@@ -2,16 +2,52 @@
 
 Agent is an AI system for autonomous single-cell epigenomic analysis.
 
+## Completed milestone
+
+### Milestone 1 — EpiZoo cell embedding backend
+
+The first validated vertical slice is complete:
+
+raw scATAC-seq AnnData
+→ validated sparse preprocessing
+→ EpiZoo
+→ reproducible cell embeddings
+
+Validated on Fang2021:
+- 2,000 mouse scATAC-seq cells
+- output shape: `(2000, 512)`
+- exact scientific parity with the manual EpiZoo pipeline
+- deterministic inference with fixed truncation seed
+- RTX 4090 peak GPU memory: ~10.9 GiB
+- validated default batch size: 4
+
+The validated implementation is:
+
+`src/agent/tools/models/epizoo.py`
+
+Do not modify this backend unless required to fix a verified bug or to support a clearly defined new capability.
+
 ## Current milestone
 
-The first milestone is:
+### Milestone 2 — Standard scientific tool layer
 
-scATAC-seq data
-→ standardized input
-→ EpiZoo
-→ cell embedding
+The current goal is to expose validated scientific capabilities through clean, structured Agent tools.
 
-Do not build the complete autonomous agent yet.
+Initial tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+
+The goal of this milestone is:
+
+user/file input
+→ structured scientific tool
+→ validated backend
+→ structured lightweight result
+
+Do not connect the LLM/planner yet.
+
+Do not implement annotation, clustering, UMAP, RAG, literature retrieval, reports, or multi-agent orchestration in this milestone.
 
 ## Development environment
 
@@ -47,17 +83,12 @@ Existing validated scientific logic should be reused whenever possible.
 
 ## Current development task
 
-Wrap the existing EpiZoo cell-embedding inference pipeline
-as the first reusable model tool.
+Build the first standard Agent tool layer around validated scientific backends.
 
-Initial capabilities:
-
-- load_model()
-- embed_cells()
-
-Target:
-
-src/agent/tools/models/epizoo.py
+Primary targets:
+- inspect a scATAC-seq `.h5ad` file safely
+- expose EpiZoo embedding through a file/path-based tool interface
+- return structured results suitable for later LLM tool calling
 
 ## Do not implement yet
 

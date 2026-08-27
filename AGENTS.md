@@ -44,9 +44,22 @@ user/file input
 → validated backend
 → structured lightweight result
 
-Do not connect the LLM/planner yet.
+Generalized LLM planning remains future work.
 
 Do not implement annotation, clustering, UMAP, RAG, literature retrieval, reports, or multi-agent orchestration in this milestone.
+
+### Milestone 3 — Agent orchestration core
+
+Milestone 3 is complete. The Agent now supports natural request
+representation, deterministic bootstrap planning, typed executable plans, an
+explicit immutable tool registry, safe sequential execution, dependency/output
+references, orchestration verification, structured errors, bounded
+same-argument retry, execution traces, and PLAN_ONLY mode.
+
+The production tool vocabulary is limited to `inspect_scATAC` and
+`epizoo_embed_cells`; arbitrary Python and shell execution are prohibited. Real
+end-to-end acceptance uses `inspect_scATAC` through AgentRuntime. Generalized
+LLM planning remains future work.
 
 ## Development environment
 

@@ -2,7 +2,7 @@
 
 Agent is an AI system for autonomous single-cell epigenomic analysis.
 
-## Completed milestone
+## Completed milestones
 
 ### Milestone 1 — EpiZoo cell embedding backend
 
@@ -27,18 +27,17 @@ The validated implementation is:
 
 Do not modify this backend unless required to fix a verified bug or to support a clearly defined new capability.
 
-## Current milestone
-
 ### Milestone 2 — Standard scientific tool layer
 
-The current goal is to expose validated scientific capabilities through clean, structured Agent tools.
+Milestone 2 is complete and validated on Fang2021.
 
-Initial tools:
+Validated tools:
 
 1. `inspect_scATAC`
 2. `epizoo_embed_cells`
+3. process-local EpiZoo model caching
 
-The goal of this milestone is:
+The validated flow is:
 
 user/file input
 → structured scientific tool
@@ -81,11 +80,11 @@ Existing validated scientific logic should be reused whenever possible.
 - Record model checkpoints and execution parameters.
 - Do not commit biological datasets or model checkpoints to Git.
 
-## Current development task
+## Completed development task
 
-Build the first standard Agent tool layer around validated scientific backends.
+The first standard Agent tool layer exposes validated scientific backends.
 
-Primary targets:
+Validated capabilities:
 - inspect a scATAC-seq `.h5ad` file safely
 - expose EpiZoo embedding through a file/path-based tool interface
 - return structured results suitable for later LLM tool calling

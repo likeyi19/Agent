@@ -12,6 +12,7 @@ import numpy as np
 
 from agent.tools.data import inspect_scATAC
 from agent.tools.models import epizoo as epizoo_backend
+from agent.tools.models.epizoo_cache import get_cached_epizoo_model
 
 
 class EpiZooEmbeddingToolResult(TypedDict):
@@ -219,7 +220,7 @@ def epizoo_embed_cells(
         ) from exc
 
     input_obs_names = tuple(str(name) for name in adata.obs_names)
-    model = epizoo_backend.load_model(
+    model = get_cached_epizoo_model(
         checkpoint_path=checkpoint_path,
         device=device,
     )

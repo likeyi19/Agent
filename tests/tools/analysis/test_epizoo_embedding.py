@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from shutil import copyfile
 from types import SimpleNamespace
 
 import anndata as ad
@@ -10,6 +11,7 @@ import pytest
 import scipy.sparse as sp
 
 from agent.tools.analysis import epizoo_embedding as tool
+from agent.tools.models import epizoo_cache
 
 
 @pytest.fixture
@@ -38,7 +40,7 @@ def mocked_backend(monkeypatch: pytest.MonkeyPatch):
     calls: dict[str, object] = {}
     embeddings = np.arange(3 * 512, dtype=np.float32).reshape(3, 512)
 
-    def fake_load_model(*, checkpoint_path, device):
+    def fake_get_cached_model(*, checkpoint_path, device):
         calls["load_model"] = {
             "checkpoint_path": checkpoint_path,
             "device": device,
@@ -58,7 +60,7 @@ def mocked_backend(monkeypatch: pytest.MonkeyPatch):
             },
         )
 
-    monkeypatch.setattr(tool.epizoo_backend, "load_model", fake_load_model)
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", fake_get_cached_model)
     monkeypatch.setattr(tool.epizoo_backend, "embed_cells", fake_embed_cells)
     return calls, embeddings
 
@@ -127,7 +129,7 @@ def test_invalid_backend_output_is_rejected_without_artifacts(
     bad_embeddings: np.ndarray,
     message: str,
 ) -> None:
-    monkeypatch.setattr(tool.epizoo_backend, "load_model", lambda **kwargs: object())
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", lambda **kwargs: object())
     monkeypatch.setattr(
         tool.epizoo_backend,
         "embed_cells",
@@ -151,7 +153,7 @@ def test_invalid_backend_output_is_rejected_without_artifacts(
 def test_cell_order_mismatch_is_rejected_without_artifacts(
     input_h5ad: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(tool.epizoo_backend, "load_model", lambda **kwargs: object())
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", lambda **kwargs: object())
     monkeypatch.setattr(
         tool.epizoo_backend,
         "embed_cells",
@@ -180,7 +182,7 @@ def test_invalid_input_path_is_rejected_before_model_loading(
         nonlocal model_loaded
         model_loaded = True
 
-    monkeypatch.setattr(tool.epizoo_backend, "load_model", fake_load_model)
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", fake_load_model)
 
     with pytest.raises(FileNotFoundError, match="AnnData file not found"):
         tool.epizoo_embed_cells(
@@ -229,7 +231,7 @@ def test_existing_outputs_require_explicit_overwrite(
 def test_failed_inference_leaves_no_completed_artifacts(
     input_h5ad: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(tool.epizoo_backend, "load_model", lambda **kwargs: object())
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", lambda **kwargs: object())
 
     def fail_inference(*args, **kwargs):
         raise RuntimeError("synthetic inference failure")
@@ -243,3 +245,58 @@ def test_failed_inference_leaves_no_completed_artifacts(
         )
 
     assert list(output_dir.iterdir()) == []
+
+
+def test_tool_reuses_cached_model_across_request_paths(
+    input_h5ad: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_input = tmp_path / "other-cells.h5ad"
+    copyfile(input_h5ad, second_input)
+    checkpoint = tmp_path / "epizoo.pth"
+    cached_model = object()
+    load_count = 0
+    inference_model_ids: list[int] = []
+
+    def fake_load_model(**kwargs):
+        nonlocal load_count
+        load_count += 1
+        return cached_model
+
+    def fake_embed_cells(model, adata, **kwargs):
+        inference_model_ids.append(id(model))
+        return SimpleNamespace(
+            embeddings=np.zeros((adata.n_obs, 512), dtype=np.float32),
+            obs_names=tuple(adata.obs_names),
+            metadata={
+                "species": {"id": 1, "name": "mouse"},
+                "checkpoint": {"path": str(checkpoint.resolve())},
+                "device": "cpu",
+            },
+        )
+
+    epizoo_cache.clear_epizoo_backend_cache()
+    monkeypatch.setattr(
+        epizoo_cache.epizoo_backend, "load_model", fake_load_model
+    )
+    monkeypatch.setattr(tool.epizoo_backend, "embed_cells", fake_embed_cells)
+    try:
+        first = tool.epizoo_embed_cells(
+            input_h5ad,
+            tmp_path / "first-output",
+            species="mouse",
+            checkpoint_path=checkpoint,
+            device="cpu",
+        )
+        second = tool.epizoo_embed_cells(
+            second_input,
+            tmp_path / "second-output",
+            species="mouse",
+            checkpoint_path=checkpoint,
+            device="cpu",
+        )
+    finally:
+        epizoo_cache.clear_epizoo_backend_cache()
+
+    assert first["status"] == second["status"] == "success"
+    assert load_count == 1
+    assert inference_model_ids == [id(cached_model), id(cached_model)]

@@ -23,7 +23,7 @@ venv/
 outputs/
 
 # Large biological data
-data/
+/data/
 *.h5ad
 *.h5
 *.mtx

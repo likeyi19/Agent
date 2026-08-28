@@ -61,6 +61,32 @@ The production tool vocabulary is limited to `inspect_scATAC` and
 end-to-end acceptance uses `inspect_scATAC` through AgentRuntime. Generalized
 LLM planning remains future work.
 
+### Milestone 4 — Natural-language planning
+
+Milestone 4 is complete. The validated planning flow is:
+
+Natural-language request
+→ `LLMPlanner`
+→ provider-neutral `PlanningModel`
+→ strict versioned planning wire schema
+→ existing `AgentPlan`
+→ existing `AgentRuntime`
+→ full-plan preflight
+→ executor/verifier
+
+Optional OpenAI, Gemini, and Groq provider adapters generate plans only. They
+receive no Python tool callables and cannot directly execute scientific tools.
+`ToolRegistry` remains the executable allowlist, and full-plan validation occurs
+before side effects. PLAN_ONLY executes zero tools. Executable argument values
+come only from structured `AgentRequest.inputs` or an existing `StepOutputRef`,
+not arbitrary LLM literals. The default runtime remains deterministic and
+offline; external providers require explicit injection and configuration.
+
+Real-provider acceptance passed with Groq using `openai/gpt-oss-20b`: a strict
+schema v2 plan passed through `LLMPlanner`, `AgentPlan`, and AgentRuntime
+PLAN_ONLY preflight while guarded scientific tool callables confirmed zero
+execution.
+
 ## Development environment
 
 - Linux server

@@ -19,7 +19,9 @@ from agent.schemas import (
 )
 
 from .executor import ExecutionOutcome, PlanExecutor, RecoveryPolicy
+from .llm_planner import LLMPlanner
 from .planner import DeterministicPlanner, Planner, PlannerError
+from .planning_model import PlanningModel
 from .registry import (
     ArgumentSpec,
     ErrorClassification,
@@ -46,8 +48,10 @@ __all__ = [
     "ErrorClassification",
     "ExecutionOutcome",
     "ExecutionTraceEvent",
+    "LLMPlanner",
     "Planner",
     "PlannerError",
+    "PlanningModel",
     "PlanExecutor",
     "PlanStep",
     "ResultContract",

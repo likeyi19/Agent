@@ -18,6 +18,12 @@ from .orchestration import (
     VerificationCheck,
     VerificationResult,
 )
+from .run_state import (
+    PersistedRunState,
+    RUN_STATE_SCHEMA_VERSION,
+    RunLifecycleStatus,
+    fingerprint_plan,
+)
 
 __all__ = [
     "AgentError",
@@ -28,7 +34,10 @@ __all__ = [
     "ExecutionTraceEvent",
     "JsonValue",
     "PlanStep",
+    "PersistedRunState",
+    "RUN_STATE_SCHEMA_VERSION",
     "RunMode",
+    "RunLifecycleStatus",
     "RunStatus",
     "StepExecutionResult",
     "StepOutputRef",
@@ -36,4 +45,5 @@ __all__ = [
     "TraceEventType",
     "VerificationCheck",
     "VerificationResult",
+    "fingerprint_plan",
 ]

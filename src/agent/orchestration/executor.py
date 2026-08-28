@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
 from time import perf_counter
-from typing import Mapping, cast
+from typing import Callable, Mapping, Sequence, cast
 
 from agent.schemas import (
     AgentError,
@@ -49,6 +49,20 @@ class ExecutionOutcome:
     step_results: tuple[StepExecutionResult, ...]
     errors: tuple[AgentError, ...]
     trace: tuple[ExecutionTraceEvent, ...]
+
+
+@dataclass(frozen=True)
+class ExecutionProgress:
+    """Immutable executor transition emitted for optional durable checkpointing."""
+
+    phase: str
+    preflight: VerificationResult
+    step_results: tuple[StepExecutionResult, ...]
+    errors: tuple[AgentError, ...]
+    trace: tuple[ExecutionTraceEvent, ...]
+
+
+ExecutionCheckpoint = Callable[[ExecutionProgress], None]
 
 
 class _TraceRecorder:
@@ -162,6 +176,13 @@ class _ReferenceResolutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _CompletedStepValidationError(RuntimeError):
+    def __init__(self, code: str, message: str, step_id: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.step_id = step_id
 
 
 class PlanExecutor:
@@ -357,7 +378,9 @@ class PlanExecutor:
         plan: AgentPlan,
         verification: VerificationResult,
         trace: _TraceRecorder,
+        preserved_steps: Mapping[str, StepExecutionResult] | None = None,
     ) -> ExecutionOutcome:
+        preserved_steps = preserved_steps or {}
         error = verification.error or AgentError(
             ErrorCategory.INTERNAL_AGENT_ERROR,
             "PLAN_PREFLIGHT_FAILED",
@@ -367,6 +390,9 @@ class PlanExecutor:
         now = _utc_now()
         results: list[StepExecutionResult] = []
         for step in plan.steps:
+            if step.step_id in preserved_steps:
+                results.append(preserved_steps[step.step_id])
+                continue
             if step.step_id == failed_step_id:
                 step_error = AgentError(
                     category=error.category,
@@ -412,12 +438,28 @@ class PlanExecutor:
         )
         return ExecutionOutcome(tuple(results), (error,), trace.events)
 
-    def execute(self, plan: AgentPlan) -> ExecutionOutcome:
-        """Preflight and execute every plan step with fail-safe stop semantics."""
+    def execute(
+        self,
+        plan: AgentPlan,
+        *,
+        completed_steps: Sequence[StepExecutionResult] = (),
+        checkpoint: ExecutionCheckpoint | None = None,
+    ) -> ExecutionOutcome:
+        """Preflight and execute a plan, optionally restoring verified steps."""
 
         if not isinstance(plan, AgentPlan):
             raise TypeError("`plan` must be an AgentPlan.")
+        if not isinstance(completed_steps, Sequence) or not all(
+            isinstance(result, StepExecutionResult) for result in completed_steps
+        ):
+            raise TypeError(
+                "`completed_steps` must be a sequence of StepExecutionResult values."
+            )
+        if checkpoint is not None and not callable(checkpoint):
+            raise TypeError("`checkpoint` must be callable or None.")
+
         trace = _TraceRecorder()
+        completed_by_id = self._validate_completed_step_set(plan, completed_steps)
         trace.add(
             TraceEventType.PLAN_VALIDATION,
             "Whole-plan preflight started.",
@@ -430,7 +472,23 @@ class PlanExecutor:
                 "Whole-plan preflight failed; no tools were invoked.",
                 details={"error_code": preflight.error.code if preflight.error else None},
             )
-            return self._preflight_failure_outcome(plan, preflight, trace)
+            outcome = self._preflight_failure_outcome(
+                plan,
+                preflight,
+                trace,
+                completed_by_id,
+            )
+            if checkpoint is not None:
+                checkpoint(
+                    ExecutionProgress(
+                        "PREFLIGHT_FAILED",
+                        preflight,
+                        outcome.step_results,
+                        outcome.errors,
+                        outcome.trace,
+                    )
+                )
+            return outcome
         trace.add(
             TraceEventType.PLAN_VALIDATION,
             "Whole-plan preflight succeeded.",
@@ -443,9 +501,188 @@ class PlanExecutor:
         errors: list[AgentError] = []
         failed_step_id: str | None = None
 
+        def snapshot() -> tuple[StepExecutionResult, ...]:
+            return tuple(
+                results_by_id.get(
+                    step.step_id,
+                    StepExecutionResult(
+                        step.step_id,
+                        step.tool_name,
+                        StepStatus.PENDING,
+                    ),
+                )
+                for step in plan.steps
+            )
+
+        def notify(phase: str) -> None:
+            if checkpoint is not None:
+                checkpoint(
+                    ExecutionProgress(
+                        phase,
+                        preflight,
+                        snapshot(),
+                        tuple(errors),
+                        trace.events,
+                    )
+                )
+
+        try:
+            for step in ordered_steps:
+                persisted = completed_by_id.get(step.step_id)
+                if persisted is None:
+                    continue
+                missing_dependencies = tuple(
+                    dependency
+                    for dependency in step.depends_on
+                    if dependency not in verified_results
+                )
+                if missing_dependencies:
+                    raise _CompletedStepValidationError(
+                        "PERSISTED_STEP_DEPENDENCY_MISSING",
+                        f"Persisted successful step {step.step_id!r} lacks verified "
+                        f"dependencies {missing_dependencies!r}.",
+                        step.step_id,
+                    )
+                try:
+                    resolved_arguments = self._resolve_arguments(
+                        step, verified_results, trace
+                    )
+                except _ReferenceResolutionError as exc:
+                    raise _CompletedStepValidationError(
+                        "PERSISTED_STEP_ARGUMENT_RESOLUTION_FAILED",
+                        str(exc),
+                        step.step_id,
+                    ) from exc
+                if dict(resolved_arguments) != dict(persisted.resolved_arguments):
+                    raise _CompletedStepValidationError(
+                        "PERSISTED_RESOLVED_ARGUMENTS_MISMATCH",
+                        f"Persisted resolved arguments for step {step.step_id!r} "
+                        "do not match arguments reconstructed from the plan.",
+                        step.step_id,
+                    )
+                if persisted.result is None:
+                    raise _CompletedStepValidationError(
+                        "PERSISTED_STEP_RESULT_MISSING",
+                        f"Persisted successful step {step.step_id!r} has no result.",
+                        step.step_id,
+                    )
+                dependency_results = {
+                    dependency: verified_results[dependency]
+                    for dependency in step.depends_on
+                }
+                verification = verify_step(
+                    step,
+                    resolved_arguments,
+                    persisted.result,
+                    self._registry,
+                    dependency_results=dependency_results,
+                )
+                trace.add(
+                    TraceEventType.VERIFICATION,
+                    "Persisted successful step revalidation succeeded."
+                    if verification.passed
+                    else "Persisted successful step revalidation failed.",
+                    step_id=step.step_id,
+                    details={
+                        "passed": verification.passed,
+                        "resume": True,
+                        "error_code": (
+                            verification.error.code if verification.error else None
+                        ),
+                    },
+                )
+                if not verification.passed:
+                    message = (
+                        verification.error.message
+                        if verification.error is not None
+                        else "Persisted step result failed revalidation."
+                    )
+                    raise _CompletedStepValidationError(
+                        "PERSISTED_STEP_REVALIDATION_FAILED",
+                        message,
+                        step.step_id,
+                    )
+                recordable = _copy_json_mapping(
+                    persisted.result, f"step.{step.step_id}.result"
+                )
+                verified_results[step.step_id] = recordable
+                results_by_id[step.step_id] = StepExecutionResult(
+                    step_id=persisted.step_id,
+                    tool_name=persisted.tool_name,
+                    status=StepStatus.SUCCEEDED,
+                    attempt_count=persisted.attempt_count,
+                    resolved_arguments=persisted.resolved_arguments,
+                    result=recordable,
+                    verification=verification,
+                    started_at=persisted.started_at,
+                    finished_at=persisted.finished_at,
+                    duration_seconds=persisted.duration_seconds,
+                )
+                trace.add(
+                    TraceEventType.RECOVERY,
+                    "Previously verified step restored without tool execution.",
+                    step_id=step.step_id,
+                    details={"resume": True},
+                )
+        except _CompletedStepValidationError as exc:
+            error = AgentError(
+                ErrorCategory.VERIFICATION_ERROR,
+                exc.code,
+                str(exc),
+                step_id=exc.step_id,
+                tool_name=(
+                    next(
+                        (
+                            step.tool_name
+                            for step in plan.steps
+                            if step.step_id == exc.step_id
+                        ),
+                        None,
+                    )
+                ),
+                exception_type=type(exc).__name__,
+            )
+            errors.append(error)
+            failed_step_id = exc.step_id
+            if exc.step_id is not None:
+                persisted = next(
+                    (
+                        result
+                        for result in completed_steps
+                        if result.step_id == exc.step_id
+                    ),
+                    None,
+                )
+                if persisted is not None:
+                    results_by_id[exc.step_id] = persisted
+                else:
+                    step = next(
+                        step for step in plan.steps if step.step_id == exc.step_id
+                    )
+                    now = _utc_now()
+                    results_by_id[exc.step_id] = StepExecutionResult(
+                        step_id=step.step_id,
+                        tool_name=step.tool_name,
+                        status=StepStatus.FAILED,
+                        error=error,
+                        started_at=now,
+                        finished_at=now,
+                        duration_seconds=0.0,
+                    )
+            trace.add(
+                TraceEventType.RECOVERY,
+                "Persisted successful step could not be restored; no tools invoked.",
+                step_id=exc.step_id,
+                details={"error_code": exc.code, "resume": True},
+            )
+        else:
+            notify("PREFLIGHT_SUCCEEDED")
+
         for step in ordered_steps:
             if failed_step_id is not None:
                 break
+            if step.step_id in results_by_id:
+                continue
             started_at = _utc_now()
             started_clock = perf_counter()
             trace.add(
@@ -486,6 +723,7 @@ class PlanExecutor:
                     step_id=step.step_id,
                     details={"error_code": error.code},
                 )
+                notify("STEP_FAILED")
                 break
 
             spec = self._registry.get(step.tool_name)
@@ -501,6 +739,17 @@ class PlanExecutor:
                     attempt=attempt,
                     details={"tool_name": step.tool_name},
                 )
+                results_by_id[step.step_id] = StepExecutionResult(
+                    step_id=step.step_id,
+                    tool_name=step.tool_name,
+                    status=StepStatus.RUNNING,
+                    attempt_count=attempt,
+                    resolved_arguments=cast(
+                        Mapping[str, JsonValue], resolved_arguments
+                    ),
+                    started_at=started_at,
+                )
+                notify("STEP_RUNNING")
                 try:
                     returned_result = spec.function(**resolved_arguments)
                 except Exception as exc:
@@ -538,6 +787,7 @@ class PlanExecutor:
                         },
                     )
                     if retry:
+                        notify("STEP_RUNNING")
                         continue
                     break
                 else:
@@ -575,6 +825,7 @@ class PlanExecutor:
                     attempt=attempt,
                     details={"error_code": tool_error.code},
                 )
+                notify("STEP_FAILED")
                 break
 
             dependency_results = {
@@ -647,6 +898,7 @@ class PlanExecutor:
                     attempt=attempt,
                     details={"error_code": error.code},
                 )
+                notify("STEP_FAILED")
                 break
 
             if recordable_result is None:
@@ -672,6 +924,7 @@ class PlanExecutor:
                 step_id=step.step_id,
                 attempt=attempt,
             )
+            notify("STEP_SUCCEEDED")
 
         if failed_step_id is not None:
             steps_by_id = {step.step_id: step for step in plan.steps}
@@ -713,6 +966,7 @@ class PlanExecutor:
                     step_id=step.step_id,
                     details={"failed_step_id": failed_step_id},
                 )
+            notify("STEPS_SKIPPED")
 
         trace.add(
             TraceEventType.RUN_COMPLETION,
@@ -722,7 +976,54 @@ class PlanExecutor:
             details={"status": "SUCCEEDED" if not errors else "FAILED"},
         )
         ordered_results = tuple(results_by_id[step.step_id] for step in plan.steps)
-        return ExecutionOutcome(ordered_results, tuple(errors), trace.events)
+        outcome = ExecutionOutcome(ordered_results, tuple(errors), trace.events)
+        if checkpoint is not None:
+            checkpoint(
+                ExecutionProgress(
+                    "EXECUTION_COMPLETED",
+                    preflight,
+                    outcome.step_results,
+                    outcome.errors,
+                    outcome.trace,
+                )
+            )
+        return outcome
+
+    @staticmethod
+    def _validate_completed_step_set(
+        plan: AgentPlan,
+        completed_steps: Sequence[StepExecutionResult],
+    ) -> dict[str, StepExecutionResult]:
+        completed_by_id: dict[str, StepExecutionResult] = {}
+        plan_by_id = {step.step_id: step for step in plan.steps}
+        for result in completed_steps:
+            if result.step_id in completed_by_id:
+                raise _CompletedStepValidationError(
+                    "DUPLICATE_PERSISTED_STEP",
+                    f"Persisted step {result.step_id!r} appears more than once.",
+                    result.step_id,
+                )
+            step = plan_by_id.get(result.step_id)
+            if step is None or step.tool_name != result.tool_name:
+                raise _CompletedStepValidationError(
+                    "PERSISTED_STEP_IDENTITY_MISMATCH",
+                    f"Persisted step {result.step_id!r} does not match the plan.",
+                    result.step_id,
+                )
+            if (
+                result.status is not StepStatus.SUCCEEDED
+                or result.result is None
+                or result.verification is None
+                or not result.verification.passed
+                or result.error is not None
+            ):
+                raise _CompletedStepValidationError(
+                    "PERSISTED_STEP_NOT_VERIFIED",
+                    f"Persisted step {result.step_id!r} is not a verified success.",
+                    result.step_id,
+                )
+            completed_by_id[result.step_id] = result
+        return completed_by_id
 
 
 def _depends_on(
@@ -745,4 +1046,10 @@ def _depends_on(
     return False
 
 
-__all__ = ["ExecutionOutcome", "PlanExecutor", "RecoveryPolicy"]
+__all__ = [
+    "ExecutionCheckpoint",
+    "ExecutionOutcome",
+    "ExecutionProgress",
+    "PlanExecutor",
+    "RecoveryPolicy",
+]

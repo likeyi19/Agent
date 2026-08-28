@@ -7,8 +7,10 @@ from agent.schemas import (
     AgentRunResult,
     ErrorCategory,
     ExecutionTraceEvent,
+    PersistedRunState,
     PlanStep,
     RunMode,
+    RunLifecycleStatus,
     RunStatus,
     StepExecutionResult,
     StepOutputRef,
@@ -18,7 +20,13 @@ from agent.schemas import (
     VerificationResult,
 )
 
-from .executor import ExecutionOutcome, PlanExecutor, RecoveryPolicy
+from .executor import (
+    ExecutionCheckpoint,
+    ExecutionOutcome,
+    ExecutionProgress,
+    PlanExecutor,
+    RecoveryPolicy,
+)
 from .llm_planner import LLMPlanner
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .planning_model import PlanningModel
@@ -34,6 +42,17 @@ from .registry import (
     build_default_tool_registry,
 )
 from .runtime import AgentRuntime
+from .run_store import (
+    FileRunStore,
+    RunAlreadyActiveError,
+    RunAlreadyExistsError,
+    RunNotFoundError,
+    RunStateConflictError,
+    RunStateCorruptionError,
+    RunStateVersionError,
+    RunStore,
+    RunStoreError,
+)
 from .verifier import verify_run, verify_step
 
 __all__ = [
@@ -47,16 +66,29 @@ __all__ = [
     "ErrorCategory",
     "ErrorClassification",
     "ExecutionOutcome",
+    "ExecutionCheckpoint",
+    "ExecutionProgress",
     "ExecutionTraceEvent",
     "LLMPlanner",
+    "FileRunStore",
     "Planner",
     "PlannerError",
     "PlanningModel",
     "PlanExecutor",
     "PlanStep",
+    "PersistedRunState",
     "ResultContract",
     "RecoveryPolicy",
     "RunMode",
+    "RunLifecycleStatus",
+    "RunAlreadyActiveError",
+    "RunAlreadyExistsError",
+    "RunNotFoundError",
+    "RunStateConflictError",
+    "RunStateCorruptionError",
+    "RunStateVersionError",
+    "RunStore",
+    "RunStoreError",
     "RunStatus",
     "StepExecutionResult",
     "StepOutputRef",

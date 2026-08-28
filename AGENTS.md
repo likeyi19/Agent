@@ -87,6 +87,47 @@ schema v2 plan passed through `LLMPlanner`, `AgentPlan`, and AgentRuntime
 PLAN_ONLY preflight while guarded scientific tool callables confirmed zero
 execution.
 
+### Milestone 5.1 — Durable run state and resume
+
+Milestone 5.1 is complete and accepted. Durability is opt-in through
+`AgentRuntime(..., run_store=...)`; the default runtime remains in-memory.
+`PersistedRunState` records the durability-specific PLANNING, VALIDATED,
+RUNNING, PLANNED, SUCCEEDED, FAILED, and INTERRUPTED lifecycle states together
+with the request, plan, step results, errors, verification, and
+trace/provenance. `RunStore` is the persistence boundary, and `FileRunStore`
+stores versioned canonical JSON with SHA-256 integrity, a plan fingerprint,
+optimistic revision checks, and atomic `fsync` plus `os.replace` updates.
+
+Each run has a stable state-update lock and a separate full-lifecycle execution
+lease. Verified successful steps are durably checkpointed before downstream
+execution. `AgentRuntime.resume(run_id)` is planner-free and reuses the persisted
+plan through the existing `PlanExecutor`, `ToolRegistry`, argument resolver, and
+verifier; there is no duplicate execution engine. Persisted successes are
+revalidated before reuse, including `StepOutputRef` restoration across restart.
+
+PLAN_ONLY remains zero-execution across restart, terminal resume is idempotent,
+and stale RUNNING scientific work is conservatively marked INTERRUPTED with no
+automatic rerun when its outcome is unknown. Scientific tools, providers,
+planners, registry, verifier, and retry semantics were not changed. Providers
+receive neither filesystem nor persisted `RunStore` access.
+
+Accepted validation:
+
+- durability/resume: 29 passed
+- canonical orchestration regression: 222 passed
+- complete lightweight regression: 376 passed, 6 skipped
+
+Deferred non-blocking follow-ups:
+
+- type-exact canonical comparison for restored resolved arguments
+- stricter persisted attempt-count provenance validation
+- optional progress-phase enum cleanup
+- unused timestamp-helper cleanup
+- canonical JSON helper consolidation
+- post-replace fsync/chmod ambiguity documentation
+- stale lock-file cleanup
+- stronger trusted-directory/symlink hardening if the store root becomes untrusted
+
 ## Development environment
 
 - Linux server

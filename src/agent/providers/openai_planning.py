@@ -7,13 +7,17 @@ from pathlib import Path
 from typing import Mapping
 
 from agent.schemas import JsonValue
+from agent.orchestration.planning_model import (
+    PlanningModelError,
+    classify_provider_exception,
+)
 
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _RESPONSE_FORMAT_NAME = "agent_plan"
 
 
-class OpenAIPlanningError(RuntimeError):
+class OpenAIPlanningError(PlanningModelError):
     """Sanitized failure at the OpenAI planning-provider boundary."""
 
 
@@ -190,8 +194,12 @@ class OpenAIPlanningModel:
                 timeout=self._timeout,
             )
         except Exception as exc:
+            code, message = classify_provider_exception(exc)
+            if code == "PLANNING_PROVIDER_ERROR":
+                message = "OpenAI planning request failed."
             raise OpenAIPlanningError(
-                "OpenAI planning request failed."
+                message,
+                code=code,
             ) from exc
         return _completed_output_text(response)
 

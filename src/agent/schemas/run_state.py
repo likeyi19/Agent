@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import hashlib
@@ -18,6 +18,7 @@ from .orchestration import (
     ExecutionTraceEvent,
     JsonValue,
     PlanStep,
+    RecoveryDisposition,
     RunMode,
     RunStatus,
     StepExecutionResult,
@@ -29,8 +30,8 @@ from .orchestration import (
 )
 
 
-RUN_STATE_SCHEMA_VERSION = 2
-LEGACY_RUN_STATE_SCHEMA_VERSIONS = frozenset({1})
+RUN_STATE_SCHEMA_VERSION = 3
+LEGACY_RUN_STATE_SCHEMA_VERSIONS = frozenset({1, 2})
 CANCELLATION_STATE_SCHEMA_VERSION = 1
 
 
@@ -198,6 +199,101 @@ def fingerprint_plan(plan: AgentPlan) -> str:
     return hashlib.sha256(_canonical_json_bytes(plan.to_dict())).hexdigest()
 
 
+@dataclass(frozen=True)
+class ToolRecoveryPolicySnapshot:
+    """Stable non-executable recovery policy provenance for one planned tool."""
+
+    tool_name: str
+    classifier_version: str
+    retryable_error_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in ("tool_name", "classifier_version"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"`{field_name}` must be a non-empty string.")
+        if not isinstance(self.retryable_error_codes, tuple) or not all(
+            isinstance(code, str) and code.strip()
+            for code in self.retryable_error_codes
+        ):
+            raise TypeError(
+                "`retryable_error_codes` must be a tuple of non-empty strings."
+            )
+        if self.retryable_error_codes != tuple(
+            sorted(set(self.retryable_error_codes))
+        ):
+            raise ValueError(
+                "`retryable_error_codes` must be unique and sorted."
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "tool_name": self.tool_name,
+            "classifier_version": self.classifier_version,
+            "retryable_error_codes": list(self.retryable_error_codes),
+        }
+
+
+def fingerprint_recovery_policy(
+    catalog_version: str,
+    max_attempts_per_step: int,
+    tools: Sequence[ToolRecoveryPolicySnapshot],
+) -> str:
+    """Return canonical identity for effective non-executable recovery policy."""
+
+    payload = {
+        "catalog_version": catalog_version,
+        "max_attempts_per_step": max_attempts_per_step,
+        "tools": [tool.to_dict() for tool in tools],
+    }
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+@dataclass(frozen=True)
+class RecoveryPolicySnapshot:
+    """Immutable recovery semantics governing one durable EXECUTE plan."""
+
+    catalog_version: str
+    max_attempts_per_step: int
+    tools: tuple[ToolRecoveryPolicySnapshot, ...]
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.catalog_version, str) or not self.catalog_version.strip():
+            raise ValueError("`catalog_version` must be a non-empty string.")
+        if (
+            isinstance(self.max_attempts_per_step, bool)
+            or not isinstance(self.max_attempts_per_step, int)
+            or self.max_attempts_per_step < 1
+        ):
+            raise ValueError("`max_attempts_per_step` must be a positive integer.")
+        if not isinstance(self.tools, tuple) or not all(
+            isinstance(tool, ToolRecoveryPolicySnapshot) for tool in self.tools
+        ):
+            raise TypeError("`tools` must be a tuple of ToolRecoveryPolicySnapshot.")
+        if tuple(tool.tool_name for tool in self.tools) != tuple(
+            sorted({tool.tool_name for tool in self.tools})
+        ):
+            raise ValueError("Recovery-policy tools must be unique and sorted by name.")
+        if not isinstance(self.fingerprint, str) or not self.fingerprint:
+            raise ValueError("`fingerprint` must be a non-empty string.")
+        expected = fingerprint_recovery_policy(
+            self.catalog_version,
+            self.max_attempts_per_step,
+            self.tools,
+        )
+        if self.fingerprint != expected:
+            raise ValueError("Recovery-policy fingerprint does not match its payload.")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "catalog_version": self.catalog_version,
+            "max_attempts_per_step": self.max_attempts_per_step,
+            "tools": [tool.to_dict() for tool in self.tools],
+            "fingerprint": self.fingerprint,
+        }
+
+
 def _parse_aware_timestamp(value: object, field_name: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"`{field_name}` must be a non-empty timestamp string.")
@@ -275,16 +371,29 @@ class PersistedRunState:
     updated_at: str
     plan: AgentPlan | None = None
     plan_fingerprint: str | None = None
+    recovery_policy_snapshot: RecoveryPolicySnapshot | None = None
     preflight_verification: VerificationResult | None = None
     steps: tuple[StepExecutionResult, ...] = ()
     run_verification: VerificationResult | None = None
     errors: tuple[AgentError, ...] = ()
     trace: tuple[ExecutionTraceEvent, ...] = ()
+    source_schema_version: int = field(
+        default=RUN_STATE_SCHEMA_VERSION,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if self.schema_version != RUN_STATE_SCHEMA_VERSION:
             raise ValueError(
                 f"Unsupported run-state schema version {self.schema_version}."
+            )
+        if self.source_schema_version not in {
+            RUN_STATE_SCHEMA_VERSION,
+            *LEGACY_RUN_STATE_SCHEMA_VERSIONS,
+        }:
+            raise ValueError(
+                f"Unsupported source schema version {self.source_schema_version}."
             )
         if isinstance(self.revision, bool) or not isinstance(self.revision, int):
             raise TypeError("`revision` must be an integer.")
@@ -317,6 +426,12 @@ class PersistedRunState:
                 )
         if self.plan is not None and not isinstance(self.plan, AgentPlan):
             raise TypeError("`plan` must be an AgentPlan or None.")
+        if self.recovery_policy_snapshot is not None and not isinstance(
+            self.recovery_policy_snapshot, RecoveryPolicySnapshot
+        ):
+            raise TypeError(
+                "`recovery_policy_snapshot` must be a RecoveryPolicySnapshot or None."
+            )
         for field_name in ("preflight_verification", "run_verification"):
             value = getattr(self, field_name)
             if value is not None and not isinstance(value, VerificationResult):
@@ -335,6 +450,10 @@ class PersistedRunState:
                 raise ValueError(
                     "A run without a plan cannot contain preflight or step state."
                 )
+            if self.recovery_policy_snapshot is not None:
+                raise ValueError(
+                    "A run without a plan cannot have a recovery-policy snapshot."
+                )
             return
         if self.plan.request_id != self.request.request_id:
             raise ValueError("Persisted request and plan identities do not match.")
@@ -342,6 +461,24 @@ class PersistedRunState:
             raise ValueError("A persisted plan requires a plan fingerprint.")
         if self.plan_fingerprint != fingerprint_plan(self.plan):
             raise ValueError("Persisted plan fingerprint does not match the plan.")
+        if self.request.mode is RunMode.PLAN_ONLY:
+            if self.recovery_policy_snapshot is not None:
+                raise ValueError(
+                    "PLAN_ONLY state cannot contain scientific recovery policy."
+                )
+        elif (
+            self.source_schema_version == RUN_STATE_SCHEMA_VERSION
+            and self.recovery_policy_snapshot is None
+        ):
+            raise ValueError(
+                "A schema-v3 EXECUTE plan requires recovery-policy provenance."
+            )
+        if self.recovery_policy_snapshot is not None and tuple(
+            tool.tool_name for tool in self.recovery_policy_snapshot.tools
+        ) != tuple(sorted({step.tool_name for step in self.plan.steps})):
+            raise ValueError(
+                "Recovery-policy tools do not match the persisted plan."
+            )
         if self.preflight_verification is not None and (
             self.preflight_verification.target_type != "plan"
             or self.preflight_verification.target_id != self.plan.plan_id
@@ -394,6 +531,14 @@ class PersistedRunState:
             )
             if started is not None and finished is not None and finished < started:
                 raise ValueError("Persisted step finish time precedes its start time.")
+            if (
+                self.recovery_policy_snapshot is not None
+                and result.attempt_count
+                > self.recovery_policy_snapshot.max_attempts_per_step
+            ):
+                raise ValueError(
+                    "Persisted step attempt count exceeds the recovery-policy bound."
+                )
         if self.steps and tuple(result.step_id for result in self.steps) != tuple(
             step.step_id for step in self.plan.steps
         ):
@@ -545,6 +690,11 @@ class PersistedRunState:
             "updated_at": self.updated_at,
             "plan": None if self.plan is None else self.plan.to_dict(),
             "plan_fingerprint": self.plan_fingerprint,
+            "recovery_policy_snapshot": (
+                None
+                if self.recovery_policy_snapshot is None
+                else self.recovery_policy_snapshot.to_dict()
+            ),
             "preflight_verification": (
                 None
                 if self.preflight_verification is None
@@ -563,31 +713,8 @@ class PersistedRunState:
     @classmethod
     def from_dict(cls, value: object) -> PersistedRunState:
         mapping = _mapping(value, "run state")
-        _exact_keys(
-            mapping,
-            {
-                "schema_version",
-                "revision",
-                "run_id",
-                "request",
-                "lifecycle_status",
-                "created_at",
-                "updated_at",
-                "plan",
-                "plan_fingerprint",
-                "preflight_verification",
-                "steps",
-                "run_verification",
-                "errors",
-                "trace",
-            },
-            "run state",
-        )
-        plan_value = mapping["plan"]
-        preflight_value = mapping["preflight_verification"]
-        run_verification_value = mapping["run_verification"]
         stored_schema_version = _integer(
-            mapping["schema_version"], "schema_version"
+            mapping.get("schema_version"), "schema_version"
         )
         if stored_schema_version not in {
             RUN_STATE_SCHEMA_VERSION,
@@ -596,6 +723,33 @@ class PersistedRunState:
             raise ValueError(
                 f"Unsupported run-state schema version {stored_schema_version}."
             )
+        expected_fields = {
+            "schema_version",
+            "revision",
+            "run_id",
+            "request",
+            "lifecycle_status",
+            "created_at",
+            "updated_at",
+            "plan",
+            "plan_fingerprint",
+            "preflight_verification",
+            "steps",
+            "run_verification",
+            "errors",
+            "trace",
+        }
+        if stored_schema_version == RUN_STATE_SCHEMA_VERSION:
+            expected_fields.add("recovery_policy_snapshot")
+        _exact_keys(
+            mapping,
+            expected_fields,
+            "run state",
+        )
+        plan_value = mapping["plan"]
+        preflight_value = mapping["preflight_verification"]
+        run_verification_value = mapping["run_verification"]
+        legacy_errors = stored_schema_version < RUN_STATE_SCHEMA_VERSION
         lifecycle_status = _enum(
             RunLifecycleStatus,
             mapping["lifecycle_status"],
@@ -604,18 +758,22 @@ class PersistedRunState:
         preflight_verification = (
             None
             if preflight_value is None
-            else _decode_verification(preflight_value)
+            else _decode_verification(preflight_value, legacy_errors=legacy_errors)
         )
         steps = tuple(
-            _decode_step_result(item) for item in _sequence(mapping["steps"], "steps")
+            _decode_step_result(item, legacy_errors=legacy_errors)
+            for item in _sequence(mapping["steps"], "steps")
         )
         run_verification = (
             None
             if run_verification_value is None
-            else _decode_verification(run_verification_value)
+            else _decode_verification(
+                run_verification_value, legacy_errors=legacy_errors
+            )
         )
         errors = tuple(
-            _decode_error(item) for item in _sequence(mapping["errors"], "errors")
+            _decode_error(item, legacy=legacy_errors)
+            for item in _sequence(mapping["errors"], "errors")
         )
         trace = tuple(
             _decode_trace(item) for item in _sequence(mapping["trace"], "trace")
@@ -641,11 +799,20 @@ class PersistedRunState:
             plan_fingerprint=_optional_string(
                 mapping["plan_fingerprint"], "plan_fingerprint"
             ),
+            recovery_policy_snapshot=(
+                None
+                if stored_schema_version < RUN_STATE_SCHEMA_VERSION
+                or mapping["recovery_policy_snapshot"] is None
+                else _decode_recovery_policy_snapshot(
+                    mapping["recovery_policy_snapshot"]
+                )
+            ),
             preflight_verification=preflight_verification,
             steps=steps,
             run_verification=run_verification,
             errors=errors,
             trace=trace,
+            source_schema_version=stored_schema_version,
         )
 
     def to_run_result(self) -> AgentRunResult:
@@ -865,24 +1032,47 @@ def _decode_plan(value: object) -> AgentPlan:
     )
 
 
-def _decode_error(value: object) -> AgentError:
+def _decode_error(value: object, *, legacy: bool = False) -> AgentError:
     mapping = _mapping(value, "error")
+    expected = {
+        "category",
+        "code",
+        "message",
+        "step_id",
+        "tool_name",
+        "exception_type",
+        "recoverable",
+        "attempt",
+        "details",
+    }
+    if not legacy:
+        expected.add("recovery_disposition")
     _exact_keys(
         mapping,
-        {
-            "category",
-            "code",
-            "message",
-            "step_id",
-            "tool_name",
-            "exception_type",
-            "recoverable",
-            "attempt",
-            "details",
-        },
+        expected,
         "error",
     )
     attempt = mapping["attempt"]
+    recoverable = _boolean(mapping["recoverable"], "error.recoverable")
+    if legacy:
+        recovery_disposition = (
+            RecoveryDisposition.SAME_STEP_RETRY_ELIGIBLE
+            if recoverable
+            else RecoveryDisposition.NO_AUTOMATIC_RECOVERY
+        )
+    else:
+        recovery_disposition = _enum(
+            RecoveryDisposition,
+            mapping["recovery_disposition"],
+            "error.recovery_disposition",
+        )
+        if recoverable is not (
+            recovery_disposition
+            is RecoveryDisposition.SAME_STEP_RETRY_ELIGIBLE
+        ):
+            raise ValueError(
+                "Persisted error recovery fields are inconsistent."
+            )
     return AgentError(
         _enum(ErrorCategory, mapping["category"], "error.category"),
         _string(mapping["code"], "error.code"),
@@ -890,9 +1080,10 @@ def _decode_error(value: object) -> AgentError:
         _optional_string(mapping["step_id"], "error.step_id"),
         _optional_string(mapping["tool_name"], "error.tool_name"),
         _optional_string(mapping["exception_type"], "error.exception_type"),
-        _boolean(mapping["recoverable"], "error.recoverable"),
+        recoverable,
         None if attempt is None else _integer(attempt, "error.attempt"),
         _json_mapping(mapping["details"], "error.details"),
+        recovery_disposition,
     )
 
 
@@ -906,7 +1097,9 @@ def _decode_check(value: object) -> VerificationCheck:
     )
 
 
-def _decode_verification(value: object) -> VerificationResult:
+def _decode_verification(
+    value: object, *, legacy_errors: bool = False
+) -> VerificationResult:
     mapping = _mapping(value, "verification")
     _exact_keys(
         mapping,
@@ -922,11 +1115,13 @@ def _decode_verification(value: object) -> VerificationResult:
             _decode_check(item)
             for item in _sequence(mapping["checks"], "verification.checks")
         ),
-        None if error is None else _decode_error(error),
+        None if error is None else _decode_error(error, legacy=legacy_errors),
     )
 
 
-def _decode_step_result(value: object) -> StepExecutionResult:
+def _decode_step_result(
+    value: object, *, legacy_errors: bool = False
+) -> StepExecutionResult:
     mapping = _mapping(value, "step result")
     _exact_keys(
         mapping,
@@ -956,11 +1151,57 @@ def _decode_step_result(value: object) -> StepExecutionResult:
         _integer(mapping["attempt_count"], "step result.attempt_count"),
         _json_mapping(mapping["resolved_arguments"], "step result.resolved_arguments"),
         None if result is None else _json_mapping(result, "step result.result"),
-        None if verification is None else _decode_verification(verification),
-        None if error is None else _decode_error(error),
+        None
+        if verification is None
+        else _decode_verification(verification, legacy_errors=legacy_errors),
+        None if error is None else _decode_error(error, legacy=legacy_errors),
         _optional_string(mapping["started_at"], "step result.started_at"),
         _optional_string(mapping["finished_at"], "step result.finished_at"),
         None if duration is None else _number(duration, "step result.duration_seconds"),
+    )
+
+
+def _decode_recovery_policy_snapshot(value: object) -> RecoveryPolicySnapshot:
+    mapping = _mapping(value, "recovery policy snapshot")
+    _exact_keys(
+        mapping,
+        {"catalog_version", "max_attempts_per_step", "tools", "fingerprint"},
+        "recovery policy snapshot",
+    )
+    tools: list[ToolRecoveryPolicySnapshot] = []
+    for index, item in enumerate(
+        _sequence(mapping["tools"], "recovery policy snapshot.tools")
+    ):
+        tool = _mapping(item, f"recovery policy snapshot.tools[{index}]")
+        _exact_keys(
+            tool,
+            {"tool_name", "classifier_version", "retryable_error_codes"},
+            f"recovery policy snapshot.tools[{index}]",
+        )
+        tools.append(
+            ToolRecoveryPolicySnapshot(
+                _string(tool["tool_name"], "tool recovery policy.tool_name"),
+                _string(
+                    tool["classifier_version"],
+                    "tool recovery policy.classifier_version",
+                ),
+                tuple(
+                    _string(code, "tool recovery policy.retryable_error_code")
+                    for code in _sequence(
+                        tool["retryable_error_codes"],
+                        "tool recovery policy.retryable_error_codes",
+                    )
+                ),
+            )
+        )
+    return RecoveryPolicySnapshot(
+        _string(mapping["catalog_version"], "recovery policy.catalog_version"),
+        _integer(
+            mapping["max_attempts_per_step"],
+            "recovery policy.max_attempts_per_step",
+        ),
+        tuple(tools),
+        _string(mapping["fingerprint"], "recovery policy.fingerprint"),
     )
 
 
@@ -990,7 +1231,10 @@ __all__ = [
     "CancellationRequest",
     "LEGACY_RUN_STATE_SCHEMA_VERSIONS",
     "PersistedRunState",
+    "RecoveryPolicySnapshot",
     "RUN_STATE_SCHEMA_VERSION",
     "RunLifecycleStatus",
+    "ToolRecoveryPolicySnapshot",
     "fingerprint_plan",
+    "fingerprint_recovery_policy",
 ]

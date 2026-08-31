@@ -23,7 +23,7 @@ from agent.schemas.run_state import (
     RUN_STATE_SCHEMA_VERSION,
     RunLifecycleStatus,
 )
-from agent.schemas import StepStatus
+from agent.schemas import RunMode, StepStatus
 
 
 RUN_STATE_FORMAT = "agent.run-state"
@@ -56,6 +56,18 @@ class RunStateVersionError(RunStoreError):
 
 class RunStateConflictError(RunStoreError):
     """Raised when an optimistic revision check detects a concurrent update."""
+
+
+class RunStoreIOError(RunStoreError):
+    """Sanitized local filesystem I/O failure at the run-store boundary."""
+
+
+class RecoveryPolicyUnknownError(RunStoreError):
+    """Raised when a legacy nonterminal run has no policy provenance."""
+
+
+class RecoveryPolicyIncompatibleError(RunStoreError):
+    """Raised when resume runtime recovery semantics differ from persisted policy."""
 
 
 class CancellationStateCorruptionError(RunStoreError):
@@ -208,6 +220,14 @@ _STEP_TRANSITIONS = {
 def _validate_update_transition(
     current: PersistedRunState, next_state: PersistedRunState
 ) -> None:
+    if (
+        next_state.request.mode is RunMode.EXECUTE
+        and next_state.plan is not None
+        and next_state.recovery_policy_snapshot is None
+    ):
+        raise RunStateConflictError(
+            "Cannot rewrite a legacy EXECUTE run without recovery-policy provenance."
+        )
     if current.request != next_state.request:
         raise RunStateConflictError("Durable request identity cannot change.")
     if current.plan is not None and current.plan != next_state.plan:
@@ -217,6 +237,14 @@ def _validate_update_transition(
         and current.plan_fingerprint != next_state.plan_fingerprint
     ):
         raise RunStateConflictError("A persisted plan fingerprint cannot change.")
+    if (
+        current.recovery_policy_snapshot is not None
+        and current.recovery_policy_snapshot
+        != next_state.recovery_policy_snapshot
+    ):
+        raise RunStateConflictError(
+            "A persisted recovery-policy snapshot cannot change."
+        )
     if next_state.lifecycle_status not in _RUN_TRANSITIONS[current.lifecycle_status]:
         raise RunStateConflictError(
             f"Illegal durable lifecycle transition {current.lifecycle_status.value} "
@@ -251,7 +279,10 @@ class FileRunStore:
         resolved = Path(root).expanduser().resolve()
         if resolved.exists() and not resolved.is_dir():
             raise ValueError(f"Run-store root is not a directory: {resolved}")
-        resolved.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RunStoreIOError("Unable to initialize durable run storage.") from exc
         self._root = resolved
 
     @property
@@ -288,16 +319,26 @@ class FileRunStore:
         """
 
         path = self.lease_path(run_id)
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise RunStoreIOError("Unable to open the durable execution lease.") from exc
         acquired = False
         try:
-            os.fchmod(descriptor, 0o600)
+            try:
+                os.fchmod(descriptor, 0o600)
+            except OSError as exc:
+                raise RunStoreIOError(
+                    "Unable to secure the durable execution lease."
+                ) from exc
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 acquired = True
             except OSError as exc:
                 if exc.errno not in {errno.EACCES, errno.EAGAIN}:
-                    raise
+                    raise RunStoreIOError(
+                        "Unable to acquire the durable execution lease."
+                    ) from exc
                 raise RunAlreadyActiveError(
                     f"Durable run {run_id!r} is already active in another runtime."
                 ) from exc
@@ -312,11 +353,19 @@ class FileRunStore:
     @contextmanager
     def _lock(self, run_id: str, *, exclusive: bool) -> Iterator[None]:
         path = self.lock_path(run_id)
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            os.fchmod(descriptor, 0o600)
-            mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            fcntl.flock(descriptor, mode)
+            descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise RunStoreIOError("Unable to open the durable state lock.") from exc
+        try:
+            try:
+                os.fchmod(descriptor, 0o600)
+                mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+                fcntl.flock(descriptor, mode)
+            except OSError as exc:
+                raise RunStoreIOError(
+                    "Unable to acquire the durable state lock."
+                ) from exc
             yield
         finally:
             try:
@@ -327,6 +376,10 @@ class FileRunStore:
     def create(self, state: PersistedRunState) -> PersistedRunState:
         if not isinstance(state, PersistedRunState):
             raise TypeError("`state` must be a PersistedRunState.")
+        if state.source_schema_version != RUN_STATE_SCHEMA_VERSION:
+            raise RunStateConflictError(
+                "A newly created run must use current-schema provenance."
+            )
         if state.revision != 0:
             raise RunStateConflictError("A newly created run must use revision 0.")
         path = self.state_path(state.run_id)
@@ -454,7 +507,7 @@ class FileRunStore:
                 f"Durable run {expected_run_id!r} was not found."
             ) from exc
         except OSError as exc:
-            raise RunStoreError(f"Unable to read durable run state: {exc}") from exc
+            raise RunStoreIOError("Unable to read durable run state.") from exc
         try:
             decoded = json.loads(
                 raw.decode("utf-8"),
@@ -535,8 +588,8 @@ class FileRunStore:
         except FileNotFoundError:
             raise
         except OSError as exc:
-            raise RunStoreError(
-                f"Unable to read durable cancellation state: {exc}"
+            raise RunStoreIOError(
+                "Unable to read durable cancellation state."
             ) from exc
         try:
             decoded = json.loads(
@@ -653,6 +706,8 @@ class FileRunStore:
                 os.fsync(directory_descriptor)
             finally:
                 os.close(directory_descriptor)
+        except OSError as exc:
+            raise RunStoreIOError("Unable to write durable run state safely.") from exc
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
@@ -699,6 +754,10 @@ class FileRunStore:
                 os.fsync(directory_descriptor)
             finally:
                 os.close(directory_descriptor)
+        except OSError as exc:
+            raise RunStoreIOError(
+                "Unable to write durable cancellation state safely."
+            ) from exc
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
@@ -714,9 +773,12 @@ __all__ = [
     "RunAlreadyActiveError",
     "RunAlreadyExistsError",
     "RunNotFoundError",
+    "RecoveryPolicyIncompatibleError",
+    "RecoveryPolicyUnknownError",
     "RunStateConflictError",
     "RunStateCorruptionError",
     "RunStateVersionError",
     "RunStore",
     "RunStoreError",
+    "RunStoreIOError",
 ]

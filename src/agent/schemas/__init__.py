@@ -9,6 +9,7 @@ from .orchestration import (
     ExecutionTraceEvent,
     JsonValue,
     PlanStep,
+    RecoveryDisposition,
     RunMode,
     RunStatus,
     StepExecutionResult,
@@ -25,9 +26,12 @@ from .run_state import (
     CancellationRequest,
     LEGACY_RUN_STATE_SCHEMA_VERSIONS,
     PersistedRunState,
+    RecoveryPolicySnapshot,
     RUN_STATE_SCHEMA_VERSION,
     RunLifecycleStatus,
+    ToolRecoveryPolicySnapshot,
     fingerprint_plan,
+    fingerprint_recovery_policy,
 )
 
 __all__ = [
@@ -44,7 +48,9 @@ __all__ = [
     "JsonValue",
     "LEGACY_RUN_STATE_SCHEMA_VERSIONS",
     "PlanStep",
+    "RecoveryDisposition",
     "PersistedRunState",
+    "RecoveryPolicySnapshot",
     "RUN_STATE_SCHEMA_VERSION",
     "RunMode",
     "RunLifecycleStatus",
@@ -53,7 +59,9 @@ __all__ = [
     "StepOutputRef",
     "StepStatus",
     "TraceEventType",
+    "ToolRecoveryPolicySnapshot",
     "VerificationCheck",
     "VerificationResult",
     "fingerprint_plan",
+    "fingerprint_recovery_policy",
 ]

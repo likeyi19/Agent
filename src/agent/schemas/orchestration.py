@@ -28,6 +28,21 @@ class ErrorCategory(str, Enum):
     INTERNAL_AGENT_ERROR = "INTERNAL_AGENT_ERROR"
 
 
+class RecoveryDisposition(str, Enum):
+    """Static recovery class attached to a classified Agent error.
+
+    This does not describe whether another attempt is available at the current
+    point in execution.  The executor records that dynamic decision in trace
+    provenance after applying the configured attempt bound and cancellation.
+    """
+
+    NO_AUTOMATIC_RECOVERY = "NO_AUTOMATIC_RECOVERY"
+    SAME_STEP_RETRY_ELIGIBLE = "SAME_STEP_RETRY_ELIGIBLE"
+    RESUME_WITH_COMPATIBLE_RUNTIME = "RESUME_WITH_COMPATIBLE_RUNTIME"
+    USER_ACTION_REQUIRED = "USER_ACTION_REQUIRED"
+    MANUAL_RECONCILIATION = "MANUAL_RECONCILIATION"
+
+
 class StepStatus(str, Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -265,6 +280,13 @@ class AgentPlan(_JsonModel):
 
 @dataclass(frozen=True)
 class AgentError(_JsonModel):
+    """Structured public failure.
+
+    ``recoverable`` means only static eligibility for the executor's bounded
+    same-step, same-argument retry.  It does not imply resumability,
+    nonterminality, or that user action can repair the current run.
+    """
+
     category: ErrorCategory
     code: str
     message: str
@@ -274,6 +296,9 @@ class AgentError(_JsonModel):
     recoverable: bool = False
     attempt: int | None = None
     details: Mapping[str, JsonValue] = field(default_factory=dict)
+    recovery_disposition: RecoveryDisposition = (
+        RecoveryDisposition.NO_AUTOMATIC_RECOVERY
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.category, ErrorCategory):
@@ -286,6 +311,31 @@ class AgentError(_JsonModel):
                 _require_non_empty_string(value, field_name)
         if not isinstance(self.recoverable, bool):
             raise TypeError("`recoverable` must be a boolean.")
+        if not isinstance(self.recovery_disposition, RecoveryDisposition):
+            raise TypeError(
+                "`recovery_disposition` must be a RecoveryDisposition."
+            )
+        if self.recoverable:
+            if self.recovery_disposition is RecoveryDisposition.NO_AUTOMATIC_RECOVERY:
+                object.__setattr__(
+                    self,
+                    "recovery_disposition",
+                    RecoveryDisposition.SAME_STEP_RETRY_ELIGIBLE,
+                )
+            elif (
+                self.recovery_disposition
+                is not RecoveryDisposition.SAME_STEP_RETRY_ELIGIBLE
+            ):
+                raise ValueError(
+                    "A recoverable error must use SAME_STEP_RETRY_ELIGIBLE."
+                )
+        elif (
+            self.recovery_disposition
+            is RecoveryDisposition.SAME_STEP_RETRY_ELIGIBLE
+        ):
+            raise ValueError(
+                "SAME_STEP_RETRY_ELIGIBLE requires `recoverable=True`."
+            )
         if self.attempt is not None and (
             isinstance(self.attempt, bool)
             or not isinstance(self.attempt, int)
@@ -450,6 +500,7 @@ __all__ = [
     "ExecutionTraceEvent",
     "JsonValue",
     "PlanStep",
+    "RecoveryDisposition",
     "RunMode",
     "RunStatus",
     "StepExecutionResult",

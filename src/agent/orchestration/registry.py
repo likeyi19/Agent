@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import errno
 import inspect
 import json
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Callable, Mapping
 
 from agent.schemas import AgentError, ErrorCategory, StepOutputRef
 from agent.tools import epizoo_embed_cells, inspect_scATAC
+
+from .error_policy import classified_agent_error
 
 
 ToolCallable = Callable[..., object]
@@ -152,6 +155,7 @@ class ToolSpec:
     result_contract: ResultContract
     exception_classifier: ExceptionClassifier
     retryable_error_codes: frozenset[str] = field(default_factory=frozenset)
+    recovery_policy_version: str = "1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -172,6 +176,13 @@ class ToolSpec:
             raise TypeError("`result_contract` must be a ResultContract.")
         if not callable(self.exception_classifier):
             raise TypeError("`exception_classifier` must be callable.")
+        if (
+            not isinstance(self.recovery_policy_version, str)
+            or not self.recovery_policy_version.strip()
+        ):
+            raise ValueError(
+                "`recovery_policy_version` must be a non-empty string."
+            )
         object.__setattr__(self, "required_arguments", MappingProxyType(required))
         object.__setattr__(self, "optional_arguments", MappingProxyType(optional))
         object.__setattr__(
@@ -255,14 +266,14 @@ class ToolRegistry:
     ) -> AgentError:
         spec = self.get(name)
         classification = spec.exception_classifier(exception)
-        return AgentError(
+        retryable = classification.code in spec.retryable_error_codes
+        return classified_agent_error(
             category=classification.category,
             code=classification.code,
-            message=str(exception) or type(exception).__name__,
             step_id=step_id,
             tool_name=name,
             exception_type=type(exception).__name__,
-            recoverable=classification.code in spec.retryable_error_codes,
+            same_step_retry_eligible=retryable,
             attempt=attempt,
         )
 
@@ -276,8 +287,14 @@ def _classify_tool_exception(exception: Exception) -> ErrorClassification:
         return ErrorClassification(
             ErrorCategory.ENVIRONMENT_ERROR, "DEPENDENCY_UNAVAILABLE"
         )
-    if isinstance(exception, (TypeError, ValueError)):
-        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR, "INVALID_ARGUMENT")
+    if isinstance(exception, MemoryError):
+        return ErrorClassification(
+            ErrorCategory.RESOURCE_ERROR, "HOST_MEMORY_EXHAUSTED"
+        )
+    if _is_cuda_out_of_memory(exception):
+        return ErrorClassification(ErrorCategory.RESOURCE_ERROR, "CUDA_OUT_OF_MEMORY")
+    if isinstance(exception, OSError) and exception.errno == errno.ENOSPC:
+        return ErrorClassification(ErrorCategory.RESOURCE_ERROR, "DISK_FULL")
     if isinstance(exception, RuntimeError):
         message = str(exception)
         if message.startswith("CUDA device ") and message.endswith(
@@ -290,6 +307,26 @@ def _classify_tool_exception(exception: Exception) -> ErrorClassification:
             ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_RUNTIME_ERROR"
         )
     return ErrorClassification(ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_EXCEPTION")
+
+
+def _classify_embedding_exception(exception: Exception) -> ErrorClassification:
+    classification = _classify_tool_exception(exception)
+    if (
+        classification.code == "TOOL_EXCEPTION"
+        and isinstance(exception, OSError)
+    ):
+        return ErrorClassification(
+            ErrorCategory.RESOURCE_ERROR, "ARTIFACT_WRITE_FAILED"
+        )
+    return classification
+
+
+def _is_cuda_out_of_memory(exception: Exception) -> bool:
+    exception_type = type(exception)
+    return (
+        exception_type.__name__ == "OutOfMemoryError"
+        and exception_type.__module__.startswith("torch")
+    )
 
 
 def _validate_inspection_result(result: Mapping[str, object]) -> None:
@@ -360,6 +397,7 @@ def build_default_tool_registry() -> ToolRegistry:
             validator=_validate_inspection_result,
         ),
         exception_classifier=_classify_tool_exception,
+        recovery_policy_version="inspect-scatac-v2",
     )
     embedding_spec = ToolSpec(
         name="epizoo_embed_cells",
@@ -393,7 +431,8 @@ def build_default_tool_registry() -> ToolRegistry:
             },
             validator=_validate_embedding_result,
         ),
-        exception_classifier=_classify_tool_exception,
+        exception_classifier=_classify_embedding_exception,
+        recovery_policy_version="epizoo-embed-cells-v2",
     )
     for spec in (inspect_spec, embedding_spec):
         _assert_signature_matches(spec)

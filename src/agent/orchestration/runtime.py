@@ -16,6 +16,7 @@ from agent.schemas import (
     ErrorCategory,
     ExecutionTraceEvent,
     PersistedRunState,
+    RecoveryDisposition,
     RUN_STATE_SCHEMA_VERSION,
     RunLifecycleStatus,
     RunMode,
@@ -34,9 +35,16 @@ from .executor import (
     PlanExecutor,
     _TraceRecorder,
 )
+from .error_policy import build_recovery_policy_snapshot, classified_agent_error
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
-from .run_store import CancellationRequestedError, RunStore, RunStoreError
+from .run_store import (
+    CancellationRequestedError,
+    RecoveryPolicyIncompatibleError,
+    RecoveryPolicyUnknownError,
+    RunStore,
+    RunStoreError,
+)
 from .verifier import verify_run
 
 
@@ -124,10 +132,9 @@ class AgentRuntime:
             if not isinstance(plan, AgentPlan):
                 raise TypeError("Planner returned a value that is not an AgentPlan.")
         except PlannerError as exc:
-            error = AgentError(
+            error = classified_agent_error(
                 category=exc.category,
                 code=exc.code,
-                message=str(exc),
                 exception_type=type(exc).__name__,
             )
             trace.add(
@@ -334,10 +341,9 @@ class AgentRuntime:
             if plan.request_id != request.request_id:
                 raise TypeError("Planner returned a plan for a different request ID.")
         except PlannerError as exc:
-            error = AgentError(
+            error = classified_agent_error(
                 category=exc.category,
                 code=exc.code,
-                message=str(exc),
                 exception_type=type(exc).__name__,
             )
             trace.add(
@@ -390,10 +396,22 @@ class AgentRuntime:
             "Planner produced a structured AgentPlan.",
             details={"plan_id": plan.plan_id, "step_count": len(plan.steps)},
         )
+        recovery_policy_snapshot = (
+            None
+            if request.mode is RunMode.PLAN_ONLY
+            else build_recovery_policy_snapshot(
+                plan,
+                self._registry,
+                max_attempts_per_step=(
+                    self._executor.recovery_policy.max_attempts_per_step
+                ),
+            )
+        )
         state = self._update_state(
             state,
             plan=plan,
             plan_fingerprint=fingerprint_plan(plan),
+            recovery_policy_snapshot=recovery_policy_snapshot,
             trace=trace.events,
         )
 
@@ -526,12 +544,44 @@ class AgentRuntime:
         if state.plan is None:
             return self._fail_interrupted_planning(state)
 
+        if state.request.mode is RunMode.EXECUTE:
+            if (
+                state.source_schema_version < RUN_STATE_SCHEMA_VERSION
+                or state.recovery_policy_snapshot is None
+            ):
+                raise RecoveryPolicyUnknownError(
+                    "Legacy nonterminal EXECUTE run has no authoritative recovery "
+                    "policy provenance; use the historical runtime or reconcile it "
+                    "manually."
+                )
+            current_policy = build_recovery_policy_snapshot(
+                state.plan,
+                self._registry,
+                max_attempts_per_step=(
+                    self._executor.recovery_policy.max_attempts_per_step
+                ),
+            )
+            if current_policy.fingerprint != state.recovery_policy_snapshot.fingerprint:
+                raise RecoveryPolicyIncompatibleError(
+                    "Durable run recovery policy is incompatible with this runtime; "
+                    "resume with the original compatible policy."
+                )
+
         trace = _TraceRecorder()
         trace.extend(state.trace)
         trace.add(
             TraceEventType.RECOVERY,
             "Durable run resume started without planner invocation.",
-            details={"run_id": state.run_id, "revision": state.revision},
+            details={
+                "run_id": state.run_id,
+                "revision": state.revision,
+                "decision": "resume_with_compatible_runtime",
+                "recovery_policy_fingerprint": (
+                    None
+                    if state.recovery_policy_snapshot is None
+                    else state.recovery_policy_snapshot.fingerprint
+                ),
+            },
         )
         state = self._update_state(state, trace=trace.events)
         cancellation = self._load_cancellation(run_id)
@@ -606,6 +656,7 @@ class AgentRuntime:
             step_id=running.step_id,
             tool_name=running.tool_name,
             attempt=running.attempt_count,
+            recovery_disposition=RecoveryDisposition.MANUAL_RECONCILIATION,
         )
         now = _utc_now()
         interrupted_steps: list[StepExecutionResult] = []
@@ -665,7 +716,25 @@ class AgentRuntime:
             "Stale RUNNING step detected; automatic rerun was refused.",
             step_id=running.step_id,
             attempt=running.attempt_count,
-            details={"error_code": error.code},
+            details={
+                "error_code": error.code,
+                "classification_code": error.code,
+                "recovery_disposition": error.recovery_disposition.value,
+                "decision": "stop_unknown_outcome",
+                "reason": "manual_reconciliation_required",
+                "attempt": running.attempt_count,
+                "max_attempts": (
+                    None
+                    if state.recovery_policy_snapshot is None
+                    else state.recovery_policy_snapshot.max_attempts_per_step
+                ),
+                "retry_exhausted": False,
+                "recovery_policy_fingerprint": (
+                    None
+                    if state.recovery_policy_snapshot is None
+                    else state.recovery_policy_snapshot.fingerprint
+                ),
+            },
         )
         trace.add(
             TraceEventType.RUN_COMPLETION,
@@ -1159,7 +1228,9 @@ def _terminal_steps(
                         step_id=step.step_id,
                         tool_name=step.tool_name,
                         exception_type=root_error.exception_type,
-                        details={"checkpoint_failure": True},
+                        recoverable=root_error.recoverable,
+                        details={**root_error.details, "checkpoint_failure": True},
+                        recovery_disposition=root_error.recovery_disposition,
                     ),
                     started_at=step.started_at,
                     finished_at=now,

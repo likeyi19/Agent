@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Mapping
 
 from agent.schemas import JsonValue
+from agent.orchestration.planning_model import (
+    PlanningModelError,
+    classify_provider_exception,
+)
 
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
-class GeminiPlanningError(RuntimeError):
+class GeminiPlanningError(PlanningModelError):
     """Sanitized failure at the Gemini planning-provider boundary."""
 
 
@@ -169,8 +173,12 @@ class GeminiPlanningModel:
                 timeout=self._timeout,
             )
         except Exception as exc:
+            code, message = classify_provider_exception(exc)
+            if code == "PLANNING_PROVIDER_ERROR":
+                message = "Gemini planning request failed."
             raise GeminiPlanningError(
-                "Gemini planning request failed."
+                message,
+                code=code,
             ) from exc
         return _completed_output_text(interaction)
 

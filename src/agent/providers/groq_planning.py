@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Mapping
 
 from agent.schemas import JsonValue
+from agent.orchestration.planning_model import (
+    PlanningModelError,
+    classify_provider_exception,
+)
 
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -15,7 +19,7 @@ _GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _RESPONSE_FORMAT_NAME = "agent_plan"
 
 
-class GroqPlanningError(RuntimeError):
+class GroqPlanningError(PlanningModelError):
     """Sanitized failure at the Groq planning-provider boundary."""
 
 
@@ -194,7 +198,10 @@ class GroqPlanningModel:
                 timeout=self._timeout,
             )
         except Exception as exc:
-            raise GroqPlanningError("Groq planning request failed.") from exc
+            code, message = classify_provider_exception(exc)
+            if code == "PLANNING_PROVIDER_ERROR":
+                message = "Groq planning request failed."
+            raise GroqPlanningError(message, code=code) from exc
         return _completed_output_text(response)
 
 

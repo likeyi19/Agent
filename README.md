@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–4 and Milestones 5.1–5.2 are complete.
+Milestones 1–4 and Milestones 5.1–5.3 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -14,6 +14,7 @@ Milestones 1–4 and Milestones 5.1–5.2 are complete.
 - Milestone 4: provider-neutral natural-language planning
 - Milestone 5.1: durable run state and planner-free resume
 - Milestone 5.2: cooperative cancellation and durable run lifecycle
+- Milestone 5.3: production error classification and deterministic recovery policy
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -66,3 +67,35 @@ runs remain immutable, and stale RUNNING work with an unknown outcome remains
 INTERRUPTED. Core cancellation behavior remains deterministic and offline and
 does not change scientific tools, planners, providers, registry, verifier, or
 retry policy.
+
+## Production error and recovery policy
+
+Milestone 5.3 keeps the existing bounded `PlanExecutor` retry loop authoritative
+and adds explicit recovery semantics rather than another retry engine.
+`RecoveryDisposition` distinguishes no automatic recovery, same-step retry
+eligibility, compatible-runtime resume, required user action, and manual
+reconciliation. `AgentError.recoverable` now means only static same-step retry
+eligibility, not general resumability or user fixability; unknown codes fail
+closed to safe nonautomatic recovery.
+
+Tool, provider, runtime, and verifier failure messages are sanitized before
+persistence, so arbitrary raw exception strings are not exposed as persisted
+`AgentError` messages. Reliable provider failures use provider-neutral codes,
+and resource failures such as CUDA out-of-memory are classified explicitly.
+Resource failures never silently change scientific settings such as batch size,
+device, dtype, truncation, model, or overwrite behavior. Verification failures
+remain conservative and do not blindly rerun scientific tools.
+
+Every retry receives a fresh canonical-equivalent copy of the validated
+arguments, so mutation in one attempt cannot affect the next. Exhaustion keeps
+the underlying error and records attempts, the configured bound, and policy
+provenance. New durable EXECUTE runs persist an immutable recovery-policy
+snapshot; resume rejects changes to maximum attempts, retryable codes, or tool
+recovery/classifier versions before scientific execution.
+
+Run-state schema v3 keeps valid terminal v1/v2 records readable and historical
+PLAN_ONLY runs zero-tool. Nonterminal legacy EXECUTE runs are rejected when
+their historical recovery policy cannot be proven, and stale RUNNING work
+continues to require manual reconciliation. Milestone 5.2 cancellation behavior
+is unchanged. Core Milestone 5.3 tests require no network, provider credentials,
+GPU, model checkpoint, or biological dataset.

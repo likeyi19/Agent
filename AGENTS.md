@@ -188,6 +188,101 @@ Deferred non-blocking follow-ups:
 - stronger trusted-directory/symlink hardening if the store root becomes untrusted
 - post-`os.replace`/`fsync` ambiguity documentation
 
+### Milestone 5.3 — Production error classification and recovery policy
+
+Milestone 5.3 is complete and accepted with non-blocking follow-ups. It keeps
+the existing `PlanExecutor` bounded retry loop as the only same-step retry
+engine and adds explicit, versioned error and recovery semantics around it.
+
+#### Public recovery semantics
+
+`RecoveryDisposition` provides:
+
+- `NO_AUTOMATIC_RECOVERY`
+- `SAME_STEP_RETRY_ELIGIBLE`
+- `RESUME_WITH_COMPATIBLE_RUNTIME`
+- `USER_ACTION_REQUIRED`
+- `MANUAL_RECONCILIATION`
+
+`AgentError.recoverable` means static same-step retry eligibility only. It does
+not mean general resumability, nonterminality, or user fixability. Dynamic retry
+decisions remain separate and are recorded in RECOVERY trace events.
+
+#### Error classification
+
+The broad `ErrorCategory` set remains unchanged, while stable codes distinguish
+planning, resource, environment, persistence, and execution failures. Unknown
+codes fail closed. Generic `TypeError` and `ValueError` are not automatically
+treated as user mistakes. CUDA out-of-memory and other reliably identifiable
+resource failures are classified explicitly, and provider failures use
+sanitized provider-neutral codes where structured information permits.
+
+Arbitrary raw tool or provider exception messages are not persisted. Verifier
+exception presentation is sanitized without changing scientific verification
+logic.
+
+#### Retry behavior
+
+Retry preserves identical validated scientific values. Each attempt receives a
+fresh canonical-equivalent argument copy, so nested mutation by one attempt
+cannot affect another. Retry exhaustion preserves the underlying error and
+records `retry_exhausted`, `attempts`, `max_attempts`, and the policy
+fingerprint. Verification failures are not automatically retried, and
+cancellation observed before a retry continues to suppress that retry.
+
+#### Recovery-policy provenance
+
+New durable EXECUTE runs persist an immutable schema-v3 policy snapshot before
+scientific execution. It contains the catalog version, effective maximum
+attempts, planned tool identities, tool recovery/classifier versions, sorted
+retryable error-code sets, and a canonical fingerprint.
+
+Resume reconstructs the current effective policy and rejects semantic drift
+before scientific execution. An incompatible resume invokes no new scientific
+tools, does not call the planner, and does not mutate or terminalize the stored
+run; it requires a compatible runtime.
+
+#### Legacy and persistence behavior
+
+Persisted run-state schema is now version 3. Valid historical v1/v2 terminal
+states remain readable, and historical PLAN_ONLY remains zero-tool. Nonterminal
+legacy v1/v2 EXECUTE records without authoritative recovery provenance are
+rejected before new scientific execution; current registry state is never used
+to fabricate historical policy. Historical decoding remains distinct from new
+current-schema state creation.
+
+Current schema-v3 `AgentError` records require `recoverable` and
+`recovery_disposition` to be semantically consistent. Contradictory persisted
+fields are corruption rather than being silently normalized. New states cannot
+spoof a historical `source_schema_version` to bypass v3 invariants, and
+`FileRunStore` must not successfully create a record it cannot read back.
+
+#### Safety invariants
+
+- arbitrary Python and shell execution remain prohibited
+- LLM providers plan only and cannot directly execute tools
+- `ToolRegistry` remains the executable allowlist
+- batch size, device, dtype, truncation, model, and overwrite settings are never automatically changed
+- stale RUNNING scientific work is never automatically rerun
+- required checkpoint failure still stops downstream execution
+- PLAN_ONLY remains zero scientific execution
+- Milestone 5.2 cancellation semantics remain unchanged
+
+Accepted validation:
+
+- focused Milestone 5.3: 38 passed
+- orchestration/provider unit tests: 408 passed
+- canonical orchestration regression: 306 passed
+- complete lightweight regression: 460 passed, 6 skipped
+
+Deferred non-blocking follow-ups:
+
+- interrupted-before-plan recovery-disposition inconsistency
+- direct catalog-version drift regression
+- explicit `StepOutputRef` plus mutable-list retry regression
+- minor remaining `RunStore` I/O normalization gaps
+- stronger catalog call-site enumeration coverage
+
 ## Development environment
 
 - Linux server

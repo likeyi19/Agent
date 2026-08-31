@@ -1059,7 +1059,7 @@ def test_literal_version_one_terminal_records_load_without_rewrite(
 
     loaded = store.load("request-1:run")
 
-    assert loaded.schema_version == RUN_STATE_SCHEMA_VERSION == 2
+    assert loaded.schema_version == RUN_STATE_SCHEMA_VERSION == 3
     assert loaded.lifecycle_status.value == lifecycle_status
     assert loaded.lifecycle_status is not RunLifecycleStatus.CANCELLED
     assert path.read_bytes() == original
@@ -1152,12 +1152,13 @@ def test_version_one_record_rejects_cancellation_trace_events(
         store.load("request-1:run")
 
 
-def test_real_version_one_record_loads_without_rewrite_then_updates_to_v2(
+def test_real_version_one_record_loads_without_rewrite_then_updates_to_v3(
     tmp_path: Path,
 ) -> None:
     store = FileRunStore(tmp_path)
     timestamp = _now()
     record = _literal_v1_record("PLANNING", timestamp=timestamp)
+    record["request"]["mode"] = "PLAN_ONLY"
     record["trace"] = [
         {
             "sequence": 0,
@@ -1174,15 +1175,15 @@ def test_real_version_one_record_loads_without_rewrite_then_updates_to_v2(
 
     loaded = store.load("request-1:run")
 
-    assert loaded.schema_version == RUN_STATE_SCHEMA_VERSION == 2
+    assert loaded.schema_version == RUN_STATE_SCHEMA_VERSION == 3
     assert path.read_bytes() == original
     original_fingerprint = loaded.plan_fingerprint
     original_trace = loaded.trace
     updated = replace(loaded, revision=1, updated_at=_now())
     store.update(updated, expected_revision=0)
     rewritten = json.loads(path.read_text(encoding="utf-8"))
-    assert rewritten["schema_version"] == 2
-    assert rewritten["record"]["schema_version"] == 2
+    assert rewritten["schema_version"] == 3
+    assert rewritten["record"]["schema_version"] == 3
     assert rewritten["record"]["revision"] == 1
     assert rewritten["record"]["run_id"] == "request-1:run"
     assert rewritten["record"]["plan_fingerprint"] == original_fingerprint

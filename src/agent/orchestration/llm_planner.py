@@ -19,7 +19,7 @@ from agent.schemas import (
 )
 
 from .planner import PlannerError
-from .planning_model import PlanningModel
+from .planning_model import PlanningModel, PlanningModelError
 from .registry import ArgumentSpec, ToolRegistry
 
 
@@ -611,6 +611,12 @@ class LLMPlanner:
                 prompt=prompt,
                 response_schema=_response_schema(registry),
             )
+        except PlanningModelError as exc:
+            raise PlannerError(
+                exc.code,
+                str(exc),
+                category=ErrorCategory.ENVIRONMENT_ERROR,
+            ) from exc
         except Exception as exc:
             raise PlannerError(
                 "PLANNING_PROVIDER_ERROR",

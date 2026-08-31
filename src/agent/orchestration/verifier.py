@@ -134,12 +134,12 @@ def _verify_common_step(
         )
         try:
             _plain_json_value(result)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError):
             checks.add(
                 "result_lightweight",
                 False,
                 "Result is lightweight and JSON-safe.",
-                f"Result is not lightweight and JSON-safe: {exc}",
+                "Result is not lightweight and JSON-safe.",
                 "RESULT_NOT_LIGHTWEIGHT",
             )
         else:
@@ -173,12 +173,12 @@ def _verify_common_step(
         if not isinstance(converted, Mapping):
             raise TypeError("result must be a mapping")
         plain_result = converted
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         checks.add(
             "result_lightweight",
             False,
             "Result is lightweight and JSON-safe.",
-            f"Result is not a lightweight JSON-safe mapping: {exc}",
+            "Result is not a lightweight JSON-safe mapping.",
             "RESULT_NOT_LIGHTWEIGHT",
         )
     else:
@@ -193,12 +193,12 @@ def _verify_common_step(
     try:
         contract_result = plain_result if plain_result is not None else result
         registry.validate_result(step.tool_name, contract_result)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         checks.add(
             "result_contract",
             False,
             "Result satisfies the authoritative registry contract.",
-            f"Result violates the authoritative registry contract: {exc}",
+            "Result violates the authoritative registry contract.",
             "RESULT_CONTRACT_INVALID",
         )
     else:

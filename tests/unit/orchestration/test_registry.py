@@ -212,8 +212,8 @@ def test_result_contract_rejects_missing_or_heavy_embedding_result(registry) -> 
     [
         (FileNotFoundError("missing"), ErrorCategory.RESOURCE_ERROR, "RESOURCE_NOT_FOUND"),
         (FileExistsError("exists"), ErrorCategory.USER_INPUT_ERROR, "OUTPUT_CONFLICT"),
-        (TypeError("bad type"), ErrorCategory.USER_INPUT_ERROR, "INVALID_ARGUMENT"),
-        (ValueError("bad value"), ErrorCategory.USER_INPUT_ERROR, "INVALID_ARGUMENT"),
+        (TypeError("bad type"), ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_EXCEPTION"),
+        (ValueError("bad value"), ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_EXCEPTION"),
         (
             RuntimeError(
                 "CUDA device cuda:0 was requested but CUDA is not available in this runtime."

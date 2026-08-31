@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
+import json
 import math
 from time import perf_counter
 from typing import Callable, Mapping, Sequence, cast
@@ -24,6 +26,11 @@ from agent.schemas import (
 )
 
 from .registry import ToolArgumentError, ToolRegistry, UnknownToolError
+from .error_policy import (
+    build_recovery_policy_snapshot,
+    classified_agent_error,
+    decide_same_step_recovery,
+)
 from .verifier import verify_step
 
 
@@ -145,6 +152,17 @@ def _copy_json_mapping(value: object, path: str) -> dict[str, JsonValue]:
     return dict(copied)
 
 
+def _fingerprint_json_mapping(value: Mapping[str, JsonValue]) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _preflight_failure(
     plan: AgentPlan,
     failures: list[tuple[str, str, str]],
@@ -159,10 +177,9 @@ def _preflight_failure(
         target_type="plan",
         target_id=plan.plan_id,
         checks=tuple(checks),
-        error=AgentError(
+        error=classified_agent_error(
             category=ErrorCategory.INTERNAL_AGENT_ERROR,
             code=code,
-            message="; ".join(failure[2] for failure in failures),
             step_id=step_id or None,
             tool_name=tool_name,
             details={
@@ -171,6 +188,7 @@ def _preflight_failure(
                 ),
                 "failure_count": len(failures),
             },
+            safe_fallback_message="Plan preflight failed.",
         ),
     )
 
@@ -404,7 +422,10 @@ class PlanExecutor:
                     step_id=step.step_id,
                     tool_name=step.tool_name,
                     exception_type=error.exception_type,
+                    recoverable=error.recoverable,
+                    attempt=error.attempt,
                     details=error.details,
+                    recovery_disposition=error.recovery_disposition,
                 )
                 status = StepStatus.FAILED
             else:
@@ -499,6 +520,11 @@ class PlanExecutor:
             TraceEventType.PLAN_VALIDATION,
             "Whole-plan preflight succeeded.",
             details={"plan_id": plan.plan_id},
+        )
+        recovery_policy_snapshot = build_recovery_policy_snapshot(
+            plan,
+            self._registry,
+            max_attempts_per_step=self._recovery_policy.max_attempts_per_step,
         )
 
         ordered_steps = plan.stable_topological_steps()
@@ -786,6 +812,11 @@ class PlanExecutor:
                 break
 
             spec = self._registry.get(step.tool_name)
+            argument_snapshot = _copy_json_mapping(
+                resolved_arguments,
+                f"step.{step.step_id}.validated_arguments",
+            )
+            argument_fingerprint = _fingerprint_json_mapping(argument_snapshot)
             attempt = 0
             returned_result: object | None = None
             tool_error: AgentError | None = None
@@ -796,6 +827,29 @@ class PlanExecutor:
                     attempt=attempt + 1,
                 ):
                     if tool_error is not None:
+                        trace.add(
+                            TraceEventType.RECOVERY,
+                            "Pending same-step retry was suppressed by cancellation.",
+                            step_id=step.step_id,
+                            attempt=attempt,
+                            details={
+                                "classification_code": tool_error.code,
+                                "recovery_disposition": (
+                                    tool_error.recovery_disposition.value
+                                ),
+                                "decision": "stop_cancelled",
+                                "reason": "cancellation_observed",
+                                "attempt": attempt,
+                                "max_attempts": (
+                                    self._recovery_policy.max_attempts_per_step
+                                ),
+                                "retry_exhausted": False,
+                                "argument_fingerprint": argument_fingerprint,
+                                "recovery_policy_fingerprint": (
+                                    recovery_policy_snapshot.fingerprint
+                                ),
+                            },
+                        )
                         finished_at = _utc_now()
                         results_by_id[step.step_id] = StepExecutionResult(
                             step_id=step.step_id,
@@ -803,7 +857,7 @@ class PlanExecutor:
                             status=StepStatus.FAILED,
                             attempt_count=attempt,
                             resolved_arguments=cast(
-                                Mapping[str, JsonValue], resolved_arguments
+                                Mapping[str, JsonValue], argument_snapshot
                             ),
                             error=tool_error,
                             started_at=started_at,
@@ -815,12 +869,22 @@ class PlanExecutor:
                         errors.insert(len(errors) - 1, tool_error)
                     break
                 attempt += 1
+                attempt_arguments = _copy_json_mapping(
+                    argument_snapshot,
+                    f"step.{step.step_id}.attempt_{attempt}_arguments",
+                )
                 trace.add(
                     TraceEventType.STEP_EXECUTION,
                     "Registered tool attempt started.",
                     step_id=step.step_id,
                     attempt=attempt,
-                    details={"tool_name": step.tool_name},
+                    details={
+                        "tool_name": step.tool_name,
+                        "argument_fingerprint": argument_fingerprint,
+                        "recovery_policy_fingerprint": (
+                            recovery_policy_snapshot.fingerprint
+                        ),
+                    },
                 )
                 results_by_id[step.step_id] = StepExecutionResult(
                     step_id=step.step_id,
@@ -828,13 +892,13 @@ class PlanExecutor:
                     status=StepStatus.RUNNING,
                     attempt_count=attempt,
                     resolved_arguments=cast(
-                        Mapping[str, JsonValue], resolved_arguments
+                        Mapping[str, JsonValue], argument_snapshot
                     ),
                     started_at=started_at,
                 )
                 notify("STEP_RUNNING")
                 try:
-                    returned_result = spec.function(**resolved_arguments)
+                    returned_result = spec.function(**attempt_arguments)
                 except Exception as exc:
                     tool_error = self._registry.classify_exception(
                         step.tool_name,
@@ -852,24 +916,52 @@ class PlanExecutor:
                             "recoverable": tool_error.recoverable,
                         },
                     )
-                    retry = (
-                        tool_error.recoverable
-                        and attempt < self._recovery_policy.max_attempts_per_step
+                    decision = decide_same_step_recovery(
+                        tool_error,
+                        attempt=attempt,
+                        max_attempts=self._recovery_policy.max_attempts_per_step,
                     )
+                    if decision.exhausted:
+                        tool_error = replace(
+                            tool_error,
+                            details={
+                                **tool_error.details,
+                                "retry_exhausted": True,
+                                "attempts": attempt,
+                                "max_attempts": (
+                                    self._recovery_policy.max_attempts_per_step
+                                ),
+                                "recovery_policy_fingerprint": (
+                                    recovery_policy_snapshot.fingerprint
+                                ),
+                            },
+                        )
                     trace.add(
                         TraceEventType.RECOVERY,
                         "Retry approved with unchanged arguments."
-                        if retry
-                        else "Retry not permitted; attempt is permanent.",
+                        if decision.retry
+                        else "Same-step recovery stopped.",
                         step_id=step.step_id,
                         attempt=attempt,
                         details={
-                            "retry": retry,
+                            "retry": decision.retry,
+                            "decision": decision.decision,
+                            "reason": decision.reason,
+                            "classification_code": tool_error.code,
+                            "recovery_disposition": (
+                                tool_error.recovery_disposition.value
+                            ),
+                            "attempt": attempt,
                             "max_attempts": self._recovery_policy.max_attempts_per_step,
                             "error_code": tool_error.code,
+                            "retry_exhausted": decision.exhausted,
+                            "argument_fingerprint": argument_fingerprint,
+                            "recovery_policy_fingerprint": (
+                                recovery_policy_snapshot.fingerprint
+                            ),
                         },
                     )
-                    if retry:
+                    if decision.retry:
                         notify("STEP_RUNNING")
                         continue
                     break
@@ -894,7 +986,7 @@ class PlanExecutor:
                     status=StepStatus.FAILED,
                     attempt_count=attempt,
                     resolved_arguments=cast(
-                        Mapping[str, JsonValue], resolved_arguments
+                        Mapping[str, JsonValue], argument_snapshot
                     ),
                     error=tool_error,
                     started_at=started_at,
@@ -920,7 +1012,7 @@ class PlanExecutor:
             }
             verification = verify_step(
                 step,
-                resolved_arguments,
+                argument_snapshot,
                 returned_result,
                 self._registry,
                 dependency_results=dependency_results,
@@ -965,7 +1057,7 @@ class PlanExecutor:
                     status=StepStatus.FAILED,
                     attempt_count=attempt,
                     resolved_arguments=cast(
-                        Mapping[str, JsonValue], resolved_arguments
+                        Mapping[str, JsonValue], argument_snapshot
                     ),
                     result=recordable_result,
                     verification=verification,
@@ -976,6 +1068,25 @@ class PlanExecutor:
                 )
                 errors.append(error)
                 failed_step_id = step.step_id
+                trace.add(
+                    TraceEventType.RECOVERY,
+                    "Verification failure is not eligible for automatic rerun.",
+                    step_id=step.step_id,
+                    attempt=attempt,
+                    details={
+                        "classification_code": error.code,
+                        "recovery_disposition": error.recovery_disposition.value,
+                        "decision": "stop_verification_failure",
+                        "reason": "verification_failure_after_tool_return",
+                        "attempt": attempt,
+                        "max_attempts": self._recovery_policy.max_attempts_per_step,
+                        "retry_exhausted": False,
+                        "argument_fingerprint": argument_fingerprint,
+                        "recovery_policy_fingerprint": (
+                            recovery_policy_snapshot.fingerprint
+                        ),
+                    },
+                )
                 trace.add(
                     TraceEventType.STEP_EXECUTION,
                     "Step failed because its result was not verified.",
@@ -996,7 +1107,7 @@ class PlanExecutor:
                 tool_name=step.tool_name,
                 status=StepStatus.SUCCEEDED,
                 attempt_count=attempt,
-                resolved_arguments=cast(Mapping[str, JsonValue], resolved_arguments),
+                resolved_arguments=cast(Mapping[str, JsonValue], argument_snapshot),
                 result=recordable_result,
                 verification=verification,
                 started_at=started_at,

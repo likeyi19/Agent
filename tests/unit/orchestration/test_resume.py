@@ -21,6 +21,8 @@ from agent.orchestration import (
     PlannerError,
     ResultContract,
     RunAlreadyActiveError,
+    RecoveryPolicyIncompatibleError,
+    RecoveryDisposition,
     RunLifecycleStatus,
     RunMode,
     RunStatus,
@@ -471,7 +473,7 @@ def test_overlapping_resume_cannot_interrupt_active_durable_run(
     assert tool.call_count == 1
 
 
-def test_resume_registry_preflight_failure_prevents_all_side_effects(
+def test_resume_registry_policy_drift_prevents_all_side_effects(
     tmp_path: Path,
 ) -> None:
     producer = Mock(return_value={"value": "persisted"})
@@ -480,14 +482,15 @@ def test_resume_registry_preflight_failure_prevents_all_side_effects(
     resume_producer = Mock(return_value={"value": "must-not-run"})
     incompatible_registry = ToolRegistry((_spec("producer", resume_producer),))
 
-    result = AgentRuntime(
-        planner=FixedPlanner(_two_step_plan()),
-        registry=incompatible_registry,
-        run_store=store,
-    ).resume("request-1:run")
+    before = store.load("request-1:run")
+    with pytest.raises(RecoveryPolicyIncompatibleError):
+        AgentRuntime(
+            planner=FixedPlanner(_two_step_plan()),
+            registry=incompatible_registry,
+            run_store=store,
+        ).resume("request-1:run")
 
-    assert result.status is RunStatus.FAILED
-    assert any(error.code == "UNKNOWN_TOOL" for error in result.errors)
+    assert store.load("request-1:run") == before
     resume_producer.assert_not_called()
     assert consumer.call_count == 0
 
@@ -669,6 +672,10 @@ def test_stale_running_step_becomes_interrupted_without_tool_rerun(
 
     assert result.status is RunStatus.FAILED
     assert result.errors[0].code == "STEP_OUTCOME_UNKNOWN_AFTER_INTERRUPTION"
+    assert (
+        result.errors[0].recovery_disposition
+        is RecoveryDisposition.MANUAL_RECONCILIATION
+    )
     assert state.lifecycle_status is RunLifecycleStatus.INTERRUPTED
     assert state.steps[0].status is StepStatus.FAILED
     tool.assert_not_called()

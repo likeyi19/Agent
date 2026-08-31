@@ -12,6 +12,8 @@ from agent.schemas import (
     ExecutionTraceEvent,
     PersistedRunState,
     PlanStep,
+    RecoveryDisposition,
+    RecoveryPolicySnapshot,
     RunMode,
     RunLifecycleStatus,
     RunStatus,
@@ -19,6 +21,7 @@ from agent.schemas import (
     StepOutputRef,
     StepStatus,
     TraceEventType,
+    ToolRecoveryPolicySnapshot,
     VerificationCheck,
     VerificationResult,
 )
@@ -33,7 +36,11 @@ from .executor import (
 )
 from .llm_planner import LLMPlanner
 from .planner import DeterministicPlanner, Planner, PlannerError
-from .planning_model import PlanningModel
+from .planning_model import (
+    PlanningModel,
+    PlanningModelError,
+    classify_provider_exception,
+)
 from .registry import (
     ArgumentSpec,
     ErrorClassification,
@@ -55,11 +62,14 @@ from .run_store import (
     RunAlreadyActiveError,
     RunAlreadyExistsError,
     RunNotFoundError,
+    RecoveryPolicyIncompatibleError,
+    RecoveryPolicyUnknownError,
     RunStateConflictError,
     RunStateCorruptionError,
     RunStateVersionError,
     RunStore,
     RunStoreError,
+    RunStoreIOError,
 )
 from .verifier import verify_run, verify_step
 
@@ -90,11 +100,16 @@ __all__ = [
     "Planner",
     "PlannerError",
     "PlanningModel",
+    "PlanningModelError",
     "PlanExecutor",
     "PlanStep",
     "PersistedRunState",
     "ResultContract",
     "RecoveryPolicy",
+    "RecoveryDisposition",
+    "RecoveryPolicySnapshot",
+    "RecoveryPolicyIncompatibleError",
+    "RecoveryPolicyUnknownError",
     "RunMode",
     "RunLifecycleStatus",
     "RunAlreadyActiveError",
@@ -105,6 +120,7 @@ __all__ = [
     "RunStateVersionError",
     "RunStore",
     "RunStoreError",
+    "RunStoreIOError",
     "RunStatus",
     "StepExecutionResult",
     "StepOutputRef",
@@ -113,11 +129,13 @@ __all__ = [
     "ToolRegistry",
     "ToolResultContractError",
     "ToolSpec",
+    "ToolRecoveryPolicySnapshot",
     "TraceEventType",
     "UnknownToolError",
     "VerificationCheck",
     "VerificationResult",
     "build_default_tool_registry",
+    "classify_provider_exception",
     "verify_run",
     "verify_step",
 ]

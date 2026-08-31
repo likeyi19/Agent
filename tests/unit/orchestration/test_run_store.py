@@ -18,12 +18,19 @@ from agent.orchestration import (
     PersistedRunState,
     PlanStep,
     RunAlreadyExistsError,
+    RunStoreIOError,
     RunLifecycleStatus,
     RunStateConflictError,
     RunStateCorruptionError,
     RunStateVersionError,
 )
-from agent.schemas import RUN_STATE_SCHEMA_VERSION, fingerprint_plan
+from agent.schemas import (
+    RUN_STATE_SCHEMA_VERSION,
+    RecoveryPolicySnapshot,
+    ToolRecoveryPolicySnapshot,
+    fingerprint_plan,
+    fingerprint_recovery_policy,
+)
 
 
 def _now() -> str:
@@ -51,7 +58,16 @@ def _planned_state() -> PersistedRunState:
         "fixed",
         (PlanStep("step", "tool", {}),),
     )
-    return replace(state, plan=plan, plan_fingerprint=fingerprint_plan(plan))
+    tools = (ToolRecoveryPolicySnapshot("tool", "test-v1", ()),)
+    policy = RecoveryPolicySnapshot(
+        "1", 2, tools, fingerprint_recovery_policy("1", 2, tools)
+    )
+    return replace(
+        state,
+        plan=plan,
+        plan_fingerprint=fingerprint_plan(plan),
+        recovery_policy_snapshot=policy,
+    )
 
 
 def _canonical(value: object) -> bytes:
@@ -244,8 +260,10 @@ def test_failed_replace_leaves_previous_revision_readable(
         raise OSError("simulated replace failure")
 
     monkeypatch.setattr(os, "replace", fail_replace)
-    with pytest.raises(OSError, match="simulated"):
+    with pytest.raises(RunStoreIOError, match="write durable run state") as raised:
         store.update(revision_one, expected_revision=0)
 
+    assert "simulated replace failure" not in str(raised.value)
+    assert isinstance(raised.value.__cause__, OSError)
     assert store.load(state.run_id) == state
     assert not tuple(tmp_path.glob("*.tmp"))

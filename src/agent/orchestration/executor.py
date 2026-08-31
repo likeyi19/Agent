@@ -49,6 +49,7 @@ class ExecutionOutcome:
     step_results: tuple[StepExecutionResult, ...]
     errors: tuple[AgentError, ...]
     trace: tuple[ExecutionTraceEvent, ...]
+    cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,11 @@ class ExecutionProgress:
     step_results: tuple[StepExecutionResult, ...]
     errors: tuple[AgentError, ...]
     trace: tuple[ExecutionTraceEvent, ...]
+    cancelled: bool = False
 
 
 ExecutionCheckpoint = Callable[[ExecutionProgress], None]
+CancellationCheck = Callable[[], str | None]
 
 
 class _TraceRecorder:
@@ -444,6 +447,7 @@ class PlanExecutor:
         *,
         completed_steps: Sequence[StepExecutionResult] = (),
         checkpoint: ExecutionCheckpoint | None = None,
+        should_cancel: CancellationCheck | None = None,
     ) -> ExecutionOutcome:
         """Preflight and execute a plan, optionally restoring verified steps."""
 
@@ -457,6 +461,8 @@ class PlanExecutor:
             )
         if checkpoint is not None and not callable(checkpoint):
             raise TypeError("`checkpoint` must be callable or None.")
+        if should_cancel is not None and not callable(should_cancel):
+            raise TypeError("`should_cancel` must be callable or None.")
 
         trace = _TraceRecorder()
         completed_by_id = self._validate_completed_step_set(plan, completed_steps)
@@ -500,6 +506,56 @@ class PlanExecutor:
         results_by_id: dict[str, StepExecutionResult] = {}
         errors: list[AgentError] = []
         failed_step_id: str | None = None
+        cancelled = False
+
+        def observe_cancellation(
+            boundary: str,
+            *,
+            step_id: str | None = None,
+            attempt: int | None = None,
+        ) -> bool:
+            nonlocal cancelled
+            if cancelled or should_cancel is None:
+                return cancelled
+            requested_at = should_cancel()
+            if requested_at is None:
+                return False
+            if not isinstance(requested_at, str) or not requested_at:
+                raise TypeError(
+                    "`should_cancel` must return a non-empty timestamp string or None."
+                )
+            cancelled = True
+            error = AgentError(
+                ErrorCategory.CANCELLATION,
+                "RUN_CANCELLED",
+                "Run cancellation was observed at a cooperative checkpoint.",
+                step_id=step_id,
+                attempt=attempt,
+                details={
+                    "requested_at": requested_at,
+                    "observed_boundary": boundary,
+                },
+            )
+            errors.append(error)
+            details = {
+                "requested_at": requested_at,
+                "observed_boundary": boundary,
+            }
+            trace.add(
+                TraceEventType.CANCELLATION_REQUESTED,
+                "Durable cancellation request was incorporated into execution trace.",
+                step_id=step_id,
+                attempt=attempt,
+                details=details,
+            )
+            trace.add(
+                TraceEventType.CANCELLATION_OBSERVED,
+                "Cancellation took effect at a cooperative execution checkpoint.",
+                step_id=step_id,
+                attempt=attempt,
+                details=details,
+            )
+            return True
 
         def snapshot() -> tuple[StepExecutionResult, ...]:
             return tuple(
@@ -523,6 +579,7 @@ class PlanExecutor:
                         snapshot(),
                         tuple(errors),
                         trace.events,
+                        cancelled,
                     )
                 )
 
@@ -678,8 +735,10 @@ class PlanExecutor:
         else:
             notify("PREFLIGHT_SUCCEEDED")
 
+        observe_cancellation("after_preflight_and_restoration")
+
         for step in ordered_steps:
-            if failed_step_id is not None:
+            if failed_step_id is not None or cancelled:
                 break
             if step.step_id in results_by_id:
                 continue
@@ -731,6 +790,30 @@ class PlanExecutor:
             returned_result: object | None = None
             tool_error: AgentError | None = None
             while attempt < self._recovery_policy.max_attempts_per_step:
+                if observe_cancellation(
+                    "before_scientific_attempt",
+                    step_id=step.step_id,
+                    attempt=attempt + 1,
+                ):
+                    if tool_error is not None:
+                        finished_at = _utc_now()
+                        results_by_id[step.step_id] = StepExecutionResult(
+                            step_id=step.step_id,
+                            tool_name=step.tool_name,
+                            status=StepStatus.FAILED,
+                            attempt_count=attempt,
+                            resolved_arguments=cast(
+                                Mapping[str, JsonValue], resolved_arguments
+                            ),
+                            error=tool_error,
+                            started_at=started_at,
+                            finished_at=finished_at,
+                            duration_seconds=max(
+                                0.0, perf_counter() - started_clock
+                            ),
+                        )
+                        errors.insert(len(errors) - 1, tool_error)
+                    break
                 attempt += 1
                 trace.add(
                     TraceEventType.STEP_EXECUTION,
@@ -800,6 +883,8 @@ class PlanExecutor:
                     )
                     break
 
+            if cancelled:
+                break
             if tool_error is not None:
                 finished_at = _utc_now()
                 duration = max(0.0, perf_counter() - started_clock)
@@ -925,8 +1010,42 @@ class PlanExecutor:
                 attempt=attempt,
             )
             notify("STEP_SUCCEEDED")
+            if observe_cancellation(
+                "after_verified_success_checkpoint",
+                step_id=step.step_id,
+                attempt=attempt,
+            ):
+                break
 
-        if failed_step_id is not None:
+        if cancelled:
+            for step in plan.steps:
+                if step.step_id in results_by_id:
+                    continue
+                skipped_error = AgentError(
+                    ErrorCategory.CANCELLATION,
+                    "EXECUTION_CANCELLED",
+                    "Step was not started because run cancellation took effect.",
+                    step_id=step.step_id,
+                    tool_name=step.tool_name,
+                )
+                now = _utc_now()
+                results_by_id[step.step_id] = StepExecutionResult(
+                    step_id=step.step_id,
+                    tool_name=step.tool_name,
+                    status=StepStatus.SKIPPED,
+                    error=skipped_error,
+                    started_at=now,
+                    finished_at=now,
+                    duration_seconds=0.0,
+                )
+                trace.add(
+                    TraceEventType.STEP_SKIPPED,
+                    "Step was skipped after cooperative cancellation was observed.",
+                    step_id=step.step_id,
+                    details={"reason": "cancellation"},
+                )
+            notify("CANCELLATION_OBSERVED")
+        elif failed_step_id is not None:
             steps_by_id = {step.step_id: step for step in plan.steps}
             for step in plan.steps:
                 if step.step_id in results_by_id:
@@ -970,13 +1089,27 @@ class PlanExecutor:
 
         trace.add(
             TraceEventType.RUN_COMPLETION,
-            "Plan execution completed successfully."
-            if not errors
-            else "Plan execution completed with failure.",
-            details={"status": "SUCCEEDED" if not errors else "FAILED"},
+            (
+                "Plan execution stopped after cooperative cancellation."
+                if cancelled
+                else (
+                    "Plan execution completed successfully."
+                    if not errors
+                    else "Plan execution completed with failure."
+                )
+            ),
+            details={
+                "status": (
+                    "CANCELLED"
+                    if cancelled
+                    else ("SUCCEEDED" if not errors else "FAILED")
+                )
+            },
         )
         ordered_results = tuple(results_by_id[step.step_id] for step in plan.steps)
-        outcome = ExecutionOutcome(ordered_results, tuple(errors), trace.events)
+        outcome = ExecutionOutcome(
+            ordered_results, tuple(errors), trace.events, cancelled=cancelled
+        )
         if checkpoint is not None:
             checkpoint(
                 ExecutionProgress(
@@ -985,6 +1118,7 @@ class PlanExecutor:
                     outcome.step_results,
                     outcome.errors,
                     outcome.trace,
+                    outcome.cancelled,
                 )
             )
         return outcome
@@ -1047,6 +1181,7 @@ def _depends_on(
 
 
 __all__ = [
+    "CancellationCheck",
     "ExecutionCheckpoint",
     "ExecutionOutcome",
     "ExecutionProgress",

@@ -19,6 +19,7 @@ class RunMode(str, Enum):
 
 
 class ErrorCategory(str, Enum):
+    CANCELLATION = "CANCELLATION"
     USER_INPUT_ERROR = "USER_INPUT_ERROR"
     RESOURCE_ERROR = "RESOURCE_ERROR"
     ENVIRONMENT_ERROR = "ENVIRONMENT_ERROR"
@@ -39,9 +40,12 @@ class RunStatus(str, Enum):
     PLANNED = "PLANNED"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class TraceEventType(str, Enum):
+    CANCELLATION_REQUESTED = "CANCELLATION_REQUESTED"
+    CANCELLATION_OBSERVED = "CANCELLATION_OBSERVED"
     PLANNING = "PLANNING"
     PLAN_VALIDATION = "PLAN_VALIDATION"
     STEP_EXECUTION = "STEP_EXECUTION"
@@ -49,6 +53,7 @@ class TraceEventType(str, Enum):
     RECOVERY = "RECOVERY"
     STEP_SKIPPED = "STEP_SKIPPED"
     RUN_COMPLETION = "RUN_COMPLETION"
+    RUN_CANCELLED = "RUN_CANCELLED"
 
 
 def _require_non_empty_string(value: object, field_name: str) -> str:

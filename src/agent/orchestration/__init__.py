@@ -5,6 +5,9 @@ from agent.schemas import (
     AgentPlan,
     AgentRequest,
     AgentRunResult,
+    CancellationDisposition,
+    CancellationReceipt,
+    CancellationRequest,
     ErrorCategory,
     ExecutionTraceEvent,
     PersistedRunState,
@@ -21,6 +24,7 @@ from agent.schemas import (
 )
 
 from .executor import (
+    CancellationCheck,
     ExecutionCheckpoint,
     ExecutionOutcome,
     ExecutionProgress,
@@ -43,6 +47,10 @@ from .registry import (
 )
 from .runtime import AgentRuntime
 from .run_store import (
+    CANCELLATION_STATE_FORMAT,
+    CancellationRequestedError,
+    CancellationStateCorruptionError,
+    CancellationStateVersionError,
     FileRunStore,
     RunAlreadyActiveError,
     RunAlreadyExistsError,
@@ -62,6 +70,14 @@ __all__ = [
     "AgentRunResult",
     "AgentRuntime",
     "ArgumentSpec",
+    "CANCELLATION_STATE_FORMAT",
+    "CancellationCheck",
+    "CancellationDisposition",
+    "CancellationReceipt",
+    "CancellationRequest",
+    "CancellationRequestedError",
+    "CancellationStateCorruptionError",
+    "CancellationStateVersionError",
     "DeterministicPlanner",
     "ErrorCategory",
     "ErrorClassification",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import errno
 import fcntl
 import hashlib
@@ -13,6 +14,11 @@ import tempfile
 from typing import ContextManager, Iterator, Mapping, Protocol, runtime_checkable
 
 from agent.schemas.run_state import (
+    CANCELLATION_STATE_SCHEMA_VERSION,
+    LEGACY_RUN_STATE_SCHEMA_VERSIONS,
+    CancellationDisposition,
+    CancellationReceipt,
+    CancellationRequest,
     PersistedRunState,
     RUN_STATE_SCHEMA_VERSION,
     RunLifecycleStatus,
@@ -21,6 +27,7 @@ from agent.schemas import StepStatus
 
 
 RUN_STATE_FORMAT = "agent.run-state"
+CANCELLATION_STATE_FORMAT = "agent.run-cancellation"
 
 
 class RunStoreError(RuntimeError):
@@ -51,6 +58,25 @@ class RunStateConflictError(RunStoreError):
     """Raised when an optimistic revision check detects a concurrent update."""
 
 
+class CancellationStateCorruptionError(RunStoreError):
+    """Raised when durable cancellation intent is malformed or inconsistent."""
+
+
+class CancellationStateVersionError(RunStoreError):
+    """Raised when durable cancellation intent uses an unsupported schema."""
+
+
+class CancellationRequestedError(RunStoreError):
+    """Raised when cancellation wins arbitration against a terminal update."""
+
+    def __init__(self, request: CancellationRequest) -> None:
+        self.request = request
+        super().__init__(
+            f"Cancellation was requested for durable run {request.run_id!r} "
+            f"at {request.requested_at}."
+        )
+
+
 @runtime_checkable
 class RunStore(Protocol):
     """Minimal persistence contract used by AgentRuntime."""
@@ -60,6 +86,10 @@ class RunStore(Protocol):
     def create(self, state: PersistedRunState) -> PersistedRunState: ...
 
     def load(self, run_id: str) -> PersistedRunState: ...
+
+    def request_cancellation(self, run_id: str) -> CancellationReceipt: ...
+
+    def load_cancellation(self, run_id: str) -> CancellationRequest | None: ...
 
     def update(
         self,
@@ -115,6 +145,7 @@ _RUN_TRANSITIONS = {
             RunLifecycleStatus.VALIDATED,
             RunLifecycleStatus.PLANNED,
             RunLifecycleStatus.FAILED,
+            RunLifecycleStatus.CANCELLED,
         }
     ),
     RunLifecycleStatus.VALIDATED: frozenset(
@@ -122,6 +153,7 @@ _RUN_TRANSITIONS = {
             RunLifecycleStatus.VALIDATED,
             RunLifecycleStatus.RUNNING,
             RunLifecycleStatus.FAILED,
+            RunLifecycleStatus.CANCELLED,
         }
     ),
     RunLifecycleStatus.RUNNING: frozenset(
@@ -130,13 +162,34 @@ _RUN_TRANSITIONS = {
             RunLifecycleStatus.SUCCEEDED,
             RunLifecycleStatus.FAILED,
             RunLifecycleStatus.INTERRUPTED,
+            RunLifecycleStatus.CANCELLED,
         }
     ),
     RunLifecycleStatus.FAILED: frozenset({RunLifecycleStatus.FAILED}),
     RunLifecycleStatus.PLANNED: frozenset(),
     RunLifecycleStatus.SUCCEEDED: frozenset(),
     RunLifecycleStatus.INTERRUPTED: frozenset(),
+    RunLifecycleStatus.CANCELLED: frozenset(),
 }
+
+
+_TERMINAL_LIFECYCLES = frozenset(
+    {
+        RunLifecycleStatus.PLANNED,
+        RunLifecycleStatus.SUCCEEDED,
+        RunLifecycleStatus.FAILED,
+        RunLifecycleStatus.INTERRUPTED,
+        RunLifecycleStatus.CANCELLED,
+    }
+)
+
+_CANCELLATION_ARBITRATED_LIFECYCLES = frozenset(
+    {
+        RunLifecycleStatus.PLANNED,
+        RunLifecycleStatus.SUCCEEDED,
+        RunLifecycleStatus.FAILED,
+    }
+)
 
 
 _STEP_TRANSITIONS = {
@@ -220,6 +273,11 @@ class FileRunStore:
 
         return self._root / f"{_safe_run_name(run_id)}.lease"
 
+    def cancellation_path(self, run_id: str) -> Path:
+        """Return the safe cancellation-sidecar location for a run ID."""
+
+        return self._root / f"{_safe_run_name(run_id)}.cancel.json"
+
     @contextmanager
     def execution_lease(self, run_id: str) -> Iterator[None]:
         """Fail fast unless this process can exclusively own run execution.
@@ -285,6 +343,53 @@ class FileRunStore:
         with self._lock(run_id, exclusive=False):
             return self._load_path(path, expected_run_id=run_id)
 
+    def request_cancellation(self, run_id: str) -> CancellationReceipt:
+        """Atomically record idempotent cancellation intent without a main update."""
+
+        state_path = self.state_path(run_id)
+        cancellation_path = self.cancellation_path(run_id)
+        with self._lock(run_id, exclusive=True):
+            current = self._load_path(state_path, expected_run_id=run_id)
+            if current.lifecycle_status in _TERMINAL_LIFECYCLES:
+                return CancellationReceipt(
+                    run_id,
+                    CancellationDisposition.ALREADY_TERMINAL,
+                    terminal_status=current.lifecycle_status,
+                )
+            try:
+                existing = self._load_cancellation_path(
+                    cancellation_path, expected_run_id=run_id
+                )
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                return CancellationReceipt(
+                    run_id,
+                    CancellationDisposition.ALREADY_REQUESTED,
+                    requested_at=existing.requested_at,
+                )
+            request = CancellationRequest(
+                CANCELLATION_STATE_SCHEMA_VERSION,
+                run_id,
+                datetime.now(timezone.utc).isoformat(),
+            )
+            self._write_cancellation_atomic(cancellation_path, request)
+            return CancellationReceipt(
+                run_id,
+                CancellationDisposition.REQUESTED,
+                requested_at=request.requested_at,
+            )
+
+    def load_cancellation(self, run_id: str) -> CancellationRequest | None:
+        """Load validated cancellation intent, returning None only when absent."""
+
+        path = self.cancellation_path(run_id)
+        with self._lock(run_id, exclusive=False):
+            try:
+                return self._load_cancellation_path(path, expected_run_id=run_id)
+            except FileNotFoundError:
+                return None
+
     def update(
         self,
         state: PersistedRunState,
@@ -314,6 +419,30 @@ class FileRunStore:
             if current.created_at != state.created_at:
                 raise RunStateConflictError("Durable run creation identity changed.")
             _validate_update_transition(current, state)
+            cancellation: CancellationRequest | None = None
+            if (
+                state.lifecycle_status in _CANCELLATION_ARBITRATED_LIFECYCLES
+                or state.lifecycle_status is RunLifecycleStatus.CANCELLED
+            ):
+                try:
+                    cancellation = self._load_cancellation_path(
+                        self.cancellation_path(state.run_id),
+                        expected_run_id=state.run_id,
+                    )
+                except FileNotFoundError:
+                    cancellation = None
+            if (
+                state.lifecycle_status in _CANCELLATION_ARBITRATED_LIFECYCLES
+                and cancellation is not None
+            ):
+                raise CancellationRequestedError(cancellation)
+            if (
+                state.lifecycle_status is RunLifecycleStatus.CANCELLED
+                and cancellation is None
+            ):
+                raise RunStateConflictError(
+                    "A durable CANCELLED transition requires cancellation intent."
+                )
             self._write_atomic(path, state)
         return state
 
@@ -352,10 +481,14 @@ class FileRunStore:
         if decoded["format"] != RUN_STATE_FORMAT:
             raise RunStateCorruptionError("Durable run format identifier is invalid.")
         version = decoded["schema_version"]
+        supported_versions = {
+            RUN_STATE_SCHEMA_VERSION,
+            *LEGACY_RUN_STATE_SCHEMA_VERSIONS,
+        }
         if (
             isinstance(version, bool)
             or not isinstance(version, int)
-            or version != RUN_STATE_SCHEMA_VERSION
+            or version not in supported_versions
         ):
             raise RunStateVersionError(
                 f"Unsupported durable run schema version {version!r}."
@@ -373,6 +506,13 @@ class FileRunStore:
         record = decoded["record"]
         if _record_digest(record) != integrity["digest"]:
             raise RunStateCorruptionError("Durable run integrity digest does not match.")
+        if not isinstance(record, Mapping):
+            raise RunStateCorruptionError("Durable run record must be a JSON object.")
+        record_version = record.get("schema_version")
+        if record_version != version or isinstance(record_version, bool):
+            raise RunStateVersionError(
+                "Envelope and record schema versions do not match."
+            )
         try:
             state = PersistedRunState.from_dict(record)
         except (TypeError, ValueError, KeyError) as exc:
@@ -381,15 +521,97 @@ class FileRunStore:
             raise RunStateCorruptionError(
                 f"Durable run record violates its schema: {exc}"
             ) from exc
-        if state.schema_version != version:
-            raise RunStateVersionError(
-                "Envelope and record schema versions do not match."
-            )
         if state.run_id != expected_run_id:
             raise RunStateCorruptionError(
                 "Durable run identity does not match its storage location."
             )
         return state
+
+    def _load_cancellation_path(
+        self, path: Path, *, expected_run_id: str
+    ) -> CancellationRequest:
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise RunStoreError(
+                f"Unable to read durable cancellation state: {exc}"
+            ) from exc
+        try:
+            decoded = json.loads(
+                raw.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_keys,
+                parse_constant=_reject_constant,
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            _DuplicateJsonKey,
+            RecursionError,
+            ValueError,
+        ) as exc:
+            raise CancellationStateCorruptionError(
+                f"Durable cancellation state is malformed JSON: {exc}"
+            ) from exc
+        if not isinstance(decoded, Mapping):
+            raise CancellationStateCorruptionError(
+                "Durable cancellation envelope must be a JSON object."
+            )
+        expected_fields = {"format", "schema_version", "integrity", "record"}
+        if set(decoded) != expected_fields:
+            raise CancellationStateCorruptionError(
+                "Durable cancellation envelope fields do not match schema."
+            )
+        if decoded["format"] != CANCELLATION_STATE_FORMAT:
+            raise CancellationStateCorruptionError(
+                "Durable cancellation format identifier is invalid."
+            )
+        version = decoded["schema_version"]
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != CANCELLATION_STATE_SCHEMA_VERSION
+        ):
+            raise CancellationStateVersionError(
+                f"Unsupported durable cancellation schema version {version!r}."
+            )
+        integrity = decoded["integrity"]
+        if not isinstance(integrity, Mapping) or set(integrity) != {
+            "algorithm",
+            "digest",
+        }:
+            raise CancellationStateCorruptionError(
+                "Durable cancellation integrity block is invalid."
+            )
+        if integrity["algorithm"] != "sha256" or not isinstance(
+            integrity["digest"], str
+        ):
+            raise CancellationStateCorruptionError(
+                "Durable cancellation integrity metadata is invalid."
+            )
+        record = decoded["record"]
+        if _record_digest(record) != integrity["digest"]:
+            raise CancellationStateCorruptionError(
+                "Durable cancellation integrity digest does not match."
+            )
+        try:
+            request = CancellationRequest.from_dict(record)
+        except (TypeError, ValueError, KeyError) as exc:
+            if "schema version" in str(exc).lower():
+                raise CancellationStateVersionError(str(exc)) from exc
+            raise CancellationStateCorruptionError(
+                f"Durable cancellation record violates its schema: {exc}"
+            ) from exc
+        if request.schema_version != version:
+            raise CancellationStateVersionError(
+                "Cancellation envelope and record schema versions do not match."
+            )
+        if request.run_id != expected_run_id:
+            raise CancellationStateCorruptionError(
+                "Durable cancellation identity does not match its storage location."
+            )
+        return request
 
     def _write_atomic(self, path: Path, state: PersistedRunState) -> None:
         record = state.to_dict()
@@ -435,8 +657,58 @@ class FileRunStore:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
+    def _write_cancellation_atomic(
+        self, path: Path, request: CancellationRequest
+    ) -> None:
+        record = request.to_dict()
+        envelope = {
+            "format": CANCELLATION_STATE_FORMAT,
+            "schema_version": CANCELLATION_STATE_SCHEMA_VERSION,
+            "integrity": {
+                "algorithm": "sha256",
+                "digest": _record_digest(record),
+            },
+            "record": record,
+        }
+        payload = _canonical_json_bytes(envelope)
+        temporary: Path | None = None
+        try:
+            descriptor, name = tempfile.mkstemp(
+                dir=self._root,
+                prefix=f".{path.stem}.",
+                suffix=".tmp",
+            )
+            temporary = Path(name)
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise
+            os.replace(temporary, path)
+            temporary = None
+            os.chmod(path, 0o600)
+            directory_descriptor = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
 
 __all__ = [
+    "CANCELLATION_STATE_FORMAT",
+    "CancellationRequestedError",
+    "CancellationStateCorruptionError",
+    "CancellationStateVersionError",
     "FileRunStore",
     "RUN_STATE_FORMAT",
     "RunAlreadyActiveError",

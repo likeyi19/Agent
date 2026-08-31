@@ -6,13 +6,14 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–4 and Milestone 5.1 are complete.
+Milestones 1–4 and Milestones 5.1–5.2 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
 - Milestone 3: safe Agent orchestration core
 - Milestone 4: provider-neutral natural-language planning
 - Milestone 5.1: durable run state and planner-free resume
+- Milestone 5.2: cooperative cancellation and durable run lifecycle
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -47,3 +48,21 @@ from interfering with an active run. Scientific tools, providers, planners,
 registry, verifier, and retry semantics are unchanged. Providers receive no
 filesystem or `RunStore` access, and core durability tests remain deterministic
 and offline without network, GPU, model checkpoint, or provider configuration.
+
+## Cooperative cancellation
+
+`AgentRuntime.cancel(run_id)` requests cancellation of a durable run without
+acquiring or stealing its execution lease. Cancellation is cooperative:
+already-running scientific calls are not force-killed, and verified completed
+work is checkpointed and preserved. Once cancellation is observed at a safe
+checkpoint, no new attempt or downstream step starts; unstarted work is marked
+SKIPPED and the run becomes CANCELLED. PLAN_ONLY remains zero scientific-tool
+execution, and terminal CANCELLED resume invokes zero planners and zero tools.
+
+Cancellation intent is stored separately from revisioned run state, so a
+request can be recorded while another runtime owns execution without
+invalidating active checkpoints. Duplicate requests are idempotent, terminal
+runs remain immutable, and stale RUNNING work with an unknown outcome remains
+INTERRUPTED. Core cancellation behavior remains deterministic and offline and
+does not change scientific tools, planners, providers, registry, verifier, or
+retry policy.

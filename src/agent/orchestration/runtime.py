@@ -11,6 +11,8 @@ from agent.schemas import (
     AgentPlan,
     AgentRequest,
     AgentRunResult,
+    CancellationReceipt,
+    CancellationRequest,
     ErrorCategory,
     ExecutionTraceEvent,
     PersistedRunState,
@@ -21,10 +23,12 @@ from agent.schemas import (
     StepExecutionResult,
     StepStatus,
     TraceEventType,
+    VerificationResult,
     fingerprint_plan,
 )
 
 from .executor import (
+    CancellationCheck,
     ExecutionCheckpoint,
     ExecutionProgress,
     PlanExecutor,
@@ -32,7 +36,7 @@ from .executor import (
 )
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
-from .run_store import RunStore
+from .run_store import CancellationRequestedError, RunStore, RunStoreError
 from .verifier import verify_run
 
 
@@ -87,6 +91,17 @@ class AgentRuntime:
     @property
     def run_store(self) -> RunStore | None:
         return self._run_store
+
+    def cancel(self, run_id: str) -> CancellationReceipt:
+        """Request cooperative cancellation of one durable nonterminal run."""
+
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError("`run_id` must be a non-empty string.")
+        store = self._required_run_store()
+        receipt = store.request_cancellation(run_id)
+        if not isinstance(receipt, CancellationReceipt):
+            raise TypeError("RunStore returned an invalid cancellation receipt.")
+        return receipt
 
     def run(self, request: AgentRequest) -> AgentRunResult:
         """Plan and optionally execute one request without hidden global state."""
@@ -174,6 +189,8 @@ class AgentRuntime:
         plan: AgentPlan,
         run_id: str,
         trace: _TraceRecorder,
+        *,
+        should_cancel: CancellationCheck | None = None,
     ) -> AgentRunResult:
         trace.add(
             TraceEventType.PLAN_VALIDATION,
@@ -205,6 +222,24 @@ class AgentRuntime:
                 planning_only=True,
                 plan=plan,
                 errors=(error,),
+                trace=trace.events,
+            )
+
+        requested_at = None if should_cancel is None else should_cancel()
+        if requested_at is not None:
+            _record_cancellation_observation(
+                trace,
+                requested_at,
+                "after_plan_only_preflight",
+            )
+            return AgentRunResult(
+                run_id=run_id,
+                request_id=request.request_id,
+                status=RunStatus.CANCELLED,
+                planning_only=True,
+                plan=plan,
+                verification=preflight,
+                errors=(_cancellation_error(requested_at, "after_plan_only_preflight"),),
                 trace=trace.events,
             )
 
@@ -261,9 +296,10 @@ class AgentRuntime:
         trace = _TraceRecorder()
         trace.add(
             TraceEventType.PLANNING,
-            "Planner invocation started.",
+            "Durable planning state initialized before planner invocation.",
             details={"planner_name": type(self._planner).__name__},
         )
+
         now = _utc_now()
         state = store.create(
             PersistedRunState(
@@ -276,6 +312,19 @@ class AgentRuntime:
                 updated_at=now,
                 trace=trace.events,
             )
+        )
+
+        cancellation = self._load_cancellation(run_id)
+        if cancellation is not None:
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="before_planner_invocation",
+            )
+        trace.add(
+            TraceEventType.PLANNING,
+            "Planner invocation started.",
+            details={"planner_name": type(self._planner).__name__},
         )
 
         try:
@@ -348,8 +397,22 @@ class AgentRuntime:
             trace=trace.events,
         )
 
+        cancellation = self._load_cancellation(run_id)
+        if cancellation is not None:
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="after_plan_persistence",
+            )
+
         if request.mode is RunMode.PLAN_ONLY:
-            result = self._run_plan_only(request, plan, run_id, trace)
+            result = self._run_plan_only(
+                request,
+                plan,
+                run_id,
+                trace,
+                should_cancel=self._cancellation_check(run_id),
+            )
             return self._persist_terminal(state, result)
         return self._run_durable_execute(request, plan, run_id, trace, state)
 
@@ -365,9 +428,12 @@ class AgentRuntime:
     ) -> AgentRunResult:
         state = initial_state
         base_trace = trace.events
+        arbitrated_progress: ExecutionProgress | None = None
 
         def checkpoint(progress: ExecutionProgress) -> None:
-            nonlocal state
+            nonlocal arbitrated_progress, state
+            if progress.cancelled:
+                return
             if progress.phase == "PREFLIGHT_SUCCEEDED":
                 lifecycle = (
                     RunLifecycleStatus.RUNNING
@@ -382,24 +448,50 @@ class AgentRuntime:
                 lifecycle = RunLifecycleStatus.FAILED
             else:
                 lifecycle = RunLifecycleStatus.RUNNING
-            state = self._update_state(
-                state,
-                lifecycle_status=lifecycle,
-                preflight_verification=progress.preflight,
-                steps=progress.step_results,
-                run_verification=None,
-                errors=progress.errors,
-                trace=_merge_trace(base_trace, progress.trace),
-            )
+            try:
+                state = self._update_state(
+                    state,
+                    lifecycle_status=lifecycle,
+                    preflight_verification=progress.preflight,
+                    steps=progress.step_results,
+                    run_verification=None,
+                    errors=progress.errors,
+                    trace=_merge_trace(base_trace, progress.trace),
+                )
+            except CancellationRequestedError:
+                arbitrated_progress = progress
+                raise
 
-        result = self._run_execute(
-            request,
-            plan,
-            run_id,
-            trace,
-            completed_steps=completed_steps,
-            checkpoint=checkpoint,
-        )
+        try:
+            result = self._run_execute(
+                request,
+                plan,
+                run_id,
+                trace,
+                completed_steps=completed_steps,
+                checkpoint=checkpoint,
+                should_cancel=self._cancellation_check(run_id),
+            )
+        except CancellationRequestedError as exc:
+            if arbitrated_progress is None:
+                raise
+            result = AgentRunResult(
+                run_id=run_id,
+                request_id=request.request_id,
+                status=RunStatus.CANCELLED,
+                planning_only=False,
+                plan=plan,
+                steps=arbitrated_progress.step_results,
+                errors=arbitrated_progress.errors,
+                trace=_merge_trace(base_trace, arbitrated_progress.trace),
+            )
+            return self._persist_cancelled(
+                state,
+                exc.request,
+                boundary="checkpoint_terminal_arbitration",
+                result=result,
+                preflight_verification=arbitrated_progress.preflight,
+            )
         return self._persist_terminal(state, result)
 
     def resume(self, run_id: str) -> AgentRunResult:
@@ -418,12 +510,21 @@ class AgentRuntime:
             RunLifecycleStatus.SUCCEEDED,
             RunLifecycleStatus.FAILED,
             RunLifecycleStatus.INTERRUPTED,
+            RunLifecycleStatus.CANCELLED,
         }:
             return state.to_run_result()
-        if state.plan is None:
-            return self._fail_interrupted_planning(state)
         if any(result.status is StepStatus.RUNNING for result in state.steps):
             return self._fail_stale_running_step(state)
+
+        cancellation = self._load_cancellation(run_id)
+        if cancellation is not None:
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="resume_before_pending_work",
+            )
+        if state.plan is None:
+            return self._fail_interrupted_planning(state)
 
         trace = _TraceRecorder()
         trace.extend(state.trace)
@@ -433,12 +534,20 @@ class AgentRuntime:
             details={"run_id": state.run_id, "revision": state.revision},
         )
         state = self._update_state(state, trace=trace.events)
+        cancellation = self._load_cancellation(run_id)
+        if cancellation is not None:
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="resume_after_state_restoration",
+            )
         if state.request.mode is RunMode.PLAN_ONLY:
             result = self._run_plan_only(
                 state.request,
                 state.plan,
                 state.run_id,
                 trace,
+                should_cancel=self._cancellation_check(run_id),
             )
             return self._persist_terminal(state, result)
         completed_steps = tuple(
@@ -541,6 +650,16 @@ class AgentRuntime:
 
         trace = _TraceRecorder()
         trace.extend(state.trace)
+        cancellation = self._load_cancellation(state.run_id)
+        if cancellation is not None:
+            trace.add(
+                TraceEventType.CANCELLATION_REQUESTED,
+                "Cancellation intent remained durable while stale work was recovered.",
+                details={
+                    "requested_at": cancellation.requested_at,
+                    "resolution": "INTERRUPTED",
+                },
+            )
         trace.add(
             TraceEventType.RECOVERY,
             "Stale RUNNING step detected; automatic rerun was refused.",
@@ -567,6 +686,18 @@ class AgentRuntime:
         state: PersistedRunState,
         result: AgentRunResult,
     ) -> AgentRunResult:
+        if result.status is RunStatus.CANCELLED:
+            cancellation = self._load_cancellation(state.run_id)
+            if cancellation is None:
+                raise RuntimeError(
+                    "A cancelled result requires durable cancellation intent."
+                )
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="cooperative_checkpoint",
+                result=result,
+            )
         lifecycle = {
             RunStatus.PLANNED: RunLifecycleStatus.PLANNED,
             RunStatus.SUCCEEDED: RunLifecycleStatus.SUCCEEDED,
@@ -577,18 +708,90 @@ class AgentRuntime:
         if result.planning_only:
             preflight = result.verification
             run_verification = None
+        try:
+            terminal = self._update_state(
+                state,
+                lifecycle_status=lifecycle,
+                plan=result.plan,
+                plan_fingerprint=(
+                    fingerprint_plan(result.plan) if result.plan is not None else None
+                ),
+                preflight_verification=preflight,
+                steps=_terminal_steps(state, result),
+                run_verification=run_verification,
+                errors=result.errors,
+                trace=_reconcile_trace(state.trace, result.trace),
+            )
+        except CancellationRequestedError as exc:
+            return self._persist_cancelled(
+                state,
+                exc.request,
+                boundary="normal_terminal_arbitration",
+                result=result,
+            )
+        return terminal.to_run_result()
+
+    def _persist_cancelled(
+        self,
+        state: PersistedRunState,
+        cancellation: CancellationRequest,
+        *,
+        boundary: str,
+        result: AgentRunResult | None = None,
+        preflight_verification: VerificationResult | None = None,
+    ) -> AgentRunResult:
+        trace = _TraceRecorder()
+        returned_trace = () if result is None else result.trace
+        trace.extend(_reconcile_trace(state.trace, returned_trace))
+        if not any(
+            event.event_type is TraceEventType.CANCELLATION_OBSERVED
+            for event in trace.events
+        ):
+            _record_cancellation_observation(
+                trace,
+                cancellation.requested_at,
+                boundary,
+            )
+        trace.add(
+            TraceEventType.RUN_CANCELLED,
+            "Durable run finalized as cooperatively cancelled.",
+            details={
+                "requested_at": cancellation.requested_at,
+                "observed_boundary": boundary,
+                "status": "CANCELLED",
+            },
+        )
+
+        plan = state.plan if result is None or result.plan is None else result.plan
+        preflight = state.preflight_verification
+        run_verification = state.run_verification
+        candidate_steps = state.steps
+        candidate_errors = state.errors
+        if result is not None:
+            candidate_steps = _terminal_steps(state, result)
+            candidate_errors = _merge_errors(state.errors, result.errors)
+            if result.planning_only:
+                preflight = result.verification
+                run_verification = None
+            else:
+                run_verification = result.verification
+        if preflight_verification is not None:
+            preflight = preflight_verification
+        cancellation_error = _cancellation_error(
+            cancellation.requested_at,
+            boundary,
+        )
+        errors = _merge_errors(candidate_errors, (cancellation_error,))
         terminal = self._update_state(
             state,
-            lifecycle_status=lifecycle,
-            plan=result.plan,
-            plan_fingerprint=(
-                fingerprint_plan(result.plan) if result.plan is not None else None
-            ),
+            lifecycle_status=RunLifecycleStatus.CANCELLED,
+            plan=plan,
+            plan_fingerprint=(fingerprint_plan(plan) if plan is not None else None),
             preflight_verification=preflight,
-            steps=_terminal_steps(state, result),
+            steps=_cancel_remaining_steps(candidate_steps),
             run_verification=run_verification,
-            errors=result.errors,
-            trace=_reconcile_trace(state.trace, result.trace),
+            errors=errors,
+            trace=trace.events,
         )
         return terminal.to_run_result()
 
@@ -615,6 +818,21 @@ class AgentRuntime:
             )
         return self._run_store
 
+    def _load_cancellation(self, run_id: str) -> CancellationRequest | None:
+        cancellation = self._required_run_store().load_cancellation(run_id)
+        if cancellation is not None and not isinstance(
+            cancellation, CancellationRequest
+        ):
+            raise TypeError("RunStore returned invalid cancellation state.")
+        return cancellation
+
+    def _cancellation_check(self, run_id: str) -> CancellationCheck:
+        def should_cancel() -> str | None:
+            cancellation = self._load_cancellation(run_id)
+            return None if cancellation is None else cancellation.requested_at
+
+        return should_cancel
+
     def _run_execute(
         self,
         request: AgentRequest,
@@ -624,13 +842,17 @@ class AgentRuntime:
         *,
         completed_steps: Sequence[StepExecutionResult] = (),
         checkpoint: ExecutionCheckpoint | None = None,
+        should_cancel: CancellationCheck | None = None,
     ) -> AgentRunResult:
         try:
             outcome = self._executor.execute(
                 plan,
                 completed_steps=completed_steps,
                 checkpoint=checkpoint,
+                should_cancel=should_cancel,
             )
+        except RunStoreError:
+            raise
         except Exception as exc:
             error = _internal_error(
                 "EXECUTOR_UNEXPECTED_ERROR",
@@ -659,6 +881,35 @@ class AgentRuntime:
 
         trace.extend(outcome.trace)
         errors = list(outcome.errors)
+        if outcome.cancelled:
+            return AgentRunResult(
+                run_id=run_id,
+                request_id=request.request_id,
+                status=RunStatus.CANCELLED,
+                planning_only=False,
+                plan=plan,
+                steps=outcome.step_results,
+                errors=tuple(errors),
+                trace=trace.events,
+            )
+        requested_at = None if should_cancel is None else should_cancel()
+        if requested_at is not None:
+            _record_cancellation_observation(
+                trace, requested_at, "before_run_verification"
+            )
+            errors.append(
+                _cancellation_error(requested_at, "before_run_verification")
+            )
+            return AgentRunResult(
+                run_id=run_id,
+                request_id=request.request_id,
+                status=RunStatus.CANCELLED,
+                planning_only=False,
+                plan=plan,
+                steps=outcome.step_results,
+                errors=tuple(errors),
+                trace=trace.events,
+            )
         try:
             run_verification = verify_run(plan, outcome.step_results)
         except Exception as exc:
@@ -703,6 +954,25 @@ class AgentRuntime:
         )
         if not run_verification.passed and run_verification.error is not None:
             errors.append(run_verification.error)
+        requested_at = None if should_cancel is None else should_cancel()
+        if requested_at is not None:
+            _record_cancellation_observation(
+                trace, requested_at, "after_run_verification"
+            )
+            errors.append(
+                _cancellation_error(requested_at, "after_run_verification")
+            )
+            return AgentRunResult(
+                run_id=run_id,
+                request_id=request.request_id,
+                status=RunStatus.CANCELLED,
+                planning_only=False,
+                plan=plan,
+                steps=outcome.step_results,
+                verification=run_verification,
+                errors=tuple(errors),
+                trace=trace.events,
+            )
         status = (
             RunStatus.SUCCEEDED
             if not errors and run_verification.passed
@@ -724,6 +994,103 @@ class AgentRuntime:
             errors=tuple(errors),
             trace=trace.events,
         )
+
+
+def _cancellation_error(requested_at: str, boundary: str) -> AgentError:
+    return AgentError(
+        ErrorCategory.CANCELLATION,
+        "RUN_CANCELLED",
+        "Run cancellation was observed at a cooperative checkpoint.",
+        details={
+            "requested_at": requested_at,
+            "observed_boundary": boundary,
+        },
+    )
+
+
+def _record_cancellation_observation(
+    trace: _TraceRecorder,
+    requested_at: str,
+    boundary: str,
+) -> None:
+    details = {
+        "requested_at": requested_at,
+        "observed_boundary": boundary,
+    }
+    trace.add(
+        TraceEventType.CANCELLATION_REQUESTED,
+        "Durable cancellation request was incorporated into the run trace.",
+        details=details,
+    )
+    trace.add(
+        TraceEventType.CANCELLATION_OBSERVED,
+        "Cancellation took effect at a cooperative runtime checkpoint.",
+        details=details,
+    )
+
+
+def _merge_errors(
+    *groups: Sequence[AgentError],
+) -> tuple[AgentError, ...]:
+    merged: list[AgentError] = []
+    for group in groups:
+        for error in group:
+            if error not in merged:
+                merged.append(error)
+    return tuple(merged)
+
+
+def _cancel_remaining_steps(
+    steps: Sequence[StepExecutionResult],
+) -> tuple[StepExecutionResult, ...]:
+    terminal: list[StepExecutionResult] = []
+    for step in steps:
+        if step.status is StepStatus.PENDING:
+            now = _utc_now()
+            terminal.append(
+                StepExecutionResult(
+                    step.step_id,
+                    step.tool_name,
+                    StepStatus.SKIPPED,
+                    error=AgentError(
+                        ErrorCategory.CANCELLATION,
+                        "EXECUTION_CANCELLED",
+                        "Step was not started because run cancellation took effect.",
+                        step_id=step.step_id,
+                        tool_name=step.tool_name,
+                    ),
+                    started_at=now,
+                    finished_at=now,
+                    duration_seconds=0.0,
+                )
+            )
+        elif step.status is StepStatus.RUNNING:
+            now = _utc_now()
+            error = AgentError(
+                ErrorCategory.INTERNAL_AGENT_ERROR,
+                "EXECUTION_STATE_UNAVAILABLE_DURING_CANCELLATION",
+                "Execution returned without a terminal result for a started step.",
+                step_id=step.step_id,
+                tool_name=step.tool_name,
+                attempt=step.attempt_count,
+            )
+            terminal.append(
+                StepExecutionResult(
+                    step.step_id,
+                    step.tool_name,
+                    StepStatus.FAILED,
+                    step.attempt_count,
+                    step.resolved_arguments,
+                    error=error,
+                    started_at=step.started_at,
+                    finished_at=now,
+                    duration_seconds=0.0,
+                )
+            )
+        else:
+            terminal.append(step)
+    return tuple(terminal)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()

@@ -29,7 +29,9 @@ from .orchestration import (
 )
 
 
-RUN_STATE_SCHEMA_VERSION = 1
+RUN_STATE_SCHEMA_VERSION = 2
+LEGACY_RUN_STATE_SCHEMA_VERSIONS = frozenset({1})
+CANCELLATION_STATE_SCHEMA_VERSION = 1
 
 
 class RunLifecycleStatus(str, Enum):
@@ -42,6 +44,140 @@ class RunLifecycleStatus(str, Enum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     INTERRUPTED = "INTERRUPTED"
+    CANCELLED = "CANCELLED"
+
+
+_LEGACY_V1_LIFECYCLE_STATUSES = frozenset(
+    {
+        RunLifecycleStatus.PLANNING,
+        RunLifecycleStatus.VALIDATED,
+        RunLifecycleStatus.RUNNING,
+        RunLifecycleStatus.PLANNED,
+        RunLifecycleStatus.SUCCEEDED,
+        RunLifecycleStatus.FAILED,
+        RunLifecycleStatus.INTERRUPTED,
+    }
+)
+_LEGACY_V1_ERROR_CATEGORIES = frozenset(
+    {
+        ErrorCategory.USER_INPUT_ERROR,
+        ErrorCategory.RESOURCE_ERROR,
+        ErrorCategory.ENVIRONMENT_ERROR,
+        ErrorCategory.TOOL_EXECUTION_ERROR,
+        ErrorCategory.VERIFICATION_ERROR,
+        ErrorCategory.INTERNAL_AGENT_ERROR,
+    }
+)
+_LEGACY_V1_TRACE_EVENT_TYPES = frozenset(
+    {
+        TraceEventType.PLANNING,
+        TraceEventType.PLAN_VALIDATION,
+        TraceEventType.STEP_EXECUTION,
+        TraceEventType.VERIFICATION,
+        TraceEventType.RECOVERY,
+        TraceEventType.STEP_SKIPPED,
+        TraceEventType.RUN_COMPLETION,
+    }
+)
+
+
+class CancellationDisposition(str, Enum):
+    """Outcome of one durable cancellation request."""
+
+    REQUESTED = "REQUESTED"
+    ALREADY_REQUESTED = "ALREADY_REQUESTED"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+
+
+@dataclass(frozen=True)
+class CancellationRequest:
+    """Minimal durable cancellation intent stored outside main run revisions."""
+
+    schema_version: int
+    run_id: str
+    requested_at: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != CANCELLATION_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported cancellation schema version {self.schema_version}."
+            )
+        if not isinstance(self.run_id, str) or not self.run_id.strip():
+            raise ValueError("`run_id` must be a non-empty string.")
+        _parse_aware_timestamp(self.requested_at, "requested_at")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "requested_at": self.requested_at,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> CancellationRequest:
+        mapping = _mapping(value, "cancellation request")
+        _exact_keys(
+            mapping,
+            {"schema_version", "run_id", "requested_at"},
+            "cancellation request",
+        )
+        return cls(
+            schema_version=_integer(mapping["schema_version"], "schema_version"),
+            run_id=_string(mapping["run_id"], "run_id"),
+            requested_at=_string(mapping["requested_at"], "requested_at"),
+        )
+
+
+@dataclass(frozen=True)
+class CancellationReceipt:
+    """JSON-safe result of requesting cooperative cancellation."""
+
+    run_id: str
+    disposition: CancellationDisposition
+    requested_at: str | None = None
+    terminal_status: RunLifecycleStatus | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run_id, str) or not self.run_id.strip():
+            raise ValueError("`run_id` must be a non-empty string.")
+        if not isinstance(self.disposition, CancellationDisposition):
+            raise TypeError("`disposition` must be a CancellationDisposition.")
+        if self.requested_at is not None:
+            _parse_aware_timestamp(self.requested_at, "requested_at")
+        if self.terminal_status is not None and not isinstance(
+            self.terminal_status, RunLifecycleStatus
+        ):
+            raise TypeError("`terminal_status` must be a RunLifecycleStatus or None.")
+        if self.disposition in {
+            CancellationDisposition.REQUESTED,
+            CancellationDisposition.ALREADY_REQUESTED,
+        }:
+            if self.requested_at is None or self.terminal_status is not None:
+                raise ValueError(
+                    "A requested cancellation requires a timestamp and no terminal status."
+                )
+        elif self.terminal_status is None:
+            raise ValueError("ALREADY_TERMINAL requires a terminal status.")
+        elif self.requested_at is not None:
+            raise ValueError("ALREADY_TERMINAL cannot contain a request timestamp.")
+        elif self.terminal_status not in {
+            RunLifecycleStatus.PLANNED,
+            RunLifecycleStatus.SUCCEEDED,
+            RunLifecycleStatus.FAILED,
+            RunLifecycleStatus.INTERRUPTED,
+            RunLifecycleStatus.CANCELLED,
+        }:
+            raise ValueError("ALREADY_TERMINAL requires a terminal lifecycle status.")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "disposition": self.disposition.value,
+            "requested_at": self.requested_at,
+            "terminal_status": (
+                None if self.terminal_status is None else self.terminal_status.value
+            ),
+        }
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -279,6 +415,33 @@ class PersistedRunState:
                 )
             return
 
+        if status is RunLifecycleStatus.CANCELLED:
+            if not any(
+                error.category is ErrorCategory.CANCELLATION
+                and error.code == "RUN_CANCELLED"
+                for error in self.errors
+            ):
+                raise ValueError("CANCELLED state requires a cancellation reason.")
+            if any(
+                result.status in {StepStatus.PENDING, StepStatus.RUNNING}
+                for result in self.steps
+            ):
+                raise ValueError("CANCELLED state cannot retain pending/running steps.")
+            if self.plan is None:
+                if (
+                    self.steps
+                    or self.preflight_verification is not None
+                    or self.run_verification is not None
+                ):
+                    raise ValueError(
+                        "A planless CANCELLED state cannot contain preflight or steps."
+                    )
+            elif self.steps and len(self.steps) != len(self.plan.steps):
+                raise ValueError(
+                    "A CANCELLED state with steps must cover the complete plan."
+                )
+            return
+
         if self.plan is None:
             raise ValueError(f"{status.value} state requires a persisted plan.")
 
@@ -423,41 +586,66 @@ class PersistedRunState:
         plan_value = mapping["plan"]
         preflight_value = mapping["preflight_verification"]
         run_verification_value = mapping["run_verification"]
+        stored_schema_version = _integer(
+            mapping["schema_version"], "schema_version"
+        )
+        if stored_schema_version not in {
+            RUN_STATE_SCHEMA_VERSION,
+            *LEGACY_RUN_STATE_SCHEMA_VERSIONS,
+        }:
+            raise ValueError(
+                f"Unsupported run-state schema version {stored_schema_version}."
+            )
+        lifecycle_status = _enum(
+            RunLifecycleStatus,
+            mapping["lifecycle_status"],
+            "lifecycle_status",
+        )
+        preflight_verification = (
+            None
+            if preflight_value is None
+            else _decode_verification(preflight_value)
+        )
+        steps = tuple(
+            _decode_step_result(item) for item in _sequence(mapping["steps"], "steps")
+        )
+        run_verification = (
+            None
+            if run_verification_value is None
+            else _decode_verification(run_verification_value)
+        )
+        errors = tuple(
+            _decode_error(item) for item in _sequence(mapping["errors"], "errors")
+        )
+        trace = tuple(
+            _decode_trace(item) for item in _sequence(mapping["trace"], "trace")
+        )
+        if stored_schema_version == 1:
+            _validate_legacy_v1_semantics(
+                lifecycle_status=lifecycle_status,
+                preflight_verification=preflight_verification,
+                steps=steps,
+                run_verification=run_verification,
+                errors=errors,
+                trace=trace,
+            )
         return cls(
-            schema_version=_integer(mapping["schema_version"], "schema_version"),
+            schema_version=RUN_STATE_SCHEMA_VERSION,
             revision=_integer(mapping["revision"], "revision"),
             run_id=_string(mapping["run_id"], "run_id"),
             request=_decode_request(mapping["request"]),
-            lifecycle_status=_enum(
-                RunLifecycleStatus,
-                mapping["lifecycle_status"],
-                "lifecycle_status",
-            ),
+            lifecycle_status=lifecycle_status,
             created_at=_string(mapping["created_at"], "created_at"),
             updated_at=_string(mapping["updated_at"], "updated_at"),
             plan=None if plan_value is None else _decode_plan(plan_value),
             plan_fingerprint=_optional_string(
                 mapping["plan_fingerprint"], "plan_fingerprint"
             ),
-            preflight_verification=(
-                None
-                if preflight_value is None
-                else _decode_verification(preflight_value)
-            ),
-            steps=tuple(
-                _decode_step_result(item) for item in _sequence(mapping["steps"], "steps")
-            ),
-            run_verification=(
-                None
-                if run_verification_value is None
-                else _decode_verification(run_verification_value)
-            ),
-            errors=tuple(
-                _decode_error(item) for item in _sequence(mapping["errors"], "errors")
-            ),
-            trace=tuple(
-                _decode_trace(item) for item in _sequence(mapping["trace"], "trace")
-            ),
+            preflight_verification=preflight_verification,
+            steps=steps,
+            run_verification=run_verification,
+            errors=errors,
+            trace=trace,
         )
 
     def to_run_result(self) -> AgentRunResult:
@@ -468,6 +656,7 @@ class PersistedRunState:
             RunLifecycleStatus.SUCCEEDED: RunStatus.SUCCEEDED,
             RunLifecycleStatus.FAILED: RunStatus.FAILED,
             RunLifecycleStatus.INTERRUPTED: RunStatus.FAILED,
+            RunLifecycleStatus.CANCELLED: RunStatus.CANCELLED,
         }
         try:
             public_status = status_map[self.lifecycle_status]
@@ -489,6 +678,47 @@ class PersistedRunState:
             errors=self.errors,
             trace=self.trace,
         )
+
+
+def _validate_legacy_v1_semantics(
+    *,
+    lifecycle_status: RunLifecycleStatus,
+    preflight_verification: VerificationResult | None,
+    steps: Sequence[StepExecutionResult],
+    run_verification: VerificationResult | None,
+    errors: Sequence[AgentError],
+    trace: Sequence[ExecutionTraceEvent],
+) -> None:
+    """Reject current-only enum values from a legacy schema-v1 record."""
+
+    if lifecycle_status not in _LEGACY_V1_LIFECYCLE_STATUSES:
+        raise ValueError(
+            "run-state schema version 1 does not support lifecycle status "
+            f"{lifecycle_status.value!r}."
+        )
+
+    semantic_errors = list(errors)
+    for verification in (preflight_verification, run_verification):
+        if verification is not None and verification.error is not None:
+            semantic_errors.append(verification.error)
+    for step in steps:
+        if step.error is not None:
+            semantic_errors.append(step.error)
+        if step.verification is not None and step.verification.error is not None:
+            semantic_errors.append(step.verification.error)
+    for error in semantic_errors:
+        if error.category not in _LEGACY_V1_ERROR_CATEGORIES:
+            raise ValueError(
+                "run-state schema version 1 does not support error category "
+                f"{error.category.value!r}."
+            )
+
+    for event in trace:
+        if event.event_type not in _LEGACY_V1_TRACE_EVENT_TYPES:
+            raise ValueError(
+                "run-state schema version 1 does not support trace event type "
+                f"{event.event_type.value!r}."
+            )
 
 
 def _mapping(value: object, path: str) -> Mapping[str, object]:
@@ -754,6 +984,11 @@ def _decode_trace(value: object) -> ExecutionTraceEvent:
 
 
 __all__ = [
+    "CANCELLATION_STATE_SCHEMA_VERSION",
+    "CancellationDisposition",
+    "CancellationReceipt",
+    "CancellationRequest",
+    "LEGACY_RUN_STATE_SCHEMA_VERSIONS",
     "PersistedRunState",
     "RUN_STATE_SCHEMA_VERSION",
     "RunLifecycleStatus",

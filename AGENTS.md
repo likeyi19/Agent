@@ -128,6 +128,66 @@ Deferred non-blocking follow-ups:
 - stale lock-file cleanup
 - stronger trusted-directory/symlink hardening if the store root becomes untrusted
 
+### Milestone 5.2 — Cooperative cancellation and run lifecycle
+
+Milestone 5.2 is complete and accepted. The public cancellation contract adds
+`RunStatus.CANCELLED`, `RunLifecycleStatus.CANCELLED`,
+`ErrorCategory.CANCELLATION`, `CancellationReceipt`, and
+`AgentRuntime.cancel(run_id)`.
+
+Durable cancellation intent is stored separately as
+`<sha256(run_id)>.cancel.json` with its own schema version, canonical JSON,
+SHA-256 corruption detection, and atomic temporary write, `fsync`,
+`os.replace`, and directory `fsync`. Cancellation uses the short per-run state
+lock and never acquires the execution lease or increments the main run-state
+revision. Duplicate requests preserve the original request timestamp;
+malformed, corrupt, or unsupported sidecars fail closed.
+
+Cancellation is cooperative and does not force-kill processes, threads, GPU
+kernels, or tools. An already-started scientific call finishes, its returned
+result follows normal `verify_step()` validation, and verified success is
+durably checkpointed before cancellation takes effect. After cancellation is
+observed, no next scientific attempt starts, cancellation before retry prevents
+the retry, and pending downstream steps become SKIPPED. Existing failure
+evidence is preserved, while a stale RUNNING step with an unknown outcome
+remains INTERRUPTED.
+
+Run and resume retain exclusive ownership of the execution lease, while cancel
+may record intent during that lease. The separate sidecar avoids main-revision
+conflicts, and the short state lock arbitrates cancellation against terminal
+commit. Cancellation wins over a normal PLANNED, SUCCEEDED, or FAILED commit if
+its intent linearized first; if terminal commit linearized first, cancel returns
+ALREADY_TERMINAL. Terminal states remain immutable, and terminal CANCELLED
+resume invokes neither planner nor scientific tools.
+
+Cancellation never routes PLAN_ONLY through scientific execution. PLAN_ONLY
+remains zero-tool across run, cancel, restart, and resume.
+
+Persisted run-state schema version is now 2. Valid Milestone 5.1 version-1
+records remain readable and are checked against the committed Milestone 5.1
+lifecycle, error-category, and trace-event vocabularies. Loading v1 does not
+rewrite it; the next legitimate update persists v2. A v1 record cannot contain
+v2-only cancellation semantics.
+
+Accepted validation:
+
+- cancellation-focused: 46 passed
+- canonical orchestration regression: 268 passed
+- complete lightweight regression: 422 passed, 6 skipped
+
+Deferred non-blocking follow-ups:
+
+- tighter boundary-specific validation for legal CANCELLED state shapes
+- direct PLAN_ONLY cancellation-requested resume test
+- simultaneous no-owner cancel plus resume test
+- synchronized concurrent cancel/terminal-commit race test
+- execution-level unreadable-sidecar I/O simulation
+- stronger single-test end-to-end cancellation trace coverage
+- optional multiprocess cancellation race coverage
+- future atomic JSON helper consolidation
+- stronger trusted-directory/symlink hardening if the store root becomes untrusted
+- post-`os.replace`/`fsync` ambiguity documentation
+
 ## Development environment
 
 - Linux server

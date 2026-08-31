@@ -104,6 +104,12 @@ class InterruptingStore:
     def load(self, run_id):
         return self.delegate.load(run_id)
 
+    def request_cancellation(self, run_id):
+        return self.delegate.request_cancellation(run_id)
+
+    def load_cancellation(self, run_id):
+        return self.delegate.load_cancellation(run_id)
+
     def update(self, state, *, expected_revision):
         saved = self.delegate.update(state, expected_revision=expected_revision)
         if not self.triggered and self.predicate(saved):
@@ -127,6 +133,12 @@ class FailingSuccessCheckpointStore:
 
     def load(self, run_id):
         return self.delegate.load(run_id)
+
+    def request_cancellation(self, run_id):
+        return self.delegate.request_cancellation(run_id)
+
+    def load_cancellation(self, run_id):
+        return self.delegate.load_cancellation(run_id)
 
     def update(self, state, *, expected_revision):
         if (

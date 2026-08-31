@@ -29,12 +29,14 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "build_cell_neighbors",
         "cluster_cells",
         "compute_cell_umap",
+        "evaluate_cell_clustering",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
     assert registry.contains("build_cell_neighbors")
     assert registry.contains("cluster_cells")
     assert registry.contains("compute_cell_umap")
+    assert registry.contains("evaluate_cell_clustering")
     assert not registry.contains("arbitrary_python")
 
 
@@ -164,6 +166,19 @@ def test_valid_downstream_arguments_and_choices(registry) -> None:
             "spread": 1,
         },
     )
+    evaluation = registry.validate_arguments(
+        "evaluate_cell_clustering",
+        {
+            "analysis_path": StepOutputRef("cluster", "analysis_path"),
+            "reference_h5ad_path": StepOutputRef("inspect", "input_path"),
+            "label_key": "celltype",
+            "output_dir": "output",
+        },
+    )
+    assert "cluster_key" not in evaluation
+    spec = registry.get("evaluate_cell_clustering")
+    assert spec.recovery_policy_version == "evaluate-cell-clustering-v1"
+    assert spec.retryable_error_codes == frozenset()
     with pytest.raises(ToolArgumentError, match="must be one of"):
         registry.validate_arguments(
             "build_cell_neighbors",
@@ -271,12 +286,34 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
         "backend": "Scanpy",
         "software_versions": versions,
     }
+    evaluation = {
+        "status": "success",
+        "analysis_path": "/output/clustered.h5ad",
+        "reference_h5ad_path": "/data/input.h5ad",
+        "report_path": "/output/clustered.clustering_metrics.json",
+        "label_key": "celltype",
+        "cluster_key": "leiden",
+        "n_cells": 2,
+        "n_reference_classes": 2,
+        "n_predicted_clusters": 2,
+        "nmi": 1.0,
+        "ari": 1.0,
+        "ami": 1.0,
+        "homogeneity": 1.0,
+        "finite": True,
+        "cell_order_preserved": True,
+        "metric_backend": "scikit-learn",
+        "average_method": "arithmetic",
+        "report_schema_version": 1,
+        "software_versions": {"scikit_learn": "1.9.0"},
+    }
 
     registry.validate_result("inspect_scATAC", inspection)
     registry.validate_result("epizoo_embed_cells", embedding)
     registry.validate_result("build_cell_neighbors", neighbors)
     registry.validate_result("cluster_cells", clustering)
     registry.validate_result("compute_cell_umap", umap)
+    registry.validate_result("evaluate_cell_clustering", evaluation)
     assert registry.get("inspect_scATAC").result_contract.name == "ScATACInspection"
     assert (
         registry.get("epizoo_embed_cells").result_contract.name
@@ -309,6 +346,34 @@ def test_result_contract_rejects_missing_or_heavy_embedding_result(registry) -> 
     )
     with pytest.raises(ToolResultContractError, match="must not return"):
         registry.validate_result("epizoo_embed_cells", result)
+
+
+def test_evaluation_result_contract_rejects_invalid_metric_range(registry) -> None:
+    result = {
+        key: expected_types[0]()
+        for key, expected_types in registry.get(
+            "evaluate_cell_clustering"
+        ).result_contract.required_fields.items()
+    }
+    result.update(
+        {
+            "status": "success",
+            "n_cells": 2,
+            "n_reference_classes": 2,
+            "n_predicted_clusters": 1,
+            "nmi": 1.1,
+            "ari": 0.0,
+            "ami": 0.0,
+            "homogeneity": 0.0,
+            "finite": True,
+            "cell_order_preserved": True,
+            "metric_backend": "scikit-learn",
+            "average_method": "arithmetic",
+            "report_schema_version": 1,
+        }
+    )
+    with pytest.raises(ToolResultContractError, match="valid range"):
+        registry.validate_result("evaluate_cell_clustering", result)
 
 
 @pytest.mark.parametrize(

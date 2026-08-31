@@ -136,7 +136,7 @@ def test_full_five_step_plan_only_preflights_and_invokes_zero_tools(
     assert result.status is RunStatus.PLANNED
     assert result.planning_only is True
     assert result.verification is not None and result.verification.passed
-    assert tuple(step.tool_name for step in result.plan.steps) == default.names()  # type: ignore[union-attr]
+    assert tuple(step.tool_name for step in result.plan.steps) == default.names()[:5]  # type: ignore[union-attr]
     assert not (tmp_path / "not-created").exists()
     for function in guarded:
         function.assert_not_called()

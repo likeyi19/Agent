@@ -8,6 +8,14 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from agent.tools.analysis.clustering_evaluation import (
+    AVERAGE_METHOD,
+    EVALUATION_REPORT_SCHEMA_VERSION,
+    METRIC_BACKEND,
+    _evaluate_sources,
+    _load_evaluation_report,
+    _report_from_snapshot,
+)
 from agent.tools.analysis.embedding_analysis import (
     EPIZOO_EMBEDDING_DIM,
     PROVENANCE_KEY,
@@ -694,6 +702,141 @@ def _verify_umap(
         "UMAP artifact has invalid stage provenance.",
         "RESULT_METADATA_INCONSISTENT",
     )
+
+
+def _verify_clustering_evaluation(
+    resolved_arguments: Mapping[str, object],
+    result: Mapping[str, object],
+    checks: _VerificationChecks,
+) -> None:
+    analysis_value = resolved_arguments.get("analysis_path")
+    reference_value = resolved_arguments.get("reference_h5ad_path")
+    label_key = resolved_arguments.get("label_key")
+    cluster_key = resolved_arguments.get("cluster_key", "leiden")
+    output_value = resolved_arguments.get("output_dir")
+    identity_valid = (
+        result.get("status") == "success"
+        and _path_corresponds(result.get("analysis_path"), analysis_value)
+        and _path_corresponds(result.get("reference_h5ad_path"), reference_value)
+        and result.get("label_key") == label_key
+        and result.get("cluster_key") == cluster_key
+        and result.get("metric_backend") == METRIC_BACKEND
+        and result.get("average_method") == AVERAGE_METHOD
+        and result.get("report_schema_version")
+        == EVALUATION_REPORT_SCHEMA_VERSION
+        and result.get("finite") is True
+        and result.get("cell_order_preserved") is True
+    )
+    checks.add(
+        "evaluation_result_identity",
+        identity_valid,
+        "Evaluation result matches resolved paths, keys, and metric identity.",
+        "Evaluation result does not match resolved paths, keys, or metric identity.",
+        "RESULT_IDENTITY_MISMATCH",
+    )
+
+    report_path: Path | None = None
+    expected_report_path: Path | None = None
+    try:
+        if not isinstance(analysis_value, (str, Path)) or not isinstance(
+            output_value, (str, Path)
+        ):
+            raise ValueError("Invalid evaluation paths.")
+        expected_report_path = (
+            Path(output_value).expanduser().resolve(strict=False)
+            / f"{Path(analysis_value).expanduser().resolve(strict=False).stem}.clustering_metrics.json"
+        )
+        report_value = result.get("report_path")
+        if not _path_corresponds(report_value, expected_report_path):
+            raise ValueError("Report path mismatch.")
+        report_path = Path(str(report_value)).expanduser().resolve()
+        report_exists = report_path.is_file() and report_path.stat().st_size > 0
+    except (OSError, RuntimeError, TypeError, ValueError):
+        report_exists = False
+    checks.add(
+        "evaluation_report_exists",
+        report_exists,
+        "Evaluation report exists at the deterministic output path.",
+        "Evaluation report is missing or has an inconsistent output path.",
+        "ARTIFACT_MISSING",
+    )
+    if not report_exists or report_path is None:
+        return
+
+    report_valid = False
+    source_valid = False
+    metrics_valid = False
+    provenance_valid = False
+    try:
+        if (
+            not isinstance(analysis_value, (str, Path))
+            or not isinstance(reference_value, (str, Path))
+            or not isinstance(label_key, str)
+            or not isinstance(cluster_key, str)
+        ):
+            raise ValueError("Invalid resolved evaluation arguments.")
+        report = _load_evaluation_report(report_path)
+        snapshot = _evaluate_sources(
+            analysis_value, reference_value, label_key, cluster_key
+        )
+        expected_report = _report_from_snapshot(snapshot)
+        report_valid = report == expected_report
+        source_valid = (
+            result.get("n_cells") == snapshot.n_cells
+            and result.get("n_reference_classes") == snapshot.n_reference_classes
+            and result.get("n_predicted_clusters") == snapshot.n_predicted_clusters
+        )
+        report_metrics = report["metrics"]
+        assert isinstance(report_metrics, Mapping)
+        metrics_valid = all(
+            isinstance(result.get(name), float)
+            and result.get(name) == report_metrics.get(name)
+            and math.isclose(
+                float(result[name]),
+                float(getattr(snapshot, name)),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            for name in ("nmi", "ari", "ami", "homogeneity")
+        )
+        report_provenance = report["provenance"]
+        assert isinstance(report_provenance, Mapping)
+        provenance_valid = report_provenance == expected_report["provenance"]
+    except Exception:
+        report_valid = False
+        source_valid = False
+        metrics_valid = False
+        provenance_valid = False
+    checks.add(
+        "evaluation_report_schema",
+        report_valid,
+        "Evaluation report is strict, canonical, and matches recomputed sources.",
+        "Evaluation report is corrupt, stale, or inconsistent with recomputed sources.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+    checks.add(
+        "evaluation_source_contract",
+        source_valid,
+        "Evaluation sources preserve exact cells and valid class counts.",
+        "Evaluation sources no longer satisfy the exact cell and class contract.",
+        "RESULT_IDENTITY_MISMATCH",
+    )
+    checks.add(
+        "evaluation_metrics_recomputed",
+        metrics_valid,
+        "All four evaluation metrics match independent recomputation.",
+        "Reported evaluation metrics do not match independent recomputation.",
+        "RESULT_VALUE_INVALID",
+    )
+    checks.add(
+        "evaluation_provenance_recomputed",
+        provenance_valid,
+        "Evaluation fingerprints match independently reread sources.",
+        "Evaluation fingerprints do not match independently reread sources.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+
+
 def _verify_embedding(
     step: PlanStep,
     resolved_arguments: Mapping[str, object],
@@ -845,6 +988,10 @@ def verify_step(
             _verify_clustering(resolved_arguments, plain_result, checks)
         elif step.tool_name == "compute_cell_umap":
             _verify_umap(resolved_arguments, plain_result, checks)
+        elif step.tool_name == "evaluate_cell_clustering":
+            _verify_clustering_evaluation(
+                resolved_arguments, plain_result, checks
+            )
     return checks.result(
         target_type="step",
         target_id=step.step_id,

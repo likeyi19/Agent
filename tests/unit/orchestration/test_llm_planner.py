@@ -163,6 +163,23 @@ def _umap_step(**changes) -> dict[str, object]:
     return step
 
 
+def _evaluation_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "evaluate",
+        "tool_name": "evaluate_cell_clustering",
+        "arguments": [
+            _ref_binding("analysis_path", "cluster", "analysis_path"),
+            _ref_binding("reference_h5ad_path", "inspect", "input_path"),
+            _input_binding("label_key", "label_key"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": ["cluster", "inspect"],
+        "description": "Evaluate fixed clustering labels.",
+    }
+    step.update(changes)
+    return step
+
+
 def _plan_response(*steps: dict[str, object], **extra) -> str:
     payload: dict[str, object] = {
         "schema_version": 2,
@@ -238,7 +255,7 @@ def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None
         }
     )
     plan = planner.plan(request, registry)
-    assert tuple(step.tool_name for step in plan.steps) == registry.names()
+    assert tuple(step.tool_name for step in plan.steps) == registry.names()[:5]
     assert plan.steps[2].arguments["embedding_path"] == StepOutputRef(
         "embed", "embedding_path"
     )
@@ -254,6 +271,38 @@ def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None
     assert "n_neighbors" not in plan.steps[2].arguments
     assert "resolution" not in plan.steps[3].arguments
     assert "min_dist" not in plan.steps[4].arguments
+
+
+def test_llm_evaluation_plan_uses_only_inputs_and_references(registry) -> None:
+    planner, _ = _planner(
+        _plan_response(
+            _inspect_step(),
+            _embed_step(),
+            _neighbors_step(),
+            _cluster_step(),
+            _evaluation_step(),
+        )
+    )
+    plan = planner.plan(
+        _request(
+            {
+                "input_path": "/data/input.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+                "label_key": "celltype",
+            }
+        ),
+        registry,
+    )
+    evaluation = plan.steps[-1]
+    assert evaluation.arguments["analysis_path"] == StepOutputRef(
+        "cluster", "analysis_path"
+    )
+    assert evaluation.arguments["reference_h5ad_path"] == StepOutputRef(
+        "inspect", "input_path"
+    )
+    assert evaluation.arguments["label_key"] == "celltype"
+    assert "cluster_key" not in evaluation.arguments
 
 
 def test_request_input_values_are_preserved_exactly(registry) -> None:
@@ -384,6 +433,9 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
         "resolution",
         "min_dist",
         "spread",
+        "reference_h5ad_path",
+        "label_key",
+        "cluster_key",
     }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (

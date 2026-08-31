@@ -1,5 +1,9 @@
 """Scientific analysis tools."""
 
+from .clustering_evaluation import (
+    CellClusteringEvaluationToolResult,
+    evaluate_cell_clustering,
+)
 from .embedding_analysis import (
     CellClusteringToolResult,
     CellNeighborsToolResult,
@@ -11,6 +15,7 @@ from .embedding_analysis import (
 from .epizoo_embedding import EpiZooEmbeddingToolResult, epizoo_embed_cells
 
 __all__ = [
+    "CellClusteringEvaluationToolResult",
     "CellClusteringToolResult",
     "CellNeighborsToolResult",
     "CellUMAPToolResult",
@@ -19,4 +24,5 @@ __all__ = [
     "cluster_cells",
     "compute_cell_umap",
     "epizoo_embed_cells",
+    "evaluate_cell_clustering",
 ]

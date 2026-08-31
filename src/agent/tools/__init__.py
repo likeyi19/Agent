@@ -1,6 +1,7 @@
 """Structured scientific tools."""
 
 from .analysis import (
+    CellClusteringEvaluationToolResult,
     CellClusteringToolResult,
     CellNeighborsToolResult,
     CellUMAPToolResult,
@@ -9,10 +10,12 @@ from .analysis import (
     cluster_cells,
     compute_cell_umap,
     epizoo_embed_cells,
+    evaluate_cell_clustering,
 )
 from .data import ScATACInspection, inspect_scATAC
 
 __all__ = [
+    "CellClusteringEvaluationToolResult",
     "CellClusteringToolResult",
     "CellNeighborsToolResult",
     "CellUMAPToolResult",
@@ -22,5 +25,6 @@ __all__ = [
     "cluster_cells",
     "compute_cell_umap",
     "epizoo_embed_cells",
+    "evaluate_cell_clustering",
     "inspect_scATAC",
 ]

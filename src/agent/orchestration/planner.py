@@ -47,6 +47,10 @@ _INSPECTION_INTENT = re.compile(
 _DOWNSTREAM_INTENT = re.compile(
     r"\b(?:neighbors?|cluster(?:ing)?|umap)\b|\bfull(?:\s+scatac)?\s+analysis\b"
 )
+_CLUSTERING_EVALUATION_INTENT = re.compile(
+    r"\b(?:evaluate|evaluation|benchmark|metrics?)\b.*\bcluster(?:s|ing)?\b"
+    r"|\bcluster(?:s|ing)?\b.*\b(?:evaluate|evaluation|benchmark|metrics?)\b"
+)
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
 _DOWNSTREAM_OPTIONAL_INPUTS = (
@@ -210,8 +214,69 @@ class DeterministicPlanner:
         embedding_intent = _EMBEDDING_INTENT.search(prompt) is not None
         inspection_intent = _INSPECTION_INTENT.search(prompt) is not None
         downstream_intent = _DOWNSTREAM_INTENT.search(prompt) is not None
+        evaluation_intent = _CLUSTERING_EVALUATION_INTENT.search(prompt) is not None
 
-        if downstream_intent:
+        if evaluation_intent:
+            _require_inputs(
+                request, ("input_path", "output_dir", "species", "label_key")
+            )
+            input_path = _path_input(request, "input_path")
+            output_dir = _path_input(request, "output_dir")
+            label_key = request.inputs["label_key"]
+            if not isinstance(label_key, str) or not label_key.strip():
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'label_key' must be a non-empty string.",
+                )
+            embedding_arguments = _embedding_inputs(request)
+            embedding_arguments["input_path"] = StepOutputRef("inspect", "input_path")
+            downstream_inputs = _downstream_inputs(request)
+            neighbors_arguments: dict[str, object] = {
+                "embedding_path": StepOutputRef("embed", "embedding_path"),
+                "cell_ids_path": StepOutputRef("embed", "cell_ids_path"),
+                "output_dir": output_dir,
+            }
+            clustering_arguments: dict[str, object] = {
+                "analysis_path": StepOutputRef("neighbors", "analysis_path"),
+                "output_dir": output_dir,
+            }
+            evaluation_arguments: dict[str, object] = {
+                "analysis_path": StepOutputRef("cluster", "analysis_path"),
+                "reference_h5ad_path": StepOutputRef("inspect", "input_path"),
+                "label_key": label_key,
+                "output_dir": output_dir,
+            }
+            for name in ("n_neighbors", "metric", "random_seed", "overwrite"):
+                if name in downstream_inputs:
+                    neighbors_arguments[name] = downstream_inputs[name]
+            for name in ("resolution", "random_seed", "overwrite"):
+                if name in downstream_inputs:
+                    clustering_arguments[name] = downstream_inputs[name]
+            if "overwrite" in request.inputs:
+                evaluation_arguments["overwrite"] = request.inputs["overwrite"]
+            if "cluster_key" in request.inputs:
+                cluster_key = request.inputs["cluster_key"]
+                if not isinstance(cluster_key, str) or not cluster_key.strip():
+                    raise PlannerError(
+                        "INVALID_REQUEST_INPUT",
+                        "Structured input 'cluster_key' must be a non-empty string.",
+                    )
+                evaluation_arguments["cluster_key"] = cluster_key
+            steps = (
+                PlanStep("inspect", "inspect_scATAC", {"path": input_path}, description="Inspect the input scATAC dataset."),
+                PlanStep("embed", "epizoo_embed_cells", embedding_arguments, ("inspect",), "Compute and persist EpiZoo cell embeddings."),
+                PlanStep("neighbors", "build_cell_neighbors", neighbors_arguments, ("embed",), "Build and persist a sparse cell-neighbor graph."),
+                PlanStep("cluster", "cluster_cells", clustering_arguments, ("neighbors",), "Cluster cells with fixed-setting Leiden."),
+                PlanStep(
+                    "evaluate",
+                    "evaluate_cell_clustering",
+                    evaluation_arguments,
+                    ("cluster", "inspect"),
+                    "Evaluate the fixed clustering against reference annotations.",
+                ),
+            )
+            workflow = "epizoo-clustering-evaluation"
+        elif downstream_intent:
             _require_inputs(request, ("input_path",))
             input_path = _path_input(request, "input_path")
             embedding_arguments = _embedding_inputs(request)

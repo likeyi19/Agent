@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5 and Milestone 6.1 are complete.
+Milestones 1–5 and Milestones 6.1–6.2 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -17,6 +17,8 @@ Milestones 1–5 and Milestone 6.1 are complete.
 - Milestone 5.3: production error classification and deterministic recovery policy
 - Milestone 6.1: EpiZoo embedding analysis with neighbors, Leiden clustering,
   and UMAP
+- Milestone 6.2: quantitative evaluation of fixed cell clustering with NMI,
+  ARI, AMI, and Homogeneity
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -115,3 +117,9 @@ The real production path was validated end to end on 2,000 Fang2021 cells with
 an RTX 4090. All five registered scientific steps succeeded and verified, cell
 order was preserved, the input file remained unchanged, and durable terminal
 resume revalidated the artifacts without rerunning scientific tools.
+
+Milestone 6.2 adds artifact-based quantitative evaluation of fixed clustering.
+Reference annotations are used only after unsupervised clustering and never to
+tune neighbors, Leiden, UMAP, parameters, or cluster selection. Real Fang2021
+evaluation successfully validated NMI, ARI, AMI, and Homogeneity while
+preserving exact cell identity and order.

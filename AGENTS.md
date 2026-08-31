@@ -354,6 +354,124 @@ superseded by Leiden, and the installed TBB version disables Numba's TBB
 threading layer. Milestone 6.1 uses Leiden, and these warnings did not affect
 acceptance.
 
+### Milestone 6.2 — Quantitative clustering evaluation
+
+Milestone 6.2 is complete and accepted. Its public scientific API is:
+
+```python
+evaluate_cell_clustering(
+    analysis_path,
+    reference_h5ad_path,
+    label_key,
+    output_dir,
+    *,
+    cluster_key="leiden",
+    overwrite=False,
+)
+```
+
+The production `ToolRegistry` now contains exactly six scientific tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+3. `build_cell_neighbors`
+4. `cluster_cells`
+5. `compute_cell_umap`
+6. `evaluate_cell_clustering`
+
+The accepted scientific direction is strictly:
+
+unsupervised clustering
+→ supervised evaluation
+
+Ground-truth annotations are used only during evaluation. They never affect
+neighbors, Leiden resolution, clustering, UMAP, parameter optimization,
+cluster selection, or upstream reruns. Milestone 6.2 performs no resolution
+sweep, label-informed clustering, metric-guided optimization, or automatic
+best-clustering selection.
+
+Evaluation accepts valid Milestone 6.1 clustering- or UMAP-stage artifacts and
+opens the reference AnnData backed and read-only. It reads the exact ordered
+cell IDs and selected `obs[label_key]` only; the raw scATAC `.X` matrix is never
+materialized or densified. Cell count, identity, uniqueness, and order must
+match exactly. There is no cell intersection, reordering, sorting, subset
+alignment, or silent dropping. Reference annotations require at least two
+classes as a v1 scientific-validity rule, while a one-cluster prediction
+remains valid.
+
+The tool calculates exactly:
+
+- Normalized Mutual Information (NMI)
+- Adjusted Rand Index (ARI)
+- Adjusted Mutual Information (AMI)
+- Homogeneity
+
+NMI and AMI explicitly use `average_method="arithmetic"`. No additional
+evaluation metric is part of Milestone 6.2.
+
+The persisted artifact is strict, atomic, overwrite-protected JSON named
+`<analysis-stem>.clustering_metrics.json`. It records resolved source paths,
+label and cluster keys, cell/class/cluster counts, the four metrics, sklearn
+backend/version, arithmetic averaging, cell-order validation, and SHA-256
+digests of the scientifically relevant ordered cells, normalized ordered
+reference labels, normalized ordered predicted labels, and canonical
+Milestone 6 analysis provenance. It does not hash the complete reference
+`.h5ad` and does not contain complete cell-ID or label vectors, matrices,
+embeddings, graphs, UMAP coordinates, or AnnData objects.
+
+The deterministic evaluation workflow is:
+
+inspect
+→ embed
+→ neighbors
+→ cluster
+→ evaluate
+
+UMAP is intentionally omitted because it is unnecessary for clustering
+metrics. Planning schema v2, whole-plan preflight, the registered-tool
+allowlist, arbitrary Python/shell prohibition, PLAN_ONLY zero-tool behavior,
+and cancellation semantics remain authoritative. Executable values still
+come only from `AgentRequest.inputs` or `StepOutputRef`; the LLM planner cannot
+invent literals. When omitted, `cluster_key="leiden"` comes from the Python API
+default rather than a planner-generated literal.
+
+Evaluation verification strictly reopens the JSON report, rereads the compact
+analysis artifact and selected backed reference annotation, revalidates exact
+cells/order, recomputes all relevant fingerprints, independently recomputes all
+four sklearn metrics, and checks report/result/recomputed consistency using
+`rel_tol=1e-12` and `abs_tol=1e-12`.
+
+On nonterminal durable resume, a completed evaluation is revalidated before
+reuse. Changed reference labels, predicted clusters, or relevant analysis
+provenance and missing/corrupt reports or source artifacts are detected. A
+successfully verified result is restored without invoking the evaluation tool
+again. Existing terminal-resume behavior is unchanged.
+
+The new recovery identity is `evaluate-cell-clustering-v1`, with no retryable
+error codes. Existing recovery identities and the global error-policy catalog
+version are unchanged.
+
+Accepted validation:
+
+- Milestone 6.2 focused: 194 passed
+- new direct/integration/lifecycle tests: 45 passed
+- canonical orchestration regression: 329 passed
+- complete lightweight regression: 556 passed, 6 skipped
+
+Real acceptance reused the fixed Milestone 6.1 clustering for 2,000 Fang2021
+cells with `label_key="celltype"`; no EpiZoo/CUDA rerun or label-informed
+parameter tuning occurred. Evaluation found 20 reference classes and 21 Leiden
+clusters: NMI `0.8642463249536162`, ARI `0.746014277040041`, AMI
+`0.8591719263671213`, and Homogeneity `0.854796248075491`, using scikit-learn
+1.9.0 and arithmetic averaging. Independent sklearn recomputation reproduced
+all values, exact cell identity/order passed, durable nonterminal resume reused
+the verified evaluation without rerunning it, and both source files remained
+byte-identical.
+
+Milestone 6.2 introduced no new environment warning. The non-blocking
+Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba notes from
+Milestone 6.1 remain unchanged and did not affect acceptance.
+
 ## Development environment
 
 - Linux server

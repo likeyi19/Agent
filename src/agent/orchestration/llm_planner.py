@@ -54,6 +54,10 @@ _TOOL_DESCRIPTIONS = {
         "Compute a fixed two-dimensional UMAP from a valid clustered Milestone 6 "
         "analysis artifact and persist a new compact h5ad artifact."
     ),
+    "evaluate_cell_clustering": (
+        "Evaluate fixed cluster labels in a valid Milestone 6 clustering or UMAP "
+        "artifact against an ordered reference annotation and persist four metrics."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -82,6 +86,18 @@ _ARGUMENT_DESCRIPTIONS = {
     ("compute_cell_umap", "spread"): "Explicit positive UMAP spread.",
     ("compute_cell_umap", "random_seed"): "Explicit nonnegative random seed.",
     ("compute_cell_umap", "overwrite"): "Whether an existing output may be replaced.",
+    ("evaluate_cell_clustering", "analysis_path"): (
+        "Valid Milestone 6 clustering or UMAP artifact path."
+    ),
+    ("evaluate_cell_clustering", "reference_h5ad_path"): (
+        "Reference annotated h5ad path with identical ordered cell IDs."
+    ),
+    ("evaluate_cell_clustering", "label_key"): "Reference annotation obs column.",
+    ("evaluate_cell_clustering", "output_dir"): "Directory for the metrics report.",
+    ("evaluate_cell_clustering", "cluster_key"): "Predicted cluster obs column.",
+    ("evaluate_cell_clustering", "overwrite"): (
+        "Whether an existing evaluation report may be replaced."
+    ),
 }
 
 

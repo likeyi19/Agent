@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import errno
 import inspect
 import json
+import math
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping
@@ -16,6 +17,7 @@ from agent.tools import (
     cluster_cells,
     compute_cell_umap,
     epizoo_embed_cells,
+    evaluate_cell_clustering,
     inspect_scATAC,
 )
 
@@ -407,6 +409,49 @@ def _validate_umap_result(result: Mapping[str, object]) -> None:
         )
 
 
+def _validate_evaluation_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "evaluate_cell_clustering field 'status' must equal 'success'."
+        )
+    if result["finite"] is not True or result["cell_order_preserved"] is not True:
+        raise ToolResultContractError(
+            "evaluate_cell_clustering must report finite metrics and preserved order."
+        )
+    if (
+        result["metric_backend"] != "scikit-learn"
+        or result["average_method"] != "arithmetic"
+        or result["report_schema_version"] != 1
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_clustering has invalid metric or schema identity."
+        )
+    if (
+        result["n_cells"] <= 0
+        or result["n_reference_classes"] < 2
+        or result["n_predicted_clusters"] < 1
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_clustering has invalid scientific counts."
+        )
+    for name, lower in (
+        ("nmi", 0.0),
+        ("ari", -1.0),
+        ("ami", -1.0),
+        ("homogeneity", 0.0),
+    ):
+        value = result[name]
+        if not math.isfinite(value) or not lower - 1e-12 <= value <= 1.0 + 1e-12:
+            raise ToolResultContractError(
+                f"evaluate_cell_clustering field {name!r} is outside its valid range."
+            )
+    forbidden = {"reference_labels", "predicted_labels", "cell_ids", "embeddings"}
+    if forbidden.intersection(result):
+        raise ToolResultContractError(
+            "evaluate_cell_clustering must not return large scientific arrays."
+        )
+
+
 def _assert_signature_matches(spec: ToolSpec) -> None:
     signature = inspect.signature(spec.function)
     parameters = signature.parameters
@@ -601,12 +646,54 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="compute-cell-umap-v1",
     )
+    evaluation_spec = ToolSpec(
+        name="evaluate_cell_clustering",
+        function=evaluate_cell_clustering,
+        required_arguments={
+            "analysis_path": path_argument,
+            "reference_h5ad_path": path_argument,
+            "label_key": ArgumentSpec((str,)),
+            "output_dir": path_argument,
+        },
+        optional_arguments={
+            "cluster_key": ArgumentSpec((str,)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="CellClusteringEvaluationToolResult",
+            required_fields={
+                "status": (str,),
+                "analysis_path": (str,),
+                "reference_h5ad_path": (str,),
+                "report_path": (str,),
+                "label_key": (str,),
+                "cluster_key": (str,),
+                "n_cells": (int,),
+                "n_reference_classes": (int,),
+                "n_predicted_clusters": (int,),
+                "nmi": (float,),
+                "ari": (float,),
+                "ami": (float,),
+                "homogeneity": (float,),
+                "finite": (bool,),
+                "cell_order_preserved": (bool,),
+                "metric_backend": (str,),
+                "average_method": (str,),
+                "report_schema_version": (int,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_evaluation_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="evaluate-cell-clustering-v1",
+    )
     specs = (
         inspect_spec,
         embedding_spec,
         neighbors_spec,
         clustering_spec,
         umap_spec,
+        evaluation_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

@@ -132,7 +132,7 @@ def test_downstream_request_produces_exact_five_step_reference_chain(registry) -
         "cluster",
         "umap",
     )
-    assert tuple(step.tool_name for step in plan.steps) == registry.names()
+    assert tuple(step.tool_name for step in plan.steps) == registry.names()[:5]
     assert plan.steps[1].arguments["input_path"] == StepOutputRef(
         "inspect", "input_path"
     )
@@ -176,6 +176,69 @@ def test_downstream_defaults_are_omitted_not_generated_as_literals(registry) -> 
     }
     assert set(plan.steps[3].arguments) == {"analysis_path", "output_dir"}
     assert set(plan.steps[4].arguments) == {"analysis_path", "output_dir"}
+
+
+def test_clustering_evaluation_intent_produces_exact_five_step_plan(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Analyze this mouse scATAC dataset with EpiZoo and evaluate the clustering",
+            {
+                "input_path": "/data/in.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+                "label_key": "celltype",
+            },
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:epizoo-clustering-evaluation"
+    assert tuple(step.step_id for step in plan.steps) == (
+        "inspect", "embed", "neighbors", "cluster", "evaluate"
+    )
+    evaluation = plan.steps[-1]
+    assert evaluation.tool_name == "evaluate_cell_clustering"
+    assert evaluation.depends_on == ("cluster", "inspect")
+    assert evaluation.arguments == {
+        "analysis_path": StepOutputRef("cluster", "analysis_path"),
+        "reference_h5ad_path": StepOutputRef("inspect", "input_path"),
+        "label_key": "celltype",
+        "output_dir": "/output",
+    }
+    assert "cluster_key" not in evaluation.arguments
+
+
+def test_clustering_evaluation_forwards_only_explicit_optional_values(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Evaluate clustering metrics",
+            {
+                "input_path": "/data/in.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+                "label_key": "celltype",
+                "cluster_key": "clusters",
+                "overwrite": True,
+            },
+        ),
+        registry,
+    )
+    assert plan.steps[-1].arguments["cluster_key"] == "clusters"
+    assert plan.steps[-1].arguments["overwrite"] is True
+
+
+def test_clustering_evaluation_requires_structured_label_key(registry) -> None:
+    with pytest.raises(PlannerError, match="label_key"):
+        DeterministicPlanner().plan(
+            _request(
+                "Evaluate the clustering",
+                {
+                    "input_path": "/data/in.h5ad",
+                    "output_dir": "/output",
+                    "species": "mouse",
+                },
+            ),
+            registry,
+        )
 
 
 def test_explicit_downstream_inputs_are_forwarded_to_correct_steps(registry) -> None:

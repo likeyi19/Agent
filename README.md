@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–4 and Milestones 5.1–5.3 are complete.
+Milestones 1–5 and Milestone 6.1 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -15,6 +15,8 @@ Milestones 1–4 and Milestones 5.1–5.3 are complete.
 - Milestone 5.1: durable run state and planner-free resume
 - Milestone 5.2: cooperative cancellation and durable run lifecycle
 - Milestone 5.3: production error classification and deterministic recovery policy
+- Milestone 6.1: EpiZoo embedding analysis with neighbors, Leiden clustering,
+  and UMAP
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -99,3 +101,17 @@ their historical recovery policy cannot be proven, and stale RUNNING work
 continues to require manual reconciliation. Milestone 5.2 cancellation behavior
 is unchanged. Core Milestone 5.3 tests require no network, provider credentials,
 GPU, model checkpoint, or biological dataset.
+
+## Downstream embedding analysis
+
+Milestone 6.1 extends the validated scientific workflow from EpiZoo cell
+embeddings through neighbor-graph construction, Leiden clustering, and 2D UMAP.
+Each stage writes a compact, copy-on-write AnnData artifact containing ordered
+cell IDs, the 512-dimensional EpiZoo representation, sparse graph data, analysis
+outputs, and versioned provenance—never the original million-dimensional scATAC
+feature matrix.
+
+The real production path was validated end to end on 2,000 Fang2021 cells with
+an RTX 4090. All five registered scientific steps succeeded and verified, cell
+order was preserved, the input file remained unchanged, and durable terminal
+resume revalidated the artifacts without rerunning scientific tools.

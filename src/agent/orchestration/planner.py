@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import Protocol, runtime_checkable
 
 from agent.schemas import (
@@ -43,8 +44,20 @@ _EMBEDDING_INTENT = re.compile(r"\b(?:embed|embedding|embeddings)\b")
 _INSPECTION_INTENT = re.compile(
     r"\b(?:inspect|inspection)\b|\bsummarize(?:\s+this)?\s+dataset\b"
 )
+_DOWNSTREAM_INTENT = re.compile(
+    r"\b(?:neighbors?|cluster(?:ing)?|umap)\b|\bfull(?:\s+scatac)?\s+analysis\b"
+)
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
+_DOWNSTREAM_OPTIONAL_INPUTS = (
+    "n_neighbors",
+    "metric",
+    "random_seed",
+    "resolution",
+    "min_dist",
+    "spread",
+    "overwrite",
+)
 
 
 def _normalized_prompt(prompt: str) -> str:
@@ -106,6 +119,68 @@ def _embedding_inputs(request: AgentRequest) -> dict[str, object]:
     return arguments
 
 
+def _downstream_inputs(request: AgentRequest) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for name in _DOWNSTREAM_OPTIONAL_INPUTS:
+        if name not in request.inputs:
+            continue
+        value = request.inputs[name]
+        if name in {"n_neighbors", "random_seed"}:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    f"Structured input {name!r} must be an integer.",
+                )
+            if name == "random_seed" and value < 0:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'random_seed' must be nonnegative.",
+                )
+        elif name == "metric":
+            if value not in {"euclidean", "cosine"}:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'metric' must be 'euclidean' or 'cosine'.",
+                )
+        elif name == "overwrite":
+            if not isinstance(value, bool):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'overwrite' must be a boolean.",
+                )
+        else:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    f"Structured input {name!r} must be a finite number.",
+                )
+        values[name] = value
+
+    effective_resolution = float(values.get("resolution", 1.0))
+    effective_min_dist = float(values.get("min_dist", 0.5))
+    effective_spread = float(values.get("spread", 1.0))
+    if effective_resolution <= 0:
+        raise PlannerError(
+            "INVALID_REQUEST_INPUT",
+            "Structured input 'resolution' must be strictly positive.",
+        )
+    if effective_min_dist < 0 or effective_spread <= 0:
+        raise PlannerError(
+            "INVALID_REQUEST_INPUT",
+            "Structured UMAP inputs require min_dist >= 0 and spread > 0.",
+        )
+    if effective_min_dist > effective_spread:
+        raise PlannerError(
+            "INVALID_REQUEST_INPUT",
+            "Structured input 'min_dist' must not exceed 'spread'.",
+        )
+    return values
+
+
 def _validate_generated_steps(
     registry: ToolRegistry, steps: tuple[PlanStep, ...]
 ) -> None:
@@ -134,8 +209,77 @@ class DeterministicPlanner:
         prompt = _normalized_prompt(request.prompt)
         embedding_intent = _EMBEDDING_INTENT.search(prompt) is not None
         inspection_intent = _INSPECTION_INTENT.search(prompt) is not None
+        downstream_intent = _DOWNSTREAM_INTENT.search(prompt) is not None
 
-        if embedding_intent:
+        if downstream_intent:
+            _require_inputs(request, ("input_path",))
+            input_path = _path_input(request, "input_path")
+            embedding_arguments = _embedding_inputs(request)
+            embedding_arguments["input_path"] = StepOutputRef(
+                step_id="inspect", output_key="input_path"
+            )
+            downstream_inputs = _downstream_inputs(request)
+            output_dir = _path_input(request, "output_dir")
+            neighbors_arguments: dict[str, object] = {
+                "embedding_path": StepOutputRef("embed", "embedding_path"),
+                "cell_ids_path": StepOutputRef("embed", "cell_ids_path"),
+                "output_dir": output_dir,
+            }
+            clustering_arguments: dict[str, object] = {
+                "analysis_path": StepOutputRef("neighbors", "analysis_path"),
+                "output_dir": output_dir,
+            }
+            umap_arguments: dict[str, object] = {
+                "analysis_path": StepOutputRef("cluster", "analysis_path"),
+                "output_dir": output_dir,
+            }
+            for name in ("n_neighbors", "metric", "random_seed", "overwrite"):
+                if name in downstream_inputs:
+                    neighbors_arguments[name] = downstream_inputs[name]
+            for name in ("resolution", "random_seed", "overwrite"):
+                if name in downstream_inputs:
+                    clustering_arguments[name] = downstream_inputs[name]
+            for name in ("min_dist", "spread", "random_seed", "overwrite"):
+                if name in downstream_inputs:
+                    umap_arguments[name] = downstream_inputs[name]
+            steps = (
+                PlanStep(
+                    step_id="inspect",
+                    tool_name="inspect_scATAC",
+                    arguments={"path": input_path},
+                    description="Inspect the input scATAC dataset.",
+                ),
+                PlanStep(
+                    step_id="embed",
+                    tool_name="epizoo_embed_cells",
+                    arguments=embedding_arguments,
+                    depends_on=("inspect",),
+                    description="Compute and persist EpiZoo cell embeddings.",
+                ),
+                PlanStep(
+                    step_id="neighbors",
+                    tool_name="build_cell_neighbors",
+                    arguments=neighbors_arguments,
+                    depends_on=("embed",),
+                    description="Build and persist a sparse cell-neighbor graph.",
+                ),
+                PlanStep(
+                    step_id="cluster",
+                    tool_name="cluster_cells",
+                    arguments=clustering_arguments,
+                    depends_on=("neighbors",),
+                    description="Cluster cells with fixed-setting Leiden.",
+                ),
+                PlanStep(
+                    step_id="umap",
+                    tool_name="compute_cell_umap",
+                    arguments=umap_arguments,
+                    depends_on=("cluster",),
+                    description="Compute and persist a two-dimensional UMAP.",
+                ),
+            )
+            workflow = "epizoo-downstream-analysis"
+        elif embedding_intent:
             _require_inputs(request, ("input_path",))
             input_path = _path_input(request, "input_path")
             embedding_arguments = _embedding_inputs(request)
@@ -173,7 +317,7 @@ class DeterministicPlanner:
             raise PlannerError(
                 "UNSUPPORTED_REQUEST",
                 "DeterministicPlanner supports only explicit scATAC inspection "
-                "or EpiZoo embedding requests.",
+                "or EpiZoo embedding/downstream-analysis requests.",
             )
 
         _validate_generated_steps(registry, steps)

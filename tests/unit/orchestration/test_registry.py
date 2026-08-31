@@ -23,9 +23,18 @@ def registry():
 
 
 def test_default_registry_contains_exact_allowlist(registry) -> None:
-    assert registry.names() == ("inspect_scATAC", "epizoo_embed_cells")
+    assert registry.names() == (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "build_cell_neighbors",
+        "cluster_cells",
+        "compute_cell_umap",
+    )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
+    assert registry.contains("build_cell_neighbors")
+    assert registry.contains("cluster_cells")
+    assert registry.contains("compute_cell_umap")
     assert not registry.contains("arbitrary_python")
 
 
@@ -128,6 +137,45 @@ def test_step_output_ref_is_accepted_before_resolution(registry) -> None:
     assert validated["input_path"] is reference
 
 
+def test_valid_downstream_arguments_and_choices(registry) -> None:
+    neighbors = registry.validate_arguments(
+        "build_cell_neighbors",
+        {
+            "embedding_path": "embedding.npy",
+            "cell_ids_path": "ids.txt",
+            "output_dir": "output",
+            "n_neighbors": 15,
+            "metric": "cosine",
+            "random_seed": 0,
+            "overwrite": False,
+        },
+    )
+    assert neighbors["metric"] == "cosine"
+    registry.validate_arguments(
+        "cluster_cells",
+        {"analysis_path": "neighbors.h5ad", "output_dir": "output", "resolution": 1},
+    )
+    registry.validate_arguments(
+        "compute_cell_umap",
+        {
+            "analysis_path": "clustered.h5ad",
+            "output_dir": "output",
+            "min_dist": 0.5,
+            "spread": 1,
+        },
+    )
+    with pytest.raises(ToolArgumentError, match="must be one of"):
+        registry.validate_arguments(
+            "build_cell_neighbors",
+            {
+                "embedding_path": "embedding.npy",
+                "cell_ids_path": "ids.txt",
+                "output_dir": "output",
+                "metric": "manhattan",
+            },
+        )
+
+
 def test_registry_contracts_match_current_public_signatures(registry) -> None:
     for name in registry.names():
         spec = registry.get(name)
@@ -173,13 +221,69 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
         "checkpoint_path": "/models/epizoo.pth",
         "device": "cuda:0",
     }
+    versions = {"scanpy": "1.11.5"}
+    neighbors = {
+        "status": "success",
+        "embedding_path": "/output/embeddings.npy",
+        "cell_ids_path": "/output/obs_names.txt",
+        "analysis_path": "/output/neighbors.h5ad",
+        "n_cells": 2,
+        "embedding_dim": 512,
+        "n_neighbors": 1,
+        "metric": "euclidean",
+        "neighbors_method": "umap",
+        "transformer": "none",
+        "random_seed": 0,
+        "connectivities_nnz": 2,
+        "distances_nnz": 2,
+        "finite": True,
+        "cell_order_preserved": True,
+        "backend": "Scanpy",
+        "software_versions": versions,
+    }
+    clustering = {
+        "status": "success",
+        "input_analysis_path": "/output/neighbors.h5ad",
+        "analysis_path": "/output/clustered.h5ad",
+        "n_cells": 2,
+        "n_clusters": 1,
+        "cluster_key": "leiden",
+        "algorithm": "leiden",
+        "resolution": 1.0,
+        "random_seed": 0,
+        "cell_order_preserved": True,
+        "backend": "Scanpy",
+        "software_versions": versions,
+    }
+    umap = {
+        "status": "success",
+        "input_analysis_path": "/output/clustered.h5ad",
+        "analysis_path": "/output/umap.h5ad",
+        "n_cells": 2,
+        "n_components": 2,
+        "umap_key": "X_umap",
+        "coordinate_dtype": "float32",
+        "finite": True,
+        "min_dist": 0.5,
+        "spread": 1.0,
+        "random_seed": 0,
+        "cell_order_preserved": True,
+        "backend": "Scanpy",
+        "software_versions": versions,
+    }
 
     registry.validate_result("inspect_scATAC", inspection)
     registry.validate_result("epizoo_embed_cells", embedding)
+    registry.validate_result("build_cell_neighbors", neighbors)
+    registry.validate_result("cluster_cells", clustering)
+    registry.validate_result("compute_cell_umap", umap)
     assert registry.get("inspect_scATAC").result_contract.name == "ScATACInspection"
     assert (
         registry.get("epizoo_embed_cells").result_contract.name
         == "EpiZooEmbeddingToolResult"
+    )
+    assert registry.get("build_cell_neighbors").result_contract.name == (
+        "CellNeighborsToolResult"
     )
 
 
@@ -238,6 +342,16 @@ def test_builtin_exception_classification(registry, exception, category, code) -
     assert error.code == code
     assert error.tool_name == "epizoo_embed_cells"
     assert error.step_id == "embed"
+    assert error.recoverable is False
+
+
+@pytest.mark.parametrize("exception", [TypeError("bad type"), ValueError("bad value")])
+def test_analysis_validation_exception_is_classified_as_invalid_argument(
+    registry, exception
+) -> None:
+    error = registry.classify_exception("build_cell_neighbors", exception)
+    assert error.category is ErrorCategory.USER_INPUT_ERROR
+    assert error.code == "INVALID_ARGUMENT"
     assert error.recoverable is False
 
 

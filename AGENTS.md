@@ -283,6 +283,77 @@ Deferred non-blocking follow-ups:
 - minor remaining `RunStore` I/O normalization gaps
 - stronger catalog call-site enumeration coverage
 
+### Milestone 6.1 — Downstream EpiZoo embedding analysis
+
+Milestone 6.1 is complete and accepted. The production `ToolRegistry` now
+contains exactly five scientific tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+3. `build_cell_neighbors`
+4. `cluster_cells`
+5. `compute_cell_umap`
+
+The accepted downstream artifact flow is:
+
+EpiZoo embeddings `.npy` plus ordered cell IDs
+→ `*.neighbors.h5ad`
+→ `*.neighbors.clustered.h5ad`
+→ `*.neighbors.clustered.umap.h5ad`
+
+These compact, copy-on-write artifacts preserve exact cell order and versioned
+provenance. They contain `obsm["X_epizoo"]`, sparse neighbor graphs, Leiden
+labels, and 2D UMAP coordinates, but not the original million-dimensional
+scATAC feature matrix. User input and upstream artifacts are never modified.
+
+Accepted scientific defaults:
+
+- neighbors use all 512 EpiZoo dimensions through `use_rep="X_epizoo"`,
+  `n_neighbors=15`, Euclidean distance, Scanpy UMAP-style connectivity, and
+  `random_seed=0`
+- clustering uses Leiden only, resolution `1.0`, igraph flavor, the weighted
+  graph, no resolution sweep or label-informed selection, and `random_seed=0`
+- UMAP uses two dimensions, `min_dist=0.5`, `spread=1.0`, spectral
+  initialization, and `random_seed=0`
+
+Milestone 6.1 preserves the existing orchestration and lifecycle contracts.
+Only registered scientific tools execute; arbitrary Python and shell remain
+prohibited. Executable planner arguments still come only from
+`AgentRequest.inputs` or `StepOutputRef`, and the LLM planner cannot invent
+executable literals. Planning schema v2 and whole-plan preflight remain
+authoritative, PLAN_ONLY executes zero tools, and downstream tools are
+nonretryable by default. Durable resume revalidates artifacts before restoring
+downstream references, cancellation behavior is unchanged, and raw scATAC
+matrices are never densified.
+
+The new recovery-policy identities are:
+
+- `build-cell-neighbors-v1`
+- `cluster-cells-v1`
+- `compute-cell-umap-v1`
+
+Existing recovery identities and the global error-policy catalog version are
+unchanged.
+
+Accepted validation:
+
+- focused Milestone 6.1: 182 passed
+- canonical orchestration regression: 318 passed
+- complete lightweight regression: 506 passed, 6 skipped
+
+Real production-path acceptance ran the complete five-tool Fang2021 workflow
+for 2,000 cells on an RTX 4090. All steps succeeded and verified in about 64.4
+seconds with about 10.9 GiB peak allocated GPU memory. The final EpiZoo
+representation was `(2000, 512)`, the UMAP was `(2000, 2)`, Leiden produced 21
+clusters, cell order was exact, the input file was unchanged, and terminal
+resume revalidated every artifact without rerunning scientific tools.
+
+Non-blocking environment notes from acceptance: the installed Louvain package
+emits a `pkg_resources` deprecation warning, Scanpy notes that Louvain is
+superseded by Leiden, and the installed TBB version disables Numba's TBB
+threading layer. Milestone 6.1 uses Leiden, and these warnings did not affect
+acceptance.
+
 ## Development environment
 
 - Linux server

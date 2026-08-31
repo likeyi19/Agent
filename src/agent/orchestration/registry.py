@@ -11,7 +11,13 @@ from types import MappingProxyType
 from typing import Callable, Mapping
 
 from agent.schemas import AgentError, ErrorCategory, StepOutputRef
-from agent.tools import epizoo_embed_cells, inspect_scATAC
+from agent.tools import (
+    build_cell_neighbors,
+    cluster_cells,
+    compute_cell_umap,
+    epizoo_embed_cells,
+    inspect_scATAC,
+)
 
 from .error_policy import classified_agent_error
 
@@ -321,6 +327,12 @@ def _classify_embedding_exception(exception: Exception) -> ErrorClassification:
     return classification
 
 
+def _classify_analysis_exception(exception: Exception) -> ErrorClassification:
+    if isinstance(exception, (TypeError, ValueError)):
+        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR, "INVALID_ARGUMENT")
+    return _classify_embedding_exception(exception)
+
+
 def _is_cuda_out_of_memory(exception: Exception) -> bool:
     exception_type = type(exception)
     return (
@@ -346,6 +358,52 @@ def _validate_embedding_result(result: Mapping[str, object]) -> None:
     if "embeddings" in result:
         raise ToolResultContractError(
             "epizoo_embed_cells must not return an embedding array in its result."
+        )
+
+
+def _validate_neighbors_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "build_cell_neighbors field 'status' must equal 'success'."
+        )
+    if result["finite"] is not True or result["cell_order_preserved"] is not True:
+        raise ToolResultContractError(
+            "build_cell_neighbors must report finite output and preserved cell order."
+        )
+    forbidden = {"embeddings", "cell_ids", "distances", "connectivities"}
+    if forbidden.intersection(result):
+        raise ToolResultContractError(
+            "build_cell_neighbors must not return large scientific arrays."
+        )
+
+
+def _validate_clustering_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "cluster_cells field 'status' must equal 'success'."
+        )
+    if result["cell_order_preserved"] is not True:
+        raise ToolResultContractError(
+            "cluster_cells must report preserved cell order."
+        )
+    if "labels" in result:
+        raise ToolResultContractError(
+            "cluster_cells must not return the full Leiden label vector."
+        )
+
+
+def _validate_umap_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "compute_cell_umap field 'status' must equal 'success'."
+        )
+    if result["finite"] is not True or result["cell_order_preserved"] is not True:
+        raise ToolResultContractError(
+            "compute_cell_umap must report finite output and preserved cell order."
+        )
+    if "coordinates" in result:
+        raise ToolResultContractError(
+            "compute_cell_umap must not return the full coordinate array."
         )
 
 
@@ -434,9 +492,125 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_embedding_exception,
         recovery_policy_version="epizoo-embed-cells-v2",
     )
-    for spec in (inspect_spec, embedding_spec):
+    neighbors_spec = ToolSpec(
+        name="build_cell_neighbors",
+        function=build_cell_neighbors,
+        required_arguments={
+            "embedding_path": path_argument,
+            "cell_ids_path": path_argument,
+            "output_dir": path_argument,
+        },
+        optional_arguments={
+            "n_neighbors": ArgumentSpec((int,)),
+            "metric": ArgumentSpec((str,), choices=("euclidean", "cosine")),
+            "random_seed": ArgumentSpec((int,)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="CellNeighborsToolResult",
+            required_fields={
+                "status": (str,),
+                "embedding_path": (str,),
+                "cell_ids_path": (str,),
+                "analysis_path": (str,),
+                "n_cells": (int,),
+                "embedding_dim": (int,),
+                "n_neighbors": (int,),
+                "metric": (str,),
+                "neighbors_method": (str,),
+                "transformer": (str,),
+                "random_seed": (int,),
+                "connectivities_nnz": (int,),
+                "distances_nnz": (int,),
+                "finite": (bool,),
+                "cell_order_preserved": (bool,),
+                "backend": (str,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_neighbors_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="build-cell-neighbors-v1",
+    )
+    clustering_spec = ToolSpec(
+        name="cluster_cells",
+        function=cluster_cells,
+        required_arguments={
+            "analysis_path": path_argument,
+            "output_dir": path_argument,
+        },
+        optional_arguments={
+            "resolution": ArgumentSpec((int, float)),
+            "random_seed": ArgumentSpec((int,)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="CellClusteringToolResult",
+            required_fields={
+                "status": (str,),
+                "input_analysis_path": (str,),
+                "analysis_path": (str,),
+                "n_cells": (int,),
+                "n_clusters": (int,),
+                "cluster_key": (str,),
+                "algorithm": (str,),
+                "resolution": (float,),
+                "random_seed": (int,),
+                "cell_order_preserved": (bool,),
+                "backend": (str,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_clustering_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="cluster-cells-v1",
+    )
+    umap_spec = ToolSpec(
+        name="compute_cell_umap",
+        function=compute_cell_umap,
+        required_arguments={
+            "analysis_path": path_argument,
+            "output_dir": path_argument,
+        },
+        optional_arguments={
+            "min_dist": ArgumentSpec((int, float)),
+            "spread": ArgumentSpec((int, float)),
+            "random_seed": ArgumentSpec((int,)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="CellUMAPToolResult",
+            required_fields={
+                "status": (str,),
+                "input_analysis_path": (str,),
+                "analysis_path": (str,),
+                "n_cells": (int,),
+                "n_components": (int,),
+                "umap_key": (str,),
+                "coordinate_dtype": (str,),
+                "finite": (bool,),
+                "min_dist": (float,),
+                "spread": (float,),
+                "random_seed": (int,),
+                "cell_order_preserved": (bool,),
+                "backend": (str,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_umap_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="compute-cell-umap-v1",
+    )
+    specs = (
+        inspect_spec,
+        embedding_spec,
+        neighbors_spec,
+        clustering_spec,
+        umap_spec,
+    )
+    for spec in specs:
         _assert_signature_matches(spec)
-    return ToolRegistry((inspect_spec, embedding_spec))
+    return ToolRegistry(specs)
 
 
 __all__ = [

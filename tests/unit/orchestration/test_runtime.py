@@ -228,7 +228,7 @@ def test_deterministic_planner_runs_through_runtime_with_fake_registry() -> None
 @pytest.mark.parametrize(
     ("prompt", "inputs", "expected_code"),
     [
-        ("cluster cells", {}, "UNSUPPORTED_REQUEST"),
+        ("cluster cells", {}, "MISSING_REQUIRED_INPUT"),
         ("inspect dataset", {}, "MISSING_REQUIRED_INPUT"),
     ],
 )

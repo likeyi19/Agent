@@ -117,6 +117,52 @@ def _embed_step(**changes) -> dict[str, object]:
     return step
 
 
+def _neighbors_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "neighbors",
+        "tool_name": "build_cell_neighbors",
+        "arguments": [
+            _ref_binding("embedding_path", "embed", "embedding_path"),
+            _ref_binding("cell_ids_path", "embed", "cell_ids_path"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": ["embed"],
+        "description": "Build a sparse neighbor graph.",
+    }
+    step.update(changes)
+    return step
+
+
+def _cluster_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "cluster",
+        "tool_name": "cluster_cells",
+        "arguments": [
+            _ref_binding("analysis_path", "neighbors", "analysis_path"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": ["neighbors"],
+        "description": "Cluster cells with Leiden.",
+    }
+    step.update(changes)
+    return step
+
+
+def _umap_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "umap",
+        "tool_name": "compute_cell_umap",
+        "arguments": [
+            _ref_binding("analysis_path", "cluster", "analysis_path"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": ["cluster"],
+        "description": "Compute a two-dimensional UMAP.",
+    }
+    step.update(changes)
+    return step
+
+
 def _plan_response(*steps: dict[str, object], **extra) -> str:
     payload: dict[str, object] = {
         "schema_version": 2,
@@ -172,6 +218,42 @@ def test_two_step_plan_binds_inputs_and_converts_reference(registry) -> None:
     assert plan.steps[1].arguments["output_dir"] == "/output"
     assert plan.steps[1].arguments["species"] == "mouse"
     assert plan.steps[1].depends_on == ("inspect",)
+
+
+def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None:
+    planner, _ = _planner(
+        _plan_response(
+            _inspect_step(),
+            _embed_step(),
+            _neighbors_step(),
+            _cluster_step(),
+            _umap_step(),
+        )
+    )
+    request = _request(
+        {
+            "input_path": "/data/input.h5ad",
+            "output_dir": "/output",
+            "species": "mouse",
+        }
+    )
+    plan = planner.plan(request, registry)
+    assert tuple(step.tool_name for step in plan.steps) == registry.names()
+    assert plan.steps[2].arguments["embedding_path"] == StepOutputRef(
+        "embed", "embedding_path"
+    )
+    assert plan.steps[2].arguments["cell_ids_path"] == StepOutputRef(
+        "embed", "cell_ids_path"
+    )
+    assert plan.steps[3].arguments["analysis_path"] == StepOutputRef(
+        "neighbors", "analysis_path"
+    )
+    assert plan.steps[4].arguments["analysis_path"] == StepOutputRef(
+        "cluster", "analysis_path"
+    )
+    assert "n_neighbors" not in plan.steps[2].arguments
+    assert "resolution" not in plan.steps[3].arguments
+    assert "min_dist" not in plan.steps[4].arguments
 
 
 def test_request_input_values_are_preserved_exactly(registry) -> None:
@@ -293,6 +375,15 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
         "checkpoint_path",
         "device",
         "overwrite",
+        "embedding_path",
+        "cell_ids_path",
+        "analysis_path",
+        "n_neighbors",
+        "metric",
+        "random_seed",
+        "resolution",
+        "min_dist",
+        "spread",
     }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (
@@ -342,10 +433,7 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
         {"json_type": "string", "name": "input_path"},
         {"json_type": "string", "name": "species"},
     ]
-    assert [tool["name"] for tool in payload["tools"]] == [
-        "inspect_scATAC",
-        "epizoo_embed_cells",
-    ]
+    assert [tool["name"] for tool in payload["tools"]] == list(registry.names())
     assert payload["tools"][1]["required_arguments"]["species"]["choices"] == [
         "human",
         "mouse",

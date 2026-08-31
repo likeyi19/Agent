@@ -42,6 +42,18 @@ _TOOL_DESCRIPTIONS = {
         "Compute EpiZoo cell embeddings from a scATAC-seq h5ad file and "
         "persist the embeddings and ordered cell identifiers as artifacts."
     ),
+    "build_cell_neighbors": (
+        "Build a sparse Scanpy nearest-neighbor graph from persisted EpiZoo "
+        "embeddings and their ordered cell-ID sidecar."
+    ),
+    "cluster_cells": (
+        "Run fixed-setting Leiden clustering on a valid Milestone 6 neighbors "
+        "analysis artifact and persist a new compact h5ad artifact."
+    ),
+    "compute_cell_umap": (
+        "Compute a fixed two-dimensional UMAP from a valid clustered Milestone 6 "
+        "analysis artifact and persist a new compact h5ad artifact."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -52,6 +64,24 @@ _ARGUMENT_DESCRIPTIONS = {
     ("epizoo_embed_cells", "checkpoint_path"): "EpiZoo checkpoint path.",
     ("epizoo_embed_cells", "device"): "Execution device.",
     ("epizoo_embed_cells", "overwrite"): "Whether existing artifacts may be replaced.",
+    ("build_cell_neighbors", "embedding_path"): "Persisted EpiZoo npy embedding path.",
+    ("build_cell_neighbors", "cell_ids_path"): "Ordered EpiZoo cell-ID sidecar path.",
+    ("build_cell_neighbors", "output_dir"): "Directory for the neighbors artifact.",
+    ("build_cell_neighbors", "n_neighbors"): "Explicit nearest-neighbor count.",
+    ("build_cell_neighbors", "metric"): "Euclidean or cosine neighbor metric.",
+    ("build_cell_neighbors", "random_seed"): "Explicit nonnegative random seed.",
+    ("build_cell_neighbors", "overwrite"): "Whether an existing output may be replaced.",
+    ("cluster_cells", "analysis_path"): "Valid Milestone 6 neighbors artifact path.",
+    ("cluster_cells", "output_dir"): "Directory for the clustered artifact.",
+    ("cluster_cells", "resolution"): "Explicit positive Leiden resolution.",
+    ("cluster_cells", "random_seed"): "Explicit nonnegative random seed.",
+    ("cluster_cells", "overwrite"): "Whether an existing output may be replaced.",
+    ("compute_cell_umap", "analysis_path"): "Valid clustered Milestone 6 artifact path.",
+    ("compute_cell_umap", "output_dir"): "Directory for the UMAP artifact.",
+    ("compute_cell_umap", "min_dist"): "Explicit nonnegative UMAP minimum distance.",
+    ("compute_cell_umap", "spread"): "Explicit positive UMAP spread.",
+    ("compute_cell_umap", "random_seed"): "Explicit nonnegative random seed.",
+    ("compute_cell_umap", "overwrite"): "Whether an existing output may be replaced.",
 }
 
 

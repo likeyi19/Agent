@@ -112,6 +112,107 @@ def test_embedding_intent_takes_precedence_over_inspection(registry) -> None:
     assert tuple(step.step_id for step in plan.steps) == ("inspect", "embed")
 
 
+def test_downstream_request_produces_exact_five_step_reference_chain(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Cluster the cells and compute UMAP",
+            {
+                "input_path": "/data/in.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+            },
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:epizoo-downstream-analysis"
+    assert tuple(step.step_id for step in plan.steps) == (
+        "inspect",
+        "embed",
+        "neighbors",
+        "cluster",
+        "umap",
+    )
+    assert tuple(step.tool_name for step in plan.steps) == registry.names()
+    assert plan.steps[1].arguments["input_path"] == StepOutputRef(
+        "inspect", "input_path"
+    )
+    assert plan.steps[2].arguments["embedding_path"] == StepOutputRef(
+        "embed", "embedding_path"
+    )
+    assert plan.steps[2].arguments["cell_ids_path"] == StepOutputRef(
+        "embed", "cell_ids_path"
+    )
+    assert plan.steps[3].arguments["analysis_path"] == StepOutputRef(
+        "neighbors", "analysis_path"
+    )
+    assert plan.steps[4].arguments["analysis_path"] == StepOutputRef(
+        "cluster", "analysis_path"
+    )
+    assert tuple(step.depends_on for step in plan.steps) == (
+        (),
+        ("inspect",),
+        ("embed",),
+        ("neighbors",),
+        ("cluster",),
+    )
+
+
+def test_downstream_defaults_are_omitted_not_generated_as_literals(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Build neighbors, cluster, and UMAP",
+            {
+                "input_path": "/data/in.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+            },
+        ),
+        registry,
+    )
+    assert set(plan.steps[2].arguments) == {
+        "embedding_path",
+        "cell_ids_path",
+        "output_dir",
+    }
+    assert set(plan.steps[3].arguments) == {"analysis_path", "output_dir"}
+    assert set(plan.steps[4].arguments) == {"analysis_path", "output_dir"}
+
+
+def test_explicit_downstream_inputs_are_forwarded_to_correct_steps(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Run the full analysis with UMAP",
+            {
+                "input_path": "/data/in.h5ad",
+                "output_dir": "/output",
+                "species": "human",
+                "n_neighbors": 20,
+                "metric": "cosine",
+                "random_seed": 7,
+                "resolution": 0.8,
+                "min_dist": 0.2,
+                "spread": 1.2,
+                "overwrite": True,
+            },
+        ),
+        registry,
+    )
+    assert dict(plan.steps[2].arguments) == {
+        "embedding_path": StepOutputRef("embed", "embedding_path"),
+        "cell_ids_path": StepOutputRef("embed", "cell_ids_path"),
+        "output_dir": "/output",
+        "n_neighbors": 20,
+        "metric": "cosine",
+        "random_seed": 7,
+        "overwrite": True,
+    }
+    assert plan.steps[3].arguments["resolution"] == 0.8
+    assert plan.steps[3].arguments["random_seed"] == 7
+    assert plan.steps[4].arguments["min_dist"] == 0.2
+    assert plan.steps[4].arguments["spread"] == 1.2
+    assert plan.steps[4].arguments["random_seed"] == 7
+
+
 @pytest.mark.parametrize(
     ("prompt", "inputs", "missing_name"),
     [
@@ -217,7 +318,7 @@ def test_generated_plan_and_arguments_validate(registry) -> None:
 
 @pytest.mark.parametrize(
     "prompt",
-    ["cluster the cells", "tell me about chromatin", "this dataset is inspectable"],
+    ["tell me about chromatin", "this dataset is inspectable"],
 )
 def test_unsupported_or_unrelated_prompt_is_rejected(registry, prompt) -> None:
     with pytest.raises(PlannerError) as raised:

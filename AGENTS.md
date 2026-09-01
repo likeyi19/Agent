@@ -1017,9 +1017,168 @@ Default validation required no network, API key, provider, GPU, checkpoint, or
 EpiZoo inference. Guarded registry callables proved that visualization build
 and verification execute zero scientific tools.
 
-Scientific report generation remains future work. Transferred-label UMAP
-remains deferred until explicit query-artifact provenance binding exists, and
-an interactive Agent UI or demo remains later work.
+Deterministic scientific reporting is provided separately by Milestone 7.3.
+Transferred-label UMAP remains deferred until explicit query-artifact
+provenance binding exists, and LLM interpretation and an interactive Agent UI
+or demo remain later work.
+
+### Milestone 7.3 — Verified Deterministic Scientific Report
+
+Milestone 7.3 is complete and accepted. Its public API is:
+
+```python
+build_analysis_report(
+    run_result,
+    evidence,
+    output_dir,
+    *,
+    registry,
+    visualization=None,
+    overwrite=False,
+)
+```
+
+```python
+verify_analysis_report(
+    run_result,
+    evidence,
+    report,
+    *,
+    registry,
+    visualization=None,
+)
+```
+
+`AgentRunResult` and `AnalysisEvidence` are required, visualization is
+optional, and `ToolRegistry` is explicitly caller supplied. Reporting remains
+post-run and outside `AgentPlan`.
+
+The accepted trust boundary is:
+
+1. freshly call `verify_analysis_evidence()`;
+2. strictly load the verified evidence;
+3. optionally freshly call `verify_analysis_visualizations()`;
+4. require exact run, request, plan, and evidence identity binding;
+5. construct a frozen report-fact projection;
+6. generate deterministic Markdown;
+7. optionally copy every verified PNG byte-for-byte;
+8. persist a strict report manifest;
+9. verify the report through exact regeneration.
+
+The report layer executes no scientific tools, browses no arbitrary files,
+reopens no arbitrary H5AD or scientific evaluation artifact, and does not
+recompute metrics, inspect UMAP geometry or image pixels, tune or rerun an
+analysis, or infer a missing scientific stage.
+
+#### Report artifacts and frozen facts
+
+The persisted bundle is:
+
+```text
+analysis_report/
+├── analysis_report.md
+├── report_manifest.json
+└── figures/              # only when visualization is supplied
+```
+
+The manifest identity is:
+
+```text
+artifact_type: agent.analysis-report
+schema_version: 1
+report_spec_version: 1
+```
+
+It binds run/request/plan identity, the evidence path and authoritative
+SHA-256, optional visualization-manifest identity and SHA-256, ordered sections
+and fact records, the fact-projection SHA-256, section-to-fact bindings, figure
+bindings, Markdown SHA-256, and report generator/spec identity. It contains no
+embeddings, coordinates, label vectors, matrices, AnnData, or duplicated
+confusion arrays.
+
+Each frozen fact has a stable identifier such as `F0001`, assigned in evidence
+topological step order and frozen per-tool field order. Every record contains
+its source step, tool, field, and exact value. Unknown future evidence fields
+do not silently appear, and every rendered scientific value originates from
+this frozen projection. These compact attributed facts form the safe substrate
+for a future constrained `ReportModel`.
+
+#### Conditional sections and scientific wording
+
+The fixed conditional section order is:
+
+1. Analysis Summary
+2. Dataset
+3. EpiZoo Representation
+4. Clustering and UMAP
+5. Clustering Evaluation
+6. Cell Annotation
+7. Annotation Evaluation
+8. Figures
+9. Methods / Analysis Parameters
+10. Provenance and Reproducibility
+
+Sections appear only when their verified source exists. Inspection-only reports
+are valid; clustering without evaluation has no clustering-evaluation claims;
+annotation without evaluation has no accuracy claims; and no visualization
+input means no Figures section or figure claims. Multiple same-kind steps
+remain in deterministic workflow order.
+
+Version 1 reports verified facts only, including cell and feature counts,
+embedding dimensions, cluster counts and resolution, NMI/ARI/AMI/Homogeneity,
+assignment counts and rates, accuracy, macro-F1, verified figure identities,
+analysis parameters, and provenance. It does not claim that results are well
+separated, excellent, reliable, biologically meaningful, or demonstrate
+conservation, and introduces no arbitrary performance thresholds. Numeric
+values retain their exact representation; nullable values such as
+`assigned_accuracy` remain undefined/`null`, never zero.
+
+#### Visualization, verification, and persistence
+
+Visualization is optional. When supplied, every verified Milestone 7.2 figure
+is copied in exact figure order. Source and copied PNG bytes and SHA-256 values
+must match, captions use fixed factual templates, and figures are never redrawn
+or interpreted. Evidence/visualization identity mismatch fails closed.
+
+`verify_analysis_report()` freshly verifies evidence and any required
+visualization, checks exact source identities, and regenerates the frozen fact
+projection, section order, captions, figure bindings, exact UTF-8 Markdown, and
+canonical manifest. It validates Markdown SHA-256 and byte equality, copied PNG
+SHA-256 and equality with the verified source PNG, and rejects missing, extra,
+renamed, or modified artifacts. Verification invokes zero scientific
+callables. Unlike PNG rendering, Markdown is verified through exact byte
+regeneration rather than heuristic review.
+
+Publication uses a staging directory; fsyncs report, figure, and directory
+contents; and treats the manifest as the completion marker. `overwrite=False`
+protects existing results. `overwrite=True` uses conservative backup and
+replacement, restores a previous valid report when replacement fails where
+possible, and reports rollback failure explicitly and fail-closed. Universal
+atomic replacement of a nonempty directory is not claimed.
+
+Milestone 7.3 introduces no `ToolRegistry` entry, `AgentPlan` integration,
+planning-schema change, RunStore change, recovery identity, provider change,
+scientific-tool change, Milestone 7.1/7.2 semantic change, EpiZoo change, or
+dependency. The production registry remains exactly eight tools, planning
+schema remains v2, and RunStore remains v3.
+
+Milestone 7.3 v1 contains no LLM-generated narrative. Future scientific
+interpretation should use a separate constrained `ReportModel` that consumes
+only compact report facts with stable fact IDs. Other brief future directions
+are application/UI composition, an interactive Agent demo, and richer export
+formats if later justified.
+
+Accepted validation:
+
+- focused Milestone 7.3: 29 passed
+- combined Milestone 7.1–7.3 report tests: 89 passed
+- Milestone 7.3 offline integration: 3 passed
+- canonical orchestration regression: 375 passed
+- complete lightweight regression: 762 passed, 6 skipped
+
+Default acceptance requires no network, API key, provider, GPU, checkpoint, or
+EpiZoo inference. Guarded registry callables proved that Milestone 7.1–7.3
+post-run reporting invokes zero scientific tools.
 
 ## Development environment
 
@@ -1071,4 +1230,4 @@ Validated capabilities:
 - cCRE perturbation
 - variant interpretation
 - web UI
-- automatic scientific reports
+- LLM-generated scientific interpretation

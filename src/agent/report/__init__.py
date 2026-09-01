@@ -1,5 +1,20 @@
 """Verified result boundaries for deterministic scientific reporting."""
 
+from .analysis_report import (
+    ANALYSIS_REPORT_ARTIFACT_TYPE,
+    ANALYSIS_REPORT_BUNDLE_DIRNAME,
+    ANALYSIS_REPORT_FILENAME,
+    ANALYSIS_REPORT_MANIFEST_FILENAME,
+    ANALYSIS_REPORT_SCHEMA_VERSION,
+    REPORT_SPEC_VERSION,
+    AnalysisReportError,
+    AnalysisReportResult,
+    ReportFactRecord,
+    ReportFigureResult,
+    build_analysis_report,
+    verify_analysis_report,
+)
+
 from .evidence import (
     ANALYSIS_EVIDENCE_ARTIFACT_TYPE,
     ANALYSIS_EVIDENCE_FILENAME,
@@ -23,6 +38,18 @@ from .visualization import (
 )
 
 __all__ = [
+    "ANALYSIS_REPORT_ARTIFACT_TYPE",
+    "ANALYSIS_REPORT_BUNDLE_DIRNAME",
+    "ANALYSIS_REPORT_FILENAME",
+    "ANALYSIS_REPORT_MANIFEST_FILENAME",
+    "ANALYSIS_REPORT_SCHEMA_VERSION",
+    "REPORT_SPEC_VERSION",
+    "AnalysisReportError",
+    "AnalysisReportResult",
+    "ReportFactRecord",
+    "ReportFigureResult",
+    "build_analysis_report",
+    "verify_analysis_report",
     "ANALYSIS_EVIDENCE_ARTIFACT_TYPE",
     "ANALYSIS_EVIDENCE_FILENAME",
     "ANALYSIS_EVIDENCE_SCHEMA_VERSION",

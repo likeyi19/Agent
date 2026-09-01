@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.2 are complete.
+Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.3 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -26,6 +26,8 @@ Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.2 are complete.
 - Milestone 7.1: deterministic verified analysis evidence for successful runs
 - Milestone 7.2: deterministic verified scientific visualization from accepted
   analysis evidence
+- Milestone 7.3: deterministic verified scientific reports from accepted
+  evidence and optional verified visualizations
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -193,3 +195,31 @@ never rerun or tune scientific analysis, never access raw scATAC `.X`, and use
 only artifact paths explicitly bound by verified evidence rather than directory
 discovery. Terminal-resume sources undergo fresh evidence and source
 verification.
+
+## Verified deterministic scientific report
+
+Milestone 7.3 adds a fully deterministic, user-readable reporting flow:
+
+successful `AgentRunResult`
+→ verified `AnalysisEvidence`
+→ optional verified `AnalysisVisualizations`
+→ frozen report-fact projection
+→ deterministic Markdown and optional copied PNGs
+→ `report_manifest.json`
+
+Report sections appear only when supported by verified workflow evidence, so
+inspection-only reports are valid and absent analysis stages are never
+fabricated. Scientific values come from a frozen whitelisted projection with
+stable fact IDs for machine-readable attribution. Exact numeric values and
+nullable values are preserved; qualitative claims such as excellent
+performance, reliable annotation, or well-separated clusters are intentionally
+not generated.
+
+Visualization is optional. When supplied, every verified Milestone 7.2 PNG is
+copied in its original order with byte-for-byte and SHA-256 equality. Figures
+are neither redrawn nor visually interpreted. Markdown, fact attribution,
+section bindings, copied-figure bindings, and the canonical manifest are
+deterministic and exactly verifiable.
+
+Milestone 7.3 v1 contains no LLM-generated narrative. Future constrained LLM
+interpretation remains separate from this deterministic reporting boundary.

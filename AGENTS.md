@@ -802,6 +802,90 @@ Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba warnings
 remain non-blocking; deliberate duplicate-ID negative tests also emit expected
 AnnData warnings.
 
+### Milestone 7.1 — Verified Analysis Evidence
+
+Milestone 7.1 is complete and accepted. Its public API is:
+
+```python
+build_analysis_evidence(
+    run_result: AgentRunResult,
+    output_dir: str | Path,
+    *,
+    registry: ToolRegistry,
+    overwrite: bool = False,
+) -> AnalysisEvidenceResult
+```
+
+```python
+verify_analysis_evidence(
+    run_result: AgentRunResult,
+    evidence_path: str | Path | AnalysisEvidenceResult,
+    *,
+    registry: ToolRegistry,
+) -> VerificationResult
+```
+
+Only successful, non-PLAN_ONLY `AgentRunResult` objects are eligible. Evidence
+construction and verification both require a fresh `verify_run()` and a fresh
+topological `verify_step()` for every step. Existing `StepOutputRef` and
+resolved-argument bindings are checked as part of that boundary. Scientific
+callables are never invoked by evidence construction or verification, and a
+terminal resume does not bypass fresh artifact verification.
+
+Schema v1 contains compact, explicit whitelisted projections for all eight
+current production tools. Unsupported future tools fail closed, and arbitrary
+future result fields are not automatically exposed. The evidence layer does not
+scan arbitrary output directories and excludes embeddings, cell-ID and label
+vectors, UMAP coordinates, confidence arrays, AnnData objects, raw scATAC
+matrices, and other large scientific payloads.
+
+The persisted artifact is:
+
+```text
+analysis_evidence.json
+artifact_type: agent.analysis-evidence
+schema_version: 1
+```
+
+Persistence uses canonical deterministic JSON, rejects duplicate keys and
+nonfinite numbers, validates the temporary artifact, fsyncs the file, installs
+it with atomic `os.replace`, fsyncs the directory, protects against accidental
+overwrite, and returns the final evidence-file SHA-256. This digest is
+authoritative for the evidence file itself. Evidence does not imply universal
+whole-file cryptographic hashing of every scientific artifact: some existing
+artifacts have authoritative digests, while others are protected by existing
+structural, provenance, and content verifier logic. Schema v1 records that
+distinction explicitly.
+
+Milestone 7.1 is downstream of orchestration and introduces no scientific-tool
+registration. The production `ToolRegistry` remains exactly eight tools. There
+is no new recovery identity, recovery-policy change, planning-schema change,
+RunStore-schema change, orchestration change, provider change, or EpiZoo change.
+It introduces no visualization, narrative generation, or LLM exposure of
+scientific payloads. Visualization is deferred to a future milestone, and
+narrative/report-model integration remains later work.
+
+Accepted validation:
+
+- focused Milestone 7.1: 30 passed
+- canonical orchestration regression: 375 passed
+- complete lightweight regression: 703 passed, 6 skipped
+
+The lightweight integration path is:
+
+```text
+tiny sparse H5AD
+→ AgentRuntime
+→ inspect_scATAC
+→ successful AgentRunResult
+→ build_analysis_evidence
+→ verify_analysis_evidence
+```
+
+It requires no network, API key, GPU, checkpoint, or EpiZoo inference. Guarded
+scientific callables also proved that evidence construction and verification
+execute zero scientific tools.
+
 ## Development environment
 
 - Linux server

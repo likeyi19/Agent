@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5 and Milestones 6.1–6.4 are complete.
+Milestones 1–5, Milestones 6.1–6.4, and Milestone 7.1 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -23,6 +23,7 @@ Milestones 1–5 and Milestones 6.1–6.4 are complete.
   through direct EpiZoo embedding-space label transfer
 - Milestone 6.4: supervised evaluation and confidence diagnostics for fixed
   cell-annotation artifacts
+- Milestone 7.1: deterministic verified analysis evidence for successful runs
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -141,3 +142,27 @@ diagnostics, a rectangular confusion summary, and descriptive confidence
 medians. Ground truth remains evaluation-only and cannot tune or rerun label
 transfer. Real held-out Fang2021 evaluation reproduced the frozen Milestone 6.3
 metrics and confidence summaries.
+
+## Verified analysis evidence
+
+Milestone 7.1 adds deterministic post-run evidence generation:
+
+successful `AgentRunResult`
+→ fresh existing `verify_run()` and `verify_step()` verification
+→ compact schema-v1 `AnalysisEvidence` projection
+→ atomic `analysis_evidence.json`
+
+The projection uses explicit whitelists for the eight existing scientific tools
+and has an authoritative evidence-file SHA-256. It records whether source
+artifacts have authoritative cryptographic digests or are instead protected by
+existing structural, provenance, and content verification. Embeddings, cell
+vectors, UMAP coordinates, labels, confidence arrays, AnnData objects, and raw
+scATAC matrices are never copied into evidence.
+
+`AnalysisEvidence` is downstream of orchestration: it is neither a
+`ToolRegistry` scientific tool nor part of `AgentPlan`. The production registry
+remains exactly eight tools, planning schema v2 and the RunStore schema are
+unchanged, and evidence build and verification never invoke registered
+scientific callables. Terminal-resume results still undergo fresh artifact
+verification before evidence is accepted. Visualization and narrative report
+generation remain future work.

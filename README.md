@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5, Milestones 6.1–6.4, and Milestone 7.1 are complete.
+Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.2 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -24,6 +24,8 @@ Milestones 1–5, Milestones 6.1–6.4, and Milestone 7.1 are complete.
 - Milestone 6.4: supervised evaluation and confidence diagnostics for fixed
   cell-annotation artifacts
 - Milestone 7.1: deterministic verified analysis evidence for successful runs
+- Milestone 7.2: deterministic verified scientific visualization from accepted
+  analysis evidence
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -165,4 +167,29 @@ remains exactly eight tools, planning schema v2 and the RunStore schema are
 unchanged, and evidence build and verification never invoke registered
 scientific callables. Terminal-resume results still undergo fresh artifact
 verification before evidence is accepted. Visualization and narrative report
-generation remain future work.
+generation are separate downstream concerns.
+
+## Verified scientific visualization
+
+Milestone 7.2 adds a presentation-only flow downstream of orchestration:
+
+successful `AgentRunResult`
+→ verified `AnalysisEvidence`
+→ fresh Milestone 7.1 verification
+→ explicit presentation-only reads from verified artifacts
+→ deterministic plotting-data projection
+→ PNG figures and `visualization_manifest.json`
+
+Version 1 produces exactly a Leiden-colored UMAP, a fixed NMI/ARI/AMI/
+Homogeneity clustering-metric bar chart, and an annotation-evaluation raw
+confusion matrix. Transferred-label UMAP, per-class F1 and confidence plots,
+SVG, narrative reporting, and interactive UI remain deferred.
+
+Visualization is neither a `ToolRegistry` scientific tool nor part of
+`AgentPlan`; the production registry remains exactly eight tools and planning
+schema v2 remains unchanged. It adds no RunStore schema or recovery-policy
+change. Build and verification invoke zero registered scientific callables,
+never rerun or tune scientific analysis, never access raw scATAC `.X`, and use
+only artifact paths explicitly bound by verified evidence rather than directory
+discovery. Terminal-resume sources undergo fresh evidence and source
+verification.

@@ -862,8 +862,8 @@ registration. The production `ToolRegistry` remains exactly eight tools. There
 is no new recovery identity, recovery-policy change, planning-schema change,
 RunStore-schema change, orchestration change, provider change, or EpiZoo change.
 It introduces no visualization, narrative generation, or LLM exposure of
-scientific payloads. Visualization is deferred to a future milestone, and
-narrative/report-model integration remains later work.
+scientific payloads. Visualization is provided separately by Milestone 7.2,
+while narrative/report-model integration remains later work.
 
 Accepted validation:
 
@@ -885,6 +885,141 @@ tiny sparse H5AD
 It requires no network, API key, GPU, checkpoint, or EpiZoo inference. Guarded
 scientific callables also proved that evidence construction and verification
 execute zero scientific tools.
+
+### Milestone 7.2 — Verified Scientific Visualization
+
+Milestone 7.2 is complete and accepted. Its public API is:
+
+```python
+build_analysis_visualizations(
+    run_result,
+    evidence,
+    output_dir,
+    *,
+    registry,
+    overwrite=False,
+)
+```
+
+```python
+verify_analysis_visualizations(
+    run_result,
+    evidence,
+    visualization,
+    *,
+    registry,
+)
+```
+
+Both a successful `AgentRunResult` and its `AnalysisEvidence` are required.
+The accepted trust boundary is:
+
+1. freshly verify `AnalysisEvidence`;
+2. strictly load the verified evidence;
+3. derive the exact supported figure set;
+4. read only artifact paths explicitly bound by evidence;
+5. derive deterministic plotting data and domain-separated digests;
+6. render or verify the visualization bundle.
+
+No arbitrary artifact or directory scanning is permitted. Build narrows source
+races with a second fresh evidence verification and source projection before
+publication. Verification freshly rederives the expected figures and plotting
+metadata without rerendering PNG bytes.
+
+#### Exact v1 figures
+
+Milestone 7.2 v1 produces exactly:
+
+1. UMAP by Leiden cluster;
+2. an NMI / ARI / AMI / Homogeneity bar chart;
+3. an annotation-evaluation raw confusion matrix.
+
+Transferred-label UMAP, per-class F1 figures, confidence figures, SVG,
+narrative reporting, and interactive UI are deferred. Transferred-label UMAP
+requires a future explicit provenance binding between the query UMAP and the
+exact query embedding/cell-ID source used by label transfer; matching cell IDs
+alone is intentionally insufficient.
+
+The UMAP presentation reads only ordered `obs_names`, `obsm["X_umap"]`, and
+`obs["leiden"]` from the verified compact UMAP H5AD. It does not access `.X`,
+`obsm["X_epizoo"]`, neighbor graphs, or raw scATAC. Coordinates and cell order
+are unchanged: there is no jitter, subsampling, or coordinate transformation.
+Leiden categories use first-occurrence order, a fixed versioned palette with a
+deterministic extension rule, deterministic cell-count-based point sizing, and
+fixed presentation parameters.
+
+Clustering metrics come directly from verified Milestone 7.1 evidence in the
+fixed order NMI, ARI, AMI, and Homogeneity. The chart uses a fixed `[-1, 1]`
+axis and zero reference line and performs no ranking, parameter comparison, or
+selection.
+
+The annotation confusion figure strictly presentation-reads the exact
+Milestone 6.4 report referenced by evidence. It uses persisted raw counts,
+preserves exact row and column order, and retains structural unassigned as the
+final column. It performs no prediction, threshold, calibration, normalization,
+or scientific optimization.
+
+#### Visualization bundle and rendering
+
+The persisted bundle is:
+
+```text
+analysis_visualizations/
+├── figures/
+│   └── NNN_<figure-kind>_<step-hash>.png
+└── visualization_manifest.json
+```
+
+The manifest has artifact type `agent.analysis-visualizations` and schema
+version 1. It binds run/request/plan identity, the authoritative evidence path
+and SHA-256, the exact expected figure set, producing scientific steps,
+explicit evidence artifact bindings, plotting-data digests, plotting-spec
+version, PNG SHA-256 values, dimensions and DPI, and the
+Matplotlib/NumPy/Agg/font renderer contract. It does not persist UMAP coordinate
+arrays, complete label vectors, duplicated confusion matrices, embeddings,
+AnnData, or raw matrices.
+
+Rendering uses direct Matplotlib `Figure` plus `FigureCanvasAgg`, with no global
+pyplot dependency, Scanpy plotting wrapper, seaborn, Plotly, or Pillow. Version
+1 is PNG-only and uses fixed plotting parameters and timestamp-free metadata.
+Actual PNG bytes are SHA-256 hashed. Rendering is deterministic within the
+recorded renderer, font, and software contract; universal byte-identical output
+across arbitrary Matplotlib or font environments is not claimed.
+
+`verify_analysis_visualizations()` freshly verifies evidence, checks manifest
+schema/type/status and source identities, reopens only explicit verified source
+artifacts, rederives the exact figure set and plotting-data/specification
+digests, and validates PNG SHA-256, signature, dimensions, names, and exact set.
+Missing, extra, renamed, tampered, and source-drifted figures fail closed.
+Neither build nor verification invokes a registered scientific callable.
+
+Publication uses a staged bundle, file and directory `fsync`, and the manifest
+as completion marker. `overwrite=False` protects existing results. Failed new
+publication leaves no completed bundle; overwrite uses conservative
+backup/rollback behavior, failed replacement preserves the previous valid
+bundle, and rollback failure fails closed. Nonempty-directory replacement is
+not claimed to be universally atomic.
+
+Milestone 7.2 remains downstream of orchestration and introduces no
+`ToolRegistry` entry, recovery identity, planning-schema change, RunStore
+change, provider change, scientific-tool change, EpiZoo change, or dependency.
+The production registry remains exactly eight tools and planning schema v2 is
+unchanged. Milestone 7.1 evidence remains the authoritative trust boundary.
+
+Accepted validation:
+
+- focused Milestone 7.2: 27 passed
+- combined Milestone 7.1 + 7.2 report tests: 57 passed
+- canonical orchestration regression: 375 passed
+- complete lightweight regression: 730 passed, 6 skipped
+
+Default validation required no network, API key, provider, GPU, checkpoint, or
+EpiZoo inference. Guarded registry callables proved that visualization build
+and verification execute zero scientific tools.
+
+Scientific report generation remains future work. Transferred-label UMAP
+remains deferred until explicit query-artifact provenance binding exists, and
+an interactive Agent UI or demo remains later work.
 
 ## Development environment
 

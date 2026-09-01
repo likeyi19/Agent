@@ -31,6 +31,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "compute_cell_umap",
         "evaluate_cell_clustering",
         "transfer_cell_labels",
+        "evaluate_cell_annotation",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -39,6 +40,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
     assert registry.contains("compute_cell_umap")
     assert registry.contains("evaluate_cell_clustering")
     assert registry.contains("transfer_cell_labels")
+    assert registry.contains("evaluate_cell_annotation")
     assert not registry.contains("arbitrary_python")
 
 
@@ -243,7 +245,28 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "compute_cell_umap": "compute-cell-umap-v1",
         "evaluate_cell_clustering": "evaluate-cell-clustering-v1",
         "transfer_cell_labels": "transfer-cell-labels-v1",
+        "evaluate_cell_annotation": "evaluate-cell-annotation-v1",
     }
+
+
+def test_annotation_evaluation_registry_contract_and_recovery_identity(registry) -> None:
+    validated = registry.validate_arguments(
+        "evaluate_cell_annotation",
+        {
+            "annotation_path": StepOutputRef("transfer", "annotation_path"),
+            "ground_truth_h5ad_path": "/data/truth.h5ad",
+            "ground_truth_label_key": "celltype",
+            "output_dir": "/output",
+        },
+    )
+    assert "overwrite" not in validated
+    spec = registry.get("evaluate_cell_annotation")
+    assert spec.recovery_policy_version == "evaluate-cell-annotation-v1"
+    assert spec.retryable_error_codes == frozenset()
+    assert spec.result_contract.required_fields["assigned_accuracy"] == (
+        float,
+        type(None),
+    )
 
 
 def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
@@ -347,6 +370,36 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
         "report_schema_version": 1,
         "software_versions": {"scikit_learn": "1.9.0"},
     }
+    annotation_evaluation = {
+        "status": "success",
+        "annotation_path": "/output/query.label_transfer.h5ad",
+        "annotation_sha256": "a" * 64,
+        "ground_truth_h5ad_path": "/data/query_truth.h5ad",
+        "report_path": "/output/query.label_transfer.annotation_evaluation.json",
+        "ground_truth_label_key": "celltype",
+        "n_cells": 2,
+        "n_ground_truth_classes": 2,
+        "n_assigned_predicted_classes": 1,
+        "assigned_count": 1,
+        "unassigned_count": 1,
+        "assignment_rate": 0.5,
+        "correct_assigned_count": 1,
+        "incorrect_assigned_count": 0,
+        "overall_accuracy": 0.5,
+        "assigned_accuracy": 1.0,
+        "macro_f1": 0.5,
+        "median_confidence": 0.75,
+        "median_assigned_confidence": 1.0,
+        "median_correct_assigned_confidence": 1.0,
+        "median_incorrect_assigned_confidence": None,
+        "finite": True,
+        "cell_order_preserved": True,
+        "metric_backend": "scikit-learn",
+        "macro_average": "macro",
+        "zero_division": 0,
+        "report_schema_version": 1,
+        "software_versions": {"scikit_learn": "1.9.0"},
+    }
 
     registry.validate_result("inspect_scATAC", inspection)
     registry.validate_result("epizoo_embed_cells", embedding)
@@ -354,6 +407,7 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
     registry.validate_result("cluster_cells", clustering)
     registry.validate_result("compute_cell_umap", umap)
     registry.validate_result("evaluate_cell_clustering", evaluation)
+    registry.validate_result("evaluate_cell_annotation", annotation_evaluation)
     assert registry.get("inspect_scATAC").result_contract.name == "ScATACInspection"
     assert (
         registry.get("epizoo_embed_cells").result_contract.name

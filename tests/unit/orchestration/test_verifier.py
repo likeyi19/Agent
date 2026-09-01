@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -16,6 +17,7 @@ from agent.orchestration import (
     AgentPlan,
     ErrorCategory,
     PlanStep,
+    StepOutputRef,
     StepExecutionResult,
     StepStatus,
     ToolRegistry,
@@ -29,6 +31,7 @@ from agent.tools import (
     build_cell_neighbors,
     cluster_cells,
     compute_cell_umap,
+    evaluate_cell_annotation,
     transfer_cell_labels,
 )
 
@@ -171,6 +174,165 @@ def _label_transfer_artifacts(tmp_path: Path):
     result = transfer_cell_labels(**arguments)
     step = PlanStep("transfer", "transfer_cell_labels", arguments)
     return step, arguments, result
+
+
+def _annotation_evaluation_artifacts(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    transfer_step, _, transfer_result = _label_transfer_artifacts(tmp_path)
+    ground_truth_path = tmp_path / "ground_truth.h5ad"
+    ad.AnnData(
+        obs=pd.DataFrame(
+            {"truth": pd.Categorical(["A", "B"])},
+            index=["query-0", "query-1"],
+        )
+    ).write_h5ad(ground_truth_path)
+    arguments = {
+        "annotation_path": transfer_result["annotation_path"],
+        "ground_truth_h5ad_path": str(ground_truth_path),
+        "ground_truth_label_key": "truth",
+        "output_dir": str(tmp_path / "evaluation"),
+    }
+    result = evaluate_cell_annotation(**arguments)
+    step = PlanStep(
+        "evaluate_annotation", "evaluate_cell_annotation", arguments
+    )
+    return step, arguments, result, transfer_step, transfer_result
+
+
+def test_valid_annotation_evaluation_passes_full_recomputation(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result, _, _ = _annotation_evaluation_artifacts(tmp_path)
+    verification = verify_step(step, arguments, result, registry)
+    assert verification.passed
+    assert {
+        "annotation_evaluation_report_schema",
+        "annotation_evaluation_sources",
+        "annotation_evaluation_metrics",
+        "annotation_evaluation_provenance",
+    }.issubset(check.name for check in verification.checks)
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("metrics", "macro_f1"),
+        ("metrics", "assigned_accuracy"),
+        ("confidence_diagnostics", "median_confidence"),
+        ("provenance", "predicted_labels_sha256"),
+    ],
+)
+def test_annotation_evaluation_report_mutation_fails_verification(
+    registry, tmp_path: Path, section: str, field: str
+) -> None:
+    step, arguments, result, _, _ = _annotation_evaluation_artifacts(tmp_path)
+    report_path = Path(result["report_path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if section == "provenance":
+        report[section][field] = "0" * 64
+    else:
+        report[section][field] = 0.123
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "annotation_evaluation_report_schema" in verification.error.details[
+        "failed_checks"
+    ]
+
+
+@pytest.mark.parametrize("target", ["per_class", "confusion"])
+def test_annotation_evaluation_diagnostic_mutation_fails_verification(
+    registry, tmp_path: Path, target: str
+) -> None:
+    step, arguments, result, _, _ = _annotation_evaluation_artifacts(tmp_path)
+    report_path = Path(result["report_path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if target == "per_class":
+        report["per_class"][0]["f1"] = 0.123
+    else:
+        report["confusion"]["counts"][0][0] = 0
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "annotation_evaluation_report_schema" in verification.error.details[
+        "failed_checks"
+    ]
+
+
+def test_changed_annotation_or_ground_truth_fails_recomputation(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result, _, _ = _annotation_evaluation_artifacts(tmp_path)
+    annotation = ad.read_h5ad(arguments["annotation_path"])
+    annotation.obs["prediction_confidence"] = [0.2, 1.0]
+    annotation.write_h5ad(arguments["annotation_path"])
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "annotation_evaluation_sources" in verification.error.details[
+        "failed_checks"
+    ]
+
+    step, arguments, result, _, _ = _annotation_evaluation_artifacts(
+        tmp_path / "truth-change"
+    )
+    truth = ad.read_h5ad(arguments["ground_truth_h5ad_path"])
+    truth.obs["truth"] = pd.Categorical(["B", "A"])
+    truth.write_h5ad(arguments["ground_truth_h5ad_path"])
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "annotation_evaluation_report_schema" in verification.error.details[
+        "failed_checks"
+    ]
+
+
+def test_chained_annotation_path_and_sha_must_match_transfer_dependency(
+    registry, tmp_path: Path
+) -> None:
+    _, arguments, result, _, transfer_result = _annotation_evaluation_artifacts(
+        tmp_path
+    )
+    step = PlanStep(
+        "evaluate_annotation",
+        "evaluate_cell_annotation",
+        {
+            "annotation_path": StepOutputRef("transfer", "annotation_path"),
+            "ground_truth_h5ad_path": arguments["ground_truth_h5ad_path"],
+            "ground_truth_label_key": "truth",
+            "output_dir": arguments["output_dir"],
+        },
+        ("transfer",),
+    )
+    assert verify_step(
+        step,
+        arguments,
+        result,
+        registry,
+        dependency_results={"transfer": transfer_result},
+    ).passed
+
+    wrong_path = dict(transfer_result)
+    wrong_path["annotation_path"] = "/different/annotation.h5ad"
+    verification = verify_step(
+        step,
+        arguments,
+        result,
+        registry,
+        dependency_results={"transfer": wrong_path},
+    )
+    assert not verification.passed
+    assert "annotation_evaluation_transfer_dependency" in verification.error.details[
+        "failed_checks"
+    ]
+    wrong_sha = dict(transfer_result)
+    wrong_sha["annotation_sha256"] = "0" * 64
+    verification = verify_step(
+        step,
+        arguments,
+        result,
+        registry,
+        dependency_results={"transfer": wrong_sha},
+    )
+    assert not verification.passed
 
 
 def test_valid_label_transfer_passes_source_integrity_verification(

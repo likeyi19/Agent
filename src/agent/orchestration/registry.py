@@ -17,6 +17,7 @@ from agent.tools import (
     cluster_cells,
     compute_cell_umap,
     epizoo_embed_cells,
+    evaluate_cell_annotation,
     evaluate_cell_clustering,
     inspect_scATAC,
     transfer_cell_labels,
@@ -528,6 +529,120 @@ def _validate_label_transfer_result(result: Mapping[str, object]) -> None:
         )
 
 
+def _validate_annotation_evaluation_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "evaluate_cell_annotation field 'status' must equal 'success'."
+        )
+    if result["finite"] is not True or result["cell_order_preserved"] is not True:
+        raise ToolResultContractError(
+            "evaluate_cell_annotation must report finite output and preserved order."
+        )
+    if (
+        result["metric_backend"] != "scikit-learn"
+        or result["macro_average"] != "macro"
+        or result["zero_division"] != 0
+        or result["report_schema_version"] != 1
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation has invalid metric or schema identity."
+        )
+    n_cells = result["n_cells"]
+    assigned = result["assigned_count"]
+    unassigned = result["unassigned_count"]
+    correct = result["correct_assigned_count"]
+    incorrect = result["incorrect_assigned_count"]
+    if (
+        n_cells <= 0
+        or result["n_ground_truth_classes"] < 1
+        or result["n_assigned_predicted_classes"] < 0
+        or min(assigned, unassigned, correct, incorrect) < 0
+        or assigned + unassigned != n_cells
+        or correct + incorrect != assigned
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation has inconsistent scientific counts."
+        )
+    required_scores = (
+        "assignment_rate",
+        "overall_accuracy",
+        "macro_f1",
+        "median_confidence",
+    )
+    nullable_scores = (
+        "assigned_accuracy",
+        "median_assigned_confidence",
+        "median_correct_assigned_confidence",
+        "median_incorrect_assigned_confidence",
+    )
+    for name in required_scores:
+        value = result[name]
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ToolResultContractError(
+                f"evaluate_cell_annotation field {name!r} is outside [0, 1]."
+            )
+    for name in nullable_scores:
+        value = result[name]
+        if value is not None and (
+            not math.isfinite(value) or not 0.0 <= value <= 1.0
+        ):
+            raise ToolResultContractError(
+                f"evaluate_cell_annotation field {name!r} is outside [0, 1]."
+            )
+    expected_nullable = {
+        "assigned_accuracy": assigned == 0,
+        "median_assigned_confidence": assigned == 0,
+        "median_correct_assigned_confidence": correct == 0,
+        "median_incorrect_assigned_confidence": incorrect == 0,
+    }
+    if any((result[name] is None) != expected for name, expected in expected_nullable.items()):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation has invalid nullable-field semantics."
+        )
+    if not math.isclose(
+        result["assignment_rate"], assigned / n_cells, rel_tol=0.0, abs_tol=1e-15
+    ) or not math.isclose(
+        result["overall_accuracy"], correct / n_cells, rel_tol=0.0, abs_tol=1e-15
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation rates are inconsistent with its counts."
+        )
+    expected_assigned_accuracy = correct / assigned if assigned else None
+    if expected_assigned_accuracy is not None and not math.isclose(
+        result["assigned_accuracy"],
+        expected_assigned_accuracy,
+        rel_tol=0.0,
+        abs_tol=1e-15,
+    ):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation assigned accuracy is inconsistent."
+        )
+    digest = result["annotation_sha256"]
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ToolResultContractError(
+            "evaluate_cell_annotation annotation digest is invalid."
+        )
+    try:
+        int(digest, 16)
+    except ValueError as exc:
+        raise ToolResultContractError(
+            "evaluate_cell_annotation annotation digest is invalid."
+        ) from exc
+    forbidden = {
+        "ground_truth_labels",
+        "predicted_labels",
+        "prediction_status",
+        "prediction_confidence",
+        "cell_ids",
+        "confusion",
+        "per_class",
+    }
+    if forbidden.intersection(result):
+        raise ToolResultContractError(
+            "evaluate_cell_annotation must not return per-cell diagnostics."
+        )
+
+
 def _assert_signature_matches(spec: ToolSpec) -> None:
     signature = inspect.signature(spec.function)
     parameters = signature.parameters
@@ -834,6 +949,53 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="transfer-cell-labels-v1",
     )
+    annotation_evaluation_spec = ToolSpec(
+        name="evaluate_cell_annotation",
+        function=evaluate_cell_annotation,
+        required_arguments={
+            "annotation_path": path_argument,
+            "ground_truth_h5ad_path": path_argument,
+            "ground_truth_label_key": ArgumentSpec((str,)),
+            "output_dir": path_argument,
+        },
+        optional_arguments={"overwrite": ArgumentSpec((bool,))},
+        result_contract=ResultContract(
+            name="CellAnnotationEvaluationToolResult",
+            required_fields={
+                "status": (str,),
+                "annotation_path": (str,),
+                "annotation_sha256": (str,),
+                "ground_truth_h5ad_path": (str,),
+                "report_path": (str,),
+                "ground_truth_label_key": (str,),
+                "n_cells": (int,),
+                "n_ground_truth_classes": (int,),
+                "n_assigned_predicted_classes": (int,),
+                "assigned_count": (int,),
+                "unassigned_count": (int,),
+                "assignment_rate": (float,),
+                "correct_assigned_count": (int,),
+                "incorrect_assigned_count": (int,),
+                "overall_accuracy": (float,),
+                "assigned_accuracy": (float, type(None)),
+                "macro_f1": (float,),
+                "median_confidence": (float,),
+                "median_assigned_confidence": (float, type(None)),
+                "median_correct_assigned_confidence": (float, type(None)),
+                "median_incorrect_assigned_confidence": (float, type(None)),
+                "finite": (bool,),
+                "cell_order_preserved": (bool,),
+                "metric_backend": (str,),
+                "macro_average": (str,),
+                "zero_division": (int,),
+                "report_schema_version": (int,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_annotation_evaluation_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="evaluate-cell-annotation-v1",
+    )
     specs = (
         inspect_spec,
         embedding_spec,
@@ -842,6 +1004,7 @@ def build_default_tool_registry() -> ToolRegistry:
         umap_spec,
         evaluation_spec,
         label_transfer_spec,
+        annotation_evaluation_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

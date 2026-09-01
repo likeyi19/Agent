@@ -62,6 +62,11 @@ _TOOL_DESCRIPTIONS = {
         "Transfer biological labels from an annotated reference to ordered query "
         "cells by exact deterministic k-nearest neighbors in EpiZoo embedding space."
     ),
+    "evaluate_cell_annotation": (
+        "Evaluate a fixed valid Milestone 6.3 annotation against exact ordered "
+        "ground-truth labels and persist fixed accuracy, macro-F1, confusion, "
+        "per-class, and descriptive confidence diagnostics."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -143,6 +148,21 @@ _ARGUMENT_DESCRIPTIONS = {
     ),
     ("transfer_cell_labels", "overwrite"): (
         "Whether an existing annotation artifact may be replaced."
+    ),
+    ("evaluate_cell_annotation", "annotation_path"): (
+        "Fixed valid Milestone 6.3 label-transfer h5ad path."
+    ),
+    ("evaluate_cell_annotation", "ground_truth_h5ad_path"): (
+        "Ground-truth h5ad path with identical ordered query cell IDs."
+    ),
+    ("evaluate_cell_annotation", "ground_truth_label_key"): (
+        "Ground-truth biological string-label obs column."
+    ),
+    ("evaluate_cell_annotation", "output_dir"): (
+        "Directory for the annotation-evaluation JSON report."
+    ),
+    ("evaluate_cell_annotation", "overwrite"): (
+        "Whether an existing annotation-evaluation report may be replaced."
     ),
 }
 

@@ -171,6 +171,108 @@ def test_label_transfer_forwards_only_explicit_optional_values(registry) -> None
     assert explicit.arguments["overwrite"] is True
 
 
+def test_standalone_annotation_evaluation_plan(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Evaluate this fixed cell annotation",
+            {
+                "annotation_path": "/data/query.label_transfer.h5ad",
+                "ground_truth_h5ad_path": "/data/query.truth.h5ad",
+                "ground_truth_label_key": "celltype",
+                "output_dir": "/output",
+            },
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:cell-annotation-evaluation"
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.step_id == "evaluate_annotation"
+    assert step.tool_name == "evaluate_cell_annotation"
+    assert step.depends_on == ()
+    assert step.arguments == {
+        "annotation_path": "/data/query.label_transfer.h5ad",
+        "ground_truth_h5ad_path": "/data/query.truth.h5ad",
+        "ground_truth_label_key": "celltype",
+        "output_dir": "/output",
+    }
+    assert "overwrite" not in step.arguments
+
+
+def test_chained_annotation_evaluation_plan_and_ground_truth_isolation(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Annotate the query and evaluate the annotation",
+            {
+                "reference_input_path": "/data/reference.h5ad",
+                "query_input_path": "/data/query.h5ad",
+                "ground_truth_h5ad_path": "/data/query.truth.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+                "reference_label_key": "reference_celltype",
+                "ground_truth_label_key": "truth_celltype",
+                "n_neighbors": 7,
+                "metric": "cosine",
+                "min_confidence": 0.6,
+                "overwrite": True,
+            },
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:epizoo-label-transfer-evaluation"
+    assert tuple(step.step_id for step in plan.steps) == (
+        "inspect_reference",
+        "embed_reference",
+        "inspect_query",
+        "embed_query",
+        "transfer",
+        "evaluate_annotation",
+    )
+    evaluation = plan.steps[-1]
+    assert evaluation.tool_name == "evaluate_cell_annotation"
+    assert evaluation.depends_on == ("transfer",)
+    assert evaluation.arguments == {
+        "annotation_path": StepOutputRef("transfer", "annotation_path"),
+        "ground_truth_h5ad_path": "/data/query.truth.h5ad",
+        "ground_truth_label_key": "truth_celltype",
+        "output_dir": "/output",
+        "overwrite": True,
+    }
+    for step in plan.steps[:-1]:
+        assert "ground_truth_h5ad_path" not in step.arguments
+        assert "ground_truth_label_key" not in step.arguments
+    transfer = plan.steps[-2]
+    assert transfer.arguments["reference_label_key"] == "reference_celltype"
+    assert transfer.arguments["n_neighbors"] == 7
+    assert transfer.arguments["metric"] == "cosine"
+    assert transfer.arguments["min_confidence"] == 0.6
+    forbidden_metric_literals = {
+        "macro_average",
+        "zero_division",
+        "confidence_diagnostics",
+    }
+    assert forbidden_metric_literals.isdisjoint(evaluation.arguments)
+
+
+def test_ambiguous_annotation_evaluation_workflow_is_rejected(registry) -> None:
+    with pytest.raises(PlannerError) as raised:
+        DeterministicPlanner().plan(
+            _request(
+                "Evaluate this annotation",
+                {
+                    "annotation_path": "/data/fixed.h5ad",
+                    "reference_input_path": "/data/reference.h5ad",
+                    "query_input_path": "/data/query.h5ad",
+                    "ground_truth_h5ad_path": "/data/truth.h5ad",
+                    "ground_truth_label_key": "celltype",
+                    "output_dir": "/output",
+                },
+            ),
+            registry,
+        )
+    assert raised.value.code == "AMBIGUOUS_REQUEST"
+
+
 def test_repeated_planning_is_deterministic(registry) -> None:
     request = _request(
         "embed this dataset",

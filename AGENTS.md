@@ -654,6 +654,154 @@ Milestone 6.3 introduced no new blocking environment issue. The existing
 non-blocking Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba
 warnings remain unchanged and did not affect acceptance.
 
+### Milestone 6.4 — Annotation evaluation and confidence diagnostics
+
+Milestone 6.4 is complete and accepted. Its public scientific API is:
+
+```python
+evaluate_cell_annotation(
+    annotation_path,
+    ground_truth_h5ad_path,
+    ground_truth_label_key,
+    output_dir,
+    *,
+    overwrite=False,
+)
+```
+
+The production `ToolRegistry` now contains exactly eight scientific tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+3. `build_cell_neighbors`
+4. `cluster_cells`
+5. `compute_cell_umap`
+6. `evaluate_cell_clustering`
+7. `transfer_cell_labels`
+8. `evaluate_cell_annotation`
+
+Milestone 6.4 evaluates an already-fixed valid Milestone 6.3 annotation.
+Ground truth is evaluation-only: it never affects EpiZoo embedding, reference
+selection, k, metric, confidence threshold, voting, assigned/unassigned state,
+transfer reruns, clustering, or UMAP.
+
+The accepted metrics are assignment rate (`assigned_count / n_cells`), overall
+accuracy (`correct_assigned_count / n_cells`, with unassigned cells counted as
+incorrect), assigned-only accuracy (`correct_assigned_count / assigned_count`),
+and macro-F1. Assigned-only accuracy is JSON `null` when no cell is assigned;
+undefined confidence subsets also use `null`, never NaN or a fabricated zero.
+Ground-truth biological classes define the fixed macro-F1 class set,
+`zero_division=0`, and structural unassigned predictions count as errors without
+becoming a biological class. Assigned predicted classes absent from query
+ground truth remain valid predictions and count as errors where appropriate.
+
+Milestone 6.4 v1 reports only descriptive confidence medians across all cells,
+assigned cells, correct assigned predictions, and incorrect assigned
+predictions. It performs no threshold optimization, ECE, calibration fitting,
+ROC thresholding, or alternate assignment generation. The persisted report also
+contains deterministic per-ground-truth-class support, true positives,
+precision, recall, and F1 in first-occurrence ground-truth order.
+
+The confusion summary is rectangular. Rows are ground-truth biological classes;
+columns are observed predicted ground-truth classes in ground-truth order,
+observed external predicted biological classes in first-prediction order, and a
+final structural-unassigned column. Structural unassigned uses a null-labeled
+descriptor and cannot collide with a legitimate biological label such as
+`"unassigned"`.
+
+Ground-truth AnnData is opened backed and read-only. Evaluation reads only exact
+ordered `obs_names` and the selected `obs[ground_truth_label_key]`; raw `.X` is
+never accessed or densified. Cell identity and order must match exactly, with no
+intersection, sorting, reordering, subset alignment, silent dropping, or label
+normalization. Ground-truth labels must be valid biological text, and a single
+ground-truth class is valid.
+
+Input annotations must retain the accepted Milestone 6.3 schema, type, stage,
+and provenance, with `n_vars = 0`, `X = None`, and exactly
+`predicted_label`, `prediction_confidence`, and `prediction_status` in `obs`.
+The strict, deterministic, atomic, fsynced, overwrite-protected report is:
+
+```text
+<annotation-stem>.annotation_evaluation.json
+artifact type: agent.cell-annotation-evaluation
+schema version: 1
+```
+
+It records counts, metrics, confidence and per-class diagnostics, rectangular
+confusion counts, validation/provenance, and software/backend metadata. It does
+not contain complete cell-ID, ground-truth, prediction, status, or confidence
+vectors, embeddings, or raw matrices. Serialization rejects NaN, infinity, and
+duplicate object keys, and the temporary report is strictly validated before
+atomic publication.
+
+The direct scientific dependency boundary is the fixed M6.3 annotation plus
+ordered ground-truth labels. Provenance protects the complete annotation-file
+SHA-256, canonical M6.3 annotation provenance, ordered query IDs, ordered ground
+truth and predicted labels, prediction statuses, and ordered confidence values.
+Milestone 6.4 intentionally does not rehash reference/query EpiZoo embeddings or
+checkpoint contents, which remain M6.3 responsibilities, and it does not hash
+the complete ground-truth H5AD.
+
+The deterministic planner supports standalone fixed-annotation evaluation and:
+
+```text
+inspect_reference → embed_reference ┐
+                                      ├→ transfer → evaluate_annotation
+inspect_query     → embed_query     ┘
+```
+
+The chained evaluation receives `transfer.annotation_path` through
+`StepOutputRef`. Ground-truth path and key occur only in the evaluation step and
+never reach inspection, embedding, or transfer. Planning schema v2 remains
+authoritative, PLAN_ONLY executes zero scientific tools, and the LLM receives
+only sanitized metadata and cannot invent executable metric settings.
+
+For a direct transfer dependency, the verifier requires both annotation path
+and annotation SHA-256 to equal the verified transfer result. Standalone
+evaluation validates the current M6.3 artifact but cannot prove its historical
+EpiZoo/checkpoint origin.
+
+Evaluation is inexpensive enough for the verifier to reopen both sources and
+fully recompute cell/order validation, counts, assignment rate, overall and
+nullable assigned accuracy, macro-F1, confidence and per-class diagnostics,
+rectangular confusion counts, and all M6.4 provenance digests. Report, result,
+and recomputed floats use `rel_tol=1e-12` and `abs_tol=1e-12`.
+
+On nonterminal durable resume, completed evaluation is fully revalidated.
+Changed predictions, statuses, confidence values, annotation provenance, ground
+truth, or missing/corrupt reports and sources are rejected. Valid evaluation is
+restored without invoking `evaluate_cell_annotation` again; terminal-resume
+semantics remain unchanged.
+
+The new recovery identity is `evaluate-cell-annotation-v1`, with no retryable
+error codes. All previous identities and the global error-policy catalog version
+remain unchanged.
+
+Accepted validation:
+
+- Milestone 6.4 focused: 219 passed
+- full orchestration unit suite: 370 passed
+- canonical orchestration regression: 375 passed
+- complete lightweight regression: 673 passed, 6 skipped
+
+Real acceptance reused the frozen accepted Milestone 6.3 annotation without
+EpiZoo inference, CUDA, transfer rerun, or tuning. Exact seed-0 query order and
+the annotation SHA were verified for 600 held-out Fang2021 cells. Evaluation
+found 20 ground-truth classes and 19 assigned predicted classes: 596 cells were
+assigned and 4 unassigned, with 543 correct and 53 incorrect assigned
+predictions. Assignment rate was `0.9933333333333333`, overall accuracy `0.905`,
+assigned accuracy `0.9110738255033557`, and macro-F1 `0.8615679910000722`.
+Median all-cell, assigned, and correct-assigned confidence were `1.0`; median
+incorrect-assigned confidence was `0.6`. These reproduced the frozen M6.3
+descriptive oracle and did not tune transfer behavior. Production verification
+passed, and durable nonterminal resume preserved one evaluation invocation with
+zero planner calls.
+
+Milestone 6.4 introduced no new blocking environment issue. Existing
+Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba warnings
+remain non-blocking; deliberate duplicate-ID negative tests also emit expected
+AnnData warnings.
+
 ## Development environment
 
 - Linux server

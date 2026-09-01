@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5 and Milestones 6.1–6.3 are complete.
+Milestones 1–5 and Milestones 6.1–6.4 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -21,6 +21,8 @@ Milestones 1–5 and Milestones 6.1–6.3 are complete.
   ARI, AMI, and Homogeneity
 - Milestone 6.3: within-species reference-to-query biological cell annotation
   through direct EpiZoo embedding-space label transfer
+- Milestone 6.4: supervised evaluation and confidence diagnostics for fixed
+  cell-annotation artifacts
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -132,3 +134,10 @@ biological label when assigned, confidence, and a separate assigned/unassigned
 state. Real held-out Fang2021 validation succeeded without exposing query
 ground-truth labels to the request, planner, embedding tools, transfer tool, or
 production verifier.
+
+Milestone 6.4 evaluates those fixed annotations with assignment coverage,
+overall and assigned-only accuracy, macro-F1, deterministic per-class
+diagnostics, a rectangular confusion summary, and descriptive confidence
+medians. Ground truth remains evaluation-only and cannot tune or rerun label
+transfer. Real held-out Fang2021 evaluation reproduced the frozen Milestone 6.3
+metrics and confidence summaries.

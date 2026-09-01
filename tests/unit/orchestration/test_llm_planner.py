@@ -539,8 +539,11 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
         "query_h5ad_path",
         "query_species",
         "query_checkpoint_path",
-        "min_confidence",
-    }
+            "min_confidence",
+            "annotation_path",
+            "ground_truth_h5ad_path",
+            "ground_truth_label_key",
+        }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (
             "string",

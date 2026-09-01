@@ -55,6 +55,12 @@ _CLUSTERING_EVALUATION_INTENT = re.compile(
 _LABEL_TRANSFER_INTENT = re.compile(
     r"\b(?:annotate|annotation|label\s+transfer|transfer\s+(?:cell\s+)?labels?)\b"
 )
+_ANNOTATION_EVALUATION_INTENT = re.compile(
+    r"\b(?:evaluate|evaluation|benchmark|metrics?)\b.*"
+    r"\b(?:annotat(?:e|ion)|cell\s+labels?|transferred\s+labels?|label\s+transfer)\b"
+    r"|\b(?:annotat(?:e|ion)|cell\s+labels?|transferred\s+labels?|label\s+transfer)\b"
+    r".*\b(?:evaluate|evaluation|benchmark|metrics?)\b"
+)
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
 _DOWNSTREAM_OPTIONAL_INPUTS = (
@@ -254,6 +260,20 @@ def _validate_generated_steps(
         ) from exc
 
 
+def _strict_label_key(request: AgentRequest, name: str) -> str:
+    value = request.inputs[name]
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+    ):
+        raise PlannerError(
+            "INVALID_REQUEST_INPUT",
+            f"Structured input {name!r} must be a nonempty string without surrounding whitespace.",
+        )
+    return value
+
+
 class DeterministicPlanner:
     """Bootstrap planner for explicit inspection and EpiZoo workflows."""
 
@@ -271,8 +291,143 @@ class DeterministicPlanner:
         downstream_intent = _DOWNSTREAM_INTENT.search(prompt) is not None
         evaluation_intent = _CLUSTERING_EVALUATION_INTENT.search(prompt) is not None
         label_transfer_intent = _LABEL_TRANSFER_INTENT.search(prompt) is not None
+        annotation_evaluation_intent = (
+            _ANNOTATION_EVALUATION_INTENT.search(prompt) is not None
+        )
 
-        if label_transfer_intent:
+        if annotation_evaluation_intent:
+            has_annotation = "annotation_path" in request.inputs
+            transfer_input_names = {"reference_input_path", "query_input_path"}
+            has_transfer_inputs = bool(transfer_input_names.intersection(request.inputs))
+            if has_annotation and has_transfer_inputs:
+                raise PlannerError(
+                    "AMBIGUOUS_REQUEST",
+                    "Annotation evaluation cannot mix a fixed annotation_path with raw reference/query transfer inputs.",
+                )
+            _require_inputs(
+                request,
+                (
+                    "ground_truth_h5ad_path",
+                    "ground_truth_label_key",
+                    "output_dir",
+                ),
+            )
+            ground_truth_path = _path_input(request, "ground_truth_h5ad_path")
+            ground_truth_label_key = _strict_label_key(
+                request, "ground_truth_label_key"
+            )
+            output_dir = _path_input(request, "output_dir")
+            if has_annotation:
+                annotation_path = _path_input(request, "annotation_path")
+                evaluation_arguments: dict[str, object] = {
+                    "annotation_path": annotation_path,
+                    "ground_truth_h5ad_path": ground_truth_path,
+                    "ground_truth_label_key": ground_truth_label_key,
+                    "output_dir": output_dir,
+                }
+                if "overwrite" in request.inputs:
+                    overwrite = request.inputs["overwrite"]
+                    if not isinstance(overwrite, bool):
+                        raise PlannerError(
+                            "INVALID_REQUEST_INPUT",
+                            "Structured input 'overwrite' must be a boolean.",
+                        )
+                    evaluation_arguments["overwrite"] = overwrite
+                steps = (
+                    PlanStep(
+                        "evaluate_annotation",
+                        "evaluate_cell_annotation",
+                        evaluation_arguments,
+                        description="Evaluate the fixed cell annotation against ordered ground truth.",
+                    ),
+                )
+                workflow = "cell-annotation-evaluation"
+            else:
+                _require_inputs(
+                    request,
+                    (
+                        "reference_input_path",
+                        "query_input_path",
+                        "species",
+                        "reference_label_key",
+                    ),
+                )
+                reference_input_path = _path_input(request, "reference_input_path")
+                query_input_path = _path_input(request, "query_input_path")
+                if Path(reference_input_path).expanduser().resolve(strict=False) == Path(
+                    query_input_path
+                ).expanduser().resolve(strict=False):
+                    raise PlannerError(
+                        "INVALID_REQUEST_INPUT",
+                        "Reference and query input paths must differ.",
+                    )
+                reference_label_key = _strict_label_key(
+                    request, "reference_label_key"
+                )
+                shared_embedding_arguments = _embedding_inputs(
+                    request, require_input_path=False
+                )
+                reference_embedding_arguments = dict(shared_embedding_arguments)
+                reference_embedding_arguments["input_path"] = StepOutputRef(
+                    "inspect_reference", "input_path"
+                )
+                query_embedding_arguments = dict(shared_embedding_arguments)
+                query_embedding_arguments["input_path"] = StepOutputRef(
+                    "inspect_query", "input_path"
+                )
+                transfer_arguments: dict[str, object] = {
+                    "reference_embedding_path": StepOutputRef(
+                        "embed_reference", "embedding_path"
+                    ),
+                    "reference_cell_ids_path": StepOutputRef(
+                        "embed_reference", "cell_ids_path"
+                    ),
+                    "reference_h5ad_path": StepOutputRef(
+                        "inspect_reference", "input_path"
+                    ),
+                    "reference_label_key": reference_label_key,
+                    "reference_species": StepOutputRef(
+                        "embed_reference", "species"
+                    ),
+                    "reference_checkpoint_path": StepOutputRef(
+                        "embed_reference", "checkpoint_path"
+                    ),
+                    "query_embedding_path": StepOutputRef(
+                        "embed_query", "embedding_path"
+                    ),
+                    "query_cell_ids_path": StepOutputRef(
+                        "embed_query", "cell_ids_path"
+                    ),
+                    "query_h5ad_path": StepOutputRef(
+                        "inspect_query", "input_path"
+                    ),
+                    "query_species": StepOutputRef("embed_query", "species"),
+                    "query_checkpoint_path": StepOutputRef(
+                        "embed_query", "checkpoint_path"
+                    ),
+                    "output_dir": output_dir,
+                }
+                transfer_arguments.update(_label_transfer_inputs(request))
+                evaluation_arguments = {
+                    "annotation_path": StepOutputRef(
+                        "transfer", "annotation_path"
+                    ),
+                    "ground_truth_h5ad_path": ground_truth_path,
+                    "ground_truth_label_key": ground_truth_label_key,
+                    "output_dir": output_dir,
+                }
+                if "overwrite" in request.inputs:
+                    evaluation_arguments["overwrite"] = request.inputs["overwrite"]
+                steps = (
+                    PlanStep("inspect_reference", "inspect_scATAC", {"path": reference_input_path}, description="Inspect the annotated reference scATAC dataset."),
+                    PlanStep("embed_reference", "epizoo_embed_cells", reference_embedding_arguments, ("inspect_reference",), "Compute reference EpiZoo cell embeddings."),
+                    PlanStep("inspect_query", "inspect_scATAC", {"path": query_input_path}, description="Inspect the query scATAC dataset."),
+                    PlanStep("embed_query", "epizoo_embed_cells", query_embedding_arguments, ("inspect_query",), "Compute query EpiZoo cell embeddings."),
+                    PlanStep("transfer", "transfer_cell_labels", transfer_arguments, ("inspect_reference", "embed_reference", "inspect_query", "embed_query"), "Transfer reference biological labels to query cells."),
+                    PlanStep("evaluate_annotation", "evaluate_cell_annotation", evaluation_arguments, ("transfer",), "Evaluate the fixed transferred annotation against ordered ground truth."),
+                )
+                workflow = "epizoo-label-transfer-evaluation"
+        elif label_transfer_intent:
             _require_inputs(
                 request,
                 (
@@ -293,16 +448,7 @@ class DeterministicPlanner:
                     "INVALID_REQUEST_INPUT",
                     "Reference and query input paths must differ.",
                 )
-            reference_label_key = request.inputs["reference_label_key"]
-            if (
-                not isinstance(reference_label_key, str)
-                or not reference_label_key.strip()
-                or reference_label_key != reference_label_key.strip()
-            ):
-                raise PlannerError(
-                    "INVALID_REQUEST_INPUT",
-                    "Structured input 'reference_label_key' must be a nonempty string without surrounding whitespace.",
-                )
+            reference_label_key = _strict_label_key(request, "reference_label_key")
             shared_embedding_arguments = _embedding_inputs(
                 request, require_input_path=False
             )

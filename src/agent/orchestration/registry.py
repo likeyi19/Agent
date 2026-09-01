@@ -19,6 +19,7 @@ from agent.tools import (
     epizoo_embed_cells,
     evaluate_cell_clustering,
     inspect_scATAC,
+    transfer_cell_labels,
 )
 
 from .error_policy import classified_agent_error
@@ -452,6 +453,81 @@ def _validate_evaluation_result(result: Mapping[str, object]) -> None:
         )
 
 
+def _validate_label_transfer_result(result: Mapping[str, object]) -> None:
+    if result["status"] != "success":
+        raise ToolResultContractError(
+            "transfer_cell_labels field 'status' must equal 'success'."
+        )
+    if (
+        result["finite"] is not True
+        or result["cell_order_preserved"] is not True
+        or result["species_compatible"] is not True
+        or result["checkpoint_compatible"] is not True
+    ):
+        raise ToolResultContractError(
+            "transfer_cell_labels must report valid compatibility and output invariants."
+        )
+    if (
+        result["embedding_dim"] != 512
+        or result["embedding_dtype"] != "float32"
+        or result["voting_method"] != "uniform_plurality"
+        or result["artifact_schema_version"] != 1
+    ):
+        raise ToolResultContractError(
+            "transfer_cell_labels has invalid scientific or schema identity."
+        )
+    n_query = result["n_query_cells"]
+    assigned = result["assigned_count"]
+    unassigned = result["unassigned_count"]
+    if (
+        result["n_reference_cells"] <= 0
+        or n_query <= 0
+        or result["n_reference_classes"] < 2
+        or assigned < 0
+        or unassigned < 0
+        or assigned + unassigned != n_query
+        or not math.isclose(
+            result["assignment_rate"], assigned / n_query, rel_tol=0.0, abs_tol=1e-15
+        )
+    ):
+        raise ToolResultContractError(
+            "transfer_cell_labels has inconsistent scientific counts."
+        )
+    for name in (
+        "annotation_sha256",
+        "reference_embedding_sha256",
+        "query_embedding_sha256",
+        "reference_cell_ids_sha256",
+        "query_cell_ids_sha256",
+        "reference_labels_sha256",
+        "model_config_sha256",
+    ):
+        digest = result[name]
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ToolResultContractError(
+                f"transfer_cell_labels field {name!r} is not a SHA-256 digest."
+            )
+        try:
+            int(digest, 16)
+        except ValueError as exc:
+            raise ToolResultContractError(
+                f"transfer_cell_labels field {name!r} is not a SHA-256 digest."
+            ) from exc
+    forbidden = {
+        "predictions",
+        "confidences",
+        "cell_ids",
+        "reference_labels",
+        "neighbor_indices",
+        "distances",
+        "embeddings",
+    }
+    if forbidden.intersection(result):
+        raise ToolResultContractError(
+            "transfer_cell_labels must not return per-cell or large scientific arrays."
+        )
+
+
 def _assert_signature_matches(spec: ToolSpec) -> None:
     signature = inspect.signature(spec.function)
     parameters = signature.parameters
@@ -687,6 +763,77 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="evaluate-cell-clustering-v1",
     )
+    label_transfer_spec = ToolSpec(
+        name="transfer_cell_labels",
+        function=transfer_cell_labels,
+        required_arguments={
+            "reference_embedding_path": path_argument,
+            "reference_cell_ids_path": path_argument,
+            "reference_h5ad_path": path_argument,
+            "reference_label_key": ArgumentSpec((str,)),
+            "query_embedding_path": path_argument,
+            "query_cell_ids_path": path_argument,
+            "query_h5ad_path": path_argument,
+            "output_dir": path_argument,
+            "reference_species": ArgumentSpec(
+                (str,), choices=("human", "mouse")
+            ),
+            "query_species": ArgumentSpec((str,), choices=("human", "mouse")),
+            "reference_checkpoint_path": path_argument,
+            "query_checkpoint_path": path_argument,
+        },
+        optional_arguments={
+            "n_neighbors": ArgumentSpec((int,)),
+            "metric": ArgumentSpec((str,), choices=("euclidean", "cosine")),
+            "min_confidence": ArgumentSpec((int, float)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="CellLabelTransferToolResult",
+            required_fields={
+                "status": (str,),
+                "annotation_path": (str,),
+                "annotation_sha256": (str,),
+                "reference_embedding_path": (str,),
+                "reference_cell_ids_path": (str,),
+                "reference_h5ad_path": (str,),
+                "query_embedding_path": (str,),
+                "query_cell_ids_path": (str,),
+                "query_h5ad_path": (str,),
+                "checkpoint_path": (str,),
+                "reference_label_key": (str,),
+                "n_reference_cells": (int,),
+                "n_query_cells": (int,),
+                "n_reference_classes": (int,),
+                "assigned_count": (int,),
+                "unassigned_count": (int,),
+                "assignment_rate": (float,),
+                "embedding_dim": (int,),
+                "embedding_dtype": (str,),
+                "n_neighbors": (int,),
+                "metric": (str,),
+                "voting_method": (str,),
+                "min_confidence": (float,),
+                "backend": (str,),
+                "species": (str,),
+                "species_compatible": (bool,),
+                "checkpoint_compatible": (bool,),
+                "cell_order_preserved": (bool,),
+                "finite": (bool,),
+                "reference_embedding_sha256": (str,),
+                "query_embedding_sha256": (str,),
+                "reference_cell_ids_sha256": (str,),
+                "query_cell_ids_sha256": (str,),
+                "reference_labels_sha256": (str,),
+                "model_config_sha256": (str,),
+                "artifact_schema_version": (int,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_label_transfer_result,
+        ),
+        exception_classifier=_classify_analysis_exception,
+        recovery_policy_version="transfer-cell-labels-v1",
+    )
     specs = (
         inspect_spec,
         embedding_spec,
@@ -694,6 +841,7 @@ def build_default_tool_registry() -> ToolRegistry:
         clustering_spec,
         umap_spec,
         evaluation_spec,
+        label_transfer_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

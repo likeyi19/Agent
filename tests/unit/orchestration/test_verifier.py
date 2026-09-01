@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 
 from agent.orchestration import (
@@ -24,7 +25,12 @@ from agent.orchestration import (
     verify_run,
     verify_step,
 )
-from agent.tools import build_cell_neighbors, cluster_cells, compute_cell_umap
+from agent.tools import (
+    build_cell_neighbors,
+    cluster_cells,
+    compute_cell_umap,
+    transfer_cell_labels,
+)
 
 
 @pytest.fixture
@@ -120,6 +126,94 @@ def _downstream_artifacts(tmp_path: Path):
     )
     umap = compute_cell_umap(clustering["analysis_path"], tmp_path / "umap")
     return embedding_path, cell_ids_path, neighbors, clustering, umap
+
+
+def _label_transfer_artifacts(tmp_path: Path):
+    reference_ids = ["reference-0", "reference-1", "reference-2", "reference-3"]
+    query_ids = ["query-0", "query-1"]
+    reference = np.zeros((4, 512), dtype=np.float32)
+    reference[:, 0] = [0, 0.2, 9.8, 10]
+    query = np.zeros((2, 512), dtype=np.float32)
+    query[:, 0] = [0.1, 9.9]
+    reference_embedding = tmp_path / "reference.npy"
+    query_embedding = tmp_path / "query.npy"
+    np.save(reference_embedding, reference)
+    np.save(query_embedding, query)
+    reference_ids_path = tmp_path / "reference.txt"
+    query_ids_path = tmp_path / "query.txt"
+    reference_ids_path.write_text("".join(f"{value}\n" for value in reference_ids))
+    query_ids_path.write_text("".join(f"{value}\n" for value in query_ids))
+    reference_h5ad = tmp_path / "reference.h5ad"
+    query_h5ad = tmp_path / "query.h5ad"
+    reference_obs = pd.DataFrame(
+        {"celltype": pd.Categorical(["A", "A", "B", "B"])},
+        index=reference_ids,
+    )
+    ad.AnnData(obs=reference_obs).write_h5ad(reference_h5ad)
+    ad.AnnData(obs=pd.DataFrame(index=query_ids)).write_h5ad(query_h5ad)
+    checkpoint = tmp_path / "checkpoint.pth"
+    checkpoint.write_bytes(b"provenance")
+    arguments = {
+        "reference_embedding_path": str(reference_embedding),
+        "reference_cell_ids_path": str(reference_ids_path),
+        "reference_h5ad_path": str(reference_h5ad),
+        "reference_label_key": "celltype",
+        "query_embedding_path": str(query_embedding),
+        "query_cell_ids_path": str(query_ids_path),
+        "query_h5ad_path": str(query_h5ad),
+        "output_dir": str(tmp_path / "output"),
+        "reference_species": "mouse",
+        "query_species": "mouse",
+        "reference_checkpoint_path": str(checkpoint),
+        "query_checkpoint_path": str(checkpoint),
+        "n_neighbors": 2,
+    }
+    result = transfer_cell_labels(**arguments)
+    step = PlanStep("transfer", "transfer_cell_labels", arguments)
+    return step, arguments, result
+
+
+def test_valid_label_transfer_passes_source_integrity_verification(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result = _label_transfer_artifacts(tmp_path)
+    verification = verify_step(step, arguments, result, registry)
+    assert verification.passed
+
+
+def test_changed_label_transfer_artifact_fails_sha_verification(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result = _label_transfer_artifacts(tmp_path)
+    path = Path(result["annotation_path"])
+    path.write_bytes(path.read_bytes() + b"changed")
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "label_transfer_artifact_sha256" in verification.error.details["failed_checks"]
+
+
+def test_changed_label_transfer_embedding_fails_source_verification(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result = _label_transfer_artifacts(tmp_path)
+    embedding = np.load(arguments["query_embedding_path"])
+    embedding[0, 0] += 1
+    np.save(arguments["query_embedding_path"], embedding)
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "label_transfer_sources" in verification.error.details["failed_checks"]
+
+
+def test_changed_reference_labels_fail_source_verification(
+    registry, tmp_path: Path
+) -> None:
+    step, arguments, result = _label_transfer_artifacts(tmp_path)
+    reference = ad.read_h5ad(arguments["reference_h5ad_path"])
+    reference.obs["celltype"] = pd.Categorical(["A", "A", "C", "C"])
+    reference.write_h5ad(arguments["reference_h5ad_path"])
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "label_transfer_sources" in verification.error.details["failed_checks"]
 
 
 def test_valid_downstream_artifacts_pass_explicit_verification(

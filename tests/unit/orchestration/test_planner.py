@@ -79,6 +79,98 @@ def test_embedding_request_produces_exact_two_step_plan(registry) -> None:
     )
 
 
+def test_label_transfer_request_produces_exact_dual_input_plan(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Use the annotated reference to annotate the query cells",
+            {
+                "reference_input_path": "/data/reference.h5ad",
+                "query_input_path": "/data/query.h5ad",
+                "output_dir": "/output",
+                "species": "mouse",
+                "reference_label_key": "celltype",
+                "checkpoint_path": "/models/epizoo.pth",
+                "device": "cuda:0",
+            },
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:epizoo-label-transfer"
+    assert tuple(step.step_id for step in plan.steps) == (
+        "inspect_reference",
+        "embed_reference",
+        "inspect_query",
+        "embed_query",
+        "transfer",
+    )
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "transfer_cell_labels",
+    )
+    reference_embed, query_embed, transfer = plan.steps[1], plan.steps[3], plan.steps[4]
+    for embed in (reference_embed, query_embed):
+        assert embed.arguments["species"] == "mouse"
+        assert embed.arguments["checkpoint_path"] == "/models/epizoo.pth"
+        assert embed.arguments["device"] == "cuda:0"
+    assert transfer.depends_on == (
+        "inspect_reference",
+        "embed_reference",
+        "inspect_query",
+        "embed_query",
+    )
+    assert transfer.arguments == {
+        "reference_embedding_path": StepOutputRef("embed_reference", "embedding_path"),
+        "reference_cell_ids_path": StepOutputRef("embed_reference", "cell_ids_path"),
+        "reference_h5ad_path": StepOutputRef("inspect_reference", "input_path"),
+        "reference_label_key": "celltype",
+        "reference_species": StepOutputRef("embed_reference", "species"),
+        "reference_checkpoint_path": StepOutputRef("embed_reference", "checkpoint_path"),
+        "query_embedding_path": StepOutputRef("embed_query", "embedding_path"),
+        "query_cell_ids_path": StepOutputRef("embed_query", "cell_ids_path"),
+        "query_h5ad_path": StepOutputRef("inspect_query", "input_path"),
+        "query_species": StepOutputRef("embed_query", "species"),
+        "query_checkpoint_path": StepOutputRef("embed_query", "checkpoint_path"),
+        "output_dir": "/output",
+    }
+
+
+def test_label_transfer_forwards_only_explicit_optional_values(registry) -> None:
+    inputs = {
+        "reference_input_path": "/data/reference.h5ad",
+        "query_input_path": "/data/query.h5ad",
+        "output_dir": "/output",
+        "species": "mouse",
+        "reference_label_key": "celltype",
+    }
+    default_plan = DeterministicPlanner().plan(
+        _request("Annotate query from reference", inputs), registry
+    )
+    transfer = default_plan.steps[-1]
+    assert {"n_neighbors", "metric", "min_confidence", "overwrite"}.isdisjoint(
+        transfer.arguments
+    )
+    explicit = DeterministicPlanner().plan(
+        _request(
+            "Annotate query from reference",
+            inputs
+            | {
+                "n_neighbors": 7,
+                "metric": "cosine",
+                "min_confidence": 0.6,
+                "overwrite": True,
+            },
+        ),
+        registry,
+    ).steps[-1]
+    assert explicit.arguments["n_neighbors"] == 7
+    assert explicit.arguments["metric"] == "cosine"
+    assert explicit.arguments["min_confidence"] == 0.6
+    assert explicit.arguments["overwrite"] is True
+
+
 def test_repeated_planning_is_deterministic(registry) -> None:
     request = _request(
         "embed this dataset",

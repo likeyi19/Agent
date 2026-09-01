@@ -26,6 +26,15 @@ from agent.tools.analysis.embedding_analysis import (
     _validate_cluster_labels,
     _validate_neighbors_artifact,
 )
+from agent.tools.analysis.label_transfer import (
+    LABEL_TRANSFER_ARTIFACT_SCHEMA_VERSION,
+    LABEL_TRANSFER_BACKEND,
+    LABEL_TRANSFER_VOTING_METHOD,
+    _file_sha256 as _label_transfer_file_sha256,
+    _prepare_sources as _prepare_label_transfer_sources,
+    _read_annotation as _read_label_transfer_annotation,
+    _validate_annotation_artifact,
+)
 
 from agent.schemas import (
     AgentError,
@@ -948,6 +957,194 @@ def _verify_embedding(
     )
 
 
+def _verify_label_transfer(
+    resolved_arguments: Mapping[str, object],
+    result: Mapping[str, object],
+    checks: _VerificationChecks,
+) -> None:
+    source_fields = (
+        "reference_embedding_path",
+        "reference_cell_ids_path",
+        "reference_h5ad_path",
+        "query_embedding_path",
+        "query_cell_ids_path",
+        "query_h5ad_path",
+    )
+    identity_valid = (
+        result.get("status") == "success"
+        and all(
+            _path_corresponds(result.get(name), resolved_arguments.get(name))
+            for name in source_fields
+        )
+        and result.get("reference_label_key")
+        == resolved_arguments.get("reference_label_key")
+        and result.get("species") == resolved_arguments.get("reference_species")
+        and result.get("species") == resolved_arguments.get("query_species")
+        and _path_corresponds(
+            result.get("checkpoint_path"),
+            resolved_arguments.get("reference_checkpoint_path"),
+        )
+        and _path_corresponds(
+            result.get("checkpoint_path"),
+            resolved_arguments.get("query_checkpoint_path"),
+        )
+        and result.get("embedding_dim") == EPIZOO_EMBEDDING_DIM
+        and result.get("embedding_dtype") == "float32"
+        and result.get("backend") == LABEL_TRANSFER_BACKEND
+        and result.get("voting_method") == LABEL_TRANSFER_VOTING_METHOD
+        and result.get("artifact_schema_version")
+        == LABEL_TRANSFER_ARTIFACT_SCHEMA_VERSION
+        and result.get("species_compatible") is True
+        and result.get("checkpoint_compatible") is True
+        and result.get("cell_order_preserved") is True
+        and result.get("finite") is True
+    )
+    checks.add(
+        "label_transfer_result_identity",
+        identity_valid,
+        "Label-transfer result matches resolved sources and scientific identity.",
+        "Label-transfer result does not match resolved sources or scientific identity.",
+        "RESULT_IDENTITY_MISMATCH",
+    )
+
+    annotation_path: Path | None = None
+    annotation_exists = False
+    try:
+        query_value = resolved_arguments.get("query_h5ad_path")
+        output_value = resolved_arguments.get("output_dir")
+        if not isinstance(query_value, (str, Path)) or not isinstance(
+            output_value, (str, Path)
+        ):
+            raise ValueError("Invalid label-transfer output arguments.")
+        expected_output = (
+            Path(output_value).expanduser().resolve(strict=False)
+            / f"{Path(query_value).expanduser().resolve(strict=False).stem}.label_transfer.h5ad"
+        )
+        annotation_value = result.get("annotation_path")
+        if not _path_corresponds(annotation_value, expected_output):
+            raise ValueError("Annotation path mismatch.")
+        annotation_path = Path(str(annotation_value)).expanduser().resolve()
+        annotation_exists = (
+            annotation_path.is_file() and annotation_path.stat().st_size > 0
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        annotation_exists = False
+    checks.add(
+        "label_transfer_artifact_exists",
+        annotation_exists,
+        "Label-transfer annotation exists at its deterministic output path.",
+        "Label-transfer annotation is missing or has an inconsistent output path.",
+        "ARTIFACT_MISSING",
+    )
+    if not annotation_exists or annotation_path is None:
+        return
+
+    artifact_hash_valid = False
+    source_valid = False
+    artifact_valid = False
+    count_valid = False
+    try:
+        artifact_hash_valid = (
+            _label_transfer_file_sha256(annotation_path)
+            == result.get("annotation_sha256")
+        )
+        sources = _prepare_label_transfer_sources(
+            resolved_arguments["reference_embedding_path"],
+            resolved_arguments["reference_cell_ids_path"],
+            resolved_arguments["reference_h5ad_path"],
+            resolved_arguments["reference_label_key"],
+            resolved_arguments["query_embedding_path"],
+            resolved_arguments["query_cell_ids_path"],
+            resolved_arguments["query_h5ad_path"],
+            reference_species=resolved_arguments["reference_species"],
+            query_species=resolved_arguments["query_species"],
+            reference_checkpoint_path=resolved_arguments[
+                "reference_checkpoint_path"
+            ],
+            query_checkpoint_path=resolved_arguments["query_checkpoint_path"],
+            n_neighbors=resolved_arguments.get("n_neighbors", 20),
+            metric=resolved_arguments.get("metric", "euclidean"),
+            min_confidence=resolved_arguments.get("min_confidence", 0.0),
+            overwrite=resolved_arguments.get("overwrite", False),
+        )
+        source_valid = (
+            result.get("reference_embedding_sha256")
+            == sources.reference_embedding_sha256
+            and result.get("query_embedding_sha256")
+            == sources.query_embedding_sha256
+            and result.get("reference_cell_ids_sha256")
+            == sources.reference_cell_ids_sha256
+            and result.get("query_cell_ids_sha256")
+            == sources.query_cell_ids_sha256
+            and result.get("reference_labels_sha256")
+            == sources.reference_labels_sha256
+            and result.get("model_config_sha256") == sources.model_config_sha256
+            and result.get("n_neighbors") == sources.n_neighbors
+            and result.get("metric") == sources.metric
+            and result.get("min_confidence") == sources.min_confidence
+            and result.get("n_reference_cells") == len(sources.reference_ids)
+            and result.get("n_query_cells") == len(sources.query_ids)
+            and result.get("n_reference_classes")
+            == len(sources.reference_label_order)
+        )
+        artifact = _read_label_transfer_annotation(annotation_path)
+        try:
+            assigned_count, unassigned_count = _validate_annotation_artifact(
+                artifact, sources
+            )
+        finally:
+            file_manager = getattr(artifact, "file", None)
+            if file_manager is not None:
+                file_manager.close()
+        artifact_valid = True
+        n_query = len(sources.query_ids)
+        count_valid = (
+            result.get("assigned_count") == assigned_count
+            and result.get("unassigned_count") == unassigned_count
+            and assigned_count + unassigned_count == n_query
+            and isinstance(result.get("assignment_rate"), float)
+            and math.isclose(
+                float(result["assignment_rate"]),
+                assigned_count / n_query,
+                rel_tol=0.0,
+                abs_tol=1e-15,
+            )
+        )
+    except Exception:
+        source_valid = False
+        artifact_valid = False
+        count_valid = False
+
+    checks.add(
+        "label_transfer_artifact_sha256",
+        artifact_hash_valid,
+        "Label-transfer annotation matches its authoritative result digest.",
+        "Label-transfer annotation digest does not match its result.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+    checks.add(
+        "label_transfer_sources",
+        source_valid,
+        "Label-transfer scientific sources and provenance digests are unchanged.",
+        "Label-transfer scientific sources or provenance digests are inconsistent.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+    checks.add(
+        "label_transfer_artifact_structure",
+        artifact_valid,
+        "Label-transfer annotation has valid compact structure and provenance.",
+        "Label-transfer annotation is corrupt or structurally inconsistent.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+    checks.add(
+        "label_transfer_counts",
+        count_valid,
+        "Label-transfer assignment counts and rate are consistent.",
+        "Label-transfer assignment counts or rate are inconsistent.",
+        "RESULT_METADATA_INCONSISTENT",
+    )
+
+
 def verify_step(
     step: PlanStep,
     resolved_arguments: Mapping[str, object],
@@ -992,6 +1189,8 @@ def verify_step(
             _verify_clustering_evaluation(
                 resolved_arguments, plain_result, checks
             )
+        elif step.tool_name == "transfer_cell_labels":
+            _verify_label_transfer(resolved_arguments, plain_result, checks)
     return checks.result(
         target_type="step",
         target_id=step.step_id,

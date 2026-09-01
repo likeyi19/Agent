@@ -58,6 +58,10 @@ _TOOL_DESCRIPTIONS = {
         "Evaluate fixed cluster labels in a valid Milestone 6 clustering or UMAP "
         "artifact against an ordered reference annotation and persist four metrics."
     ),
+    "transfer_cell_labels": (
+        "Transfer biological labels from an annotated reference to ordered query "
+        "cells by exact deterministic k-nearest neighbors in EpiZoo embedding space."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -97,6 +101,48 @@ _ARGUMENT_DESCRIPTIONS = {
     ("evaluate_cell_clustering", "cluster_key"): "Predicted cluster obs column.",
     ("evaluate_cell_clustering", "overwrite"): (
         "Whether an existing evaluation report may be replaced."
+    ),
+    ("transfer_cell_labels", "reference_embedding_path"): (
+        "Persisted reference EpiZoo npy embedding path."
+    ),
+    ("transfer_cell_labels", "reference_cell_ids_path"): (
+        "Ordered reference EpiZoo cell-ID sidecar path."
+    ),
+    ("transfer_cell_labels", "reference_h5ad_path"): (
+        "Annotated reference scATAC h5ad path."
+    ),
+    ("transfer_cell_labels", "reference_label_key"): (
+        "Reference biological string-label obs column."
+    ),
+    ("transfer_cell_labels", "reference_species"): (
+        "Species reported by reference EpiZoo embedding."
+    ),
+    ("transfer_cell_labels", "reference_checkpoint_path"): (
+        "Checkpoint path reported by reference EpiZoo embedding."
+    ),
+    ("transfer_cell_labels", "query_embedding_path"): (
+        "Persisted query EpiZoo npy embedding path."
+    ),
+    ("transfer_cell_labels", "query_cell_ids_path"): (
+        "Ordered query EpiZoo cell-ID sidecar path."
+    ),
+    ("transfer_cell_labels", "query_h5ad_path"): "Query scATAC h5ad path.",
+    ("transfer_cell_labels", "query_species"): (
+        "Species reported by query EpiZoo embedding."
+    ),
+    ("transfer_cell_labels", "query_checkpoint_path"): (
+        "Checkpoint path reported by query EpiZoo embedding."
+    ),
+    ("transfer_cell_labels", "output_dir"): (
+        "Directory for the compact label-transfer artifact."
+    ),
+    ("transfer_cell_labels", "n_neighbors"): "Explicit exact-neighbor count.",
+    ("transfer_cell_labels", "metric"): "Euclidean or cosine distance metric.",
+    ("transfer_cell_labels", "min_confidence"): (
+        "Explicit minimum uniform-vote confidence within zero and one."
+    ),
+    ("transfer_cell_labels", "overwrite"): (
+        "Whether an existing annotation artifact may be replaced."
     ),
 }
 

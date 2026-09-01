@@ -4,6 +4,7 @@ from .analysis import (
     CellClusteringEvaluationToolResult,
     CellClusteringToolResult,
     CellNeighborsToolResult,
+    CellLabelTransferToolResult,
     CellUMAPToolResult,
     EpiZooEmbeddingToolResult,
     build_cell_neighbors,
@@ -11,6 +12,7 @@ from .analysis import (
     compute_cell_umap,
     epizoo_embed_cells,
     evaluate_cell_clustering,
+    transfer_cell_labels,
 )
 from .data import ScATACInspection, inspect_scATAC
 
@@ -18,6 +20,7 @@ __all__ = [
     "CellClusteringEvaluationToolResult",
     "CellClusteringToolResult",
     "CellNeighborsToolResult",
+    "CellLabelTransferToolResult",
     "CellUMAPToolResult",
     "EpiZooEmbeddingToolResult",
     "ScATACInspection",
@@ -27,4 +30,5 @@ __all__ = [
     "epizoo_embed_cells",
     "evaluate_cell_clustering",
     "inspect_scATAC",
+    "transfer_cell_labels",
 ]

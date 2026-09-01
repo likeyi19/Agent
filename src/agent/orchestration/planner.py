@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import math
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from agent.schemas import (
@@ -51,6 +52,9 @@ _CLUSTERING_EVALUATION_INTENT = re.compile(
     r"\b(?:evaluate|evaluation|benchmark|metrics?)\b.*\bcluster(?:s|ing)?\b"
     r"|\bcluster(?:s|ing)?\b.*\b(?:evaluate|evaluation|benchmark|metrics?)\b"
 )
+_LABEL_TRANSFER_INTENT = re.compile(
+    r"\b(?:annotate|annotation|label\s+transfer|transfer\s+(?:cell\s+)?labels?)\b"
+)
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
 _DOWNSTREAM_OPTIONAL_INPUTS = (
@@ -60,6 +64,12 @@ _DOWNSTREAM_OPTIONAL_INPUTS = (
     "resolution",
     "min_dist",
     "spread",
+    "overwrite",
+)
+_LABEL_TRANSFER_OPTIONAL_INPUTS = (
+    "n_neighbors",
+    "metric",
+    "min_confidence",
     "overwrite",
 )
 
@@ -87,8 +97,15 @@ def _path_input(request: AgentRequest, name: str) -> str:
     return value
 
 
-def _embedding_inputs(request: AgentRequest) -> dict[str, object]:
-    _require_inputs(request, _EMBEDDING_REQUIRED_INPUTS)
+def _embedding_inputs(
+    request: AgentRequest, *, require_input_path: bool = True
+) -> dict[str, object]:
+    required = (
+        _EMBEDDING_REQUIRED_INPUTS
+        if require_input_path
+        else ("output_dir", "species")
+    )
+    _require_inputs(request, required)
     arguments: dict[str, object] = {
         "output_dir": _path_input(request, "output_dir"),
     }
@@ -185,6 +202,44 @@ def _downstream_inputs(request: AgentRequest) -> dict[str, object]:
     return values
 
 
+def _label_transfer_inputs(request: AgentRequest) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for name in _LABEL_TRANSFER_OPTIONAL_INPUTS:
+        if name not in request.inputs:
+            continue
+        value = request.inputs[name]
+        if name == "n_neighbors":
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'n_neighbors' must be a positive integer.",
+                )
+        elif name == "metric":
+            if value not in {"euclidean", "cosine"}:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'metric' must be 'euclidean' or 'cosine'.",
+                )
+        elif name == "min_confidence":
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0.0 <= float(value) <= 1.0
+            ):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'min_confidence' must be finite within [0, 1].",
+                )
+        elif not isinstance(value, bool):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                "Structured input 'overwrite' must be a boolean.",
+            )
+        values[name] = value
+    return values
+
+
 def _validate_generated_steps(
     registry: ToolRegistry, steps: tuple[PlanStep, ...]
 ) -> None:
@@ -215,8 +270,123 @@ class DeterministicPlanner:
         inspection_intent = _INSPECTION_INTENT.search(prompt) is not None
         downstream_intent = _DOWNSTREAM_INTENT.search(prompt) is not None
         evaluation_intent = _CLUSTERING_EVALUATION_INTENT.search(prompt) is not None
+        label_transfer_intent = _LABEL_TRANSFER_INTENT.search(prompt) is not None
 
-        if evaluation_intent:
+        if label_transfer_intent:
+            _require_inputs(
+                request,
+                (
+                    "reference_input_path",
+                    "query_input_path",
+                    "output_dir",
+                    "species",
+                    "reference_label_key",
+                ),
+            )
+            reference_input_path = _path_input(request, "reference_input_path")
+            query_input_path = _path_input(request, "query_input_path")
+            output_dir = _path_input(request, "output_dir")
+            if Path(reference_input_path).expanduser().resolve(strict=False) == Path(
+                query_input_path
+            ).expanduser().resolve(strict=False):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Reference and query input paths must differ.",
+                )
+            reference_label_key = request.inputs["reference_label_key"]
+            if (
+                not isinstance(reference_label_key, str)
+                or not reference_label_key.strip()
+                or reference_label_key != reference_label_key.strip()
+            ):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured input 'reference_label_key' must be a nonempty string without surrounding whitespace.",
+                )
+            shared_embedding_arguments = _embedding_inputs(
+                request, require_input_path=False
+            )
+            reference_embedding_arguments = dict(shared_embedding_arguments)
+            reference_embedding_arguments["input_path"] = StepOutputRef(
+                "inspect_reference", "input_path"
+            )
+            query_embedding_arguments = dict(shared_embedding_arguments)
+            query_embedding_arguments["input_path"] = StepOutputRef(
+                "inspect_query", "input_path"
+            )
+            transfer_arguments: dict[str, object] = {
+                "reference_embedding_path": StepOutputRef(
+                    "embed_reference", "embedding_path"
+                ),
+                "reference_cell_ids_path": StepOutputRef(
+                    "embed_reference", "cell_ids_path"
+                ),
+                "reference_h5ad_path": StepOutputRef(
+                    "inspect_reference", "input_path"
+                ),
+                "reference_label_key": reference_label_key,
+                "reference_species": StepOutputRef(
+                    "embed_reference", "species"
+                ),
+                "reference_checkpoint_path": StepOutputRef(
+                    "embed_reference", "checkpoint_path"
+                ),
+                "query_embedding_path": StepOutputRef(
+                    "embed_query", "embedding_path"
+                ),
+                "query_cell_ids_path": StepOutputRef(
+                    "embed_query", "cell_ids_path"
+                ),
+                "query_h5ad_path": StepOutputRef("inspect_query", "input_path"),
+                "query_species": StepOutputRef("embed_query", "species"),
+                "query_checkpoint_path": StepOutputRef(
+                    "embed_query", "checkpoint_path"
+                ),
+                "output_dir": output_dir,
+            }
+            transfer_arguments.update(_label_transfer_inputs(request))
+            steps = (
+                PlanStep(
+                    "inspect_reference",
+                    "inspect_scATAC",
+                    {"path": reference_input_path},
+                    description="Inspect the annotated reference scATAC dataset.",
+                ),
+                PlanStep(
+                    "embed_reference",
+                    "epizoo_embed_cells",
+                    reference_embedding_arguments,
+                    ("inspect_reference",),
+                    "Compute reference EpiZoo cell embeddings.",
+                ),
+                PlanStep(
+                    "inspect_query",
+                    "inspect_scATAC",
+                    {"path": query_input_path},
+                    description="Inspect the query scATAC dataset.",
+                ),
+                PlanStep(
+                    "embed_query",
+                    "epizoo_embed_cells",
+                    query_embedding_arguments,
+                    ("inspect_query",),
+                    "Compute query EpiZoo cell embeddings.",
+                ),
+                PlanStep(
+                    "transfer",
+                    "transfer_cell_labels",
+                    transfer_arguments,
+                    (
+                        "inspect_reference",
+                        "embed_reference",
+                        "inspect_query",
+                        "embed_query",
+                    ),
+                    "Transfer reference biological labels to query cells.",
+                ),
+            )
+            workflow = "epizoo-label-transfer"
+        elif evaluation_intent:
             _require_inputs(
                 request, ("input_path", "output_dir", "species", "label_key")
             )

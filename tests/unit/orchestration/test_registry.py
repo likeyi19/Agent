@@ -30,6 +30,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "cluster_cells",
         "compute_cell_umap",
         "evaluate_cell_clustering",
+        "transfer_cell_labels",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -37,6 +38,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
     assert registry.contains("cluster_cells")
     assert registry.contains("compute_cell_umap")
     assert registry.contains("evaluate_cell_clustering")
+    assert registry.contains("transfer_cell_labels")
     assert not registry.contains("arbitrary_python")
 
 
@@ -204,6 +206,44 @@ def test_registry_contracts_match_current_public_signatures(registry) -> None:
             if parameter.default is inspect.Parameter.empty
         }
         assert expected_required == set(spec.required_arguments)
+
+
+def test_label_transfer_registry_contract_and_recovery_identity(registry) -> None:
+    validated = registry.validate_arguments(
+        "transfer_cell_labels",
+        {
+            "reference_embedding_path": StepOutputRef("ref", "embedding_path"),
+            "reference_cell_ids_path": StepOutputRef("ref", "cell_ids_path"),
+            "reference_h5ad_path": StepOutputRef("inspect-ref", "input_path"),
+            "reference_label_key": "celltype",
+            "query_embedding_path": StepOutputRef("query", "embedding_path"),
+            "query_cell_ids_path": StepOutputRef("query", "cell_ids_path"),
+            "query_h5ad_path": StepOutputRef("inspect-query", "input_path"),
+            "output_dir": "/output",
+            "reference_species": StepOutputRef("ref", "species"),
+            "query_species": StepOutputRef("query", "species"),
+            "reference_checkpoint_path": StepOutputRef("ref", "checkpoint_path"),
+            "query_checkpoint_path": StepOutputRef("query", "checkpoint_path"),
+        },
+    )
+    assert "n_neighbors" not in validated
+    spec = registry.get("transfer_cell_labels")
+    assert spec.recovery_policy_version == "transfer-cell-labels-v1"
+    assert spec.retryable_error_codes == frozenset()
+
+
+def test_label_transfer_addition_preserves_existing_recovery_identities(registry) -> None:
+    assert {
+        name: registry.get(name).recovery_policy_version for name in registry.names()
+    } == {
+        "inspect_scATAC": "inspect-scatac-v2",
+        "epizoo_embed_cells": "epizoo-embed-cells-v2",
+        "build_cell_neighbors": "build-cell-neighbors-v1",
+        "cluster_cells": "cluster-cells-v1",
+        "compute_cell_umap": "compute-cell-umap-v1",
+        "evaluate_cell_clustering": "evaluate-cell-clustering-v1",
+        "transfer_cell_labels": "transfer-cell-labels-v1",
+    }
 
 
 def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:

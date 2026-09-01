@@ -180,6 +180,36 @@ def _evaluation_step(**changes) -> dict[str, object]:
     return step
 
 
+def _transfer_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "transfer",
+        "tool_name": "transfer_cell_labels",
+        "arguments": [
+            _ref_binding("reference_embedding_path", "embed_reference", "embedding_path"),
+            _ref_binding("reference_cell_ids_path", "embed_reference", "cell_ids_path"),
+            _ref_binding("reference_h5ad_path", "inspect_reference", "input_path"),
+            _input_binding("reference_label_key", "reference_label_key"),
+            _ref_binding("reference_species", "embed_reference", "species"),
+            _ref_binding("reference_checkpoint_path", "embed_reference", "checkpoint_path"),
+            _ref_binding("query_embedding_path", "embed_query", "embedding_path"),
+            _ref_binding("query_cell_ids_path", "embed_query", "cell_ids_path"),
+            _ref_binding("query_h5ad_path", "inspect_query", "input_path"),
+            _ref_binding("query_species", "embed_query", "species"),
+            _ref_binding("query_checkpoint_path", "embed_query", "checkpoint_path"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": [
+            "inspect_reference",
+            "embed_reference",
+            "inspect_query",
+            "embed_query",
+        ],
+        "description": "Transfer biological labels.",
+    }
+    step.update(changes)
+    return step
+
+
 def _plan_response(*steps: dict[str, object], **extra) -> str:
     payload: dict[str, object] = {
         "schema_version": 2,
@@ -236,6 +266,69 @@ def test_two_step_plan_binds_inputs_and_converts_reference(registry) -> None:
     assert plan.steps[1].arguments["species"] == "mouse"
     assert plan.steps[1].depends_on == ("inspect",)
 
+
+def test_llm_label_transfer_plan_uses_only_inputs_and_upstream_references(
+    registry,
+) -> None:
+    inspect_reference = _inspect_step(
+        step_id="inspect_reference",
+        arguments=[_input_binding("path", "reference_input_path")],
+    )
+    embed_reference = _embed_step(
+        step_id="embed_reference",
+        arguments=[
+            _ref_binding("input_path", "inspect_reference", "input_path"),
+            _input_binding("output_dir", "output_dir"),
+            _input_binding("species", "species"),
+            _input_binding("checkpoint_path", "checkpoint_path"),
+        ],
+        depends_on=["inspect_reference"],
+    )
+    inspect_query = _inspect_step(
+        step_id="inspect_query",
+        arguments=[_input_binding("path", "query_input_path")],
+    )
+    embed_query = _embed_step(
+        step_id="embed_query",
+        arguments=[
+            _ref_binding("input_path", "inspect_query", "input_path"),
+            _input_binding("output_dir", "output_dir"),
+            _input_binding("species", "species"),
+            _input_binding("checkpoint_path", "checkpoint_path"),
+        ],
+        depends_on=["inspect_query"],
+    )
+    planner, _ = _planner(
+        _plan_response(
+            inspect_reference,
+            embed_reference,
+            inspect_query,
+            embed_query,
+            _transfer_step(),
+        )
+    )
+    request = _request(
+        {
+            "reference_input_path": "/data/reference.h5ad",
+            "query_input_path": "/data/query.h5ad",
+            "output_dir": "/output",
+            "species": "mouse",
+            "reference_label_key": "celltype",
+            "checkpoint_path": "/models/epizoo.pth",
+        }
+    )
+    plan = planner.plan(request, registry)
+    transfer = plan.steps[-1]
+    assert transfer.tool_name == "transfer_cell_labels"
+    assert transfer.arguments["reference_species"] == StepOutputRef(
+        "embed_reference", "species"
+    )
+    assert transfer.arguments["query_checkpoint_path"] == StepOutputRef(
+        "embed_query", "checkpoint_path"
+    )
+    assert "n_neighbors" not in transfer.arguments
+    assert "metric" not in transfer.arguments
+    assert "min_confidence" not in transfer.arguments
 
 def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None:
     planner, _ = _planner(
@@ -436,6 +529,17 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
         "reference_h5ad_path",
         "label_key",
         "cluster_key",
+        "reference_embedding_path",
+        "reference_cell_ids_path",
+        "reference_label_key",
+        "reference_species",
+        "reference_checkpoint_path",
+        "query_embedding_path",
+        "query_cell_ids_path",
+        "query_h5ad_path",
+        "query_species",
+        "query_checkpoint_path",
+        "min_confidence",
     }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (

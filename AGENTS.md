@@ -472,6 +472,188 @@ Milestone 6.2 introduced no new environment warning. The non-blocking
 Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba notes from
 Milestone 6.1 remain unchanged and did not affect acceptance.
 
+### Milestone 6.3 — Reference-to-query cell-label transfer
+
+Milestone 6.3 is complete and accepted. Its public scientific API is:
+
+```python
+transfer_cell_labels(
+    reference_embedding_path,
+    reference_cell_ids_path,
+    reference_h5ad_path,
+    reference_label_key,
+    query_embedding_path,
+    query_cell_ids_path,
+    query_h5ad_path,
+    output_dir,
+    *,
+    reference_species,
+    query_species,
+    reference_checkpoint_path,
+    query_checkpoint_path,
+    n_neighbors=20,
+    metric="euclidean",
+    min_confidence=0.0,
+    overwrite=False,
+)
+```
+
+The production `ToolRegistry` now contains exactly seven scientific tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+3. `build_cell_neighbors`
+4. `cluster_cells`
+5. `compute_cell_umap`
+6. `evaluate_cell_clustering`
+7. `transfer_cell_labels`
+
+The accepted label-transfer workflow is:
+
+```text
+annotated reference scATAC
+→ inspect reference
+→ reference EpiZoo embedding ┐
+                               ├→ reference-to-query label transfer
+query scATAC                  │
+→ inspect query            │
+→ query EpiZoo embedding ──────┘
+```
+
+Transfer operates directly in the original validated 512-dimensional EpiZoo
+embedding space. It does not use PCA, UMAP, Leiden, clustering, centering,
+standardization, batch correction, learned projections, approximate neighbors,
+or reference subsampling.
+
+The exact CPU backend uses scikit-learn chunked pairwise distances with bounded
+working memory, `n_jobs=1`, and no backend auto-switching or random scientific
+stage. Accepted defaults are `n_neighbors=20`, Euclidean distance, uniform
+plurality voting, and `min_confidence=0.0`. Neighbor ordering is deterministic:
+distance ascending, then reference row index ascending, including ties at the
+kth boundary. There is no automatic reduction of k.
+
+Confidence is the winning vote count divided by `n_neighbors`. A prediction is
+assigned only when one label has a unique plurality and confidence is at least
+`min_confidence`. Exact top-vote ties remain unassigned, with a missing
+`predicted_label` and retained confidence. Assignment state is stored separately
+in `prediction_status`; `"unassigned"` is not a reserved biological label.
+There is no distance weighting, lexicographic tie break, class-frequency
+correction, or label-guided parameter tuning.
+
+Reference annotations are read only from the selected reference `.obs` column.
+They must be nonmissing, nonblank text or categorical text labels without
+leading or trailing whitespace and must contain at least two classes. Numeric,
+boolean, and arbitrary-object labels are rejected, while accepted biological
+label text is preserved exactly. Query ground-truth labels are neither required
+nor available to the production transfer path.
+
+Milestone 6.3 v1 is within-species only. Both species must be supported by
+EpiZoo and equal. Reference and query checkpoint paths are canonicalized, must
+exist, and must resolve to exactly the same file. The approximately 5.2 GB
+checkpoint is not fully hashed. Within the Agent workflow, verified embedding
+results and `StepOutputRef` bindings provide species and checkpoint provenance;
+externally supplied embeddings do not gain cryptographic historical proof that
+the stated checkpoint produced them.
+
+Canonical digests protect both embedding contents, both ordered cell-ID
+sidecars, ordered reference labels, and the fixed EpiZoo model configuration.
+Embedding digests cover a versioned schema, shape, dtype, and row-major float32
+contents through chunked memory-mapped reads. The raw reference and query h5ad
+files are not fully hashed, and transfer neither accesses nor densifies their
+raw scATAC `.X` matrices.
+
+The compact, atomic annotation artifact is:
+
+```text
+<query-stem>.label_transfer.h5ad
+
+n_obs = query cells
+n_vars = 0
+X = None
+
+obs_names = exact ordered query cell IDs
+obs["predicted_label"]
+obs["prediction_confidence"]
+obs["prediction_status"]
+uns["agent_milestone6_label_transfer"]
+```
+
+It contains no raw scATAC matrix, source embedding matrix, neighbor list,
+distance matrix, complete reference-label vector, Leiden label, UMAP coordinate,
+or graph matrix. Writing is overwrite-protected, temporary-file validated,
+atomically installed, and fsynced. The final annotation-file SHA-256 is stored
+in the lightweight tool/durable step result, not inside the same H5AD artifact,
+where it would be self-referential.
+
+The deterministic planner generates:
+
+```text
+inspect_reference → embed_reference ┐
+                                      ├→ transfer
+inspect_query     → embed_query     ┘
+```
+
+Both embedding steps receive the same structured species and checkpoint
+configuration. Transfer receives actual upstream species, checkpoint path,
+embedding path, and ID-sidecar path through `StepOutputRef`. Optional scientific
+arguments are omitted unless present in structured request inputs. Planning
+schema v2, whole-plan preflight, the executable allowlist, and PLAN_ONLY
+zero-tool behavior remain authoritative. The LLM cannot invent executable
+paths, species, checkpoint, label key, k, metric, confidence threshold, or
+defaults.
+
+The verifier intentionally does not rerun the full kNN calculation. It checks
+the final annotation SHA, compact structure, exact query order,
+label/status/confidence consistency, assignment counts and rate, current
+reference vocabulary, all source and model digests, species and canonical
+checkpoint compatibility, and scientific parameters/backend/provenance. On
+nonterminal resume, changed embeddings, IDs, reference labels, or missing or
+corrupt annotations fail revalidation. A valid completed transfer is restored
+without rerunning kNN; terminal resume behavior is unchanged.
+
+The new recovery identity is `transfer-cell-labels-v1`, with no retryable error
+codes. All previous recovery identities and the global error-policy catalog
+version remain unchanged.
+
+Accepted validation:
+
+- Milestone 6.3 focused: 205 passed
+- all orchestration unit tests: 345 passed
+- canonical orchestration regression: 350 passed
+- complete lightweight regression: 612 passed, 6 skipped
+
+Real acceptance used a seed-0, label-independent split of 2,000 Fang2021 cells:
+1,400 annotated reference cells and 600 disjoint query cells, with each subset
+returned to original source order. The reference label key was `celltype`; the
+production query h5ad contained no `celltype` column. Held-out query labels
+existed only in the acceptance harness and were unavailable to `AgentRequest`,
+the planner, both embedding tools, transfer, and the production verifier.
+
+All five production steps succeeded on their first attempt and passed
+verification in about 61.65 seconds. Transfer itself took about 0.90 seconds,
+durable revalidation took about 0.92 seconds without reinvoking any tool, and
+peak allocated GPU memory was about 10.8 GiB. No Leiden, UMAP, clustering
+evaluation, or parameter tuning occurred.
+
+Using the unchanged defaults, 596 of 600 query cells were assigned, for an
+assignment fraction of `0.9933333333`. Held-out descriptive evaluation performed
+only after artifact finalization and production verification gave overall
+accuracy `0.905`, assigned-only accuracy `0.9110738255`, and macro-F1
+`0.8615679910` across 20 true query classes and 19 assigned predicted classes.
+Median confidence was `1.0`, with median confidence `1.0` for correct assigned
+predictions and `0.6` for incorrect assigned predictions. These metrics did not
+choose the split, reference, k, metric, confidence threshold, or any rerun.
+
+A second transfer using the same persisted embeddings and defaults produced
+identical biological predictions, assignment statuses, confidence values, and
+scientific provenance. SHA-256 before/after checks confirmed that the reference
+and query subsets, both embeddings, both ID sidecars, and original Fang2021
+source were unchanged.
+
+Milestone 6.3 introduced no new blocking environment issue. The existing
+non-blocking Louvain/`pkg_resources`, Scanpy Louvain deprecation, and TBB/Numba
+warnings remain unchanged and did not affect acceptance.
+
 ## Development environment
 
 - Linux server

@@ -6,7 +6,8 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.3 are complete.
+Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.4 are complete.
+Milestone 7 / Phase II is complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -28,6 +29,8 @@ Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.3 are complete.
   analysis evidence
 - Milestone 7.3: deterministic verified scientific reports from accepted
   evidence and optional verified visualizations
+- Milestone 7.4: end-to-end research application with a Python service API,
+  managed workspaces, verified post-run composition, and a one-shot CLI
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -223,3 +226,107 @@ deterministic and exactly verifiable.
 
 Milestone 7.3 v1 contains no LLM-generated narrative. Future constrained LLM
 interpretation remains separate from this deterministic reporting boundary.
+
+## End-to-end research application
+
+Milestone 7.4 provides the first coherent user-facing flow:
+
+```text
+natural-language scientific request
+→ constrained planning
+→ verified durable execution
+→ verified evidence
+→ verified visualization when supported
+→ verified deterministic scientific report
+→ compact user-facing application result
+```
+
+The public service boundary is:
+
+```python
+ResearchAgentApplication(
+    workspace_root,
+    *,
+    planner=None,
+    registry=None,
+    executor=None,
+)
+```
+
+It exposes `run(request)`, `resume(run_id)`, and `cancel(run_id)`. The
+application owns its `FileRunStore`, while all scientific execution continues
+to occur exclusively through `AgentRuntime`. It composes the existing evidence,
+visualization, and deterministic-report APIs rather than duplicating their
+logic.
+
+After successful execution, evidence is built or verified and reused, supported
+visualization kinds are queried explicitly, applicable figures are built or
+reused, and the deterministic report undergoes final verification. An empty
+visualization capability is a normal figureless-report workflow; failure of an
+expected visualization remains fatal. PLAN_ONLY returns its validated plan and
+preflight result with zero scientific execution and creates no evidence,
+visualization, or report.
+
+Resume remains planner-free. Valid post-run artifacts are verified and reused,
+missing stages may be built, and tampered, mismatched, partial, or conflicting
+outputs fail closed without silent repair or overwrite. Cancellation delegates
+to `AgentRuntime.cancel()`; it remains cooperative, and reporting-stage
+cancellation is deferred.
+
+Managed output uses full SHA-256 run identities:
+
+```text
+<workspace>/
+├── run_state/
+└── runs/<full-sha256-of-run-id>/
+    ├── composition.lock
+    ├── scientific/
+    ├── evidence/
+    ├── visualizations/
+    └── report/
+```
+
+Raw request/run IDs are not path components. Output roots are application-owned,
+managed symlinks and wrong-type paths are rejected, and the application uses
+exact artifact paths rather than directory discovery. The workspace is assumed
+to be trusted and local; complete hostile-filesystem-race protection is not
+claimed. A nonblocking per-run composition lock serializes evidence through
+final report verification without changing runtime execution leases or adding
+another durable state machine.
+
+The compact JSON-safe application result retains the authoritative
+`AgentRunResult` and uses `ArtifactReference` values containing only artifact
+type, path, and SHA-256. It never returns embeddings, matrices, coordinates, or
+AnnData objects. Application-local errors are sanitized and stage-aware, while
+runtime/planner/scientific `AgentError` values remain authoritative.
+
+The first CLI uses standard-library `argparse` and prints compact JSON:
+
+```text
+PYTHONPATH=src python -m agent run ...
+PYTHONPATH=src python -m agent resume ...
+PYTHONPATH=src python -m agent cancel ...
+```
+
+Deterministic offline planning is the default. Existing OpenAI, Gemini, and
+Groq planning adapters can be selected when configured; API keys remain in the
+environment. There is no installed console script yet because packaging
+metadata is deferred. Streamlit, Gradio, a persistent REPL, multi-turn state,
+LLM report narrative, and browser UI are also deferred.
+
+The canonical first application demo is:
+
+```text
+inspect_scATAC
+→ epizoo_embed_cells
+→ build_cell_neighbors
+→ cluster_cells
+→ compute_cell_umap
+→ verified evidence
+→ Leiden UMAP
+→ deterministic report
+```
+
+The richer reference/query annotation workflow remains available through the
+scientific-tool layer but is not required for this primary demo. Milestone 7.4
+did not run the optional real-provider plus real-EpiZoo acceptance.

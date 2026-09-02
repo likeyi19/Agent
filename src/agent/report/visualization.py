@@ -79,6 +79,11 @@ _PRIMARY_PALETTE = (
 _METRIC_ORDER = ("NMI", "ARI", "AMI", "Homogeneity")
 _METRIC_FACT_KEYS = ("nmi", "ari", "ami", "homogeneity")
 _METRIC_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#b279a2")
+_FIGURE_KIND_BY_TOOL: Mapping[str, str] = {
+    "compute_cell_umap": "umap_leiden",
+    "evaluate_cell_clustering": "clustering_metrics",
+    "evaluate_cell_annotation": "annotation_confusion",
+}
 _RC_PARAMS: Mapping[str, object] = {
     "font.family": _FONT_FAMILY,
     "font.size": 9.0,
@@ -571,15 +576,15 @@ def _figure_identity(ordinal: int, kind: str, step_id: str) -> tuple[str, str]:
     return figure_id, f"{figure_id}.png"
 
 
-def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProjection, ...]:
+def _supported_figure_sources(
+    snapshot: _EvidenceSnapshot,
+) -> tuple[tuple[str, str, str, Mapping[str, object]], ...]:
     workflow = snapshot.payload.get("workflow")
     steps = snapshot.payload.get("steps")
-    artifacts = snapshot.payload.get("artifacts")
     if (
         not isinstance(workflow, Mapping)
         or not isinstance(workflow.get("ordered_steps"), list)
         or not isinstance(steps, list)
-        or not isinstance(artifacts, list)
     ):
         raise AnalysisVisualizationError(
             "VISUALIZATION_EVIDENCE_INVALID",
@@ -600,7 +605,7 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
             )
         step_records[step_id] = value
 
-    projections: list[_FigureProjection] = []
+    supported: list[tuple[str, str, str, Mapping[str, object]]] = []
     for ordered_step in workflow["ordered_steps"]:
         if not isinstance(ordered_step, Mapping):
             raise AnalysisVisualizationError(
@@ -614,11 +619,8 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 "VISUALIZATION_EVIDENCE_INVALID",
                 "Verified evidence has invalid workflow identity.",
             )
-        if tool_name not in {
-            "compute_cell_umap",
-            "evaluate_cell_clustering",
-            "evaluate_cell_annotation",
-        }:
+        kind = _FIGURE_KIND_BY_TOOL.get(tool_name)
+        if kind is None:
             continue
         step = step_records.get(step_id)
         if step is None or step.get("tool_name") != tool_name:
@@ -632,9 +634,24 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 "VISUALIZATION_EVIDENCE_INVALID",
                 "Verified evidence lacks supported step facts.",
             )
+        supported.append((step_id, tool_name, kind, step))
+    return tuple(supported)
+
+
+def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProjection, ...]:
+    artifacts = snapshot.payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise AnalysisVisualizationError(
+            "VISUALIZATION_EVIDENCE_INVALID",
+            "Verified evidence lacks its artifact projection.",
+        )
+
+    projections: list[_FigureProjection] = []
+    for step_id, tool_name, kind, step in _supported_figure_sources(snapshot):
+        facts = step["facts"]
+        assert isinstance(facts, Mapping)
         ordinal = len(projections) + 1
         if tool_name == "compute_cell_umap":
-            kind = "umap_leiden"
             source = _source_artifact(
                 artifacts,
                 step_id=step_id,
@@ -673,7 +690,6 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 "legend_columns": legend_columns,
             }
         elif tool_name == "evaluate_cell_clustering":
-            kind = "clustering_metrics"
             source = _source_artifact(
                 artifacts,
                 step_id=step_id,
@@ -699,7 +715,6 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 "selection": False,
             }
         else:
-            kind = "annotation_confusion"
             source = _source_artifact(
                 artifacts,
                 step_id=step_id,
@@ -754,6 +769,29 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
             "Verified evidence contains no supported Milestone 7.2 figure source.",
         )
     return tuple(projections)
+
+
+def get_supported_visualization_kinds(
+    run_result: AgentRunResult,
+    evidence: str | Path | AnalysisEvidenceResult,
+    *,
+    registry: ToolRegistry,
+) -> tuple[str, ...]:
+    """Return ordered M7.2 figure kinds supported by freshly verified evidence.
+
+    This capability query reads only the verified evidence projection after the
+    accepted M7.1 verification boundary.  It does not render figures, inspect
+    visualization output directories, or invoke scientific tool callables.
+    """
+
+    if not isinstance(run_result, AgentRunResult):
+        raise TypeError("`run_result` must be an AgentRunResult.")
+    if not isinstance(registry, ToolRegistry):
+        raise TypeError("`registry` must be a ToolRegistry.")
+    snapshot = _verified_evidence_snapshot(run_result, evidence, registry)
+    return tuple(
+        kind for _, _, kind, _ in _supported_figure_sources(snapshot)
+    )
 
 
 def _renderer_contract() -> Mapping[str, JsonValue]:
@@ -1554,5 +1592,6 @@ __all__ = [
     "AnalysisVisualizationResult",
     "VisualizationFigureResult",
     "build_analysis_visualizations",
+    "get_supported_visualization_kinds",
     "verify_analysis_visualizations",
 ]

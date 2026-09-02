@@ -22,6 +22,7 @@ from agent.report import (
     ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
     AnalysisVisualizationError,
     build_analysis_visualizations,
+    get_supported_visualization_kinds,
     verify_analysis_visualizations,
 )
 from agent.schemas import (
@@ -217,6 +218,41 @@ def _build(tmp_path: Path, **source_options: object) -> tuple[object, ...]:
         registry=_guarded_registry(),
     )
     return run, evidence, umap_path, confusion_path, result
+
+
+def test_supported_visualization_kinds_are_ordered_and_do_not_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, evidence, _, _ = _source(
+        tmp_path,
+        tools=(
+            "inspect_scATAC",
+            "evaluate_cell_annotation",
+            "compute_cell_umap",
+            "evaluate_cell_clustering",
+        ),
+    )
+    monkeypatch.setattr(
+        visualization_module,
+        "_render_figure",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Capability detection must not render figures.")
+        ),
+    )
+
+    assert get_supported_visualization_kinds(
+        run, evidence, registry=_guarded_registry()
+    ) == ("annotation_confusion", "umap_leiden", "clustering_metrics")
+
+
+def test_supported_visualization_kinds_returns_empty_for_figureless_evidence(
+    tmp_path: Path,
+) -> None:
+    run, evidence, _, _ = _source(tmp_path, tools=("inspect_scATAC",))
+
+    assert get_supported_visualization_kinds(
+        run, evidence, registry=_guarded_registry()
+    ) == ()
 
 
 def test_builds_exact_v1_bundle_and_verifies_without_tool_execution(tmp_path: Path) -> None:

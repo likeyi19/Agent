@@ -1180,6 +1180,248 @@ Default acceptance requires no network, API key, provider, GPU, checkpoint, or
 EpiZoo inference. Guarded registry callables proved that Milestone 7.1–7.3
 post-run reporting invokes zero scientific tools.
 
+### Milestone 7.4 — End-to-End Research Agent Application
+
+Milestone 7.4 is complete and accepted. It closes Milestone 7 / Phase II with
+the first coherent application flow:
+
+```text
+natural-language scientific request
+→ constrained planning
+→ verified durable execution
+→ verified evidence
+→ verified visualization when supported
+→ verified deterministic scientific report
+→ compact user-facing application result
+```
+
+The completed reporting and application stack is:
+
+```text
+M7.1 — Verified Analysis Evidence
+M7.2 — Verified Scientific Visualization
+M7.3 — Verified Deterministic Scientific Report
+M7.4 — End-to-End Research Agent Application
+```
+
+#### Application API and result contracts
+
+The public service is:
+
+```python
+ResearchAgentApplication(
+    workspace_root,
+    *,
+    planner=None,
+    registry=None,
+    executor=None,
+)
+```
+
+It exposes `run(request)`, `resume(run_id)`, and `cancel(run_id)`. The
+application constructs and owns its `FileRunStore` beneath the approved
+workspace. Scientific execution remains exclusively in the existing
+`AgentRuntime`; the application composes accepted public APIs and contains no
+second planner, executor, verifier, scientific pipeline, or cancellation state
+system.
+
+The immutable JSON-safe application schemas are:
+
+- `ApplicationStatus`: PLANNED, SUCCEEDED, FAILED, CANCELLED
+- `ApplicationStage`: RUNTIME, EVIDENCE, VISUALIZATION, REPORT, COMPLETE
+- `ArtifactReference`: artifact type, path, and SHA-256
+- `ApplicationError`: sanitized stable code, message, and stage
+- `ApplicationResult`: application/run identity, application and runtime
+  statuses, workspace, authoritative `AgentRunResult`, compact artifact
+  references, and optional application error
+
+Artifact references never contain embeddings, matrices, UMAP coordinates,
+cell vectors, AnnData, or loaded report contents. `AgentRunResult` remains the
+authoritative source of planner, preflight, scientific, verification, recovery,
+and cancellation errors. The application error layer is deliberately thin;
+stable codes include `APP_REQUEST_INVALID`, `APP_WORKSPACE_INVALID`,
+`APP_OUTPUT_CONFLICT`, `APP_COMPOSITION_ACTIVE`, `APP_EVIDENCE_FAILED`,
+`APP_VISUALIZATION_FAILED`, and `APP_REPORT_FAILED`. Arbitrary raw exception
+strings are not exposed through JSON-facing `ApplicationError` values.
+
+#### Workspace and configuration contract
+
+The managed layout is:
+
+```text
+<workspace>/
+├── run_state/
+└── runs/
+    └── <full-sha256-of-run-id>/
+        ├── composition.lock
+        ├── scientific/
+        ├── evidence/
+        ├── visualizations/
+        └── report/
+```
+
+Raw request and run IDs never become filesystem path components. Managed names
+are fixed, each run uses the complete SHA-256 of its run ID, canonical paths
+must remain beneath the approved root, and managed symlinks and unexpected file
+types are rejected. The application consumes only exact artifact paths returned
+by accepted APIs; it does not scan directories to discover scientific results.
+The implementation assumes a trusted local workspace and does not claim full
+protection against a hostile actor concurrently changing the filesystem.
+
+Scientific values—input/reference/query H5AD paths, species, checkpoint,
+device, labels, and explicit scientific parameters—remain structured
+`AgentRequest.inputs`. The application owns run-state and scientific,
+evidence, visualization, and report output roots. Before planning it creates a
+new effective `AgentRequest` containing the trusted scientific `output_dir`;
+the caller's immutable request is not modified. Reserved output-root fields and
+application-level `overwrite=True` are rejected. This preserves the existing
+argument-provenance boundary and prevents an LLM from inventing output paths.
+
+Post-run composition has a per-run, local, nonblocking `flock` covering:
+
+```text
+evidence
+→ visualization capability/build
+→ deterministic report
+→ final verification
+```
+
+Concurrent composition for the same run fails safely with
+`APP_COMPOSITION_ACTIVE`. This lock is neither distributed nor a new durable
+state machine and does not modify `AgentRuntime` execution-lease semantics.
+
+#### Composition, PLAN_ONLY, resume, and cancellation
+
+Only a successful executed `AgentRunResult` enters post-run composition:
+
+1. M7.1 evidence is built or freshly verified and reused.
+2. supported visualization kinds are queried explicitly.
+3. M7.2 visualizations are built or verified and reused when applicable.
+4. an empty capability result proceeds normally to a figureless M7.3 report.
+5. the M7.3 report is built or verified and reused.
+6. final report verification must pass before application success.
+
+If a visualization kind is supported, visualization build or verification
+failure is fatal; it is never silently downgraded to a figureless report.
+
+PLAN_ONLY returns `ApplicationStatus.PLANNED` with the validated `AgentPlan`
+and preflight verification preserved in `AgentRunResult`. It executes zero
+scientific tools and creates no evidence, visualization, or report.
+
+`ResearchAgentApplication.resume(run_id)` calls the planner-free
+`AgentRuntime.resume(run_id)` and deterministically recovers the same hashed
+workspace. Terminal successful scientific steps are not rerun. Post-run reuse
+is exact:
+
+```text
+valid existing artifact → verify and reuse
+missing artifact → build
+tampered/mismatched artifact → fail closed
+partial/conflicting destination → output conflict
+```
+
+There is no silent overwrite, hidden repair, in-place mutation, application
+manifest, or reporting cache. A new request/workspace is the v1 regeneration
+path.
+
+`cancel(run_id)` delegates directly to `AgentRuntime.cancel()`. Existing
+cooperative semantics remain authoritative: active scientific calls are not
+force-killed, and a cancelled scientific run creates no evidence,
+visualization, or report. Reporting-stage cooperative cancellation remains
+deferred.
+
+#### Visualization capability and CLI
+
+The new public M7.2 query is:
+
+```python
+get_supported_visualization_kinds(
+    run_result,
+    evidence,
+    *,
+    registry,
+)
+```
+
+It freshly verifies the accepted evidence boundary, uses the same authoritative
+figure mapping as M7.2 construction, returns deterministic workflow-ordered
+kinds, and returns an empty tuple for a legitimate figureless workflow. It
+invokes zero scientific callables and performs no artifact discovery.
+`build_analysis_visualizations()` remains strict and still rejects calls with
+no supported figure.
+
+The standard-library `argparse` CLI is:
+
+```text
+PYTHONPATH=src python -m agent run ...
+PYTHONPATH=src python -m agent resume ...
+PYTHONPATH=src python -m agent cancel ...
+```
+
+It emits compact deterministic JSON. Exit code 0 means success or planned; 2
+means invalid CLI/application/provider configuration; 3 means runtime or
+durable-state failure; 4 means a cancelled application result; and 5 means
+postprocessing failure. Deterministic/offline planning is the default. The CLI
+may select the existing OpenAI, Gemini, or Groq adapters when configured, but
+provider secrets remain environment-only and never become CLI arguments,
+request inputs, durable state, application results, or output. No provider
+factory was added to the application service, and provider adapters were not
+changed. Installable console-script packaging remains deferred.
+
+#### Safety invariants, demo, and acceptance
+
+Natural-language planning retains all accepted boundaries. Executable values
+come only from `AgentRequest.inputs` or `StepOutputRef`; providers receive
+sanitized tool/schema data and no Python callables; planning schema v2 and
+whole-plan preflight remain authoritative; and `ToolRegistry` remains the
+executable allowlist. “Generate a report” names application postprocessing, not
+a scientific tool. Arbitrary Python and shell execution remain prohibited.
+
+Milestone 7.4 introduced no scientific tool, registry identity, planning-schema
+change, RunStore-schema change, recovery identity, executor/verifier semantic
+change, runtime semantic change, provider semantic change, EpiZoo change,
+dependency, ReportModel, or LLM-generated scientific narrative. The production
+registry remains exactly eight tools, planning schema remains v2, and RunStore
+remains v3.
+
+The canonical first demo is:
+
+```text
+inspect_scATAC
+→ epizoo_embed_cells
+→ build_cell_neighbors
+→ cluster_cells
+→ compute_cell_umap
+→ verified evidence
+→ Leiden UMAP
+→ deterministic report
+```
+
+The richer reference/query annotation workflow remains available through the
+scientific-tool layer but is not required for this primary application demo.
+
+Accepted validation:
+
+- focused application service: 19 passed
+- workspace: 8 passed
+- CLI: 7 passed
+- Milestone 7.4 integration: 3 passed
+- combined Milestone 7.1–7.4 reporting/application: 128 passed
+- canonical orchestration regression: 375 passed
+- complete lightweight regression: 801 passed, 6 skipped
+
+Default acceptance required no network, provider API key, GPU, checkpoint, or
+real EpiZoo inference. The lightweight integration exercised the real
+application, runtime, RunStore, downstream CPU tools, reporting composition,
+and verification. Downstream scientific steps ran once; reporting plus terminal
+resume did not increase their invocation counts. Optional real-provider plus
+real-EpiZoo Fang2021 acceptance remains guarded/deferred and was not required.
+
+Nonblocking future work is reporting-stage cooperative cancellation, optional
+real-provider/EpiZoo acceptance, installable console-script packaging, stronger
+hostile-filesystem-race hardening, browser or multi-turn UI, and a separately
+scoped constrained `ReportModel`. None is part of Milestone 7.4.
+
 ## Development environment
 
 - Linux server

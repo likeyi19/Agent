@@ -34,6 +34,7 @@ from .visualization import (
     AnalysisVisualizationResult,
     VisualizationFigureResult,
     build_analysis_visualizations,
+    get_supported_visualization_kinds,
     verify_analysis_visualizations,
 )
 
@@ -66,5 +67,6 @@ __all__ = [
     "AnalysisVisualizationResult",
     "VisualizationFigureResult",
     "build_analysis_visualizations",
+    "get_supported_visualization_kinds",
     "verify_analysis_visualizations",
 ]

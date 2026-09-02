@@ -1422,6 +1422,191 @@ real-provider/EpiZoo acceptance, installable console-script packaging, stronger
 hostile-filesystem-race hardening, browser or multi-turn UI, and a separately
 scoped constrained `ReportModel`. None is part of Milestone 7.4.
 
+### Milestone 8.1 — Feature-space and replicate-aware pseudobulk foundation
+
+Milestone 8.1 is complete and accepted. Regulatory accessibility analysis now
+returns to the immutable raw scATAC H5AD rather than treating compact M6/M7
+artifacts as a regulatory feature matrix.
+
+Its public scientific APIs are:
+
+```python
+validate_scATAC_feature_space(
+    input_path,
+    output_dir,
+    *,
+    matrix_source,
+    matrix_semantics,
+    species,
+    genome_assembly,
+    coordinate_source,
+    layer_key=None,
+    feature_chrom_key=None,
+    feature_start_key=None,
+    feature_end_key=None,
+    coordinate_system=None,
+    semantics_metadata_key=None,
+    overwrite=False,
+)
+
+build_replicate_pseudobulk(
+    feature_space_path,
+    replicate_key,
+    group_key,
+    condition_key,
+    output_dir,
+    *,
+    group_source,
+    group_annotation_path=None,
+    covariate_keys=(),
+    overwrite=False,
+)
+```
+
+The production `ToolRegistry` now contains exactly ten scientific tools:
+
+1. `inspect_scATAC`
+2. `epizoo_embed_cells`
+3. `build_cell_neighbors`
+4. `cluster_cells`
+5. `compute_cell_umap`
+6. `evaluate_cell_clustering`
+7. `transfer_cell_labels`
+8. `evaluate_cell_annotation`
+9. `validate_scATAC_feature_space`
+10. `build_replicate_pseudobulk`
+
+Feature validation accepts only sparse CSR/CSC `X` or an explicitly named
+sparse layer. The structured request must assert one of fragment counts,
+insertion counts, binary accessibility, or normalized/continuous signal;
+normalized/continuous input is explicitly ineligible for pseudobulk. Fragment
+and insertion identity is never inferred from values. An optional configured
+raw `uns` field may corroborate the declaration and must agree exactly. Binary
+accessibility is additionally content-validated as exact zero/one values. All
+accepted matrices must be finite, nonnegative, and integer-valued.
+
+M8.1 v1 supports only human/hg38 and mouse/mm10. Coordinates are optional:
+`coordinate_source="none"` is valid and explicitly recorded. When coordinates
+come from named `.var` columns, column identities, coordinate system, values,
+and ordered digest are strictly validated and provenance-bound. Coordinates
+are never parsed from feature names or otherwise inferred.
+
+The canonical schema-v1 feature-space JSON manifest records the complete source
+H5AD SHA-256, resolved matrix source/layer, declared semantics and assertion
+source, species/assembly, exact dimensions/storage/dtype/nnz, ordered cell and
+feature digests, canonical sparse-matrix digest, optional coordinate digest,
+software versions, and a domain-separated feature-space identity. It contains
+no complete cell, feature, coordinate, or matrix vectors. The raw file is
+hashed before and after validation and is never modified.
+
+Pseudobulk metadata semantics are strict. `replicate_key` is biological
+replicate/subject identity and may span conditions. The exact unit is
+`(group, replicate, condition)`. Replicate, condition, and covariates always
+come from raw `.obs`. Group comes only from raw `.obs` or the fixed
+`predicted_label` of an accepted M6.3 annotation. Verified annotation groups
+require exact raw cell identity/order and every cell assigned; arbitrary H5AD,
+CSV, Leiden, intersection, sorting, reordering, and silent dropping are
+prohibited. Covariates are preserved only when constant within each
+replicate-condition pair. M8.1 imposes no later DA design/rank/replication rule.
+
+Aggregation is exact sparse SUM only. Units are ordered by first occurrence in
+the authoritative source cell order, no low-cell unit is removed, and every
+cell is assigned once. Pseudobulk IDs use a domain-separated canonical digest
+of the authoritative feature-space identity plus group, replicate, and
+condition. Production aggregation uses chunked sparse membership-matrix
+multiplication with checked int64 accumulation and a checked overflow fallback.
+It performs no normalization, cell or feature filtering, feature intersection,
+sorting, reindexing, remapping, liftOver, or coordinate inference.
+
+The schema-v1 pseudobulk artifact is:
+
+```text
+<source-stem>.replicate_pseudobulk.h5ad
+
+rows = first-occurrence-ordered (group, replicate, condition) units
+columns = exact original ordered regulatory features
+X = sparse CSR int64 SUM counts
+layers/obsm/obsp/varm/varp/raw = empty
+
+obs:
+  group, replicate, condition
+  n_cells, first_cell_index, library_size
+  covariate_000... in requested order
+
+var:
+  exact feature IDs
+  optional exact chrom, start, end only when supplied
+
+uns:
+  agent_milestone8_pseudobulk = schema-v1 provenance
+```
+
+The artifact provenance binds the feature manifest and identity, raw source,
+matrix semantics and assertion source, species/assembly, metadata keys and
+optional M6.3 annotation digest, ordered source metadata and unit assignments,
+feature identity/order, optional coordinates, exact pseudobulk matrix, counts,
+library sizes, aggregation settings, validation flags, and software versions.
+The complete artifact SHA-256 remains in the lightweight result/durable step
+result to avoid a self-referential file digest.
+
+Verification never invokes either new scientific callable. It independently
+rehashes and reconstructs the raw feature space and metadata, deterministic
+unit order and IDs, cell counts, first-cell positions, covariates, features,
+coordinates, and library sizes. Every pseudobulk SUM is recomputed with Python
+integer row maps, an algorithm distinct from production sparse matrix
+multiplication, and compared exactly row by row as canonical CSR. Source and
+artifact files are checked for mutation across verification. No complete
+matrix densification is permitted.
+
+The deterministic planner produces:
+
+```text
+validate_feature_space
+→ build_pseudobulk
+```
+
+The second step receives `feature_space_path` through `StepOutputRef`. All
+other executable values come from structured `AgentRequest.inputs`; the LLM
+planner receives descriptions and schemas but no executable Python callable.
+Planning schema v2, whole-plan preflight, RunStore schema v3, durability,
+cancellation, and bounded recovery semantics remain unchanged. PLAN_ONLY
+executes zero scientific tools.
+
+The recovery identities are `validate-scatac-feature-space-v1` and
+`build-replicate-pseudobulk-v1`, both with no automatically retryable
+scientific codes. Durable resume independently revalidates a completed feature
+manifest/raw source before restoring its reference; changed or missing evidence
+blocks downstream pseudobulk. Cancellation observed after feature validation
+prevents pseudobulk invocation, and semantic recovery-policy drift is rejected
+before new scientific execution.
+
+AnalysisEvidence and deterministic reports remain schema v1 with explicit
+additive support for both tools. Existing envelope/grammar and M1–M7 behavior
+remain unchanged. M8.1 has no supported visualization kind, so the application
+correctly produces a verified figureless report. The complete M7.4 application
+path, terminal resume, and post-run artifact reuse are supported.
+
+Accepted validation:
+
+- focused M8.1 and adjacent integration/regression selection: 239 passed
+- canonical orchestration/provider/lifecycle regression: 405 passed
+- complete lightweight regression: 832 passed, 6 skipped
+- realistic backed-sparse acceptance: 1,024 cells by 50,000 features, backed
+  CSC raw input, 64 pseudobulks, exact production plus independent verification,
+  with CSR/CSC densification methods guarded against invocation
+
+The realistic acceptance required no network, provider API key, GPU, model
+checkpoint, or biological dataset. No local Fang2021/raw scATAC source was
+available, so guarded real-data M8.1 acceptance was not performed. Existing
+nonblocking Louvain/`pkg_resources`, Scanpy Louvain deprecation, TBB/Numba, and
+duplicate-test-ID warnings remain unchanged and do not affect M8.1.
+
+M8.1 does not implement edgeR, TMM, differential accessibility, DA feature
+filtering, genomic annotation, motif analysis, regulatory interpretation, or
+any later Milestone 8 capability. Future coordinate-dependent interpretation
+must fail closed when coordinates are absent, and binary-accessibility
+pseudobulk must not silently enter a sequencing-count DA model.
+
 ## Development environment
 
 - Linux server

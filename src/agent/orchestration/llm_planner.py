@@ -67,6 +67,15 @@ _TOOL_DESCRIPTIONS = {
         "ground-truth labels and persist fixed accuracy, macro-F1, confusion, "
         "per-class, and descriptive confidence diagnostics."
     ),
+    "validate_scATAC_feature_space": (
+        "Validate an immutable raw sparse scATAC regulatory feature space, its "
+        "declared count semantics, species/assembly, ordered identities, and "
+        "optional explicit coordinates, then persist a provenance manifest."
+    ),
+    "build_replicate_pseudobulk": (
+        "Build exact sparse SUM pseudobulks for fixed group, biological replicate, "
+        "and condition metadata from a verified regulatory feature-space manifest."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -164,6 +173,29 @@ _ARGUMENT_DESCRIPTIONS = {
     ("evaluate_cell_annotation", "overwrite"): (
         "Whether an existing annotation-evaluation report may be replaced."
     ),
+    ("validate_scATAC_feature_space", "input_path"): "Immutable raw scATAC h5ad path.",
+    ("validate_scATAC_feature_space", "output_dir"): "Directory for the feature-space manifest.",
+    ("validate_scATAC_feature_space", "matrix_source"): "Exact matrix source: X or layer.",
+    ("validate_scATAC_feature_space", "matrix_semantics"): "Declared regulatory matrix semantics.",
+    ("validate_scATAC_feature_space", "species"): "Human or mouse source species.",
+    ("validate_scATAC_feature_space", "genome_assembly"): "Compatible hg38 or mm10 genome assembly.",
+    ("validate_scATAC_feature_space", "coordinate_source"): "Explicit var columns or no coordinates.",
+    ("validate_scATAC_feature_space", "layer_key"): "Exact layer key when matrix_source is layer.",
+    ("validate_scATAC_feature_space", "feature_chrom_key"): "Explicit chromosome var column.",
+    ("validate_scATAC_feature_space", "feature_start_key"): "Explicit start-coordinate var column.",
+    ("validate_scATAC_feature_space", "feature_end_key"): "Explicit end-coordinate var column.",
+    ("validate_scATAC_feature_space", "coordinate_system"): "Explicit coordinate convention.",
+    ("validate_scATAC_feature_space", "semantics_metadata_key"): "Optional corroborating raw uns key.",
+    ("validate_scATAC_feature_space", "overwrite"): "Whether an existing manifest may be replaced.",
+    ("build_replicate_pseudobulk", "feature_space_path"): "Verified regulatory feature-space manifest.",
+    ("build_replicate_pseudobulk", "replicate_key"): "Raw obs biological replicate/subject column.",
+    ("build_replicate_pseudobulk", "group_key"): "Raw group column or fixed predicted_label key.",
+    ("build_replicate_pseudobulk", "condition_key"): "Raw obs comparison-condition column.",
+    ("build_replicate_pseudobulk", "output_dir"): "Directory for the pseudobulk H5AD.",
+    ("build_replicate_pseudobulk", "group_source"): "raw_obs or verified_annotation.",
+    ("build_replicate_pseudobulk", "group_annotation_path"): "Valid Milestone 6.3 annotation path.",
+    ("build_replicate_pseudobulk", "covariate_keys"): "Ordered raw obs covariate columns.",
+    ("build_replicate_pseudobulk", "overwrite"): "Whether an existing pseudobulk may be replaced.",
 }
 
 

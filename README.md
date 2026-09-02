@@ -6,8 +6,8 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5, Milestones 6.1–6.4, and Milestones 7.1–7.4 are complete.
-Milestone 7 / Phase II is complete.
+Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestone 8.1
+are complete. Milestone 7 / Phase II is complete, and Phase III has begun.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -31,6 +31,8 @@ Milestone 7 / Phase II is complete.
   evidence and optional verified visualizations
 - Milestone 7.4: end-to-end research application with a Python service API,
   managed workspaces, verified post-run composition, and a one-shot CLI
+- Milestone 8.1: explicit raw regulatory feature-space provenance and exact
+  sparse replicate-aware pseudobulk SUM aggregation
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -150,6 +152,78 @@ medians. Ground truth remains evaluation-only and cannot tune or rerun label
 transfer. Real held-out Fang2021 evaluation reproduced the frozen Milestone 6.3
 metrics and confidence summaries.
 
+## Replicate-aware regulatory foundation
+
+Milestone 8.1 returns to the immutable raw scATAC H5AD for regulatory count
+analysis. It adds two registered scientific tools:
+
+```python
+validate_scATAC_feature_space(
+    input_path,
+    output_dir,
+    *,
+    matrix_source,
+    matrix_semantics,
+    species,
+    genome_assembly,
+    coordinate_source,
+    layer_key=None,
+    feature_chrom_key=None,
+    feature_start_key=None,
+    feature_end_key=None,
+    coordinate_system=None,
+    semantics_metadata_key=None,
+    overwrite=False,
+)
+
+build_replicate_pseudobulk(
+    feature_space_path,
+    replicate_key,
+    group_key,
+    condition_key,
+    output_dir,
+    *,
+    group_source,
+    group_annotation_path=None,
+    covariate_keys=(),
+    overwrite=False,
+)
+```
+
+The feature-space tool accepts only sparse `X` or an explicitly named sparse
+layer, preserves the declared fragment-count, insertion-count, or binary
+accessibility semantics, and rejects normalized/continuous input. Species and
+assembly are restricted to human/hg38 and mouse/mm10. Coordinates are optional
+and explicitly provenance-recorded; they are never inferred.
+
+The pseudobulk unit is exactly `(group, replicate, condition)`, ordered by first
+occurrence in source cell order. Replicate identity may span conditions.
+Replicate, condition, and covariates come from raw `.obs`; group comes either
+from raw `.obs` or the fixed `predicted_label` of an accepted Milestone 6.3
+annotation with exact cell identity/order and no unassigned cells. Aggregation
+is exact sparse SUM with no normalization, feature filtering, cell filtering,
+intersection, reordering, remapping, or coordinate inference.
+
+Feature validation writes a compact schema-v1 canonical JSON manifest.
+Pseudobulk writes one sparse CSR/int64 schema-v1 H5AD with original ordered
+features, pseudobulk metadata in `.obs`, optional exact coordinates in `.var`,
+and versioned provenance in `uns["agent_milestone8_pseudobulk"]`. Deterministic
+pseudobulk row IDs are domain-separated hashes scoped to the authoritative
+feature-space identity and the complete unit tuple.
+
+Independent verification never invokes either scientific callable. It
+reconstructs source and feature identity, metadata, unit order and IDs,
+covariates, coordinates, library sizes, and every integer SUM with a Python
+row-map algorithm distinct from production sparse matrix multiplication.
+Counts are compared exactly and complete matrices are never densified.
+
+Planning schema v2 and RunStore schema v3 remain unchanged. The production
+registry now contains exactly ten tools. Both M8.1 recovery identities are
+versioned and have no automatically retryable scientific codes. Evidence and
+deterministic reports remain schema v1, and M8.1 visualization is intentionally
+figureless. edgeR, TMM, differential accessibility, genomic annotation, and
+motif analysis are not part of Milestone 8.1.
+
 ## Verified analysis evidence
 
 Milestone 7.1 adds deterministic post-run evidence generation:
@@ -159,7 +233,7 @@ successful `AgentRunResult`
 → compact schema-v1 `AnalysisEvidence` projection
 → atomic `analysis_evidence.json`
 
-The projection uses explicit whitelists for the eight existing scientific tools
+The projection uses explicit whitelists for the ten existing scientific tools
 and has an authoritative evidence-file SHA-256. It records whether source
 artifacts have authoritative cryptographic digests or are instead protected by
 existing structural, provenance, and content verification. Embeddings, cell
@@ -168,7 +242,7 @@ scATAC matrices are never copied into evidence.
 
 `AnalysisEvidence` is downstream of orchestration: it is neither a
 `ToolRegistry` scientific tool nor part of `AgentPlan`. The production registry
-remains exactly eight tools, planning schema v2 and the RunStore schema are
+contains exactly ten tools, while planning schema v2 and the RunStore schema are
 unchanged, and evidence build and verification never invoke registered
 scientific callables. Terminal-resume results still undergo fresh artifact
 verification before evidence is accepted. Visualization and narrative report
@@ -191,7 +265,7 @@ confusion matrix. Transferred-label UMAP, per-class F1 and confidence plots,
 SVG, narrative reporting, and interactive UI remain deferred.
 
 Visualization is neither a `ToolRegistry` scientific tool nor part of
-`AgentPlan`; the production registry remains exactly eight tools and planning
+`AgentPlan`; the production registry contains exactly ten tools and planning
 schema v2 remains unchanged. It adds no RunStore schema or recovery-policy
 change. Build and verification invoke zero registered scientific callables,
 never rerun or tune scientific analysis, never access raw scATAC `.X`, and use

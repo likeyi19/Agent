@@ -543,6 +543,23 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
             "annotation_path",
             "ground_truth_h5ad_path",
             "ground_truth_label_key",
+            "condition_key",
+            "coordinate_source",
+            "coordinate_system",
+            "covariate_keys",
+            "feature_chrom_key",
+            "feature_end_key",
+            "feature_space_path",
+            "feature_start_key",
+            "genome_assembly",
+            "group_annotation_path",
+            "group_key",
+            "group_source",
+            "layer_key",
+            "matrix_semantics",
+            "matrix_source",
+            "replicate_key",
+            "semantics_metadata_key",
         }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (

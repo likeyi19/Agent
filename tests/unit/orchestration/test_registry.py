@@ -32,6 +32,8 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "evaluate_cell_clustering",
         "transfer_cell_labels",
         "evaluate_cell_annotation",
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -246,6 +248,8 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "evaluate_cell_clustering": "evaluate-cell-clustering-v1",
         "transfer_cell_labels": "transfer-cell-labels-v1",
         "evaluate_cell_annotation": "evaluate-cell-annotation-v1",
+        "validate_scATAC_feature_space": "validate-scatac-feature-space-v1",
+        "build_replicate_pseudobulk": "build-replicate-pseudobulk-v1",
     }
 
 

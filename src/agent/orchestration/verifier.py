@@ -6,7 +6,9 @@ import math
 from pathlib import Path
 from typing import Mapping, Sequence
 
+import anndata as ad
 import numpy as np
+from scipy import sparse
 
 from agent.tools.analysis.annotation_evaluation import (
     ANNOTATION_EVALUATION_REPORT_SCHEMA_VERSION,
@@ -43,6 +45,23 @@ from agent.tools.analysis.label_transfer import (
     _prepare_sources as _prepare_label_transfer_sources,
     _read_annotation as _read_label_transfer_annotation,
     _validate_annotation_artifact,
+)
+from agent.tools.analysis.replicate_pseudobulk import (
+    FEATURE_SPACE_SCHEMA_VERSION,
+    M81ScientificError,
+    PSEUDOBULK_PROVENANCE_KEY,
+    PSEUDOBULK_SCHEMA_VERSION,
+    _artifact_provenance as _m81_artifact_provenance,
+    _canonical_covariate as _m81_canonical_covariate,
+    _canonical_integer_chunk as _m81_canonical_integer_chunk,
+    _feature_manifest as _m81_feature_manifest,
+    _file_sha256 as _m81_file_sha256,
+    _load_feature_manifest as _m81_load_feature_manifest,
+    _metadata_snapshot as _m81_metadata_snapshot,
+    _output_value_semantics as _m81_output_value_semantics,
+    _read_backed as _m81_read_backed,
+    _snapshot_from_manifest as _m81_snapshot_from_manifest,
+    _source_matrix as _m81_source_matrix,
 )
 
 from agent.schemas import (
@@ -1347,6 +1366,469 @@ def _verify_annotation_evaluation(
     )
 
 
+def _m81_json_value(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("nonfinite value")
+        return value
+    if isinstance(value, np.generic):
+        return _m81_json_value(value.item())
+    if isinstance(value, np.ndarray):
+        return [_m81_json_value(item) for item in value.tolist()]
+    if isinstance(value, Mapping):
+        return {str(key): _m81_json_value(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_m81_json_value(nested) for nested in value]
+    raise TypeError("unsupported persisted M8.1 value")
+
+
+def _expected_feature_space_result(
+    feature_path: Path, feature_sha256: str, snapshot: object
+) -> dict[str, object]:
+    return {
+        "status": "success",
+        "feature_space_path": str(feature_path),
+        "feature_space_sha256": feature_sha256,
+        "feature_space_identity_sha256": snapshot.feature_space_identity_sha256,
+        "input_path": str(snapshot.input_path),
+        "source_h5ad_sha256": snapshot.source_h5ad_sha256,
+        "matrix_source": snapshot.matrix_source,
+        "layer_key": snapshot.layer_key,
+        "matrix_semantics": snapshot.matrix_semantics,
+        "semantics_assertion_source": snapshot.semantics_assertion_source,
+        "pseudobulk_eligible": True,
+        "species": snapshot.species,
+        "genome_assembly": snapshot.genome_assembly,
+        "coordinate_source": snapshot.coordinate_source,
+        "coordinate_system": snapshot.coordinate_system,
+        "n_cells": snapshot.n_cells,
+        "n_features": snapshot.n_features,
+        "nnz": snapshot.nnz,
+        "source_dtype": snapshot.source_dtype,
+        "source_sparse_format": snapshot.source_sparse_format,
+        "cell_ids_sha256": snapshot.cell_ids_sha256,
+        "feature_ids_sha256": snapshot.feature_ids_sha256,
+        "matrix_sha256": snapshot.matrix_sha256,
+        "coordinates_sha256": snapshot.coordinates_sha256,
+        "artifact_schema_version": FEATURE_SPACE_SCHEMA_VERSION,
+        "software_versions": dict(snapshot.software_versions),
+    }
+
+
+def _verify_feature_space(
+    resolved_arguments: Mapping[str, object],
+    result: Mapping[str, object],
+    checks: _VerificationChecks,
+) -> None:
+    try:
+        path, manifest, digest = _m81_load_feature_manifest(
+            result["feature_space_path"]
+        )
+        snapshot = _m81_snapshot_from_manifest(manifest)
+        expected_path = (
+            Path(resolved_arguments["output_dir"]).expanduser().resolve(strict=False)
+            / f"{Path(resolved_arguments['input_path']).expanduser().resolve(strict=False).stem}.regulatory_feature_space.json"
+        )
+        argument_config = {
+            "input_path": str(
+                Path(resolved_arguments["input_path"])
+                .expanduser()
+                .resolve(strict=False)
+            ),
+            "matrix_source": resolved_arguments["matrix_source"],
+            "matrix_semantics": resolved_arguments["matrix_semantics"],
+            "species": resolved_arguments["species"],
+            "genome_assembly": resolved_arguments["genome_assembly"],
+            "coordinate_source": resolved_arguments["coordinate_source"],
+            "layer_key": resolved_arguments.get("layer_key"),
+            "feature_chrom_key": resolved_arguments.get("feature_chrom_key"),
+            "feature_start_key": resolved_arguments.get("feature_start_key"),
+            "feature_end_key": resolved_arguments.get("feature_end_key"),
+            "coordinate_system": resolved_arguments.get("coordinate_system"),
+            "semantics_metadata_key": resolved_arguments.get(
+                "semantics_metadata_key"
+            ),
+        }
+        actual_config = {
+            "input_path": str(snapshot.input_path),
+            "matrix_source": snapshot.matrix_source,
+            "matrix_semantics": snapshot.matrix_semantics,
+            "species": snapshot.species,
+            "genome_assembly": snapshot.genome_assembly,
+            "coordinate_source": snapshot.coordinate_source,
+            "layer_key": snapshot.layer_key,
+            "feature_chrom_key": snapshot.feature_chrom_key,
+            "feature_start_key": snapshot.feature_start_key,
+            "feature_end_key": snapshot.feature_end_key,
+            "coordinate_system": snapshot.coordinate_system,
+            "semantics_metadata_key": snapshot.semantics_metadata_key,
+        }
+        if path != expected_path:
+            raise M81ScientificError(
+                "RESULT_PATH_MISMATCH", "Unexpected feature-space output path."
+            )
+        if argument_config != actual_config:
+            raise M81ScientificError(
+                "RESULT_IDENTITY_MISMATCH", "Arguments differ from the manifest."
+            )
+        if manifest != _m81_feature_manifest(snapshot):
+            raise M81ScientificError(
+                "FEATURE_SPACE_SOURCE_MISMATCH", "Manifest differs from source."
+            )
+        if dict(result) != _expected_feature_space_result(path, digest, snapshot):
+            raise M81ScientificError(
+                "RESULT_IDENTITY_MISMATCH", "Result differs from recomputation."
+            )
+    except Exception as exc:
+        checks.add(
+            "feature_space_independent_revalidation",
+            False,
+            "Feature-space manifest and source passed independent revalidation.",
+            "Feature-space manifest or source failed independent revalidation.",
+            getattr(exc, "code", "FEATURE_SPACE_ARTIFACT_INVALID"),
+        )
+        return
+    checks.add(
+        "feature_space_independent_revalidation",
+        True,
+        "Feature-space manifest and source passed independent revalidation.",
+        "Feature-space manifest or source failed independent revalidation.",
+        "FEATURE_SPACE_ARTIFACT_INVALID",
+    )
+
+
+def _independent_pseudobulk_sum(source: object, metadata: object) -> sparse.csr_matrix:
+    """Aggregate via Python integer row maps, distinct from production matmul."""
+
+    rows: list[dict[int, int]] = [dict() for _ in metadata.unit_keys]
+    source_adata = _m81_read_backed(source.input_path)
+    try:
+        matrix = _m81_source_matrix(
+            source_adata, source.matrix_source, source.layer_key
+        )
+        for start in range(0, source.n_cells, 4096):
+            stop = min(start + 4096, source.n_cells)
+            chunk = _m81_canonical_integer_chunk(
+                matrix, start, stop, source.matrix_semantics
+            )
+            for local_row in range(chunk.shape[0]):
+                target = rows[metadata.cell_to_unit[start + local_row]]
+                left, right = chunk.indptr[local_row : local_row + 2]
+                for column, value in zip(
+                    chunk.indices[left:right],
+                    chunk.data[left:right],
+                    strict=True,
+                ):
+                    total = target.get(int(column), 0) + int(value)
+                    if total > np.iinfo(np.int64).max:
+                        raise M81ScientificError(
+                            "INTEGER_SUM_OVERFLOW",
+                            "Independent pseudobulk sum overflowed.",
+                        )
+                    target[int(column)] = total
+    finally:
+        manager = getattr(source_adata, "file", None)
+        if manager is not None:
+            manager.close()
+    indptr = [0]
+    indices: list[int] = []
+    data: list[int] = []
+    for row in rows:
+        for column in sorted(row):
+            value = row[column]
+            if value:
+                indices.append(column)
+                data.append(value)
+        indptr.append(len(indices))
+    return sparse.csr_matrix(
+        (
+            np.asarray(data, dtype=np.int64),
+            np.asarray(indices, dtype=np.int64),
+            np.asarray(indptr, dtype=np.int64),
+        ),
+        shape=(len(rows), source.n_features),
+    )
+
+
+def _verify_pseudobulk(
+    step: PlanStep,
+    resolved_arguments: Mapping[str, object],
+    result: Mapping[str, object],
+    dependency_results: Mapping[str, Mapping[str, object]],
+    checks: _VerificationChecks,
+) -> None:
+    artifact: ad.AnnData | None = None
+    try:
+        feature_path, manifest, feature_sha256 = _m81_load_feature_manifest(
+            resolved_arguments["feature_space_path"]
+        )
+        source = _m81_snapshot_from_manifest(manifest)
+        if manifest != _m81_feature_manifest(source):
+            raise M81ScientificError(
+                "FEATURE_SPACE_SOURCE_MISMATCH", "Feature source changed."
+            )
+        raw_covariates = resolved_arguments.get("covariate_keys", ())
+        if not isinstance(raw_covariates, (list, tuple)):
+            raise M81ScientificError(
+                "PSEUDOBULK_METADATA_MISMATCH", "Covariate contract invalid."
+            )
+        covariate_keys = tuple(str(value) for value in raw_covariates)
+        metadata = _m81_metadata_snapshot(
+            source,
+            replicate_key=str(resolved_arguments["replicate_key"]),
+            group_key=str(resolved_arguments["group_key"]),
+            condition_key=str(resolved_arguments["condition_key"]),
+            group_source=str(resolved_arguments["group_source"]),
+            group_annotation_path=resolved_arguments.get("group_annotation_path"),
+            covariate_keys=covariate_keys,
+        )
+        expected = _independent_pseudobulk_sum(source, metadata)
+        if _m81_file_sha256(source.input_path) != source.source_h5ad_sha256:
+            raise M81ScientificError(
+                "FEATURE_SPACE_SOURCE_MISMATCH",
+                "Feature source changed during independent verification.",
+            )
+        library_sizes_list: list[int] = []
+        for row in range(expected.shape[0]):
+            left, right = expected.indptr[row : row + 2]
+            total = sum(int(value) for value in expected.data[left:right])
+            if total > np.iinfo(np.int64).max:
+                raise M81ScientificError(
+                    "INTEGER_SUM_OVERFLOW",
+                    "Independent pseudobulk library size overflowed.",
+                )
+            library_sizes_list.append(total)
+        library_sizes = tuple(library_sizes_list)
+        expected_provenance = _m81_artifact_provenance(
+            source,
+            feature_path,
+            feature_sha256,
+            metadata,
+            expected,
+            group_source=str(resolved_arguments["group_source"]),
+            group_key=str(resolved_arguments["group_key"]),
+            replicate_key=str(resolved_arguments["replicate_key"]),
+            condition_key=str(resolved_arguments["condition_key"]),
+            covariate_keys=covariate_keys,
+            library_sizes=library_sizes,
+        )
+        expected_path = (
+            Path(resolved_arguments["output_dir"])
+            .expanduser()
+            .resolve(strict=False)
+            / f"{source.input_path.stem}.replicate_pseudobulk.h5ad"
+        )
+        artifact_path = Path(str(result["pseudobulk_path"])).expanduser().resolve()
+        if artifact_path != expected_path or not artifact_path.is_file():
+            raise M81ScientificError(
+                "RESULT_PATH_MISMATCH", "Pseudobulk path is invalid."
+            )
+        digest_before = _m81_file_sha256(artifact_path)
+        if digest_before != result["pseudobulk_sha256"]:
+            raise M81ScientificError(
+                "ARTIFACT_SHA256_MISMATCH", "Pseudobulk digest differs."
+            )
+        artifact = ad.read_h5ad(artifact_path, backed="r")
+        if (
+            artifact.n_obs != len(metadata.unit_keys)
+            or artifact.n_vars != source.n_features
+            or artifact.raw is not None
+            or any(
+                len(container)
+                for container in (
+                    artifact.layers,
+                    artifact.obsm,
+                    artifact.obsp,
+                    artifact.varm,
+                    artifact.varp,
+                )
+            )
+            or set(artifact.uns) != {PSEUDOBULK_PROVENANCE_KEY}
+        ):
+            raise M81ScientificError(
+                "PSEUDOBULK_ARTIFACT_INVALID", "Pseudobulk structure is invalid."
+            )
+        expected_obs = (
+            "group",
+            "replicate",
+            "condition",
+            "n_cells",
+            "first_cell_index",
+            "library_size",
+            *(f"covariate_{index:03d}" for index in range(len(covariate_keys))),
+        )
+        if (
+            tuple(artifact.obs.columns) != expected_obs
+            or tuple(str(value) for value in artifact.obs_names) != metadata.unit_ids
+        ):
+            raise M81ScientificError(
+                "PSEUDOBULK_METADATA_MISMATCH", "Pseudobulk rows are invalid."
+            )
+        if tuple(str(value) for value in artifact.var_names) != source.feature_ids:
+            raise M81ScientificError(
+                "PSEUDOBULK_FEATURE_MISMATCH", "Feature identity/order changed."
+            )
+        expected_var = (
+            ("chrom", "start", "end") if source.chromosomes is not None else ()
+        )
+        if tuple(artifact.var.columns) != expected_var:
+            raise M81ScientificError(
+                "PSEUDOBULK_FEATURE_MISMATCH", "Feature coordinate schema changed."
+            )
+        observed_units = tuple(
+            zip(
+                (str(value) for value in artifact.obs["group"]),
+                (str(value) for value in artifact.obs["replicate"]),
+                (str(value) for value in artifact.obs["condition"]),
+                strict=True,
+            )
+        )
+        if observed_units != metadata.unit_keys:
+            raise M81ScientificError(
+                "PSEUDOBULK_METADATA_MISMATCH", "Unit metadata changed."
+            )
+        if tuple(int(value) for value in artifact.obs["n_cells"]) != metadata.cell_counts:
+            raise M81ScientificError(
+                "PSEUDOBULK_METADATA_MISMATCH", "Cell counts changed."
+            )
+        if tuple(int(value) for value in artifact.obs["first_cell_index"]) != metadata.first_cell_indices:
+            raise M81ScientificError(
+                "PSEUDOBULK_METADATA_MISMATCH", "First-cell positions changed."
+            )
+        if tuple(int(value) for value in artifact.obs["library_size"]) != library_sizes:
+            raise M81ScientificError(
+                "PSEUDOBULK_AGGREGATION_MISMATCH", "Library sizes changed."
+            )
+        for index, key in enumerate(covariate_keys):
+            observed = tuple(
+                _m81_canonical_covariate(value, key)
+                for value in artifact.obs[f"covariate_{index:03d}"].tolist()
+            )
+            expected_values = tuple(row[index] for row in metadata.unit_covariates)
+            if observed != expected_values:
+                raise M81ScientificError(
+                    "PSEUDOBULK_METADATA_MISMATCH", "Covariates changed."
+                )
+        if source.chromosomes is not None and (
+            tuple(str(value) for value in artifact.var["chrom"])
+            != source.chromosomes
+            or tuple(int(value) for value in artifact.var["start"]) != source.starts
+            or tuple(int(value) for value in artifact.var["end"]) != source.ends
+        ):
+            raise M81ScientificError(
+                "PSEUDOBULK_FEATURE_MISMATCH", "Feature coordinates changed."
+            )
+        observed_matrix = artifact.X
+        if (
+            observed_matrix is None
+            or not isinstance(observed_matrix, ad.abc.CSRDataset)
+            or np.dtype(observed_matrix.dtype) != np.dtype(np.int64)
+        ):
+            raise M81ScientificError(
+                "PSEUDOBULK_ARTIFACT_INVALID", "X must be backed CSR int64."
+            )
+        for row in range(expected.shape[0]):
+            observed_row = _m81_canonical_integer_chunk(
+                observed_matrix,
+                row,
+                row + 1,
+                _m81_output_value_semantics(source.matrix_semantics),
+            )
+            expected_row = expected[row : row + 1]
+            if not (
+                np.array_equal(observed_row.indptr, expected_row.indptr)
+                and np.array_equal(observed_row.indices, expected_row.indices)
+                and np.array_equal(observed_row.data, expected_row.data)
+            ):
+                raise M81ScientificError(
+                    "PSEUDOBULK_AGGREGATION_MISMATCH", "Exact SUM differs."
+                )
+        if _m81_json_value(artifact.uns[PSEUDOBULK_PROVENANCE_KEY]) != _m81_json_value(
+            expected_provenance
+        ):
+            raise M81ScientificError(
+                "PSEUDOBULK_PROVENANCE_MISMATCH", "Provenance differs."
+            )
+        expected_result = {
+            "status": "success",
+            "pseudobulk_path": str(artifact_path),
+            "pseudobulk_sha256": digest_before,
+            "feature_space_path": str(feature_path),
+            "feature_space_sha256": feature_sha256,
+            "feature_space_identity_sha256": source.feature_space_identity_sha256,
+            "source_h5ad_path": str(source.input_path),
+            "source_h5ad_sha256": source.source_h5ad_sha256,
+            "matrix_semantics": source.matrix_semantics,
+            "output_value_semantics": _m81_output_value_semantics(
+                source.matrix_semantics
+            ),
+            "aggregation_method": "sum",
+            "output_dtype": "int64",
+            "group_source": resolved_arguments["group_source"],
+            "group_key": resolved_arguments["group_key"],
+            "replicate_key": resolved_arguments["replicate_key"],
+            "condition_key": resolved_arguments["condition_key"],
+            "covariate_keys": list(covariate_keys),
+            "n_cells": source.n_cells,
+            "n_features": source.n_features,
+            "n_pseudobulks": len(metadata.unit_keys),
+            "n_groups": len(set(metadata.group_values)),
+            "n_replicates": len(set(metadata.replicate_values)),
+            "n_conditions": len(set(metadata.condition_values)),
+            "minimum_cells_per_pseudobulk": min(metadata.cell_counts),
+            "maximum_cells_per_pseudobulk": max(metadata.cell_counts),
+            "matrix_nnz": int(expected.nnz),
+            "total_sum": int(sum(library_sizes)),
+            "all_cells_accounted_for": True,
+            "feature_order_preserved": True,
+            "artifact_schema_version": PSEUDOBULK_SCHEMA_VERSION,
+            "software_versions": dict(source.software_versions),
+        }
+        if dict(result) != expected_result:
+            raise M81ScientificError(
+                "RESULT_IDENTITY_MISMATCH", "Result differs from recomputation."
+            )
+        for planned in step.arguments.values():
+            if (
+                isinstance(planned, StepOutputRef)
+                and planned.output_key == "feature_space_path"
+            ):
+                dependency = dependency_results.get(planned.step_id)
+                if (
+                    dependency is None
+                    or dependency.get("feature_space_sha256") != feature_sha256
+                    or dependency.get("feature_space_identity_sha256")
+                    != source.feature_space_identity_sha256
+                ):
+                    raise M81ScientificError(
+                        "DEPENDENCY_INCONSISTENT", "Feature dependency differs."
+                    )
+        artifact.file.close()
+        artifact = None
+        if _m81_file_sha256(artifact_path) != digest_before:
+            raise M81ScientificError(
+                "ARTIFACT_SHA256_MISMATCH", "Artifact changed during verification."
+            )
+    except Exception as exc:
+        if artifact is not None:
+            artifact.file.close()
+        checks.add(
+            "pseudobulk_independent_revalidation",
+            False,
+            "Pseudobulk passed independent source and exact SUM revalidation.",
+            "Pseudobulk failed independent source, metadata, or exact SUM revalidation.",
+            getattr(exc, "code", "PSEUDOBULK_ARTIFACT_INVALID"),
+        )
+        return
+    checks.add(
+        "pseudobulk_independent_revalidation",
+        True,
+        "Pseudobulk passed independent source and exact SUM revalidation.",
+        "Pseudobulk failed independent source, metadata, or exact SUM revalidation.",
+        "PSEUDOBULK_ARTIFACT_INVALID",
+    )
+
+
 def verify_step(
     step: PlanStep,
     resolved_arguments: Mapping[str, object],
@@ -1395,6 +1877,16 @@ def verify_step(
             _verify_label_transfer(resolved_arguments, plain_result, checks)
         elif step.tool_name == "evaluate_cell_annotation":
             _verify_annotation_evaluation(
+                step,
+                resolved_arguments,
+                plain_result,
+                dependency_results,
+                checks,
+            )
+        elif step.tool_name == "validate_scATAC_feature_space":
+            _verify_feature_space(resolved_arguments, plain_result, checks)
+        elif step.tool_name == "build_replicate_pseudobulk":
+            _verify_pseudobulk(
                 step,
                 resolved_arguments,
                 plain_result,

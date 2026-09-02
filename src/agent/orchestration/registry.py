@@ -21,7 +21,10 @@ from agent.tools import (
     evaluate_cell_clustering,
     inspect_scATAC,
     transfer_cell_labels,
+    build_replicate_pseudobulk,
+    validate_scATAC_feature_space,
 )
+from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
 
 from .error_policy import classified_agent_error
 
@@ -337,6 +340,19 @@ def _classify_analysis_exception(exception: Exception) -> ErrorClassification:
     return _classify_embedding_exception(exception)
 
 
+def _classify_m81_exception(exception: Exception) -> ErrorClassification:
+    if isinstance(exception, M81ScientificError):
+        category = (
+            ErrorCategory.RESOURCE_ERROR
+            if exception.code == "INTEGER_SUM_OVERFLOW"
+            else ErrorCategory.VERIFICATION_ERROR
+            if exception.code == "SOURCE_CHANGED_DURING_READ"
+            else ErrorCategory.USER_INPUT_ERROR
+        )
+        return ErrorClassification(category, exception.code)
+    return _classify_analysis_exception(exception)
+
+
 def _is_cuda_out_of_memory(exception: Exception) -> bool:
     exception_type = type(exception)
     return (
@@ -641,6 +657,85 @@ def _validate_annotation_evaluation_result(result: Mapping[str, object]) -> None
         raise ToolResultContractError(
             "evaluate_cell_annotation must not return per-cell diagnostics."
         )
+
+
+def _valid_sha256(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_feature_space_result(result: Mapping[str, object]) -> None:
+    if (
+        result["status"] != "success"
+        or result["artifact_schema_version"] != 1
+        or result["pseudobulk_eligible"] is not True
+        or result["matrix_semantics"]
+        not in {"fragment_counts", "insertion_counts", "binary_accessibility"}
+        or result["matrix_source"] not in {"X", "layer"}
+        or result["coordinate_source"] not in {"none", "var_columns"}
+        or result["semantics_assertion_source"]
+        not in {"structured_request", "structured_request_and_raw_uns"}
+    ):
+        raise ToolResultContractError("Feature-space result has invalid scientific identity.")
+    if min(result["n_cells"], result["n_features"]) <= 0 or result["nnz"] < 0:
+        raise ToolResultContractError("Feature-space result has invalid dimensions.")
+    for name in (
+        "feature_space_sha256",
+        "feature_space_identity_sha256",
+        "source_h5ad_sha256",
+        "cell_ids_sha256",
+        "feature_ids_sha256",
+        "matrix_sha256",
+    ):
+        if not _valid_sha256(result[name]):
+            raise ToolResultContractError(f"Feature-space field {name!r} is not SHA-256.")
+    coordinate_digest = result["coordinates_sha256"]
+    if (result["coordinate_source"] == "none") != (coordinate_digest is None):
+        raise ToolResultContractError("Feature-space coordinate digest is inconsistent.")
+    if coordinate_digest is not None and not _valid_sha256(coordinate_digest):
+        raise ToolResultContractError("Feature-space coordinate digest is invalid.")
+    forbidden = {"matrix", "cell_ids", "feature_ids", "coordinates"}
+    if forbidden.intersection(result):
+        raise ToolResultContractError("Feature-space result contains a large payload.")
+
+
+def _validate_pseudobulk_result(result: Mapping[str, object]) -> None:
+    if (
+        result["status"] != "success"
+        or result["artifact_schema_version"] != 1
+        or result["aggregation_method"] != "sum"
+        or result["output_dtype"] != "int64"
+        or result["group_source"] not in {"raw_obs", "verified_annotation"}
+        or result["all_cells_accounted_for"] is not True
+        or result["feature_order_preserved"] is not True
+    ):
+        raise ToolResultContractError("Pseudobulk result has invalid scientific identity.")
+    positive = (
+        "n_cells", "n_features", "n_pseudobulks", "n_groups", "n_replicates",
+        "n_conditions", "minimum_cells_per_pseudobulk", "maximum_cells_per_pseudobulk",
+    )
+    if any(result[name] <= 0 for name in positive) or result["matrix_nnz"] < 0 or result["total_sum"] < 0:
+        raise ToolResultContractError("Pseudobulk result has invalid counts.")
+    if result["minimum_cells_per_pseudobulk"] > result["maximum_cells_per_pseudobulk"]:
+        raise ToolResultContractError("Pseudobulk cell-count range is invalid.")
+    if not isinstance(result["covariate_keys"], list) or not all(
+        isinstance(value, str) and value for value in result["covariate_keys"]
+    ):
+        raise ToolResultContractError("Pseudobulk covariate keys are invalid.")
+    for name in (
+        "pseudobulk_sha256", "feature_space_sha256",
+        "feature_space_identity_sha256", "source_h5ad_sha256",
+    ):
+        if not _valid_sha256(result[name]):
+            raise ToolResultContractError(f"Pseudobulk field {name!r} is not SHA-256.")
+    forbidden = {"matrix", "cell_ids", "feature_ids", "unit_assignments", "metadata_vectors"}
+    if forbidden.intersection(result):
+        raise ToolResultContractError("Pseudobulk result contains a large payload.")
 
 
 def _assert_signature_matches(spec: ToolSpec) -> None:
@@ -996,6 +1091,103 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="evaluate-cell-annotation-v1",
     )
+    feature_space_spec = ToolSpec(
+        name="validate_scATAC_feature_space",
+        function=validate_scATAC_feature_space,
+        required_arguments={
+            "input_path": path_argument,
+            "output_dir": path_argument,
+            "matrix_source": ArgumentSpec((str,), choices=("X", "layer")),
+            "matrix_semantics": ArgumentSpec(
+                (str,),
+                choices=(
+                    "fragment_counts",
+                    "insertion_counts",
+                    "binary_accessibility",
+                    "normalized_continuous",
+                ),
+            ),
+            "species": ArgumentSpec((str,), choices=("human", "mouse")),
+            "genome_assembly": ArgumentSpec((str,), choices=("hg38", "mm10")),
+            "coordinate_source": ArgumentSpec((str,), choices=("none", "var_columns")),
+        },
+        optional_arguments={
+            "layer_key": ArgumentSpec((str, type(None))),
+            "feature_chrom_key": ArgumentSpec((str, type(None))),
+            "feature_start_key": ArgumentSpec((str, type(None))),
+            "feature_end_key": ArgumentSpec((str, type(None))),
+            "coordinate_system": ArgumentSpec(
+                (str, type(None)),
+                choices=("zero_based_half_open", "one_based_closed", None),
+            ),
+            "semantics_metadata_key": ArgumentSpec((str, type(None))),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="ScATACFeatureSpaceToolResult",
+            required_fields={
+                "status": (str,), "feature_space_path": (str,),
+                "feature_space_sha256": (str,), "feature_space_identity_sha256": (str,),
+                "input_path": (str,), "source_h5ad_sha256": (str,),
+                "matrix_source": (str,), "layer_key": (str, type(None)),
+                "matrix_semantics": (str,), "semantics_assertion_source": (str,),
+                "pseudobulk_eligible": (bool,), "species": (str,),
+                "genome_assembly": (str,), "coordinate_source": (str,),
+                "coordinate_system": (str, type(None)), "n_cells": (int,),
+                "n_features": (int,), "nnz": (int,), "source_dtype": (str,),
+                "source_sparse_format": (str,), "cell_ids_sha256": (str,),
+                "feature_ids_sha256": (str,), "matrix_sha256": (str,),
+                "coordinates_sha256": (str, type(None)),
+                "artifact_schema_version": (int,), "software_versions": (dict,),
+            },
+            validator=_validate_feature_space_result,
+        ),
+        exception_classifier=_classify_m81_exception,
+        recovery_policy_version="validate-scatac-feature-space-v1",
+    )
+    pseudobulk_spec = ToolSpec(
+        name="build_replicate_pseudobulk",
+        function=build_replicate_pseudobulk,
+        required_arguments={
+            "feature_space_path": path_argument,
+            "replicate_key": ArgumentSpec((str,)),
+            "group_key": ArgumentSpec((str,)),
+            "condition_key": ArgumentSpec((str,)),
+            "output_dir": path_argument,
+            "group_source": ArgumentSpec(
+                (str,), choices=("raw_obs", "verified_annotation")
+            ),
+        },
+        optional_arguments={
+            "group_annotation_path": ArgumentSpec((str, Path, type(None))),
+            "covariate_keys": ArgumentSpec((list, tuple)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="ReplicatePseudobulkToolResult",
+            required_fields={
+                "status": (str,), "pseudobulk_path": (str,),
+                "pseudobulk_sha256": (str,), "feature_space_path": (str,),
+                "feature_space_sha256": (str,), "feature_space_identity_sha256": (str,),
+                "source_h5ad_path": (str,), "source_h5ad_sha256": (str,),
+                "matrix_semantics": (str,), "output_value_semantics": (str,),
+                "aggregation_method": (str,), "output_dtype": (str,),
+                "group_source": (str,), "group_key": (str,),
+                "replicate_key": (str,), "condition_key": (str,),
+                "covariate_keys": (list,), "n_cells": (int,),
+                "n_features": (int,), "n_pseudobulks": (int,),
+                "n_groups": (int,), "n_replicates": (int,),
+                "n_conditions": (int,), "minimum_cells_per_pseudobulk": (int,),
+                "maximum_cells_per_pseudobulk": (int,), "matrix_nnz": (int,),
+                "total_sum": (int,), "all_cells_accounted_for": (bool,),
+                "feature_order_preserved": (bool,), "artifact_schema_version": (int,),
+                "software_versions": (dict,),
+            },
+            validator=_validate_pseudobulk_result,
+        ),
+        exception_classifier=_classify_m81_exception,
+        recovery_policy_version="build-replicate-pseudobulk-v1",
+    )
     specs = (
         inspect_spec,
         embedding_spec,
@@ -1005,6 +1197,8 @@ def build_default_tool_registry() -> ToolRegistry:
         evaluation_spec,
         label_transfer_spec,
         annotation_evaluation_spec,
+        feature_space_spec,
+        pseudobulk_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

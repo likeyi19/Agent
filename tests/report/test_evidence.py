@@ -457,9 +457,16 @@ def test_projection_covers_all_eight_tools_and_artifact_integrity_modes(
 
     assert result["n_steps"] == 8
     assert len(payload["steps"]) == 8
-    assert {step["tool_name"] for step in payload["steps"]} == set(
-        build_default_tool_registry().names()
-    )
+    assert {step["tool_name"] for step in payload["steps"]} == {
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "build_cell_neighbors",
+        "cluster_cells",
+        "compute_cell_umap",
+        "evaluate_cell_clustering",
+        "transfer_cell_labels",
+        "evaluate_cell_annotation",
+    }
     artifacts = {value["artifact_kind"]: value for value in payload["artifacts"]}
     assert len(artifacts) == 8
     assert artifacts["cell_label_transfer_h5ad"]["integrity"][
@@ -972,7 +979,7 @@ def test_evaluation_report_tampering_fails_through_existing_verifier(
     assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
 
 
-def test_production_registry_membership_remains_exactly_eight() -> None:
+def test_production_registry_membership_is_exactly_ten_after_milestone8_1() -> None:
     assert build_default_tool_registry().names() == (
         "inspect_scATAC",
         "epizoo_embed_cells",
@@ -982,4 +989,6 @@ def test_production_registry_membership_remains_exactly_eight() -> None:
         "evaluate_cell_clustering",
         "transfer_cell_labels",
         "evaluate_cell_annotation",
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
     )

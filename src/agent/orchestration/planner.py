@@ -61,6 +61,9 @@ _ANNOTATION_EVALUATION_INTENT = re.compile(
     r"|\b(?:annotat(?:e|ion)|cell\s+labels?|transferred\s+labels?|label\s+transfer)\b"
     r".*\b(?:evaluate|evaluation|benchmark|metrics?)\b"
 )
+_PSEUDOBULK_INTENT = re.compile(
+    r"\b(?:pseudo[-\s]?bulk|replicate[-\s]?aware\s+(?:regulatory|accessibility))\b"
+)
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
 _DOWNSTREAM_OPTIONAL_INPUTS = (
@@ -274,6 +277,111 @@ def _strict_label_key(request: AgentRequest, name: str) -> str:
     return value
 
 
+def _pseudobulk_plan_inputs(
+    request: AgentRequest,
+) -> tuple[dict[str, object], dict[str, object]]:
+    required = (
+        "input_path",
+        "output_dir",
+        "matrix_source",
+        "matrix_semantics",
+        "species",
+        "genome_assembly",
+        "coordinate_source",
+        "replicate_key",
+        "group_key",
+        "condition_key",
+        "group_source",
+    )
+    _require_inputs(request, required)
+    feature_arguments: dict[str, object] = {
+        "input_path": _path_input(request, "input_path"),
+        "output_dir": _path_input(request, "output_dir"),
+    }
+    pseudobulk_arguments: dict[str, object] = {
+        "feature_space_path": StepOutputRef(
+            "validate_feature_space", "feature_space_path"
+        ),
+        "output_dir": _path_input(request, "output_dir"),
+    }
+    strict_names = (
+        "matrix_source",
+        "matrix_semantics",
+        "species",
+        "genome_assembly",
+        "coordinate_source",
+        "replicate_key",
+        "group_key",
+        "condition_key",
+        "group_source",
+    )
+    for name in strict_names:
+        value = request.inputs[name]
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                f"Structured input {name!r} must be a strict nonempty string.",
+            )
+        if name in {
+            "matrix_source",
+            "matrix_semantics",
+            "species",
+            "genome_assembly",
+            "coordinate_source",
+        }:
+            feature_arguments[name] = value
+        else:
+            pseudobulk_arguments[name] = value
+    optional_feature_names = (
+        "layer_key",
+        "feature_chrom_key",
+        "feature_start_key",
+        "feature_end_key",
+        "coordinate_system",
+        "semantics_metadata_key",
+    )
+    for name in optional_feature_names:
+        if name not in request.inputs:
+            continue
+        value = request.inputs[name]
+        if value is not None and (
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+        ):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                f"Structured input {name!r} must be null or a strict nonempty string.",
+            )
+        feature_arguments[name] = value
+    if "group_annotation_path" in request.inputs:
+        pseudobulk_arguments["group_annotation_path"] = _path_input(
+            request, "group_annotation_path"
+        )
+    if "covariate_keys" in request.inputs:
+        covariates = request.inputs["covariate_keys"]
+        if not isinstance(covariates, tuple) or not all(
+            isinstance(value, str)
+            and value.strip()
+            and value == value.strip()
+            for value in covariates
+        ):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                "Structured input 'covariate_keys' must be an array of strict strings.",
+            )
+        pseudobulk_arguments["covariate_keys"] = covariates
+    if "overwrite" in request.inputs:
+        overwrite = request.inputs["overwrite"]
+        if not isinstance(overwrite, bool):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT", "Structured input 'overwrite' must be boolean."
+            )
+        feature_arguments["overwrite"] = overwrite
+        pseudobulk_arguments["overwrite"] = overwrite
+    return feature_arguments, pseudobulk_arguments
+
+
 class DeterministicPlanner:
     """Bootstrap planner for explicit inspection and EpiZoo workflows."""
 
@@ -294,8 +402,29 @@ class DeterministicPlanner:
         annotation_evaluation_intent = (
             _ANNOTATION_EVALUATION_INTENT.search(prompt) is not None
         )
+        pseudobulk_intent = _PSEUDOBULK_INTENT.search(prompt) is not None
 
-        if annotation_evaluation_intent:
+        if pseudobulk_intent:
+            feature_arguments, pseudobulk_arguments = _pseudobulk_plan_inputs(
+                request
+            )
+            steps = (
+                PlanStep(
+                    "validate_feature_space",
+                    "validate_scATAC_feature_space",
+                    feature_arguments,
+                    description="Validate exact raw regulatory feature-space provenance.",
+                ),
+                PlanStep(
+                    "build_pseudobulk",
+                    "build_replicate_pseudobulk",
+                    pseudobulk_arguments,
+                    ("validate_feature_space",),
+                    "Aggregate exact sparse replicate-aware pseudobulk sums.",
+                ),
+            )
+            workflow = "replicate-aware-pseudobulk"
+        elif annotation_evaluation_intent:
             has_annotation = "annotation_path" in request.inputs
             transfer_input_names = {"reference_input_path", "query_input_path"}
             has_transfer_inputs = bool(transfer_input_names.intersection(request.inputs))

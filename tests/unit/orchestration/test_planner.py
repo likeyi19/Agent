@@ -38,6 +38,43 @@ def test_deterministic_planner_satisfies_protocol() -> None:
     assert isinstance(DeterministicPlanner(), Planner)
 
 
+def test_pseudobulk_request_produces_exact_two_step_plan(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Build replicate-aware pseudobulk accessibility",
+            {
+                "input_path": "/data/raw.h5ad",
+                "output_dir": "/output",
+                "matrix_source": "layer",
+                "layer_key": "counts",
+                "matrix_semantics": "fragment_counts",
+                "semantics_metadata_key": "matrix_semantics",
+                "species": "human",
+                "genome_assembly": "hg38",
+                "coordinate_source": "none",
+                "replicate_key": "donor",
+                "group_key": "cell_type",
+                "condition_key": "condition",
+                "group_source": "raw_obs",
+                "covariate_keys": ["sex", "age"],
+            },
+        ),
+        registry,
+    )
+
+    assert plan.plan_id == "request-1:replicate-aware-pseudobulk"
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
+    )
+    assert plan.steps[1].depends_on == ("validate_feature_space",)
+    assert plan.steps[1].arguments["feature_space_path"] == StepOutputRef(
+        "validate_feature_space", "feature_space_path"
+    )
+    assert plan.steps[0].arguments["layer_key"] == "counts"
+    assert plan.steps[1].arguments["covariate_keys"] == ("sex", "age")
+
+
 def test_inspection_request_produces_exact_one_step_plan(registry) -> None:
     plan = DeterministicPlanner().plan(
         _request("Inspect this scATAC-seq dataset", {"input_path": "/data/in.h5ad"}),

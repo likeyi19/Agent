@@ -656,6 +656,48 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
         "macro_average",
         "zero_division",
     ),
+    "validate_scATAC_feature_space": (
+        "input_path",
+        "n_cells",
+        "n_features",
+        "matrix_source",
+        "layer_key",
+        "matrix_semantics",
+        "semantics_assertion_source",
+        "pseudobulk_eligible",
+        "species",
+        "genome_assembly",
+        "coordinate_source",
+        "coordinate_system",
+        "nnz",
+        "source_dtype",
+        "source_sparse_format",
+        "feature_space_identity_sha256",
+    ),
+    "build_replicate_pseudobulk": (
+        "n_cells",
+        "n_features",
+        "n_pseudobulks",
+        "n_groups",
+        "n_replicates",
+        "n_conditions",
+        "minimum_cells_per_pseudobulk",
+        "maximum_cells_per_pseudobulk",
+        "matrix_nnz",
+        "total_sum",
+        "matrix_semantics",
+        "output_value_semantics",
+        "aggregation_method",
+        "output_dtype",
+        "group_source",
+        "group_key",
+        "replicate_key",
+        "condition_key",
+        "covariate_keys",
+        "all_cells_accounted_for",
+        "feature_order_preserved",
+        "pseudobulk_sha256",
+    ),
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
@@ -667,6 +709,8 @@ _TOOL_TITLES: Mapping[str, str] = {
     "evaluate_cell_clustering": "Clustering evaluation",
     "transfer_cell_labels": "Cell-label transfer",
     "evaluate_cell_annotation": "Annotation evaluation",
+    "validate_scATAC_feature_space": "Regulatory feature space",
+    "build_replicate_pseudobulk": "Replicate-aware pseudobulk",
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
@@ -735,6 +779,36 @@ _FIELD_LABELS: Mapping[str, str] = {
     "median_incorrect_assigned_confidence": "Median incorrect-assigned confidence",
     "macro_average": "Macro averaging",
     "zero_division": "Zero-division policy",
+    "matrix_source": "Regulatory matrix source",
+    "layer_key": "Regulatory matrix layer",
+    "matrix_semantics": "Regulatory matrix semantics",
+    "semantics_assertion_source": "Matrix-semantics assertion source",
+    "pseudobulk_eligible": "Pseudobulk eligible",
+    "genome_assembly": "Genome assembly",
+    "coordinate_source": "Coordinate source",
+    "coordinate_system": "Coordinate system",
+    "source_dtype": "Source matrix dtype",
+    "source_sparse_format": "Source sparse format",
+    "feature_space_identity_sha256": "Feature-space identity SHA-256",
+    "n_pseudobulks": "Pseudobulk units",
+    "n_groups": "Biological groups",
+    "n_replicates": "Biological replicates",
+    "n_conditions": "Conditions",
+    "minimum_cells_per_pseudobulk": "Minimum cells per pseudobulk",
+    "maximum_cells_per_pseudobulk": "Maximum cells per pseudobulk",
+    "matrix_nnz": "Pseudobulk nonzero entries",
+    "total_sum": "Total pseudobulk sum",
+    "output_value_semantics": "Pseudobulk value semantics",
+    "aggregation_method": "Aggregation method",
+    "output_dtype": "Output matrix dtype",
+    "group_source": "Group source",
+    "group_key": "Group metadata key",
+    "replicate_key": "Replicate metadata key",
+    "condition_key": "Condition metadata key",
+    "covariate_keys": "Covariate metadata keys",
+    "all_cells_accounted_for": "All cells accounted for",
+    "feature_order_preserved": "Feature order preserved",
+    "pseudobulk_sha256": "Pseudobulk SHA-256",
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
@@ -764,6 +838,16 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
         "Annotation Evaluation",
         frozenset({"evaluate_cell_annotation"}),
     ),
+    (
+        "regulatory_feature_space",
+        "Regulatory Feature Space",
+        frozenset({"validate_scATAC_feature_space"}),
+    ),
+    (
+        "replicate_pseudobulk",
+        "Replicate-aware Pseudobulk",
+        frozenset({"build_replicate_pseudobulk"}),
+    ),
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
@@ -786,6 +870,27 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
         "min_confidence",
     ),
     "evaluate_cell_annotation": ("metric_backend", "macro_average", "zero_division"),
+    "validate_scATAC_feature_space": (
+        "matrix_source",
+        "layer_key",
+        "matrix_semantics",
+        "semantics_assertion_source",
+        "species",
+        "genome_assembly",
+        "coordinate_source",
+        "coordinate_system",
+        "source_sparse_format",
+    ),
+    "build_replicate_pseudobulk": (
+        "aggregation_method",
+        "output_dtype",
+        "output_value_semantics",
+        "group_source",
+        "group_key",
+        "replicate_key",
+        "condition_key",
+        "covariate_keys",
+    ),
 }
 
 
@@ -1052,6 +1157,8 @@ def _render_summary(
         "evaluate_cell_clustering": "Clustering evaluation available",
         "transfer_cell_labels": "Cell-label transfer performed",
         "evaluate_cell_annotation": "Annotation evaluation available",
+        "validate_scATAC_feature_space": "Regulatory feature space validated",
+        "build_replicate_pseudobulk": "Replicate-aware pseudobulk produced",
     }
     lines = ["## Analysis Summary", ""]
     for tool_name in _REPORT_FIELDS:

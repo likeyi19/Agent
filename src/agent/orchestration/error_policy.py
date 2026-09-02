@@ -53,6 +53,54 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "INVALID_ARGUMENT": ErrorPolicyEntry(
         "Scientific tool arguments are invalid.", _USER
     ),
+    "FEATURE_SPACE_SOURCE_INVALID": ErrorPolicyEntry(
+        "The regulatory feature-space source is invalid.", _USER
+    ),
+    "MATRIX_SOURCE_INVALID": ErrorPolicyEntry(
+        "The configured regulatory matrix source is invalid.", _USER
+    ),
+    "MATRIX_STORAGE_UNSUPPORTED": ErrorPolicyEntry(
+        "The regulatory matrix storage format is unsupported.", _USER
+    ),
+    "MATRIX_SEMANTICS_UNSUPPORTED": ErrorPolicyEntry(
+        "The declared regulatory matrix semantics are unsupported.", _USER
+    ),
+    "MATRIX_VALUES_INVALID": ErrorPolicyEntry(
+        "The regulatory matrix contains values incompatible with its semantics.", _USER
+    ),
+    "INTEGER_SUM_OVERFLOW": ErrorPolicyEntry(
+        "Exact pseudobulk sums exceed the supported integer range.", _USER
+    ),
+    "CELL_IDENTIFIERS_INVALID": ErrorPolicyEntry(
+        "Source cell identifiers are invalid.", _USER
+    ),
+    "FEATURE_IDENTIFIERS_INVALID": ErrorPolicyEntry(
+        "Source feature identifiers are invalid.", _USER
+    ),
+    "FEATURE_COORDINATES_INVALID": ErrorPolicyEntry(
+        "Configured regulatory feature coordinates are invalid.", _USER
+    ),
+    "SPECIES_ASSEMBLY_INVALID": ErrorPolicyEntry(
+        "The species and genome assembly are unsupported or incompatible.", _USER
+    ),
+    "METADATA_COLUMN_MISSING": ErrorPolicyEntry(
+        "Required pseudobulk observation metadata is missing.", _USER
+    ),
+    "METADATA_VALUES_INVALID": ErrorPolicyEntry(
+        "Pseudobulk observation metadata contains invalid values.", _USER
+    ),
+    "COVARIATE_NOT_CONSTANT": ErrorPolicyEntry(
+        "A pseudobulk covariate varies within a replicate-condition unit.", _USER
+    ),
+    "GROUP_ANNOTATION_INVALID": ErrorPolicyEntry(
+        "The configured pseudobulk group annotation is invalid.", _USER
+    ),
+    "CELL_IDENTITY_MISMATCH": ErrorPolicyEntry(
+        "Ordered cell identities do not match exactly.", _USER
+    ),
+    "SOURCE_CHANGED_DURING_READ": ErrorPolicyEntry(
+        "A scientific source changed while it was being validated.", _NO
+    ),
     "DEPENDENCY_UNAVAILABLE": ErrorPolicyEntry(
         "A required runtime dependency is unavailable.", _USER
     ),
@@ -173,6 +221,14 @@ _BUILTIN_NO_AUTOMATIC_CODES = frozenset(
         "RESULT_PATH_MISMATCH",
         "RESULT_STATUS_INVALID",
         "RESULT_VALUE_INVALID",
+        "FEATURE_SPACE_ARTIFACT_INVALID",
+        "FEATURE_SPACE_SOURCE_MISMATCH",
+        "ARTIFACT_SHA256_MISMATCH",
+        "PSEUDOBULK_ARTIFACT_INVALID",
+        "PSEUDOBULK_METADATA_MISMATCH",
+        "PSEUDOBULK_FEATURE_MISMATCH",
+        "PSEUDOBULK_AGGREGATION_MISMATCH",
+        "PSEUDOBULK_PROVENANCE_MISMATCH",
         "RUN_RESULT_INVALID",
         "RUN_VERIFICATION_UNEXPECTED_ERROR",
         "SKIPPED_AFTER_PREFLIGHT_FAILURE",

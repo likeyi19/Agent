@@ -18,6 +18,12 @@ from .embedding_analysis import (
 )
 from .epizoo_embedding import EpiZooEmbeddingToolResult, epizoo_embed_cells
 from .label_transfer import CellLabelTransferToolResult, transfer_cell_labels
+from .replicate_pseudobulk import (
+    ReplicatePseudobulkToolResult,
+    ScATACFeatureSpaceToolResult,
+    build_replicate_pseudobulk,
+    validate_scATAC_feature_space,
+)
 
 __all__ = [
     "CellAnnotationEvaluationToolResult",
@@ -27,6 +33,8 @@ __all__ = [
     "CellLabelTransferToolResult",
     "CellUMAPToolResult",
     "EpiZooEmbeddingToolResult",
+    "ReplicatePseudobulkToolResult",
+    "ScATACFeatureSpaceToolResult",
     "build_cell_neighbors",
     "cluster_cells",
     "compute_cell_umap",
@@ -34,4 +42,6 @@ __all__ = [
     "evaluate_cell_clustering",
     "evaluate_cell_annotation",
     "transfer_cell_labels",
+    "build_replicate_pseudobulk",
+    "validate_scATAC_feature_space",
 ]

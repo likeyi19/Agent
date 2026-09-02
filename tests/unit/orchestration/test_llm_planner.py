@@ -210,6 +210,26 @@ def _transfer_step(**changes) -> dict[str, object]:
     return step
 
 
+def _da_step(**changes) -> dict[str, object]:
+    step: dict[str, object] = {
+        "step_id": "da",
+        "tool_name": "run_replicate_differential_accessibility",
+        "arguments": [
+            _input_binding("pseudobulk_path", "pseudobulk_path"),
+            _input_binding("group_value", "group_value"),
+            _input_binding("condition_key", "condition_key"),
+            _input_binding("numerator_condition", "numerator_condition"),
+            _input_binding("denominator_condition", "denominator_condition"),
+            _input_binding("design_type", "design_type"),
+            _input_binding("output_dir", "output_dir"),
+        ],
+        "depends_on": [],
+        "description": "Run fixed replicate-aware differential accessibility.",
+    }
+    step.update(changes)
+    return step
+
+
 def _plan_response(*steps: dict[str, object], **extra) -> str:
     payload: dict[str, object] = {
         "schema_version": 2,
@@ -244,6 +264,55 @@ def test_one_step_inspection_plan(registry) -> None:
     assert plan.steps[0].tool_name == "inspect_scATAC"
     assert dict(plan.steps[0].arguments) == {"path": "/data/input.h5ad"}
     assert plan.steps[0].description == "Inspect the supplied dataset."
+
+
+def test_bounded_schema_v2_da_plan_uses_only_request_bindings(registry) -> None:
+    planner, model = _planner(_plan_response(_da_step()))
+    inputs = {
+        "pseudobulk_path": "/data/pseudobulk.h5ad",
+        "group_value": "T",
+        "condition_key": "condition",
+        "numerator_condition": "treated",
+        "denominator_condition": "control",
+        "design_type": "independent",
+        "output_dir": "/output",
+    }
+    plan = planner.plan(_request(inputs), registry)
+    assert plan.steps[0].tool_name == "run_replicate_differential_accessibility"
+    assert dict(plan.steps[0].arguments) == inputs
+    prompt, schema = model.calls[0]
+    assert schema["properties"]["schema_version"]["enum"] == (2,)
+    serialized = json.dumps(schema).casefold()
+    for prohibited in ("rscript", "r command", "formula", "shell execution"):
+        assert prohibited not in serialized
+    assert "rscript" not in prompt.casefold()
+
+
+def test_llm_da_plan_only_executes_zero_scientific_tools(registry) -> None:
+    planner, _ = _planner(_plan_response(_da_step()))
+    guard = Mock(side_effect=AssertionError("PLAN_ONLY invoked a scientific tool"))
+    guarded = ToolRegistry(
+        tuple(
+            replace(registry.get(name), function=guard)
+            for name in registry.names()
+        )
+    )
+    result = AgentRuntime(planner=planner, registry=guarded).run(
+        _request(
+            {
+                "pseudobulk_path": "/data/pseudobulk.h5ad",
+                "group_value": "T",
+                "condition_key": "condition",
+                "numerator_condition": "treated",
+                "denominator_condition": "control",
+                "design_type": "independent",
+                "output_dir": "/output",
+            },
+            mode=RunMode.PLAN_ONLY,
+        )
+    )
+    assert result.status is RunStatus.PLANNED
+    guard.assert_not_called()
 
 
 def test_two_step_plan_binds_inputs_and_converts_reference(registry) -> None:
@@ -560,6 +629,12 @@ def test_response_schema_is_strict_fixed_v2_and_registry_derived(registry) -> No
             "matrix_source",
             "replicate_key",
             "semantics_metadata_key",
+            "pseudobulk_path",
+            "group_value",
+            "numerator_condition",
+            "denominator_condition",
+            "design_type",
+            "covariates",
         }
     for field_name in ("input_name", "ref_step_id", "ref_output_key"):
         assert binding_schema["properties"][field_name]["type"] == (

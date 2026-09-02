@@ -200,10 +200,17 @@ class _ReferenceResolutionError(RuntimeError):
 
 
 class _CompletedStepValidationError(RuntimeError):
-    def __init__(self, code: str, message: str, step_id: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        step_id: str | None = None,
+        category: ErrorCategory = ErrorCategory.VERIFICATION_ERROR,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.step_id = step_id
+        self.category = category
 
 
 class PlanExecutor:
@@ -680,10 +687,19 @@ class PlanExecutor:
                         if verification.error is not None
                         else "Persisted step result failed revalidation."
                     )
+                    verification_error = verification.error
+                    if (
+                        verification_error is not None
+                        and verification_error.category is ErrorCategory.ENVIRONMENT_ERROR
+                    ):
+                        raise _CompletedStepValidationError(
+                            verification_error.code,
+                            message,
+                            step.step_id,
+                            ErrorCategory.ENVIRONMENT_ERROR,
+                        )
                     raise _CompletedStepValidationError(
-                        "PERSISTED_STEP_REVALIDATION_FAILED",
-                        message,
-                        step.step_id,
+                        "PERSISTED_STEP_REVALIDATION_FAILED", message, step.step_id
                     )
                 recordable = _copy_json_mapping(
                     persisted.result, f"step.{step.step_id}.result"
@@ -708,22 +724,32 @@ class PlanExecutor:
                     details={"resume": True},
                 )
         except _CompletedStepValidationError as exc:
-            error = AgentError(
-                ErrorCategory.VERIFICATION_ERROR,
-                exc.code,
-                str(exc),
-                step_id=exc.step_id,
-                tool_name=(
-                    next(
-                        (
-                            step.tool_name
-                            for step in plan.steps
-                            if step.step_id == exc.step_id
-                        ),
-                        None,
-                    )
+            tool_name = next(
+                (
+                    step.tool_name
+                    for step in plan.steps
+                    if step.step_id == exc.step_id
                 ),
-                exception_type=type(exc).__name__,
+                None,
+            )
+            error = (
+                classified_agent_error(
+                    category=exc.category,
+                    code=exc.code,
+                    step_id=exc.step_id,
+                    tool_name=tool_name,
+                    exception_type=type(exc).__name__,
+                    safe_fallback_message=str(exc),
+                )
+                if exc.category is ErrorCategory.ENVIRONMENT_ERROR
+                else AgentError(
+                    ErrorCategory.VERIFICATION_ERROR,
+                    exc.code,
+                    str(exc),
+                    step_id=exc.step_id,
+                    tool_name=tool_name,
+                    exception_type=type(exc).__name__,
+                )
             )
             errors.append(error)
             failed_step_id = exc.step_id

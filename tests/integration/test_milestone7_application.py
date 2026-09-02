@@ -268,4 +268,4 @@ def test_llm_planner_report_language_stays_outside_tool_plan(tmp_path: Path) -> 
     assert isinstance(schema, Mapping)
     assert schema["properties"]["schema_version"]["enum"] == (2,)
     assert not _contains_callable(schema)
-    assert len(application.registry.names()) == 10
+    assert len(application.registry.names()) == 11

@@ -9,6 +9,7 @@ from .analysis import (
     CellUMAPToolResult,
     EpiZooEmbeddingToolResult,
     ReplicatePseudobulkToolResult,
+    ReplicateDifferentialAccessibilityToolResult,
     ScATACFeatureSpaceToolResult,
     build_cell_neighbors,
     cluster_cells,
@@ -18,6 +19,7 @@ from .analysis import (
     evaluate_cell_clustering,
     transfer_cell_labels,
     build_replicate_pseudobulk,
+    run_replicate_differential_accessibility,
     validate_scATAC_feature_space,
 )
 from .data import ScATACInspection, inspect_scATAC
@@ -31,6 +33,7 @@ __all__ = [
     "CellUMAPToolResult",
     "EpiZooEmbeddingToolResult",
     "ReplicatePseudobulkToolResult",
+    "ReplicateDifferentialAccessibilityToolResult",
     "ScATACFeatureSpaceToolResult",
     "ScATACInspection",
     "build_cell_neighbors",
@@ -42,5 +45,6 @@ __all__ = [
     "inspect_scATAC",
     "transfer_cell_labels",
     "build_replicate_pseudobulk",
+    "run_replicate_differential_accessibility",
     "validate_scATAC_feature_space",
 ]

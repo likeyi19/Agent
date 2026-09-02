@@ -76,6 +76,10 @@ _TOOL_DESCRIPTIONS = {
         "Build exact sparse SUM pseudobulks for fixed group, biological replicate, "
         "and condition metadata from a verified regulatory feature-space manifest."
     ),
+    "run_replicate_differential_accessibility": (
+        "Run the fixed replicate-aware edgeR quasi-likelihood differential-"
+        "accessibility workflow on a verified Milestone 8.1 pseudobulk artifact."
+    ),
 }
 
 _ARGUMENT_DESCRIPTIONS = {
@@ -196,6 +200,33 @@ _ARGUMENT_DESCRIPTIONS = {
     ("build_replicate_pseudobulk", "group_annotation_path"): "Valid Milestone 6.3 annotation path.",
     ("build_replicate_pseudobulk", "covariate_keys"): "Ordered raw obs covariate columns.",
     ("build_replicate_pseudobulk", "overwrite"): "Whether an existing pseudobulk may be replaced.",
+    ("run_replicate_differential_accessibility", "pseudobulk_path"): (
+        "Valid verified Milestone 8.1 replicate-pseudobulk H5AD path."
+    ),
+    ("run_replicate_differential_accessibility", "group_value"): (
+        "Exact biological group value selected for comparison."
+    ),
+    ("run_replicate_differential_accessibility", "condition_key"): (
+        "Condition metadata key recorded by the pseudobulk artifact."
+    ),
+    ("run_replicate_differential_accessibility", "numerator_condition"): (
+        "Exact numerator condition for the directional contrast."
+    ),
+    ("run_replicate_differential_accessibility", "denominator_condition"): (
+        "Exact denominator condition for the directional contrast."
+    ),
+    ("run_replicate_differential_accessibility", "design_type"): (
+        "Explicit independent or paired replicate design."
+    ),
+    ("run_replicate_differential_accessibility", "output_dir"): (
+        "Directory for the compact differential-accessibility H5AD."
+    ),
+    ("run_replicate_differential_accessibility", "covariates"): (
+        "Ordered additive covariate specifications with exact key and kind."
+    ),
+    ("run_replicate_differential_accessibility", "overwrite"): (
+        "Whether the identical DA output may be replaced."
+    ),
 }
 
 

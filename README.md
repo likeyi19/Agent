@@ -6,7 +6,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 
 ## Current status
 
-Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestone 8.1
+Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
 are complete. Milestone 7 / Phase II is complete, and Phase III has begun.
 
 - Milestone 1: validated EpiZoo scientific backend
@@ -33,6 +33,8 @@ are complete. Milestone 7 / Phase II is complete, and Phase III has begun.
   managed workspaces, verified post-run composition, and a one-shot CLI
 - Milestone 8.1: explicit raw regulatory feature-space provenance and exact
   sparse replicate-aware pseudobulk SUM aggregation
+- Milestone 8.2: independently verified replicate-aware differential
+  accessibility through a pinned edgeR v4 quasi-likelihood workflow
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -218,11 +220,70 @@ row-map algorithm distinct from production sparse matrix multiplication.
 Counts are compared exactly and complete matrices are never densified.
 
 Planning schema v2 and RunStore schema v3 remain unchanged. The production
-registry now contains exactly ten tools. Both M8.1 recovery identities are
+registry now contains exactly eleven tools. Both M8.1 recovery identities are
 versioned and have no automatically retryable scientific codes. Evidence and
 deterministic reports remain schema v1, and M8.1 visualization is intentionally
 figureless. edgeR, TMM, differential accessibility, genomic annotation, and
 motif analysis are not part of Milestone 8.1.
+
+## Replicate-aware differential accessibility
+
+Milestone 8.2 adds the eleventh registered scientific tool:
+
+```python
+run_replicate_differential_accessibility(
+    pseudobulk_path,
+    group_value,
+    condition_key,
+    numerator_condition,
+    denominator_condition,
+    design_type,
+    output_dir,
+    *,
+    covariates=(),
+    overwrite=False,
+)
+```
+
+The authoritative input is an accepted Milestone 8.1 SUM-count pseudobulk;
+individual cells are never treated as DA replicates. Independent designs
+require at least two disjoint biological replicates per condition, with an
+explicit low-replication warning at two. Paired designs require at least three
+complete biological pairs. The fixed two-condition contrast is numerator minus
+denominator, with optional ordered additive categorical or numeric covariates.
+
+The statistical path uses edgeR 4.10.4 on R 4.6.1 / Bioconductor 3.23 in the
+isolated `agent-edger` runtime: condition-based `filterByExpr`, library-size
+recalculation, TMM normalization, robust edgeR v4 quasi-likelihood fitting and
+testing, and Benjamini–Hochberg correction. Statistical parameters are
+repository-controlled and cannot be supplied by users or planners.
+
+Verification is a separate execution path. It independently revalidates and
+recomputes the M8.1 source, reconstructs selection/design/contrast/digests in
+Python without calling production preparation or DA code, and invokes the
+separately pinned `edger_ql_verify_v1.R` script. Source, artifact, preparation,
+filter, normalization, statistics, effect directions, provenance, scripts, and
+the exact R package stack are checked before success or durable reuse.
+
+Planning schema v2 and RunStore schema v3 are unchanged. The DA recovery
+identity is `run-replicate-differential-accessibility-edger-ql-v1`; the tool has
+one actual attempt and no automatically retryable scientific/backend code.
+AnalysisEvidence and deterministic reports remain schema v1 and compact, and
+the application produces a verified figureless DA report without feature-level
+statistics or biological interpretation.
+
+Guarded real-data acceptance remains outstanding: local Fang2021 and PBMC
+count data lack a genuine two-condition replicate design, the local BMMC
+candidate is normalized continuous mixed-modality data rather than eligible raw
+accessibility counts, and the replicated rice heat-shock dataset is outside the
+supported human/mouse contract. No metadata was fabricated and no external data
+was downloaded.
+
+Deferred scope includes binary-accessibility inference, alternative or mixed
+models, multi-condition/interacting/time-course designs, effect-size shrinkage,
+adaptive filtering, genomic or peak-to-gene annotation, motifs, pathways,
+regulatory interpretation, volcano/MA plots, perturbation analysis, and mutation
+analysis.
 
 ## Verified analysis evidence
 
@@ -233,7 +294,7 @@ successful `AgentRunResult`
 → compact schema-v1 `AnalysisEvidence` projection
 → atomic `analysis_evidence.json`
 
-The projection uses explicit whitelists for the ten existing scientific tools
+The projection uses explicit whitelists for the eleven existing scientific tools
 and has an authoritative evidence-file SHA-256. It records whether source
 artifacts have authoritative cryptographic digests or are instead protected by
 existing structural, provenance, and content verification. Embeddings, cell
@@ -242,7 +303,7 @@ scATAC matrices are never copied into evidence.
 
 `AnalysisEvidence` is downstream of orchestration: it is neither a
 `ToolRegistry` scientific tool nor part of `AgentPlan`. The production registry
-contains exactly ten tools, while planning schema v2 and the RunStore schema are
+contains exactly eleven tools, while planning schema v2 and the RunStore schema are
 unchanged, and evidence build and verification never invoke registered
 scientific callables. Terminal-resume results still undergo fresh artifact
 verification before evidence is accepted. Visualization and narrative report
@@ -265,7 +326,7 @@ confusion matrix. Transferred-label UMAP, per-class F1 and confidence plots,
 SVG, narrative reporting, and interactive UI remain deferred.
 
 Visualization is neither a `ToolRegistry` scientific tool nor part of
-`AgentPlan`; the production registry contains exactly ten tools and planning
+`AgentPlan`; the production registry contains exactly eleven tools and planning
 schema v2 remains unchanged. It adds no RunStore schema or recovery-policy
 change. Build and verification invoke zero registered scientific callables,
 never rerun or tune scientific analysis, never access raw scATAC `.X`, and use

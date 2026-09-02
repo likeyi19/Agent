@@ -24,6 +24,10 @@ from .replicate_pseudobulk import (
     build_replicate_pseudobulk,
     validate_scATAC_feature_space,
 )
+from .differential_accessibility_backend import (
+    ReplicateDifferentialAccessibilityToolResult,
+    run_replicate_differential_accessibility,
+)
 
 __all__ = [
     "CellAnnotationEvaluationToolResult",
@@ -34,6 +38,7 @@ __all__ = [
     "CellUMAPToolResult",
     "EpiZooEmbeddingToolResult",
     "ReplicatePseudobulkToolResult",
+    "ReplicateDifferentialAccessibilityToolResult",
     "ScATACFeatureSpaceToolResult",
     "build_cell_neighbors",
     "cluster_cells",
@@ -43,5 +48,6 @@ __all__ = [
     "evaluate_cell_annotation",
     "transfer_cell_labels",
     "build_replicate_pseudobulk",
+    "run_replicate_differential_accessibility",
     "validate_scATAC_feature_space",
 ]

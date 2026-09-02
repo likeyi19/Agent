@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
 import math
 from pathlib import Path
@@ -63,6 +64,10 @@ _ANNOTATION_EVALUATION_INTENT = re.compile(
 )
 _PSEUDOBULK_INTENT = re.compile(
     r"\b(?:pseudo[-\s]?bulk|replicate[-\s]?aware\s+(?:regulatory|accessibility))\b"
+)
+_DIFFERENTIAL_ACCESSIBILITY_INTENT = re.compile(
+    r"\b(?:differential(?:ly)?\s+accessible|differential\s+accessibility|"
+    r"replicate[-\s]?aware\s+differential)\b"
 )
 _EMBEDDING_REQUIRED_INPUTS = ("input_path", "output_dir", "species")
 _EMBEDDING_OPTIONAL_INPUTS = ("checkpoint_path", "device", "overwrite")
@@ -382,6 +387,87 @@ def _pseudobulk_plan_inputs(
     return feature_arguments, pseudobulk_arguments
 
 
+def _differential_accessibility_inputs(
+    request: AgentRequest,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    _require_inputs(
+        request,
+        (
+            "group_value",
+            "condition_key",
+            "numerator_condition",
+            "denominator_condition",
+            "design_type",
+            "output_dir",
+        ),
+    )
+    arguments: dict[str, object] = {
+        "output_dir": _path_input(request, "output_dir")
+    }
+    for name in (
+        "group_value",
+        "condition_key",
+        "numerator_condition",
+        "denominator_condition",
+    ):
+        arguments[name] = _strict_label_key(request, name)
+    design_type = request.inputs["design_type"]
+    if design_type not in {"independent", "paired"}:
+        raise PlannerError(
+            "INVALID_REQUEST_INPUT",
+            "Structured input 'design_type' must be 'independent' or 'paired'.",
+        )
+    arguments["design_type"] = design_type
+
+    covariate_keys: list[str] = []
+    if "covariates" in request.inputs:
+        covariates = request.inputs["covariates"]
+        if not isinstance(covariates, tuple):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                "Structured input 'covariates' must be an array.",
+            )
+        normalized: list[dict[str, str]] = []
+        for index, covariate in enumerate(covariates):
+            if not isinstance(covariate, Mapping) or set(covariate) != {
+                "key",
+                "kind",
+            }:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Each covariate must contain exactly 'key' and 'kind'.",
+                )
+            key = covariate["key"]
+            kind = covariate["kind"]
+            if (
+                not isinstance(key, str)
+                or not key.strip()
+                or key != key.strip()
+                or kind not in {"categorical", "numeric"}
+            ):
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    f"Structured covariate at position {index} is invalid.",
+                )
+            if key in covariate_keys:
+                raise PlannerError(
+                    "INVALID_REQUEST_INPUT",
+                    "Structured covariate keys must be unique.",
+                )
+            covariate_keys.append(key)
+            normalized.append({"key": key, "kind": kind})
+        arguments["covariates"] = tuple(normalized)
+    if "overwrite" in request.inputs:
+        overwrite = request.inputs["overwrite"]
+        if not isinstance(overwrite, bool):
+            raise PlannerError(
+                "INVALID_REQUEST_INPUT",
+                "Structured input 'overwrite' must be boolean.",
+            )
+        arguments["overwrite"] = overwrite
+    return arguments, tuple(covariate_keys)
+
+
 class DeterministicPlanner:
     """Bootstrap planner for explicit inspection and EpiZoo workflows."""
 
@@ -403,8 +489,99 @@ class DeterministicPlanner:
             _ANNOTATION_EVALUATION_INTENT.search(prompt) is not None
         )
         pseudobulk_intent = _PSEUDOBULK_INTENT.search(prompt) is not None
+        differential_accessibility_intent = (
+            _DIFFERENTIAL_ACCESSIBILITY_INTENT.search(prompt) is not None
+        )
 
-        if pseudobulk_intent:
+        if differential_accessibility_intent:
+            da_arguments, da_covariate_keys = _differential_accessibility_inputs(
+                request
+            )
+            raw_construction_inputs = {
+                "input_path",
+                "matrix_source",
+                "matrix_semantics",
+                "species",
+                "genome_assembly",
+                "coordinate_source",
+                "replicate_key",
+                "group_key",
+                "group_source",
+                "layer_key",
+                "feature_chrom_key",
+                "feature_start_key",
+                "feature_end_key",
+                "coordinate_system",
+                "semantics_metadata_key",
+                "group_annotation_path",
+                "covariate_keys",
+            }
+            has_pseudobulk = "pseudobulk_path" in request.inputs
+            has_raw_inputs = bool(raw_construction_inputs.intersection(request.inputs))
+            if has_pseudobulk and has_raw_inputs:
+                raise PlannerError(
+                    "AMBIGUOUS_REQUEST",
+                    "Differential accessibility cannot mix a fixed pseudobulk_path "
+                    "with raw pseudobulk-construction inputs.",
+                )
+            if has_pseudobulk:
+                da_arguments["pseudobulk_path"] = _path_input(
+                    request, "pseudobulk_path"
+                )
+                steps = (
+                    PlanStep(
+                        "differential_accessibility",
+                        "run_replicate_differential_accessibility",
+                        da_arguments,
+                        description=(
+                            "Run replicate-aware differential accessibility with "
+                            "the fixed edgeR quasi-likelihood workflow."
+                        ),
+                    ),
+                )
+                workflow = "replicate-differential-accessibility"
+            else:
+                feature_arguments, pseudobulk_arguments = _pseudobulk_plan_inputs(
+                    request
+                )
+                if da_covariate_keys:
+                    existing = tuple(pseudobulk_arguments.get("covariate_keys", ()))
+                    if existing and existing != da_covariate_keys:
+                        raise PlannerError(
+                            "INVALID_REQUEST_INPUT",
+                            "Structured covariate_keys must exactly match the ordered "
+                            "differential-accessibility covariates.",
+                        )
+                    pseudobulk_arguments["covariate_keys"] = da_covariate_keys
+                da_arguments["pseudobulk_path"] = StepOutputRef(
+                    "build_pseudobulk", "pseudobulk_path"
+                )
+                steps = (
+                    PlanStep(
+                        "validate_feature_space",
+                        "validate_scATAC_feature_space",
+                        feature_arguments,
+                        description=(
+                            "Validate exact raw regulatory feature-space provenance."
+                        ),
+                    ),
+                    PlanStep(
+                        "build_pseudobulk",
+                        "build_replicate_pseudobulk",
+                        pseudobulk_arguments,
+                        ("validate_feature_space",),
+                        "Aggregate exact sparse replicate-aware pseudobulk sums.",
+                    ),
+                    PlanStep(
+                        "differential_accessibility",
+                        "run_replicate_differential_accessibility",
+                        da_arguments,
+                        ("build_pseudobulk",),
+                        "Run fixed edgeR quasi-likelihood differential accessibility.",
+                    ),
+                )
+                workflow = "raw-to-replicate-differential-accessibility"
+        elif pseudobulk_intent:
             feature_arguments, pseudobulk_arguments = _pseudobulk_plan_inputs(
                 request
             )
@@ -827,7 +1004,7 @@ class DeterministicPlanner:
             raise PlannerError(
                 "UNSUPPORTED_REQUEST",
                 "DeterministicPlanner supports only explicit scATAC inspection "
-                "or EpiZoo embedding/downstream-analysis requests.",
+                "or registered EpiZoo and replicate-aware analysis requests.",
             )
 
         _validate_generated_steps(registry, steps)

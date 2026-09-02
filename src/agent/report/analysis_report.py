@@ -698,6 +698,42 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
         "feature_order_preserved",
         "pseudobulk_sha256",
     ),
+    "run_replicate_differential_accessibility": (
+        "group_value",
+        "condition_key",
+        "numerator_condition",
+        "denominator_condition",
+        "positive_logfc_meaning",
+        "design_type",
+        "covariates",
+        "n_samples",
+        "n_numerator_replicates",
+        "n_denominator_replicates",
+        "design_rank",
+        "residual_degrees_of_freedom",
+        "warning_codes",
+        "n_warnings",
+        "n_input_features",
+        "n_tested_features",
+        "n_filtered_features",
+        "filtering_method",
+        "filter_configuration",
+        "normalization_method",
+        "normalization_configuration",
+        "ql_configuration",
+        "backend_pipeline",
+        "r_version",
+        "bioconductor_version",
+        "edger_version",
+        "package_versions",
+        "pseudobulk_sha256",
+        "preparation_sha256",
+        "result_sha256",
+        "analysis_sha256",
+        "da_sha256",
+        "production_r_script_sha256",
+        "verifier_r_script_sha256",
+    ),
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
@@ -711,6 +747,9 @@ _TOOL_TITLES: Mapping[str, str] = {
     "evaluate_cell_annotation": "Annotation evaluation",
     "validate_scATAC_feature_space": "Regulatory feature space",
     "build_replicate_pseudobulk": "Replicate-aware pseudobulk",
+    "run_replicate_differential_accessibility": (
+        "Replicate-aware Differential Accessibility"
+    ),
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
@@ -809,6 +848,38 @@ _FIELD_LABELS: Mapping[str, str] = {
     "all_cells_accounted_for": "All cells accounted for",
     "feature_order_preserved": "Feature order preserved",
     "pseudobulk_sha256": "Pseudobulk SHA-256",
+    "group_value": "Selected biological group",
+    "numerator_condition": "Numerator condition",
+    "denominator_condition": "Denominator condition",
+    "positive_logfc_meaning": "Positive logFC direction",
+    "design_type": "Replicate design",
+    "covariates": "Additive covariates",
+    "n_samples": "Included pseudobulk samples",
+    "n_numerator_replicates": "Numerator replicates",
+    "n_denominator_replicates": "Denominator replicates",
+    "design_rank": "Design rank",
+    "residual_degrees_of_freedom": "Residual degrees of freedom",
+    "warning_codes": "Scientific warning codes",
+    "n_warnings": "Scientific warning count",
+    "n_input_features": "Input features",
+    "n_tested_features": "Tested features",
+    "n_filtered_features": "Filtered features",
+    "filtering_method": "Filtering method",
+    "filter_configuration": "Filtering configuration",
+    "normalization_method": "Normalization method",
+    "normalization_configuration": "Normalization configuration",
+    "ql_configuration": "Quasi-likelihood configuration",
+    "backend_pipeline": "Statistical backend pipeline",
+    "r_version": "R version",
+    "bioconductor_version": "Bioconductor version",
+    "edger_version": "edgeR version",
+    "package_versions": "Pinned package versions",
+    "preparation_sha256": "Preparation SHA-256",
+    "result_sha256": "Statistical result SHA-256",
+    "analysis_sha256": "Analysis identity SHA-256",
+    "da_sha256": "DA artifact SHA-256",
+    "production_r_script_sha256": "Production R script SHA-256",
+    "verifier_r_script_sha256": "Independent verifier R script SHA-256",
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
@@ -847,6 +918,11 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
         "replicate_pseudobulk",
         "Replicate-aware Pseudobulk",
         frozenset({"build_replicate_pseudobulk"}),
+    ),
+    (
+        "replicate_differential_accessibility",
+        "Replicate-aware Differential Accessibility",
+        frozenset({"run_replicate_differential_accessibility"}),
     ),
 )
 
@@ -890,6 +966,25 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
         "replicate_key",
         "condition_key",
         "covariate_keys",
+    ),
+    "run_replicate_differential_accessibility": (
+        "group_value",
+        "condition_key",
+        "numerator_condition",
+        "denominator_condition",
+        "positive_logfc_meaning",
+        "design_type",
+        "covariates",
+        "filtering_method",
+        "filter_configuration",
+        "normalization_method",
+        "normalization_configuration",
+        "ql_configuration",
+        "backend_pipeline",
+        "r_version",
+        "bioconductor_version",
+        "edger_version",
+        "package_versions",
     ),
 }
 
@@ -1159,6 +1254,9 @@ def _render_summary(
         "evaluate_cell_annotation": "Annotation evaluation available",
         "validate_scATAC_feature_space": "Regulatory feature space validated",
         "build_replicate_pseudobulk": "Replicate-aware pseudobulk produced",
+        "run_replicate_differential_accessibility": (
+            "Replicate-aware differential accessibility completed"
+        ),
     }
     lines = ["## Analysis Summary", ""]
     for tool_name in _REPORT_FIELDS:

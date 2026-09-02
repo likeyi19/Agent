@@ -77,12 +77,16 @@ from agent.schemas import (
 )
 
 from .registry import ToolRegistry, UnknownToolError
+from .error_policy import classified_agent_error
+from .differential_accessibility_verifier import (
+    verify_replicate_differential_accessibility,
+)
 
 
 class _VerificationChecks:
     def __init__(self) -> None:
         self.checks: list[VerificationCheck] = []
-        self.failures: list[tuple[str, str, str]] = []
+        self.failures: list[tuple[str, str, str, ErrorCategory]] = []
 
     def add(
         self,
@@ -91,11 +95,12 @@ class _VerificationChecks:
         success_message: str,
         failure_message: str,
         error_code: str,
+        error_category: ErrorCategory = ErrorCategory.VERIFICATION_ERROR,
     ) -> None:
         message = success_message if passed else failure_message
         self.checks.append(VerificationCheck(name=name, passed=passed, message=message))
         if not passed:
-            self.failures.append((error_code, failure_message, name))
+            self.failures.append((error_code, failure_message, name, error_category))
 
     def result(
         self,
@@ -112,22 +117,34 @@ class _VerificationChecks:
                 target_id=target_id,
                 checks=tuple(self.checks),
             )
-        code, _, _ = self.failures[0]
-        failed_names = tuple(name for _, _, name in self.failures)
-        messages = "; ".join(message for _, message, _ in self.failures)
-        return VerificationResult(
-            passed=False,
-            target_type=target_type,
-            target_id=target_id,
-            checks=tuple(self.checks),
-            error=AgentError(
-                category=ErrorCategory.VERIFICATION_ERROR,
+        code, _, _, category = self.failures[0]
+        failed_names = tuple(name for _, _, name, _ in self.failures)
+        messages = "; ".join(message for _, message, _, _ in self.failures)
+        error = (
+            classified_agent_error(
+                category=category,
+                code=code,
+                step_id=step_id,
+                tool_name=tool_name,
+                details={"failed_checks": failed_names},
+                safe_fallback_message=messages,
+            )
+            if category is not ErrorCategory.VERIFICATION_ERROR
+            else AgentError(
+                category=category,
                 code=code,
                 message=messages,
                 step_id=step_id,
                 tool_name=tool_name,
                 details={"failed_checks": failed_names},
-            ),
+            )
+        )
+        return VerificationResult(
+            passed=False,
+            target_type=target_type,
+            target_id=target_id,
+            checks=tuple(self.checks),
+            error=error,
         )
 
 
@@ -1829,6 +1846,54 @@ def _verify_pseudobulk(
     )
 
 
+def _verify_differential_accessibility(
+    resolved_arguments: Mapping[str, object],
+    result: Mapping[str, object],
+    checks: _VerificationChecks,
+) -> None:
+    try:
+        metadata = verify_replicate_differential_accessibility(
+            resolved_arguments, result
+        )
+    except Exception as exc:
+        error_code = getattr(exc, "code", "DA_ARTIFACT_INVALID")
+        error_category = (
+            ErrorCategory.ENVIRONMENT_ERROR
+            if error_code
+            in {
+                "RSCRIPT_UNAVAILABLE",
+                "EDGER_PACKAGE_UNAVAILABLE",
+                "EDGER_VERSION_UNSUPPORTED",
+                "R_PACKAGE_VERSION_INCOMPATIBLE",
+            }
+            else ErrorCategory.VERIFICATION_ERROR
+        )
+        checks.add(
+            "differential_accessibility_independent_revalidation",
+            False,
+            "DA artifact passed independent reconstruction and edgeR recomputation.",
+            "DA artifact failed independent reconstruction or edgeR recomputation.",
+            error_code,
+            error_category,
+        )
+        return
+    checks.add(
+        "differential_accessibility_independent_revalidation",
+        True,
+        "DA artifact passed independent reconstruction and edgeR recomputation.",
+        "DA artifact failed independent reconstruction or edgeR recomputation.",
+        "DA_ARTIFACT_INVALID",
+    )
+    checks.add(
+        "differential_accessibility_verifier_script_identity",
+        len(metadata.verifier_r_script_sha256) == 64,
+        "Independent verifier R script SHA-256: "
+        f"{metadata.verifier_r_script_sha256}.",
+        "Independent verifier R script identity is invalid.",
+        "R_PACKAGE_VERSION_INCOMPATIBLE",
+    )
+
+
 def verify_step(
     step: PlanStep,
     resolved_arguments: Mapping[str, object],
@@ -1892,6 +1957,10 @@ def verify_step(
                 plain_result,
                 dependency_results,
                 checks,
+            )
+        elif step.tool_name == "run_replicate_differential_accessibility":
+            _verify_differential_accessibility(
+                resolved_arguments, plain_result, checks
             )
     return checks.result(
         target_type="step",

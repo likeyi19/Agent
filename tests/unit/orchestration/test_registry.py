@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from agent.tools.analysis.differential_accessibility import M82ScientificError
 from agent.orchestration import (
     ErrorCategory,
+    RecoveryDisposition,
     StepOutputRef,
     ToolArgumentError,
     ToolResultContractError,
@@ -34,6 +36,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "evaluate_cell_annotation",
         "validate_scATAC_feature_space",
         "build_replicate_pseudobulk",
+        "run_replicate_differential_accessibility",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -250,7 +253,98 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "evaluate_cell_annotation": "evaluate-cell-annotation-v1",
         "validate_scATAC_feature_space": "validate-scatac-feature-space-v1",
         "build_replicate_pseudobulk": "build-replicate-pseudobulk-v1",
+        "run_replicate_differential_accessibility": (
+            "run-replicate-differential-accessibility-edger-ql-v1"
+        ),
     }
+
+
+def test_differential_accessibility_registry_contract_is_exact_and_nonretryable(
+    registry,
+) -> None:
+    spec = registry.get("run_replicate_differential_accessibility")
+    assert tuple(spec.required_arguments) == (
+        "pseudobulk_path",
+        "group_value",
+        "condition_key",
+        "numerator_condition",
+        "denominator_condition",
+        "design_type",
+        "output_dir",
+    )
+    assert tuple(spec.optional_arguments) == ("covariates", "overwrite")
+    assert spec.recovery_policy_version == (
+        "run-replicate-differential-accessibility-edger-ql-v1"
+    )
+    assert spec.retryable_error_codes == frozenset()
+    validated = registry.validate_arguments(
+        spec.name,
+        {
+            "pseudobulk_path": StepOutputRef("pseudobulk", "pseudobulk_path"),
+            "group_value": "T",
+            "condition_key": "condition",
+            "numerator_condition": "treated",
+            "denominator_condition": "control",
+            "design_type": "paired",
+            "output_dir": "/output",
+            "covariates": ({"key": "age", "kind": "numeric"},),
+        },
+    )
+    assert validated["design_type"] == "paired"
+
+
+@pytest.mark.parametrize(
+    ("code", "category"),
+    [
+        ("DA_CONDITION_KEY_MISMATCH", ErrorCategory.USER_INPUT_ERROR),
+        ("DA_DESIGN_RANK_DEFICIENT", ErrorCategory.USER_INPUT_ERROR),
+        ("DA_NO_FEATURES_AFTER_FILTER", ErrorCategory.TOOL_EXECUTION_ERROR),
+        ("R_BACKEND_PROTOCOL_INVALID", ErrorCategory.TOOL_EXECUTION_ERROR),
+        ("EDGER_VERSION_UNSUPPORTED", ErrorCategory.ENVIRONMENT_ERROR),
+        ("HOST_MEMORY_EXHAUSTED", ErrorCategory.RESOURCE_ERROR),
+        ("DISK_FULL", ErrorCategory.RESOURCE_ERROR),
+        ("SOURCE_CHANGED_DURING_READ", ErrorCategory.VERIFICATION_ERROR),
+    ],
+)
+def test_differential_accessibility_error_classification_is_stable_and_sanitized(
+    registry, code, category
+) -> None:
+    error = registry.classify_exception(
+        "run_replicate_differential_accessibility",
+        M82ScientificError(code, "/secret/path must not persist"),
+        step_id="da",
+        attempt=1,
+    )
+    assert error.code == code
+    assert error.category is category
+    assert error.recoverable is False
+    assert "/secret/path" not in error.message
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "RSCRIPT_UNAVAILABLE",
+        "EDGER_PACKAGE_UNAVAILABLE",
+        "EDGER_VERSION_UNSUPPORTED",
+        "R_PACKAGE_VERSION_INCOMPATIBLE",
+    ],
+)
+def test_differential_accessibility_backend_compatibility_requires_compatible_runtime(
+    registry, code
+) -> None:
+    error = registry.classify_exception(
+        "run_replicate_differential_accessibility",
+        M82ScientificError(code, "sensitive backend diagnostic"),
+        step_id="da",
+        attempt=1,
+    )
+    assert error.category is ErrorCategory.ENVIRONMENT_ERROR
+    assert error.recoverable is False
+    assert (
+        error.recovery_disposition
+        is RecoveryDisposition.RESUME_WITH_COMPATIBLE_RUNTIME
+    )
 
 
 def test_annotation_evaluation_registry_contract_and_recovery_identity(registry) -> None:

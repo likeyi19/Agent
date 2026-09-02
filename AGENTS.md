@@ -1607,6 +1607,105 @@ any later Milestone 8 capability. Future coordinate-dependent interpretation
 must fail closed when coordinates are absent, and binary-accessibility
 pseudobulk must not silently enter a sequencing-count DA model.
 
+### Milestone 8.2 — Replicate-aware differential accessibility
+
+Milestone 8.2 is complete with guarded real-data acceptance outstanding because
+no scientifically eligible local dataset was available. Its public scientific
+API is:
+
+```python
+run_replicate_differential_accessibility(
+    pseudobulk_path,
+    group_value,
+    condition_key,
+    numerator_condition,
+    denominator_condition,
+    design_type,
+    output_dir,
+    *,
+    covariates=(),
+    overwrite=False,
+)
+```
+
+The production `ToolRegistry` contains exactly eleven scientific tools. The new
+recovery identity is
+`run-replicate-differential-accessibility-edger-ql-v1`; execution has one actual
+attempt and no M8.2 scientific/backend error is automatically retryable.
+Planning schema v2 and RunStore schema v3 remain unchanged.
+
+The authoritative scientific input is a verified Milestone 8.1 sparse int64
+SUM-count pseudobulk. DA never uses individual cells as replicates. Independent
+designs require at least two disjoint biological replicates per condition and
+emit `DA_LOW_REPLICATION` when either side has exactly two. Paired designs
+require at least three complete biological pairs. One-cell pseudobulk units are
+retained and emit `DA_ONE_CELL_PSEUDOBULK`. Selection, exclusion reasons,
+ordered categorical/numeric covariates, condition coding, numeric design,
+contrast, rank, estimability, and residual-DF checks are fixed by M8.2-A.
+
+The fixed M8.2-B backend uses R 4.6.1, Bioconductor 3.23, edgeR 4.10.4,
+BiocManager 1.30.27, limma 3.68.5, locfit 1.5.9.12, statmod 1.5.2, and lattice
+0.23.1 in the isolated `agent-edger` runtime. It applies condition-based
+`filterByExpr`, subsets with recalculated library sizes, TMM normalization,
+robust edgeR v4 `glmQLFit`/`glmQLFTest`, and BH correction. Users and planners
+cannot provide R code, formulas, shell strings, backend paths, or statistical
+parameters. The compact DA H5AD is figureless and contains no count matrix,
+duplicated counts, graph, embedding, or large result table outside `.var`.
+
+Authoritative verification is independent of production M8.2 code. It first
+rehashes and independently verifies the M8.1 feature-space/raw-source binding
+and exact pseudobulk SUMs. A separate Python implementation reconstructs all
+M8.2 preparation identities and digests. The separately SHA-pinned
+`src/agent/orchestration/r/edger_ql_verify_v1.R` script independently reruns the
+same frozen edgeR contract without sourcing or invoking the production R
+script. Exact structural/discrete/digest comparisons, tolerance-bounded edgeR
+numeric comparisons, independent Python BH recomputation, exact package-stack
+compatibility, and before/after source/artifact hashes are required.
+
+Deterministic planning supports both a fixed verified pseudobulk → DA plan and
+raw scATAC → feature validation → pseudobulk → DA. The chained DA path uses a
+`StepOutputRef`; mixed raw and fixed-pseudobulk sources are rejected. The LLM
+planner remains bounded by wire schema v2 and request/ref bindings. PLAN_ONLY
+starts neither Python science nor R.
+
+Verified DA success is durably checkpointed. Nonterminal resume independently
+revalidates the source and artifact and reuses the result without reinvoking
+production DA. Drift or an incompatible R stack blocks reuse; stale RUNNING
+work requires manual reconciliation. Cooperative cancellation before DA starts
+prevents it; cancellation during R lets the current call finish, verify, and
+checkpoint before cancellation becomes authoritative.
+
+AnalysisEvidence schema v1 adds only compact verified comparison, design,
+warning, filtering/normalization/backend/version, artifact, and digest facts.
+It excludes feature statistics, sample vectors, designs, normalization vectors,
+and peak lists. The deterministic schema-v1 report adds a factual
+"Replicate-aware Differential Accessibility" section. No M8.2 visualization,
+significant-peak selection, interpretation, or causal claim is generated; the
+application path is a verified figureless report.
+
+Accepted validation:
+
+- focused M8.2-A/B/C plus registry/planner selection: 244 passed
+- adjacent reporting/application regression: 132 passed
+- adjacent M8.1 regression: 27 passed
+- canonical orchestration/provider/lifecycle regression: 503 passed
+- complete lightweight regression: 903 passed, 54 skipped
+
+The guarded local-data audit did not identify a valid supported dataset. Local
+Fang2021 and PBMC count data lack a genuine two-condition replicate design; the
+local BMMC candidate has real donors and conditions but stores normalized
+continuous mixed GEX/ATAC values rather than eligible raw accessibility counts;
+the replicated rice heat-shock dataset is outside the human/mouse contract. No
+metadata was fabricated, no external data was downloaded, and real-data M8.2
+acceptance remains an explicit review gate.
+
+Deferred scope includes binary-accessibility inference, DESeq2, limma-voom,
+mixed models, multi-condition contrasts, interactions, time courses,
+effect-size shrinkage, adaptive filtering, user-configurable edgeR parameters,
+peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
+volcano/MA plots, biological interpretation, perturbation analysis, and
+mutation analysis.
+
 ## Development environment
 
 - Linux server

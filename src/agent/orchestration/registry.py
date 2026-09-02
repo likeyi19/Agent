@@ -13,6 +13,7 @@ from typing import Callable, Mapping
 
 from agent.schemas import AgentError, ErrorCategory, StepOutputRef
 from agent.tools import (
+    build_replicate_pseudobulk,
     build_cell_neighbors,
     cluster_cells,
     compute_cell_umap,
@@ -20,11 +21,17 @@ from agent.tools import (
     evaluate_cell_annotation,
     evaluate_cell_clustering,
     inspect_scATAC,
+    run_replicate_differential_accessibility,
     transfer_cell_labels,
-    build_replicate_pseudobulk,
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
+from agent.tools.analysis.differential_accessibility import M82ScientificError
+from agent.tools.analysis.differential_accessibility_backend import (
+    DA_ARTIFACT_SCHEMA_VERSION,
+    DA_ARTIFACT_TYPE,
+    EDGER_PIPELINE_ID,
+)
 
 from .error_policy import classified_agent_error
 
@@ -349,6 +356,34 @@ def _classify_m81_exception(exception: Exception) -> ErrorClassification:
             if exception.code == "SOURCE_CHANGED_DURING_READ"
             else ErrorCategory.USER_INPUT_ERROR
         )
+        return ErrorClassification(category, exception.code)
+    return _classify_analysis_exception(exception)
+
+
+def _classify_m82_exception(exception: Exception) -> ErrorClassification:
+    if isinstance(exception, M82ScientificError):
+        if exception.code in {"HOST_MEMORY_EXHAUSTED", "DISK_FULL"}:
+            category = ErrorCategory.RESOURCE_ERROR
+        elif exception.code in {
+            "RSCRIPT_UNAVAILABLE",
+            "EDGER_PACKAGE_UNAVAILABLE",
+            "EDGER_VERSION_UNSUPPORTED",
+            "R_PACKAGE_VERSION_INCOMPATIBLE",
+        }:
+            category = ErrorCategory.ENVIRONMENT_ERROR
+        elif exception.code == "SOURCE_CHANGED_DURING_READ":
+            category = ErrorCategory.VERIFICATION_ERROR
+        elif exception.code in {
+            "DA_NO_FEATURES_AFTER_FILTER",
+            "DA_FILTERED_LIBRARY_ZERO",
+            "R_BACKEND_EXECUTION_FAILED",
+            "R_BACKEND_PROTOCOL_INVALID",
+            "DA_NUMERICAL_RESULT_INVALID",
+            "ARTIFACT_WRITE_FAILED",
+        }:
+            category = ErrorCategory.TOOL_EXECUTION_ERROR
+        else:
+            category = ErrorCategory.USER_INPUT_ERROR
         return ErrorClassification(category, exception.code)
     return _classify_analysis_exception(exception)
 
@@ -736,6 +771,86 @@ def _validate_pseudobulk_result(result: Mapping[str, object]) -> None:
     forbidden = {"matrix", "cell_ids", "feature_ids", "unit_assignments", "metadata_vectors"}
     if forbidden.intersection(result):
         raise ToolResultContractError("Pseudobulk result contains a large payload.")
+
+
+def _validate_differential_accessibility_result(
+    result: Mapping[str, object],
+) -> None:
+    if (
+        result["status"] != "success"
+        or result["artifact_type"] != DA_ARTIFACT_TYPE
+        or result["artifact_schema_version"] != DA_ARTIFACT_SCHEMA_VERSION
+        or result["backend_pipeline"] != EDGER_PIPELINE_ID
+        or result["filtering_method"] != "edgeR::filterByExpr"
+        or result["normalization_method"] != "TMM"
+        or result["design_type"] not in {"independent", "paired"}
+    ):
+        raise ToolResultContractError(
+            "Differential-accessibility result has invalid scientific identity."
+        )
+    positive = (
+        "n_samples",
+        "n_numerator_replicates",
+        "n_denominator_replicates",
+        "design_rank",
+        "residual_degrees_of_freedom",
+        "n_input_features",
+        "n_tested_features",
+    )
+    if any(result[name] <= 0 for name in positive):
+        raise ToolResultContractError(
+            "Differential-accessibility result has invalid positive counts."
+        )
+    if result["n_filtered_features"] < 0 or (
+        result["n_tested_features"] + result["n_filtered_features"]
+        != result["n_input_features"]
+    ):
+        raise ToolResultContractError(
+            "Differential-accessibility feature counts are inconsistent."
+        )
+    if (
+        not isinstance(result["warning_codes"], list)
+        or not all(
+            isinstance(value, str) and value for value in result["warning_codes"]
+        )
+        or result["n_warnings"] != len(result["warning_codes"])
+    ):
+        raise ToolResultContractError(
+            "Differential-accessibility warning metadata is invalid."
+        )
+    for name in (
+        "da_sha256",
+        "pseudobulk_sha256",
+        "preparation_sha256",
+        "analysis_sha256",
+        "production_r_script_sha256",
+    ):
+        if not _valid_sha256(result[name]):
+            raise ToolResultContractError(
+                f"Differential-accessibility field {name!r} is not SHA-256."
+            )
+    if not isinstance(result["package_versions"], dict) or not all(
+        isinstance(key, str)
+        and key
+        and isinstance(value, str)
+        and value
+        for key, value in result["package_versions"].items()
+    ):
+        raise ToolResultContractError(
+            "Differential-accessibility package versions are invalid."
+        )
+    forbidden = {
+        "matrix",
+        "feature_ids",
+        "row_eligibility",
+        "design_matrix",
+        "contrast",
+        "statistics",
+    }
+    if forbidden.intersection(result):
+        raise ToolResultContractError(
+            "Differential-accessibility result contains a large payload."
+        )
 
 
 def _assert_signature_matches(spec: ToolSpec) -> None:
@@ -1188,6 +1303,68 @@ def build_default_tool_registry() -> ToolRegistry:
         exception_classifier=_classify_m81_exception,
         recovery_policy_version="build-replicate-pseudobulk-v1",
     )
+    differential_accessibility_spec = ToolSpec(
+        name="run_replicate_differential_accessibility",
+        function=run_replicate_differential_accessibility,
+        required_arguments={
+            "pseudobulk_path": path_argument,
+            "group_value": ArgumentSpec((str,)),
+            "condition_key": ArgumentSpec((str,)),
+            "numerator_condition": ArgumentSpec((str,)),
+            "denominator_condition": ArgumentSpec((str,)),
+            "design_type": ArgumentSpec(
+                (str,), choices=("independent", "paired")
+            ),
+            "output_dir": path_argument,
+        },
+        optional_arguments={
+            "covariates": ArgumentSpec((list, tuple)),
+            "overwrite": ArgumentSpec((bool,)),
+        },
+        result_contract=ResultContract(
+            name="ReplicateDifferentialAccessibilityToolResult",
+            required_fields={
+                "status": (str,),
+                "da_path": (str,),
+                "da_sha256": (str,),
+                "artifact_type": (str,),
+                "artifact_schema_version": (int,),
+                "pseudobulk_path": (str,),
+                "pseudobulk_sha256": (str,),
+                "preparation_sha256": (str,),
+                "analysis_sha256": (str,),
+                "group_value": (str,),
+                "condition_key": (str,),
+                "numerator_condition": (str,),
+                "denominator_condition": (str,),
+                "design_type": (str,),
+                "n_samples": (int,),
+                "n_numerator_replicates": (int,),
+                "n_denominator_replicates": (int,),
+                "design_rank": (int,),
+                "residual_degrees_of_freedom": (int,),
+                "warning_codes": (list,),
+                "n_warnings": (int,),
+                "n_input_features": (int,),
+                "n_tested_features": (int,),
+                "n_filtered_features": (int,),
+                "filtering_method": (str,),
+                "normalization_method": (str,),
+                "backend_pipeline": (str,),
+                "production_r_script_sha256": (str,),
+                "r_version": (str,),
+                "bioconductor_version": (str,),
+                "edger_version": (str,),
+                "package_versions": (dict,),
+            },
+            validator=_validate_differential_accessibility_result,
+        ),
+        exception_classifier=_classify_m82_exception,
+        retryable_error_codes=frozenset(),
+        recovery_policy_version=(
+            "run-replicate-differential-accessibility-edger-ql-v1"
+        ),
+    )
     specs = (
         inspect_spec,
         embedding_spec,
@@ -1199,6 +1376,7 @@ def build_default_tool_registry() -> ToolRegistry:
         annotation_evaluation_spec,
         feature_space_spec,
         pseudobulk_spec,
+        differential_accessibility_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

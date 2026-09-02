@@ -75,6 +75,94 @@ def test_pseudobulk_request_produces_exact_two_step_plan(registry) -> None:
     assert plan.steps[1].arguments["covariate_keys"] == ("sex", "age")
 
 
+def _da_inputs() -> dict[str, object]:
+    return {
+        "group_value": "T cells",
+        "condition_key": "condition",
+        "numerator_condition": "treated",
+        "denominator_condition": "control",
+        "design_type": "independent",
+        "output_dir": "/output",
+    }
+
+
+def test_existing_pseudobulk_da_request_produces_exact_one_step_plan(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Run replicate-aware differential accessibility",
+            {**_da_inputs(), "pseudobulk_path": "/data/pseudobulk.h5ad"},
+        ),
+        registry,
+    )
+    assert plan.plan_id == "request-1:replicate-differential-accessibility"
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "run_replicate_differential_accessibility",
+    )
+    assert plan.steps[0].arguments["pseudobulk_path"] == "/data/pseudobulk.h5ad"
+
+
+def test_raw_da_request_chains_feature_pseudobulk_and_da_by_reference(registry) -> None:
+    plan = DeterministicPlanner().plan(
+        _request(
+            "Build pseudobulk and run differential accessibility",
+            {
+                **_da_inputs(),
+                "input_path": "/data/raw.h5ad",
+                "matrix_source": "X",
+                "matrix_semantics": "fragment_counts",
+                "species": "human",
+                "genome_assembly": "hg38",
+                "coordinate_source": "none",
+                "replicate_key": "donor",
+                "group_key": "cell_type",
+                "group_source": "raw_obs",
+                "covariates": [{"key": "age", "kind": "numeric"}],
+            },
+        ),
+        registry,
+    )
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
+        "run_replicate_differential_accessibility",
+    )
+    assert plan.steps[2].arguments["pseudobulk_path"] == StepOutputRef(
+        "build_pseudobulk", "pseudobulk_path"
+    )
+    assert plan.steps[1].arguments["covariate_keys"] == ("age",)
+    assert plan.steps[2].arguments["covariates"] == (
+        {"key": "age", "kind": "numeric"},
+    )
+
+
+def test_da_intent_precedes_pseudobulk_and_ambiguous_sources_fail(registry) -> None:
+    with pytest.raises(PlannerError) as caught:
+        DeterministicPlanner().plan(
+            _request(
+                "Build pseudobulk then run differential accessibility",
+                {
+                    **_da_inputs(),
+                    "pseudobulk_path": "/data/pseudobulk.h5ad",
+                    "input_path": "/data/raw.h5ad",
+                },
+            ),
+            registry,
+        )
+    assert caught.value.code == "AMBIGUOUS_REQUEST"
+
+
+def test_da_requires_explicit_structured_scientific_inputs(registry) -> None:
+    with pytest.raises(PlannerError) as caught:
+        DeterministicPlanner().plan(
+            _request(
+                "Compare treated versus control differential accessibility",
+                {"pseudobulk_path": "/data/pseudobulk.h5ad"},
+            ),
+            registry,
+        )
+    assert caught.value.code == "MISSING_REQUIRED_INPUT"
+
+
 def test_inspection_request_produces_exact_one_step_plan(registry) -> None:
     plan = DeterministicPlanner().plan(
         _request("Inspect this scATAC-seq dataset", {"input_path": "/data/in.h5ad"}),

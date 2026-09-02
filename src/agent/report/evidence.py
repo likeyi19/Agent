@@ -10,6 +10,12 @@ from pathlib import Path
 import tempfile
 from typing import Literal, Mapping, TypedDict
 
+import anndata as ad
+import numpy as np
+
+from agent.orchestration.differential_accessibility_verifier import (
+    VERIFICATION_R_SCRIPT,
+)
 from agent.orchestration.registry import ToolRegistry
 from agent.orchestration.verifier import verify_run, verify_step
 from agent.schemas import (
@@ -317,6 +323,42 @@ _PSEUDOBULK_FIELDS = frozenset(
         "feature_order_preserved",
         "artifact_schema_version",
         "software_versions",
+    }
+)
+_DIFFERENTIAL_ACCESSIBILITY_FIELDS = frozenset(
+    {
+        "status",
+        "da_path",
+        "da_sha256",
+        "artifact_type",
+        "artifact_schema_version",
+        "pseudobulk_path",
+        "pseudobulk_sha256",
+        "preparation_sha256",
+        "analysis_sha256",
+        "group_value",
+        "condition_key",
+        "numerator_condition",
+        "denominator_condition",
+        "design_type",
+        "n_samples",
+        "n_numerator_replicates",
+        "n_denominator_replicates",
+        "design_rank",
+        "residual_degrees_of_freedom",
+        "warning_codes",
+        "n_warnings",
+        "n_input_features",
+        "n_tested_features",
+        "n_filtered_features",
+        "filtering_method",
+        "normalization_method",
+        "backend_pipeline",
+        "production_r_script_sha256",
+        "r_version",
+        "bioconductor_version",
+        "edger_version",
+        "package_versions",
     }
 )
 
@@ -651,6 +693,53 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             ),
         ),
     ),
+    "run_replicate_differential_accessibility": _ToolProjection(
+        _DIFFERENTIAL_ACCESSIBILITY_FIELDS,
+        (
+            "da_sha256",
+            "pseudobulk_sha256",
+            "preparation_sha256",
+            "analysis_sha256",
+            "group_value",
+            "condition_key",
+            "numerator_condition",
+            "denominator_condition",
+            "design_type",
+            "n_samples",
+            "n_numerator_replicates",
+            "n_denominator_replicates",
+            "design_rank",
+            "residual_degrees_of_freedom",
+            "warning_codes",
+            "n_warnings",
+            "n_input_features",
+            "n_tested_features",
+            "n_filtered_features",
+            "filtering_method",
+            "normalization_method",
+            "backend_pipeline",
+            "production_r_script_sha256",
+            "r_version",
+            "bioconductor_version",
+            "edger_version",
+            "package_versions",
+            "artifact_schema_version",
+        ),
+        "run-replicate-differential-accessibility-edger-ql-v1",
+        (
+            _ArtifactProjection(
+                "da_path",
+                "replicate_differential_accessibility_h5ad",
+                (
+                    "authoritative_whole_file_sha256",
+                    "fresh_independent_python_reconstruction",
+                    "fresh_independent_edger_recomputation",
+                    "exact_result_and_provenance_digest_validation",
+                ),
+                digest_field="da_sha256",
+            ),
+        ),
+    ),
 }
 
 
@@ -664,6 +753,13 @@ def _plain_json(value: object, path: str = "value") -> JsonValue:
                 "Analysis evidence cannot contain non-finite values.",
             )
         return value
+    if isinstance(value, np.generic):
+        return _plain_json(value.item(), path)
+    if isinstance(value, np.ndarray):
+        return tuple(
+            _plain_json(nested, f"{path}[{index}]")
+            for index, nested in enumerate(value.tolist())
+        )
     if isinstance(value, Mapping):
         copied: dict[str, JsonValue] = {}
         for key, nested in value.items():
@@ -778,6 +874,49 @@ def _project_artifacts(
             }
         )
     return artifacts
+
+
+def _differential_accessibility_derived_facts(
+    resolved_arguments: Mapping[str, object], result: Mapping[str, object]
+) -> dict[str, JsonValue]:
+    path_value = result.get("da_path")
+    if not isinstance(path_value, str) or not path_value:
+        raise AnalysisEvidenceError(
+            "EVIDENCE_SOURCE_RESULT_INVALID",
+            "A verified DA result lacks its artifact path.",
+        )
+    artifact = None
+    try:
+        artifact = ad.read_h5ad(Path(path_value).expanduser().resolve(), backed="r")
+        provenance = artifact.uns["agent_milestone8_differential_accessibility"]
+        comparison = provenance["comparison"]
+        filtering = provenance["filter"]
+        normalization = provenance["normalization"]
+        statistical_test = provenance["statistical_test"]
+        result_sha256 = statistical_test["result_sha256"]
+        if not isinstance(result_sha256, str) or len(result_sha256) != 64:
+            raise ValueError
+        int(result_sha256, 16)
+        verifier_sha256 = hashlib.sha256(VERIFICATION_R_SCRIPT.read_bytes()).hexdigest()
+        return {
+            "positive_logfc_meaning": _plain_json(
+                comparison["positive_logfc_meaning"]
+            ),
+            "covariates": _plain_json(resolved_arguments.get("covariates", ())),
+            "filter_configuration": _plain_json(filtering),
+            "normalization_configuration": _plain_json(normalization),
+            "ql_configuration": _plain_json(statistical_test),
+            "result_sha256": result_sha256,
+            "verifier_r_script_sha256": verifier_sha256,
+        }
+    except Exception as exc:
+        raise AnalysisEvidenceError(
+            "EVIDENCE_SOURCE_RESULT_INVALID",
+            "Freshly verified DA provenance could not be projected.",
+        ) from exc
+    finally:
+        if artifact is not None and artifact.file is not None:
+            artifact.file.close()
 
 
 def _prepare_evidence(
@@ -950,6 +1089,12 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == "run_replicate_differential_accessibility":
+            facts.update(
+                _differential_accessibility_derived_facts(
+                    step_result.resolved_arguments, step_result.result
+                )
+            )
         evidence_steps.append(
             {
                 "step_id": step.step_id,

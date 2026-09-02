@@ -101,6 +101,76 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "SOURCE_CHANGED_DURING_READ": ErrorPolicyEntry(
         "A scientific source changed while it was being validated.", _NO
     ),
+    "DA_CONDITION_KEY_MISMATCH": ErrorPolicyEntry(
+        "The differential-accessibility condition key does not match the pseudobulk artifact.",
+        _USER,
+    ),
+    "DA_MATRIX_SEMANTICS_INELIGIBLE": ErrorPolicyEntry(
+        "The pseudobulk matrix semantics are ineligible for differential accessibility.",
+        _USER,
+    ),
+    "DA_GROUP_NOT_FOUND": ErrorPolicyEntry(
+        "The requested differential-accessibility group is absent.", _USER
+    ),
+    "DA_CONDITION_NOT_FOUND": ErrorPolicyEntry(
+        "A requested differential-accessibility condition is absent or invalid.", _USER
+    ),
+    "DA_REPLICATION_INSUFFICIENT": ErrorPolicyEntry(
+        "The selected comparison has insufficient biological replication.", _USER
+    ),
+    "DA_PAIRING_INVALID": ErrorPolicyEntry(
+        "The selected paired comparison is invalid.", _USER
+    ),
+    "DA_ZERO_LIBRARY": ErrorPolicyEntry(
+        "An included pseudobulk sample has a zero library size.", _USER
+    ),
+    "DA_COVARIATE_INVALID": ErrorPolicyEntry(
+        "A requested differential-accessibility covariate is invalid.", _USER
+    ),
+    "DA_COVARIATE_INVARIANT": ErrorPolicyEntry(
+        "A requested differential-accessibility covariate is invariant.", _USER
+    ),
+    "DA_DESIGN_INVALID": ErrorPolicyEntry(
+        "The requested differential-accessibility design is invalid.", _USER
+    ),
+    "DA_DESIGN_RANK_DEFICIENT": ErrorPolicyEntry(
+        "The differential-accessibility design matrix is rank deficient.", _USER
+    ),
+    "DA_CONTRAST_NOT_ESTIMABLE": ErrorPolicyEntry(
+        "The requested differential-accessibility contrast is not estimable.", _USER
+    ),
+    "DA_RESIDUAL_DF_INSUFFICIENT": ErrorPolicyEntry(
+        "The differential-accessibility design has insufficient residual degrees of freedom.",
+        _USER,
+    ),
+    "DA_NO_FEATURES_AFTER_FILTER": ErrorPolicyEntry(
+        "No regulatory features remain after the frozen expression filter.", _USER
+    ),
+    "DA_FILTERED_LIBRARY_ZERO": ErrorPolicyEntry(
+        "Filtering produced an invalid zero library size.", _NO
+    ),
+    "DA_NUMERICAL_RESULT_INVALID": ErrorPolicyEntry(
+        "The differential-accessibility backend produced invalid numerical results.",
+        _NO,
+    ),
+    "RSCRIPT_UNAVAILABLE": ErrorPolicyEntry(
+        "The run requires its compatible pinned R runtime.", _RESUME
+    ),
+    "EDGER_PACKAGE_UNAVAILABLE": ErrorPolicyEntry(
+        "The run requires its compatible pinned edgeR package.", _RESUME
+    ),
+    "EDGER_VERSION_UNSUPPORTED": ErrorPolicyEntry(
+        "The run requires its compatible pinned edgeR version.", _RESUME
+    ),
+    "R_PACKAGE_VERSION_INCOMPATIBLE": ErrorPolicyEntry(
+        "The run requires its compatible pinned R package stack.", _RESUME
+    ),
+    "R_BACKEND_EXECUTION_FAILED": ErrorPolicyEntry(
+        "The differential-accessibility R backend failed during execution.", _NO
+    ),
+    "R_BACKEND_PROTOCOL_INVALID": ErrorPolicyEntry(
+        "The differential-accessibility R backend protocol is invalid.", _NO
+    ),
     "DEPENDENCY_UNAVAILABLE": ErrorPolicyEntry(
         "A required runtime dependency is unavailable.", _USER
     ),
@@ -224,6 +294,8 @@ _BUILTIN_NO_AUTOMATIC_CODES = frozenset(
         "FEATURE_SPACE_ARTIFACT_INVALID",
         "FEATURE_SPACE_SOURCE_MISMATCH",
         "ARTIFACT_SHA256_MISMATCH",
+        "DA_ARTIFACT_INVALID",
+        "DA_PREPARATION_INVALID",
         "PSEUDOBULK_ARTIFACT_INVALID",
         "PSEUDOBULK_METADATA_MISMATCH",
         "PSEUDOBULK_FEATURE_MISMATCH",

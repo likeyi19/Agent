@@ -63,30 +63,22 @@ def _case(cases: tuple[BenchmarkCase, ...], case_id: str) -> BenchmarkCase:
 
 
 def _binding(step: dict[str, object], name: str) -> dict[str, object]:
-    return next(
-        binding
-        for binding in step["arguments"]
-        if isinstance(binding, dict) and binding["name"] == name
-    )
+    arguments = step["arguments"]
+    assert isinstance(arguments, dict)
+    binding = arguments[name]
+    assert isinstance(binding, dict)
+    return binding
 
 
 def _bind_to_input(binding: dict[str, object], input_name: str) -> None:
-    binding.update(
-        {
-            "binding_type": "input",
-            "input_name": input_name,
-            "ref_step_id": None,
-            "ref_output_key": None,
-        }
-    )
+    binding.clear()
+    binding.update({"binding_type": "input", "input_name": input_name})
 
 
 def _without_argument(step: dict[str, object], name: str) -> None:
-    step["arguments"] = [
-        binding
-        for binding in step["arguments"]
-        if not isinstance(binding, dict) or binding.get("name") != name
-    ]
+    arguments = step["arguments"]
+    assert isinstance(arguments, dict)
+    arguments[name] = None
 
 
 def test_corpus_covers_required_categories_workflows_and_tools(
@@ -151,7 +143,9 @@ def test_provider_step_ids_and_descriptions_are_normalized_away(
     changed["steps"][0]["description"] = None
     changed["steps"][1]["description"] = "Unrelated provider prose."
     changed["steps"][1]["depends_on"] = ["opaque-alpha"]
-    changed["steps"][1]["arguments"][0]["ref_step_id"] = "opaque-alpha"
+    changed["steps"][1]["arguments"]["input_path"]["ref_step_id"] = (
+        "opaque-alpha"
+    )
 
     baseline_report = run_benchmark(
         (case,), replay_overrides={case.case_id: {"response": baseline}}
@@ -176,11 +170,7 @@ def test_binding_origin_is_scored_separately_from_preflight(
 ) -> None:
     case = _case(cases, "embedding_canonical")
     response = json.loads(oracle_response(case))
-    output_binding = next(
-        binding
-        for binding in response["steps"][1]["arguments"]
-        if binding["name"] == "output_dir"
-    )
+    output_binding = response["steps"][1]["arguments"]["output_dir"]
     output_binding["input_name"] = "input_path"
 
     score = run_benchmark(
@@ -396,7 +386,7 @@ def test_dependency_and_result_reference_are_scored_structurally(
 ) -> None:
     case = _case(cases, "embedding_canonical")
     response = json.loads(oracle_response(case))
-    response["steps"][1]["arguments"][0]["ref_output_key"] = (
+    response["steps"][1]["arguments"]["input_path"]["ref_output_key"] = (
         "invented_result_path"
     )
 

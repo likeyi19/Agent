@@ -45,31 +45,37 @@ class DiagnosticPlanningModel:
         return self.response  # type: ignore[return-value]
 
 
-def _input_binding(name: str, input_name: str) -> dict[str, object]:
+def _input_binding(input_name: str) -> dict[str, object]:
     return {
-        "name": name,
         "binding_type": "input",
         "input_name": input_name,
-        "ref_step_id": None,
-        "ref_output_key": None,
     }
 
 
-def _ref_binding(name: str, step_id: str, output_key: str) -> dict[str, object]:
+def _ref_binding(step_id: str, output_key: str) -> dict[str, object]:
     return {
-        "name": name,
         "binding_type": "ref",
-        "input_name": None,
         "ref_step_id": step_id,
         "ref_output_key": output_key,
     }
+
+
+def _arguments(tool_name: str, **bindings: object) -> dict[str, object]:
+    spec = build_default_tool_registry().get(tool_name)
+    arguments: dict[str, object] = {
+        name: None for name in spec.optional_arguments
+    }
+    arguments.update(bindings)
+    return arguments
 
 
 def _inspect_step(**changes: object) -> dict[str, object]:
     step: dict[str, object] = {
         "step_id": "inspect",
         "tool_name": "inspect_scATAC",
-        "arguments": [_input_binding("path", "input_path")],
+        "arguments": _arguments(
+            "inspect_scATAC", path=_input_binding("input_path")
+        ),
         "depends_on": [],
         "description": None,
     }
@@ -81,11 +87,12 @@ def _embed_step(**changes: object) -> dict[str, object]:
     step: dict[str, object] = {
         "step_id": "embed",
         "tool_name": "epizoo_embed_cells",
-        "arguments": [
-            _input_binding("input_path", "input_path"),
-            _input_binding("output_dir", "output_dir"),
-            _input_binding("species", "species"),
-        ],
+        "arguments": _arguments(
+            "epizoo_embed_cells",
+            input_path=_input_binding("input_path"),
+            output_dir=_input_binding("output_dir"),
+            species=_input_binding("species"),
+        ),
         "depends_on": [],
         "description": None,
     }
@@ -95,7 +102,7 @@ def _embed_step(**changes: object) -> dict[str, object]:
 
 def _plan_response(*steps: dict[str, object], **changes: object) -> str:
     response: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "plan",
         "steps": list(steps),
         "reason": None,
@@ -184,6 +191,7 @@ def test_successful_planning_emits_complete_sanitized_diagnostics() -> None:
     assert diagnostics[-1]["retry_used"] is False
     assert diagnostics[-1]["fallback_used"] is False
     assert diagnostics[-1]["diagnostic_schema_version"] == 2
+    assert diagnostics[-1]["planning_wire_schema_version"] == 3
     assert diagnostics[-1]["profile_id"] == "unprofiled"
     assert diagnostics[-1]["provider_id"] == "custom"
     assert len(diagnostics[-1]["model_identity_digest"]) == 64
@@ -285,7 +293,7 @@ def test_malformed_and_markdown_json_fail_at_parse(response: str) -> None:
 def test_wire_schema_invalid_output_is_distinguished_from_parse() -> None:
     result = _run(
         DiagnosticPlanningModel(
-            json.dumps({"schema_version": 2, "status": "plan", "steps": []})
+            json.dumps({"schema_version": 3, "status": "plan", "steps": []})
         )
     )
     diagnostic = _diagnostics(result)[-1]
@@ -295,11 +303,11 @@ def test_wire_schema_invalid_output_is_distinguished_from_parse() -> None:
 
 
 def test_invalid_binding_reports_safe_local_position() -> None:
-    invalid = _input_binding("path", "input_path")
+    invalid = _input_binding("input_path")
     invalid["binding_type"] = "literal"
     result = _run(
         DiagnosticPlanningModel(
-            _plan_response(_inspect_step(arguments=[invalid]))
+            _plan_response(_inspect_step(arguments={"path": invalid}))
         )
     )
     diagnostic = _diagnostics(result)[-1]
@@ -316,7 +324,7 @@ def test_missing_model_requested_input_reports_name_without_value() -> None:
         DiagnosticPlanningModel(
             _plan_response(
                 _inspect_step(
-                    arguments=[_input_binding("path", "missing_input")]
+                    arguments={"path": _input_binding("missing_input")}
                 )
             )
         )
@@ -329,11 +337,11 @@ def test_missing_model_requested_input_reports_name_without_value() -> None:
     assert diagnostic["reason_code"] == "request_input_missing"
 
 
-def test_unknown_tool_is_diagnosed_during_side_effect_free_preflight() -> None:
+def test_unknown_tool_is_diagnosed_during_candidate_parsing() -> None:
     result = _run(
         DiagnosticPlanningModel(
             _plan_response(
-                _inspect_step(tool_name="invented_tool", arguments=[])
+                _inspect_step(tool_name="invented_tool", arguments={})
             )
         )
     )
@@ -343,25 +351,25 @@ def test_unknown_tool_is_diagnosed_during_side_effect_free_preflight() -> None:
     assert diagnostic["stage"] == "tool_selection"
     assert diagnostic["step_index"] == 0
     assert "tool_name" not in diagnostic
-    assert diagnostic["candidate_preflight_passed"] is False
+    assert diagnostic["candidate_preflight_passed"] is None
 
 
 @pytest.mark.parametrize(
     ("arguments", "reason_code", "argument_name"),
     [
-        ([], "missing_tool_argument", "path"),
+        ({}, "missing_tool_argument", "path"),
         (
-            [
-                _input_binding("path", "input_path"),
-                _input_binding("input_path", "input_path"),
-            ],
+            {
+                "path": _input_binding("input_path"),
+                "input_path": _input_binding("input_path"),
+            },
             "unknown_tool_argument",
             "input_path",
         ),
     ],
 )
 def test_missing_and_unknown_tool_arguments_are_diagnosed(
-    arguments: list[dict[str, object]],
+    arguments: dict[str, object],
     reason_code: str,
     argument_name: str,
 ) -> None:
@@ -400,11 +408,12 @@ def test_invalid_dependency_is_diagnosed_before_candidate_construction() -> None
 def test_invalid_result_field_reference_has_safe_structural_detail() -> None:
     inspect = _inspect_step()
     embed = _embed_step(
-        arguments=[
-            _ref_binding("input_path", "inspect", "embedding_path"),
-            _input_binding("output_dir", "output_dir"),
-            _input_binding("species", "species"),
-        ],
+        arguments=_arguments(
+            "epizoo_embed_cells",
+            input_path=_ref_binding("inspect", "embedding_path"),
+            output_dir=_input_binding("output_dir"),
+            species=_input_binding("species"),
+        ),
         depends_on=["inspect"],
     )
     result = _run(
@@ -431,7 +440,7 @@ def test_explicit_unsupported_response_has_no_refusal_prose() -> None:
     refusal = "provider refusal prose with PRIVATE-TOKEN"
     response = json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "status": "unsupported",
             "steps": [],
             "reason": refusal,
@@ -477,7 +486,7 @@ def test_diagnostics_survive_durable_success_and_failure(tmp_path) -> None:
     unsupported_store = FileRunStore(tmp_path / "unsupported")
     unsupported_response = json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "status": "unsupported",
             "steps": [],
             "reason": "unsupported provider prose",
@@ -530,7 +539,7 @@ def test_invented_identifier_that_looks_like_a_secret_is_not_echoed() -> None:
     result = _run(
         DiagnosticPlanningModel(
             _plan_response(
-                _inspect_step(tool_name=identifier_secret, arguments=[])
+                _inspect_step(tool_name=identifier_secret, arguments={})
             )
         )
     )

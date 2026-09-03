@@ -34,7 +34,7 @@ class StubPlanningModel:
         del prompt, response_schema
         return json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "unsupported",
                 "steps": [],
                 "reason": "stub",

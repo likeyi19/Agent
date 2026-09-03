@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 from pathlib import Path
@@ -26,10 +27,10 @@ from .planning_diagnostics import (
     PlanningDiagnosticStage,
 )
 from .planning_model import PlanningModel, PlanningModelError, PlanningModelProfile
-from .registry import ArgumentSpec, ToolRegistry
+from .registry import ArgumentSpec, ResultFieldPlanningSemantics, ToolRegistry
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _MAX_RESPONSE_BYTES = 64 * 1024
 _MAX_RESPONSE_DEPTH = 10
 _MAX_RESPONSE_NODES = 4096
@@ -49,202 +50,6 @@ _PROVIDER_ERROR_CODES = frozenset(
     }
 )
 
-_TOOL_DESCRIPTIONS = {
-    "inspect_scATAC": (
-        "Inspect a scATAC-seq h5ad file and return lightweight matrix and "
-        "metadata information without running model inference."
-    ),
-    "epizoo_embed_cells": (
-        "Compute EpiZoo cell embeddings from a scATAC-seq h5ad file and "
-        "persist the embeddings and ordered cell identifiers as artifacts."
-    ),
-    "build_cell_neighbors": (
-        "Build a sparse Scanpy nearest-neighbor graph from persisted EpiZoo "
-        "embeddings and their ordered cell-ID sidecar."
-    ),
-    "cluster_cells": (
-        "Run fixed-setting Leiden clustering on a valid Milestone 6 neighbors "
-        "analysis artifact and persist a new compact h5ad artifact."
-    ),
-    "compute_cell_umap": (
-        "Compute a fixed two-dimensional UMAP from a valid clustered Milestone 6 "
-        "analysis artifact and persist a new compact h5ad artifact."
-    ),
-    "evaluate_cell_clustering": (
-        "Evaluate fixed cluster labels in a valid Milestone 6 clustering or UMAP "
-        "artifact against an ordered reference annotation and persist four metrics."
-    ),
-    "transfer_cell_labels": (
-        "Transfer biological labels from an annotated reference to ordered query "
-        "cells by exact deterministic k-nearest neighbors in EpiZoo embedding space."
-    ),
-    "evaluate_cell_annotation": (
-        "Evaluate a fixed valid Milestone 6.3 annotation against exact ordered "
-        "ground-truth labels and persist fixed accuracy, macro-F1, confusion, "
-        "per-class, and descriptive confidence diagnostics."
-    ),
-    "validate_scATAC_feature_space": (
-        "Validate an immutable raw sparse scATAC regulatory feature space, its "
-        "declared count semantics, species/assembly, ordered identities, and "
-        "optional explicit coordinates, then persist a provenance manifest."
-    ),
-    "build_replicate_pseudobulk": (
-        "Build exact sparse SUM pseudobulks for fixed group, biological replicate, "
-        "and condition metadata from a verified regulatory feature-space manifest."
-    ),
-    "run_replicate_differential_accessibility": (
-        "Run the fixed replicate-aware edgeR quasi-likelihood differential-"
-        "accessibility workflow on a verified Milestone 8.1 pseudobulk artifact."
-    ),
-}
-
-_ARGUMENT_DESCRIPTIONS = {
-    ("inspect_scATAC", "path"): "Input scATAC-seq h5ad path.",
-    ("epizoo_embed_cells", "input_path"): "Input scATAC-seq h5ad path.",
-    ("epizoo_embed_cells", "output_dir"): "Directory for embedding artifacts.",
-    ("epizoo_embed_cells", "species"): "Species supported by EpiZoo.",
-    ("epizoo_embed_cells", "checkpoint_path"): "EpiZoo checkpoint path.",
-    ("epizoo_embed_cells", "device"): "Execution device.",
-    ("epizoo_embed_cells", "overwrite"): "Whether existing artifacts may be replaced.",
-    ("build_cell_neighbors", "embedding_path"): "Persisted EpiZoo npy embedding path.",
-    ("build_cell_neighbors", "cell_ids_path"): "Ordered EpiZoo cell-ID sidecar path.",
-    ("build_cell_neighbors", "output_dir"): "Directory for the neighbors artifact.",
-    ("build_cell_neighbors", "n_neighbors"): "Explicit nearest-neighbor count.",
-    ("build_cell_neighbors", "metric"): "Euclidean or cosine neighbor metric.",
-    ("build_cell_neighbors", "random_seed"): "Explicit nonnegative random seed.",
-    ("build_cell_neighbors", "overwrite"): "Whether an existing output may be replaced.",
-    ("cluster_cells", "analysis_path"): "Valid Milestone 6 neighbors artifact path.",
-    ("cluster_cells", "output_dir"): "Directory for the clustered artifact.",
-    ("cluster_cells", "resolution"): "Explicit positive Leiden resolution.",
-    ("cluster_cells", "random_seed"): "Explicit nonnegative random seed.",
-    ("cluster_cells", "overwrite"): "Whether an existing output may be replaced.",
-    ("compute_cell_umap", "analysis_path"): "Valid clustered Milestone 6 artifact path.",
-    ("compute_cell_umap", "output_dir"): "Directory for the UMAP artifact.",
-    ("compute_cell_umap", "min_dist"): "Explicit nonnegative UMAP minimum distance.",
-    ("compute_cell_umap", "spread"): "Explicit positive UMAP spread.",
-    ("compute_cell_umap", "random_seed"): "Explicit nonnegative random seed.",
-    ("compute_cell_umap", "overwrite"): "Whether an existing output may be replaced.",
-    ("evaluate_cell_clustering", "analysis_path"): (
-        "Valid Milestone 6 clustering or UMAP artifact path."
-    ),
-    ("evaluate_cell_clustering", "reference_h5ad_path"): (
-        "Reference annotated h5ad path with identical ordered cell IDs."
-    ),
-    ("evaluate_cell_clustering", "label_key"): "Reference annotation obs column.",
-    ("evaluate_cell_clustering", "output_dir"): "Directory for the metrics report.",
-    ("evaluate_cell_clustering", "cluster_key"): "Predicted cluster obs column.",
-    ("evaluate_cell_clustering", "overwrite"): (
-        "Whether an existing evaluation report may be replaced."
-    ),
-    ("transfer_cell_labels", "reference_embedding_path"): (
-        "Persisted reference EpiZoo npy embedding path."
-    ),
-    ("transfer_cell_labels", "reference_cell_ids_path"): (
-        "Ordered reference EpiZoo cell-ID sidecar path."
-    ),
-    ("transfer_cell_labels", "reference_h5ad_path"): (
-        "Annotated reference scATAC h5ad path."
-    ),
-    ("transfer_cell_labels", "reference_label_key"): (
-        "Reference biological string-label obs column."
-    ),
-    ("transfer_cell_labels", "reference_species"): (
-        "Species reported by reference EpiZoo embedding."
-    ),
-    ("transfer_cell_labels", "reference_checkpoint_path"): (
-        "Checkpoint path reported by reference EpiZoo embedding."
-    ),
-    ("transfer_cell_labels", "query_embedding_path"): (
-        "Persisted query EpiZoo npy embedding path."
-    ),
-    ("transfer_cell_labels", "query_cell_ids_path"): (
-        "Ordered query EpiZoo cell-ID sidecar path."
-    ),
-    ("transfer_cell_labels", "query_h5ad_path"): "Query scATAC h5ad path.",
-    ("transfer_cell_labels", "query_species"): (
-        "Species reported by query EpiZoo embedding."
-    ),
-    ("transfer_cell_labels", "query_checkpoint_path"): (
-        "Checkpoint path reported by query EpiZoo embedding."
-    ),
-    ("transfer_cell_labels", "output_dir"): (
-        "Directory for the compact label-transfer artifact."
-    ),
-    ("transfer_cell_labels", "n_neighbors"): "Explicit exact-neighbor count.",
-    ("transfer_cell_labels", "metric"): "Euclidean or cosine distance metric.",
-    ("transfer_cell_labels", "min_confidence"): (
-        "Explicit minimum uniform-vote confidence within zero and one."
-    ),
-    ("transfer_cell_labels", "overwrite"): (
-        "Whether an existing annotation artifact may be replaced."
-    ),
-    ("evaluate_cell_annotation", "annotation_path"): (
-        "Fixed valid Milestone 6.3 label-transfer h5ad path."
-    ),
-    ("evaluate_cell_annotation", "ground_truth_h5ad_path"): (
-        "Ground-truth h5ad path with identical ordered query cell IDs."
-    ),
-    ("evaluate_cell_annotation", "ground_truth_label_key"): (
-        "Ground-truth biological string-label obs column."
-    ),
-    ("evaluate_cell_annotation", "output_dir"): (
-        "Directory for the annotation-evaluation JSON report."
-    ),
-    ("evaluate_cell_annotation", "overwrite"): (
-        "Whether an existing annotation-evaluation report may be replaced."
-    ),
-    ("validate_scATAC_feature_space", "input_path"): "Immutable raw scATAC h5ad path.",
-    ("validate_scATAC_feature_space", "output_dir"): "Directory for the feature-space manifest.",
-    ("validate_scATAC_feature_space", "matrix_source"): "Exact matrix source: X or layer.",
-    ("validate_scATAC_feature_space", "matrix_semantics"): "Declared regulatory matrix semantics.",
-    ("validate_scATAC_feature_space", "species"): "Human or mouse source species.",
-    ("validate_scATAC_feature_space", "genome_assembly"): "Compatible hg38 or mm10 genome assembly.",
-    ("validate_scATAC_feature_space", "coordinate_source"): "Explicit var columns or no coordinates.",
-    ("validate_scATAC_feature_space", "layer_key"): "Exact layer key when matrix_source is layer.",
-    ("validate_scATAC_feature_space", "feature_chrom_key"): "Explicit chromosome var column.",
-    ("validate_scATAC_feature_space", "feature_start_key"): "Explicit start-coordinate var column.",
-    ("validate_scATAC_feature_space", "feature_end_key"): "Explicit end-coordinate var column.",
-    ("validate_scATAC_feature_space", "coordinate_system"): "Explicit coordinate convention.",
-    ("validate_scATAC_feature_space", "semantics_metadata_key"): "Optional corroborating raw uns key.",
-    ("validate_scATAC_feature_space", "overwrite"): "Whether an existing manifest may be replaced.",
-    ("build_replicate_pseudobulk", "feature_space_path"): "Verified regulatory feature-space manifest.",
-    ("build_replicate_pseudobulk", "replicate_key"): "Raw obs biological replicate/subject column.",
-    ("build_replicate_pseudobulk", "group_key"): "Raw group column or fixed predicted_label key.",
-    ("build_replicate_pseudobulk", "condition_key"): "Raw obs comparison-condition column.",
-    ("build_replicate_pseudobulk", "output_dir"): "Directory for the pseudobulk H5AD.",
-    ("build_replicate_pseudobulk", "group_source"): "raw_obs or verified_annotation.",
-    ("build_replicate_pseudobulk", "group_annotation_path"): "Valid Milestone 6.3 annotation path.",
-    ("build_replicate_pseudobulk", "covariate_keys"): "Ordered raw obs covariate columns.",
-    ("build_replicate_pseudobulk", "overwrite"): "Whether an existing pseudobulk may be replaced.",
-    ("run_replicate_differential_accessibility", "pseudobulk_path"): (
-        "Valid verified Milestone 8.1 replicate-pseudobulk H5AD path."
-    ),
-    ("run_replicate_differential_accessibility", "group_value"): (
-        "Exact biological group value selected for comparison."
-    ),
-    ("run_replicate_differential_accessibility", "condition_key"): (
-        "Condition metadata key recorded by the pseudobulk artifact."
-    ),
-    ("run_replicate_differential_accessibility", "numerator_condition"): (
-        "Exact numerator condition for the directional contrast."
-    ),
-    ("run_replicate_differential_accessibility", "denominator_condition"): (
-        "Exact denominator condition for the directional contrast."
-    ),
-    ("run_replicate_differential_accessibility", "design_type"): (
-        "Explicit independent or paired replicate design."
-    ),
-    ("run_replicate_differential_accessibility", "output_dir"): (
-        "Directory for the compact differential-accessibility H5AD."
-    ),
-    ("run_replicate_differential_accessibility", "covariates"): (
-        "Ordered additive covariate specifications with exact key and kind."
-    ),
-    ("run_replicate_differential_accessibility", "overwrite"): (
-        "Whether the identical DA output may be replaced."
-    ),
-}
-
 
 class _DuplicateJsonKey(ValueError):
     pass
@@ -263,52 +68,94 @@ def _reject_json_constant(value: str) -> object:
     raise ValueError(f"Non-standard JSON constant {value!r} is not allowed.")
 
 
-def _response_schema(registry: ToolRegistry) -> Mapping[str, JsonValue]:
-    tool_names = registry.names()
-    argument_names = tuple(
-        sorted(
-            {
-                argument_name
-                for tool_name in tool_names
-                for argument_name in (
-                    *registry.get(tool_name).required_arguments,
-                    *registry.get(tool_name).optional_arguments,
-                )
-            }
-        )
-    )
-    tool_name_schema: dict[str, JsonValue] = {"type": "string"}
-    if tool_names:
-        tool_name_schema["enum"] = tool_names
-    argument_name_schema: dict[str, JsonValue] = {"type": "string"}
-    if argument_names:
-        argument_name_schema["enum"] = argument_names
+def _closed_object_schema(
+    properties: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": tuple(properties),
+        "additionalProperties": False,
+    }
 
-    binding_properties: Mapping[str, JsonValue] = {
-        "name": argument_name_schema,
-        "binding_type": {"type": "string", "enum": ("input", "ref")},
-        "input_name": {"type": ("string", "null")},
-        "ref_step_id": {"type": ("string", "null")},
-        "ref_output_key": {"type": ("string", "null")},
-    }
-    binding_schema: Mapping[str, JsonValue] = {
-        "type": "object",
-        "properties": binding_properties,
-        "required": tuple(binding_properties),
-        "additionalProperties": False,
-    }
-    step_properties: Mapping[str, JsonValue] = {
-        "step_id": {"type": "string"},
-        "tool_name": tool_name_schema,
-        "arguments": {"type": "array", "items": binding_schema},
-        "depends_on": {"type": "array", "items": {"type": "string"}},
-        "description": {"type": ("string", "null")},
-    }
+
+def _binding_schema(
+    request: AgentRequest,
+    argument_spec: ArgumentSpec,
+) -> Mapping[str, JsonValue]:
+    alternatives: list[Mapping[str, JsonValue]] = []
+    input_names = tuple(sorted(request.inputs))
+    if input_names:
+        alternatives.append(
+            _closed_object_schema(
+                {
+                    "binding_type": {"type": "string", "enum": ("input",)},
+                    "input_name": {"type": "string", "enum": input_names},
+                }
+            )
+        )
+    if argument_spec.allow_step_output_ref:
+        alternatives.append(
+            _closed_object_schema(
+                {
+                    "binding_type": {"type": "string", "enum": ("ref",)},
+                    "ref_step_id": {"type": "string"},
+                    "ref_output_key": {"type": "string"},
+                }
+            )
+        )
+    if not alternatives:
+        raise PlannerError(
+            "PLANNER_CATALOG_INVALID",
+            "A registered tool argument has no available binding source.",
+            category=ErrorCategory.INTERNAL_AGENT_ERROR,
+        )
+    return {"anyOf": tuple(alternatives)}
+
+
+def _tool_step_schema(
+    tool_name: str,
+    request: AgentRequest,
+    registry: ToolRegistry,
+) -> Mapping[str, JsonValue]:
+    spec = registry.get(tool_name)
+    argument_properties: dict[str, JsonValue] = {}
+    for argument_name, argument_spec in sorted(spec.required_arguments.items()):
+        argument_properties[argument_name] = _binding_schema(request, argument_spec)
+    for argument_name, argument_spec in sorted(spec.optional_arguments.items()):
+        argument_properties[argument_name] = {
+            "anyOf": (
+                _binding_schema(request, argument_spec),
+                {"type": "null"},
+            )
+        }
+    return _closed_object_schema(
+        {
+            "step_id": {"type": "string"},
+            "tool_name": {"type": "string", "enum": (tool_name,)},
+            "arguments": _closed_object_schema(argument_properties),
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "description": {"type": ("string", "null")},
+        }
+    )
+
+
+def _response_schema(
+    registry: ToolRegistry,
+    request: AgentRequest,
+) -> Mapping[str, JsonValue]:
+    tool_names = registry.names()
+    if not tool_names:
+        raise PlannerError(
+            "PLANNER_CATALOG_INVALID",
+            "Planning requires at least one registered tool.",
+            category=ErrorCategory.INTERNAL_AGENT_ERROR,
+        )
     step_schema: Mapping[str, JsonValue] = {
-        "type": "object",
-        "properties": step_properties,
-        "required": tuple(step_properties),
-        "additionalProperties": False,
+        "anyOf": tuple(
+            _tool_step_schema(tool_name, request, registry)
+            for tool_name in tool_names
+        )
     }
     root_properties: Mapping[str, JsonValue] = {
         "schema_version": {"type": "integer", "enum": (_SCHEMA_VERSION,)},
@@ -316,12 +163,7 @@ def _response_schema(registry: ToolRegistry) -> Mapping[str, JsonValue]:
         "steps": {"type": "array", "items": step_schema},
         "reason": {"type": ("string", "null")},
     }
-    return {
-        "type": "object",
-        "properties": root_properties,
-        "required": tuple(root_properties),
-        "additionalProperties": False,
-    }
+    return _closed_object_schema(root_properties)
 
 
 def _python_type_to_json_type(value_type: type) -> str:
@@ -349,6 +191,19 @@ def _catalog_choice(value: object) -> JsonValue:
         return value
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_catalog_choice(item) for item in value)
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise PlannerError(
+                "PLANNER_CATALOG_INVALID",
+                "A registered tool mapping cannot be represented safely for planning.",
+                category=ErrorCategory.INTERNAL_AGENT_ERROR,
+            )
+        return {
+            key: _catalog_choice(value[key])
+            for key in sorted(value)
+        }
     raise PlannerError(
         "PLANNER_CATALOG_INVALID",
         "A registered tool choice cannot be represented safely for planning.",
@@ -357,7 +212,7 @@ def _catalog_choice(value: object) -> JsonValue:
 
 
 def _argument_catalog(
-    tool_name: str, argument_name: str, spec: ArgumentSpec
+    spec: ArgumentSpec,
 ) -> Mapping[str, JsonValue]:
     metadata: dict[str, JsonValue] = {
         "json_types": tuple(
@@ -368,11 +223,58 @@ def _argument_catalog(
         ),
         "allows_step_output_ref": spec.allow_step_output_ref,
     }
-    description = _ARGUMENT_DESCRIPTIONS.get((tool_name, argument_name))
-    if description is not None:
-        metadata["description"] = description
+    planning = spec.planning
+    if planning is not None:
+        metadata.update(
+            {
+                "description": planning.description,
+                "source_eligibility": planning.source_eligibility.value,
+                "accepted_artifact_kinds": tuple(
+                    kind.value for kind in planning.accepted_artifact_kinds
+                ),
+                "scientific_parameter": planning.scientific_parameter,
+            }
+        )
+        if planning.provenance_role is not None:
+            metadata["provenance_role"] = planning.provenance_role.value
+        if planning.conditional_note is not None:
+            metadata["conditional_note"] = planning.conditional_note
     if spec.choices:
         metadata["choices"] = tuple(_catalog_choice(value) for value in spec.choices)
+    if (
+        planning is not None
+        and planning.default_when_omitted is not inspect.Parameter.empty
+    ):
+        default_when_omitted = planning.default_when_omitted
+        metadata["default_when_omitted"] = (
+            "registered_tool_default"
+            if default_when_omitted is not None
+            and any(issubclass(value_type, Path) for value_type in spec.accepted_types)
+            else _catalog_choice(default_when_omitted)
+        )
+    return metadata
+
+
+def _result_field_catalog(
+    accepted_types: tuple[type, ...],
+    planning: ResultFieldPlanningSemantics | None,
+) -> Mapping[str, JsonValue]:
+    metadata: dict[str, JsonValue] = {
+        "json_types": tuple(
+            dict.fromkeys(
+                _python_type_to_json_type(value_type)
+                for value_type in accepted_types
+            )
+        ),
+        "downstream_bindable": False,
+    }
+    if planning is not None:
+        metadata["description"] = planning.description
+        metadata["downstream_bindable"] = planning.downstream_bindable
+        if planning.artifact_kind is not None:
+            metadata["artifact_kind"] = planning.artifact_kind.value
+        if planning.provenance_role is not None:
+            metadata["provenance_role"] = planning.provenance_role.value
     return metadata
 
 
@@ -380,21 +282,38 @@ def _sanitized_catalog(registry: ToolRegistry) -> tuple[Mapping[str, JsonValue],
     tools: list[Mapping[str, JsonValue]] = []
     for tool_name in registry.names():
         spec = registry.get(tool_name)
+        planning = spec.planning
         tools.append(
             {
                 "name": spec.name,
-                "description": _TOOL_DESCRIPTIONS.get(
-                    spec.name, "Registered scientific tool."
+                "planning_role": (
+                    planning.role.value if planning is not None else "operation"
+                ),
+                "description": (
+                    planning.description
+                    if planning is not None
+                    else "Registered scientific tool."
                 ),
                 "required_arguments": {
-                    name: _argument_catalog(spec.name, name, argument_spec)
+                    name: _argument_catalog(argument_spec)
                     for name, argument_spec in sorted(spec.required_arguments.items())
                 },
                 "optional_arguments": {
-                    name: _argument_catalog(spec.name, name, argument_spec)
+                    name: _argument_catalog(argument_spec)
                     for name, argument_spec in sorted(spec.optional_arguments.items())
                 },
-                "result_fields": tuple(sorted(spec.result_contract.required_fields)),
+                "result_fields": {
+                    name: _result_field_catalog(
+                        accepted_types,
+                        spec.result_contract.planning_fields.get(name),
+                    )
+                    for name, accepted_types in sorted(
+                        spec.result_contract.required_fields.items()
+                    )
+                },
+                "conditional_notes": (
+                    planning.conditional_notes if planning is not None else ()
+                ),
             }
         )
     return tuple(tools)
@@ -436,16 +355,36 @@ def _build_prompt(request: AgentRequest, registry: ToolRegistry) -> str:
         for name in sorted(request.inputs)
     )
     prompt_payload = {
+        "planning_catalog_semantic_version": 1,
         "instructions": (
-            "Return exactly one JSON object matching the supplied response schema. "
-            "Plan only with the listed tools. Represent every executable argument "
-            "as one fixed binding object in the step arguments array. An input "
-            "binding uses binding_type='input', an available input_name, and null "
-            "ref fields. A reference binding uses binding_type='ref', null "
-            "input_name, and non-null ref_step_id/ref_output_key naming a declared "
-            "upstream dependency. Never emit executable literal values. For a plan, "
-            "return non-empty steps and null reason. For an unsupported request, "
-            "return empty steps and a non-empty reason."
+            "Return only one complete JSON planning decision matching the supplied "
+            "schema.",
+            "Use only registered tools and choose only operations needed to fulfill "
+            "the request.",
+            "Bind executable values only from semantically matching AgentRequest "
+            "inputs or compatible upstream result fields; never match inputs by JSON "
+            "type alone.",
+            "Never invent paths, species, metadata keys, parameters, artifacts, or "
+            "other executable values.",
+            "If a supplied scientific parameter is used by a selected operation, "
+            "preserve its value exactly through the corresponding input binding; use "
+            "null for an unused optional argument so the tool default applies.",
+            "Use a reference binding when an upstream step in this plan creates a "
+            "required compatible artifact or provenance value.",
+            "Every dependency must reflect actual data or reference flow, and every "
+            "reference must name its producer step and result field.",
+            "Preserve reference, query, and ground-truth branch identity from argument "
+            "and result provenance metadata; independent branches need no fixed order.",
+            "Do not silently substitute a different available input when indispensable "
+            "information is missing.",
+            "Do not substitute a scientifically different available operation for the "
+            "requested operation.",
+            "Return unsupported with no steps for genuinely unsupported, ambiguous, "
+            "conflicting, or indispensably incomplete requests.",
+            "For a plan return non-empty steps and null reason; for unsupported return "
+            "empty steps and a non-empty reason.",
+            "Each step arguments object must contain every key fixed by its selected "
+            "tool branch, using exact input or reference binding fields.",
         ),
         "request": {
             "prompt": request.prompt,
@@ -605,11 +544,12 @@ def _parse_argument_binding(
     *,
     context: str,
     step_index: int,
-    binding_index: int,
+    argument_name: str,
+    argument_spec: ArgumentSpec,
 ) -> tuple[str, object]:
     diagnostic_fields = {
         "step_index": step_index,
-        "binding_index": binding_index,
+        "argument_name": argument_name,
     }
     if not isinstance(binding, dict):
         raise _invalid_output(
@@ -618,36 +558,14 @@ def _parse_argument_binding(
             reason_code="binding_not_object",
             diagnostic_fields=diagnostic_fields,
         )
-    expected_fields = {
-        "name",
-        "binding_type",
-        "input_name",
-        "ref_step_id",
-        "ref_output_key",
-    }
-    if set(binding) != expected_fields:
-        raise _invalid_output(
-            f"{context} must contain every v2 binding field and no others.",
-            code="PLANNER_BINDING_INVALID",
-            reason_code="binding_fields_invalid",
-            diagnostic_fields=diagnostic_fields,
-        )
-    argument_name = _bounded_string(
-        binding["name"],
-        field_name=f"{context}.name",
-        code="PLANNER_BINDING_INVALID",
-    )
-    binding_type = binding["binding_type"]
+    binding_type = binding.get("binding_type")
     if binding_type == "input":
-        if binding["ref_step_id"] is not None or binding["ref_output_key"] is not None:
+        if set(binding) != {"binding_type", "input_name"}:
             raise _invalid_output(
-                f"{context} input binding must have null reference fields.",
+                f"{context} input binding fields are invalid.",
                 code="PLANNER_BINDING_INVALID",
-                reason_code="input_binding_reference_fields_nonnull",
-                diagnostic_fields={
-                    **diagnostic_fields,
-                    "argument_name": argument_name,
-                },
+                reason_code="input_binding_fields_invalid",
+                diagnostic_fields=diagnostic_fields,
             )
         input_name = _bounded_string(
             binding["input_name"],
@@ -664,21 +582,24 @@ def _parse_argument_binding(
                 diagnostic_reason_code="request_input_missing",
                 diagnostic_fields={
                     **diagnostic_fields,
-                    "argument_name": argument_name,
                     "input_name": input_name,
                 },
             )
         return argument_name, request.inputs[input_name]
     if binding_type == "ref":
-        if binding["input_name"] is not None:
+        if set(binding) != {"binding_type", "ref_step_id", "ref_output_key"}:
             raise _invalid_output(
-                f"{context} reference binding must have null input_name.",
+                f"{context} reference binding fields are invalid.",
                 code="PLANNER_BINDING_INVALID",
-                reason_code="reference_binding_input_nonnull",
-                diagnostic_fields={
-                    **diagnostic_fields,
-                    "argument_name": argument_name,
-                },
+                reason_code="reference_binding_fields_invalid",
+                diagnostic_fields=diagnostic_fields,
+            )
+        if not argument_spec.allow_step_output_ref:
+            raise _invalid_output(
+                f"{context} does not permit a step-output reference.",
+                code="PLANNER_BINDING_INVALID",
+                reason_code="reference_binding_not_allowed",
+                diagnostic_fields=diagnostic_fields,
             )
         return argument_name, StepOutputRef(
             step_id=_bounded_string(
@@ -696,15 +617,14 @@ def _parse_argument_binding(
         f"{context}.binding_type must be 'input' or 'ref'.",
         code="PLANNER_BINDING_INVALID",
         reason_code="binding_type_invalid",
-        diagnostic_fields={
-            **diagnostic_fields,
-            "argument_name": argument_name,
-        },
+        diagnostic_fields=diagnostic_fields,
     )
 
 
 def _parse_plan_steps(
-    raw_steps: object, request: AgentRequest
+    raw_steps: object,
+    request: AgentRequest,
+    registry: ToolRegistry,
 ) -> tuple[PlanStep, ...]:
     if not isinstance(raw_steps, list):
         raise _invalid_output("Plan response `steps` must be an array.")
@@ -737,29 +657,82 @@ def _parse_plan_steps(
         tool_name = _bounded_string(
             raw_step["tool_name"], field_name=f"{context}.tool_name"
         )
-        raw_arguments = raw_step["arguments"]
-        if not isinstance(raw_arguments, list):
-            raise _invalid_output(f"{context}.arguments must be an array.")
-        arguments: dict[str, object] = {}
-        for binding_index, binding in enumerate(raw_arguments):
-            argument_name, argument_value = _parse_argument_binding(
-                binding,
-                request,
-                context=f"{context}.arguments[{binding_index}]",
-                step_index=index,
-                binding_index=binding_index,
+        if not registry.contains(tool_name):
+            raise PlannerError(
+                "UNKNOWN_TOOL",
+                "Planning response selected a tool outside the executable allowlist.",
+                category=ErrorCategory.INTERNAL_AGENT_ERROR,
+                diagnostic_stage=PlanningDiagnosticStage.TOOL_SELECTION,
+                diagnostic_reason_code="unknown_tool",
+                diagnostic_fields={"step_index": index, "tool_name": tool_name},
             )
-            if argument_name in arguments:
+        tool_spec = registry.get(tool_name)
+        raw_arguments = raw_step["arguments"]
+        if not isinstance(raw_arguments, dict):
+            raise _invalid_output(
+                f"{context}.arguments must be an object.",
+                code="PLANNER_BINDING_INVALID",
+                reason_code="arguments_not_object",
+                diagnostic_fields={"step_index": index},
+            )
+        required_arguments = set(tool_spec.required_arguments)
+        optional_arguments = set(tool_spec.optional_arguments)
+        expected_arguments = required_arguments.union(optional_arguments)
+        supplied_arguments = set(raw_arguments)
+        if supplied_arguments != expected_arguments:
+            missing_required = sorted(required_arguments.difference(supplied_arguments))
+            missing_optional = sorted(optional_arguments.difference(supplied_arguments))
+            unknown = sorted(supplied_arguments.difference(expected_arguments))
+            if missing_required:
+                code = "INVALID_TOOL_ARGUMENTS"
+                reason_code = "missing_tool_argument"
+                argument_name = missing_required[0]
+            elif unknown:
+                code = "INVALID_TOOL_ARGUMENTS"
+                reason_code = "unknown_tool_argument"
+                argument_name = unknown[0]
+            else:
+                code = "PLANNER_BINDING_INVALID"
+                reason_code = "missing_nullable_optional_argument"
+                argument_name = missing_optional[0]
+            raise _invalid_output(
+                f"{context}.arguments must contain exactly the selected tool's "
+                "registered argument keys; unused optional arguments must be null.",
+                code=code,
+                stage=PlanningDiagnosticStage.ARGUMENT_BINDING,
+                reason_code=reason_code,
+                diagnostic_fields={
+                    "step_index": index,
+                    "argument_name": argument_name,
+                },
+            )
+        arguments: dict[str, object] = {}
+        ordered_argument_specs = (
+            *tool_spec.required_arguments.items(),
+            *tool_spec.optional_arguments.items(),
+        )
+        for argument_name, argument_spec in ordered_argument_specs:
+            binding = raw_arguments[argument_name]
+            if argument_name in optional_arguments and binding is None:
+                continue
+            if binding is None:
                 raise _invalid_output(
-                    f"{context} contains duplicate argument {argument_name!r}.",
+                    f"{context}.arguments.{argument_name} cannot be null.",
                     code="PLANNER_BINDING_INVALID",
-                    reason_code="duplicate_argument",
+                    reason_code="required_argument_null",
                     diagnostic_fields={
                         "step_index": index,
-                        "binding_index": binding_index,
                         "argument_name": argument_name,
                     },
                 )
+            argument_name, argument_value = _parse_argument_binding(
+                binding,
+                request,
+                context=f"{context}.arguments.{argument_name}",
+                step_index=index,
+                argument_name=argument_name,
+                argument_spec=argument_spec,
+            )
             arguments[argument_name] = argument_value
 
         raw_dependencies = raw_step["depends_on"]
@@ -801,7 +774,11 @@ def _parse_plan_steps(
     return tuple(steps)
 
 
-def _parse_response(response: object, request: AgentRequest) -> tuple[PlanStep, ...]:
+def _parse_response(
+    response: object,
+    request: AgentRequest,
+    registry: ToolRegistry,
+) -> tuple[PlanStep, ...]:
     payload = _parse_json_response(response)
     _require_fields(
         payload,
@@ -833,7 +810,7 @@ def _parse_response(response: object, request: AgentRequest) -> tuple[PlanStep, 
         raise _invalid_output("Planning response has an unsupported status.")
     if payload["reason"] is not None:
         raise _invalid_output("Plan response reason must be null.")
-    return _parse_plan_steps(payload["steps"], request)
+    return _parse_plan_steps(payload["steps"], request, registry)
 
 
 def _sanitize_model_id(model_id: object) -> str:
@@ -947,7 +924,7 @@ class LLMPlanner:
         try:
             response = self._model.complete(
                 prompt=prompt,
-                response_schema=_response_schema(registry),
+                response_schema=_response_schema(registry, request),
             )
         except PlanningModelError as exc:
             provider_code = (
@@ -995,7 +972,7 @@ class LLMPlanner:
             )
         )
         try:
-            steps = _parse_response(response, request)
+            steps = _parse_response(response, request, registry)
         except PlannerError as exc:
             _append_preceding_success_diagnostics(
                 diagnostics,

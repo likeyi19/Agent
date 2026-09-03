@@ -10,7 +10,14 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from agent.orchestration import AgentRuntime, DeterministicPlanner, PlanningModel
+from agent.orchestration import (
+    AgentRequest,
+    AgentRuntime,
+    DeterministicPlanner,
+    PlanningModel,
+    build_default_tool_registry,
+)
+from agent.orchestration.llm_planner import _response_schema
 from agent.providers import (
     GroqPlanningDependencyError,
     GroqPlanningError,
@@ -20,7 +27,7 @@ from agent.providers import (
 
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _OUTPUT = (
-    '{"schema_version":2,"status":"unsupported","steps":[],'
+    '{"schema_version":3,"status":"unsupported","steps":[],'
     '"reason":"safe"}'
 )
 
@@ -76,18 +83,15 @@ def _adapter(
     )
 
 
-def _schema() -> dict[str, object]:
-    return {
-        "type": "object",
-        "properties": {
-            "schema_version": {"type": "integer", "enum": (2,)},
-            "status": {"type": "string", "enum": ("plan", "unsupported")},
-            "steps": {"type": "array", "items": {"type": "object"}},
-            "reason": {"type": ("string", "null")},
-        },
-        "required": ("schema_version", "status", "steps", "reason"),
-        "additionalProperties": False,
-    }
+def _schema(input_path: str = "/synthetic/input.h5ad"):
+    return _response_schema(
+        build_default_tool_registry(),
+        AgentRequest(
+            "provider-schema",
+            "Inspect the supplied dataset.",
+            {"input_path": input_path},
+        ),
+    )
 
 
 def _install_fake_openai(monkeypatch, factory) -> None:
@@ -110,11 +114,12 @@ def test_configured_model_identity_and_timeout_are_stable() -> None:
     assert adapter.timeout == 17.0
 
 
-def test_responses_request_maps_prompt_and_v2_schema_exactly() -> None:
+def test_responses_request_maps_prompt_and_v3_schema_exactly() -> None:
     adapter, client = _adapter()
     prompt = "exact planning prompt"
+    response_schema = _schema()
 
-    returned = adapter.complete(prompt=prompt, response_schema=_schema())
+    returned = adapter.complete(prompt=prompt, response_schema=response_schema)
 
     assert returned == _OUTPUT
     assert len(client.responses.calls) == 1
@@ -126,27 +131,14 @@ def test_responses_request_maps_prompt_and_v2_schema_exactly() -> None:
                 "type": "json_schema",
                 "name": "agent_plan",
                 "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "schema_version": {"type": "integer", "enum": [2]},
-                        "status": {
-                            "type": "string",
-                            "enum": ["plan", "unsupported"],
-                        },
-                        "steps": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                        },
-                        "reason": {"type": ["string", "null"]},
-                    },
-                    "required": ["schema_version", "status", "steps", "reason"],
-                    "additionalProperties": False,
-                },
+                "schema": json.loads(json.dumps(response_schema)),
             }
         },
         "timeout": 12.5,
     }
+    transmitted = client.responses.calls[0]["text"]["format"]["schema"]
+    assert transmitted["properties"]["schema_version"]["enum"] == [3]
+    assert "anyOf" in transmitted["properties"]["steps"]["items"]
 
 
 def test_request_enables_no_tools_or_provider_state() -> None:
@@ -170,12 +162,12 @@ def test_request_enables_no_tools_or_provider_state() -> None:
 def test_adapter_adds_no_dataset_or_file_values() -> None:
     adapter, client = _adapter()
     prompt = "prompt-without-local-data"
+    private_path = "/private/secret-dataset.h5ad"
 
-    adapter.complete(prompt=prompt, response_schema=_schema())
+    adapter.complete(prompt=prompt, response_schema=_schema(private_path))
 
     serialized = json.dumps(client.responses.calls[0], sort_keys=True)
-    assert "/data/" not in serialized
-    assert "h5ad" not in serialized
+    assert private_path not in serialized
     assert client.responses.calls[0]["input"] == prompt
 
 

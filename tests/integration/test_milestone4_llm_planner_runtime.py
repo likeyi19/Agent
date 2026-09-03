@@ -61,15 +61,12 @@ def _inspect_step() -> dict[str, object]:
     return {
         "step_id": "inspect",
         "tool_name": "inspect_scATAC",
-        "arguments": [
-            {
-                "name": "path",
+        "arguments": {
+            "path": {
                 "binding_type": "input",
                 "input_name": "input_path",
-                "ref_step_id": None,
-                "ref_output_key": None,
             }
-        ],
+        },
         "depends_on": [],
         "description": "Inspect the dataset safely.",
     }
@@ -79,29 +76,24 @@ def _embed_step() -> dict[str, object]:
     return {
         "step_id": "embed",
         "tool_name": "epizoo_embed_cells",
-        "arguments": [
-            {
-                "name": "input_path",
+        "arguments": {
+            "input_path": {
                 "binding_type": "ref",
-                "input_name": None,
                 "ref_step_id": "inspect",
                 "ref_output_key": "input_path",
             },
-            {
-                "name": "output_dir",
+            "output_dir": {
                 "binding_type": "input",
                 "input_name": "output_dir",
-                "ref_step_id": None,
-                "ref_output_key": None,
             },
-            {
-                "name": "species",
+            "species": {
                 "binding_type": "input",
                 "input_name": "species",
-                "ref_step_id": None,
-                "ref_output_key": None,
             },
-        ],
+            "checkpoint_path": None,
+            "device": None,
+            "overwrite": None,
+        },
         "depends_on": ["inspect"],
         "description": "Compute EpiZoo embeddings.",
     }
@@ -109,7 +101,7 @@ def _embed_step() -> dict[str, object]:
 
 def _response(*steps: dict[str, object]) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "plan",
         "steps": list(steps),
         "reason": None,
@@ -198,7 +190,7 @@ def test_invalid_later_llm_step_preflight_prevents_earlier_real_tool(
     invalid_step = {
         "step_id": "unsafe",
         "tool_name": "arbitrary_python",
-        "arguments": [],
+        "arguments": {},
         "depends_on": ["inspect"],
         "description": None,
     }

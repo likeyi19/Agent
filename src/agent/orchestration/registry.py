@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 import errno
+from enum import Enum
 import inspect
 import json
 import math
@@ -63,6 +64,165 @@ class ErrorClassification:
 ExceptionClassifier = Callable[[Exception], ErrorClassification]
 
 
+_MAX_PLANNING_DESCRIPTION_LENGTH = 512
+_MAX_PLANNING_NOTE_LENGTH = 512
+
+
+class PlanningToolRole(str, Enum):
+    """Small descriptive vocabulary for a tool's planning-facing role."""
+
+    OPERATION = "operation"
+    INSPECTION = "inspection"
+    VALIDATION = "validation"
+    EVALUATION = "evaluation"
+
+
+class PlanningSourceEligibility(str, Enum):
+    """Non-authoritative guidance for where an argument should be bound."""
+
+    REQUEST_INPUT_ONLY = "request_input_only"
+    UPSTREAM_RESULT_ONLY = "upstream_result_only"
+    REQUEST_INPUT_OR_UPSTREAM_RESULT = "request_input_or_upstream_result"
+
+
+class ArtifactSemanticKind(str, Enum):
+    """Bounded planning vocabulary for composable scientific artifacts."""
+
+    RAW_SCATAC = "raw_scatac"
+    EPIZOO_CHECKPOINT = "epizoo_checkpoint"
+    EPIZOO_EMBEDDING = "epizoo_embedding"
+    ORDERED_CELL_IDS = "ordered_cell_ids"
+    NEIGHBORS_ANALYSIS = "neighbors_analysis"
+    CLUSTERED_ANALYSIS = "clustered_analysis"
+    UMAP_ANALYSIS = "umap_analysis"
+    CLUSTERING_EVALUATION_REPORT = "clustering_evaluation_report"
+    CELL_ANNOTATION = "cell_annotation"
+    ANNOTATION_EVALUATION_REPORT = "annotation_evaluation_report"
+    FEATURE_SPACE_MANIFEST = "feature_space_manifest"
+    REPLICATE_PSEUDOBULK = "replicate_pseudobulk"
+    DIFFERENTIAL_ACCESSIBILITY_RESULT = "differential_accessibility_result"
+
+
+class PlanningProvenanceRole(str, Enum):
+    """Planning-only branch identity carried by arguments or results."""
+
+    REFERENCE = "reference"
+    QUERY = "query"
+    GROUND_TRUTH = "ground_truth"
+    BRANCH_PRESERVING = "branch_preserving"
+
+
+def _planning_text(value: object, name: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise TypeError(f"`{name}` must be a non-empty string.")
+    if len(value) > maximum:
+        raise ValueError(f"`{name}` exceeds {maximum} characters.")
+    return value
+
+
+@dataclass(frozen=True)
+class ArgumentPlanningSemantics:
+    """Immutable generation guidance for one registered argument."""
+
+    description: str
+    source_eligibility: PlanningSourceEligibility
+    accepted_artifact_kinds: tuple[ArtifactSemanticKind, ...] = ()
+    scientific_parameter: bool = False
+    provenance_role: PlanningProvenanceRole | None = None
+    conditional_note: str | None = None
+    default_when_omitted: object = inspect.Parameter.empty
+
+    def __post_init__(self) -> None:
+        _planning_text(
+            self.description,
+            "description",
+            _MAX_PLANNING_DESCRIPTION_LENGTH,
+        )
+        if not isinstance(self.source_eligibility, PlanningSourceEligibility):
+            raise TypeError(
+                "`source_eligibility` must be a PlanningSourceEligibility."
+            )
+        if not isinstance(self.accepted_artifact_kinds, tuple) or not all(
+            isinstance(kind, ArtifactSemanticKind)
+            for kind in self.accepted_artifact_kinds
+        ):
+            raise TypeError(
+                "`accepted_artifact_kinds` must be a tuple of "
+                "ArtifactSemanticKind values."
+            )
+        if len(set(self.accepted_artifact_kinds)) != len(
+            self.accepted_artifact_kinds
+        ):
+            raise ValueError("`accepted_artifact_kinds` must not contain duplicates.")
+        if not isinstance(self.scientific_parameter, bool):
+            raise TypeError("`scientific_parameter` must be a boolean.")
+        if self.provenance_role is not None and not isinstance(
+            self.provenance_role, PlanningProvenanceRole
+        ):
+            raise TypeError(
+                "`provenance_role` must be a PlanningProvenanceRole or None."
+            )
+        if self.conditional_note is not None:
+            _planning_text(
+                self.conditional_note,
+                "conditional_note",
+                _MAX_PLANNING_NOTE_LENGTH,
+            )
+
+
+@dataclass(frozen=True)
+class ResultFieldPlanningSemantics:
+    """Immutable generation guidance for one lightweight result field."""
+
+    description: str
+    downstream_bindable: bool = False
+    artifact_kind: ArtifactSemanticKind | None = None
+    provenance_role: PlanningProvenanceRole | None = None
+
+    def __post_init__(self) -> None:
+        _planning_text(
+            self.description,
+            "description",
+            _MAX_PLANNING_DESCRIPTION_LENGTH,
+        )
+        if not isinstance(self.downstream_bindable, bool):
+            raise TypeError("`downstream_bindable` must be a boolean.")
+        if self.artifact_kind is not None and not isinstance(
+            self.artifact_kind, ArtifactSemanticKind
+        ):
+            raise TypeError(
+                "`artifact_kind` must be an ArtifactSemanticKind or None."
+            )
+        if self.provenance_role is not None and not isinstance(
+            self.provenance_role, PlanningProvenanceRole
+        ):
+            raise TypeError(
+                "`provenance_role` must be a PlanningProvenanceRole or None."
+            )
+
+
+@dataclass(frozen=True)
+class ToolPlanningSemantics:
+    """Descriptive, non-authoritative planning semantics for one tool."""
+
+    role: PlanningToolRole
+    description: str
+    conditional_notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, PlanningToolRole):
+            raise TypeError("`role` must be a PlanningToolRole.")
+        _planning_text(
+            self.description,
+            "description",
+            _MAX_PLANNING_DESCRIPTION_LENGTH,
+        )
+        if not isinstance(self.conditional_notes, tuple):
+            raise TypeError("`conditional_notes` must be a tuple.")
+        for note in self.conditional_notes:
+            _planning_text(note, "conditional_note", _MAX_PLANNING_NOTE_LENGTH)
+
+
 @dataclass(frozen=True)
 class ArgumentSpec:
     """Runtime contract for one public tool argument."""
@@ -70,6 +230,7 @@ class ArgumentSpec:
     accepted_types: tuple[type, ...]
     choices: tuple[object, ...] = ()
     allow_step_output_ref: bool = True
+    planning: ArgumentPlanningSemantics | None = None
 
     def __post_init__(self) -> None:
         if not self.accepted_types or not all(
@@ -80,6 +241,12 @@ class ArgumentSpec:
             raise TypeError("`choices` must be a tuple.")
         if not isinstance(self.allow_step_output_ref, bool):
             raise TypeError("`allow_step_output_ref` must be a boolean.")
+        if self.planning is not None and not isinstance(
+            self.planning, ArgumentPlanningSemantics
+        ):
+            raise TypeError(
+                "`planning` must be ArgumentPlanningSemantics or None."
+            )
 
     def validate(self, name: str, value: object) -> None:
         if isinstance(value, StepOutputRef):
@@ -112,6 +279,9 @@ class ResultContract:
     name: str
     required_fields: Mapping[str, tuple[type, ...]]
     validator: ResultValidator | None = None
+    planning_fields: Mapping[str, ResultFieldPlanningSemantics] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -128,6 +298,25 @@ class ResultContract:
                 )
             copied[key] = expected_types
         object.__setattr__(self, "required_fields", MappingProxyType(copied))
+        planning_fields = dict(self.planning_fields)
+        unknown_planning_fields = sorted(set(planning_fields).difference(copied))
+        if unknown_planning_fields:
+            raise ValueError(
+                "Result planning semantics name unknown fields: "
+                f"{unknown_planning_fields}."
+            )
+        if not all(
+            isinstance(value, ResultFieldPlanningSemantics)
+            for value in planning_fields.values()
+        ):
+            raise TypeError(
+                "Result planning fields must be ResultFieldPlanningSemantics values."
+            )
+        object.__setattr__(
+            self,
+            "planning_fields",
+            MappingProxyType(planning_fields),
+        )
 
     def validate(self, result: object) -> None:
         if not isinstance(result, Mapping):
@@ -176,6 +365,7 @@ class ToolSpec:
     exception_classifier: ExceptionClassifier
     retryable_error_codes: frozenset[str] = field(default_factory=frozenset)
     recovery_policy_version: str = "1"
+    planning: ToolPlanningSemantics | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -203,6 +393,53 @@ class ToolSpec:
             raise ValueError(
                 "`recovery_policy_version` must be a non-empty string."
             )
+        if self.planning is not None and not isinstance(
+            self.planning, ToolPlanningSemantics
+        ):
+            raise TypeError("`planning` must be ToolPlanningSemantics or None.")
+        if self.planning is not None:
+            missing_planning = sorted(
+                name
+                for name, spec in (*required.items(), *optional.items())
+                if spec.planning is None
+            )
+            if missing_planning:
+                raise ValueError(
+                    f"Tool {self.name!r} lacks planning semantics for arguments: "
+                    f"{missing_planning}."
+                )
+            signature = inspect.signature(self.function)
+            for argument_name, argument_spec in tuple(optional.items()):
+                argument_planning = argument_spec.planning
+                if (
+                    argument_planning is not None
+                    and argument_planning.default_when_omitted
+                    is inspect.Parameter.empty
+                ):
+                    parameter = signature.parameters.get(argument_name)
+                    if (
+                        parameter is None
+                        or parameter.default is inspect.Parameter.empty
+                    ):
+                        raise ValueError(
+                            f"Tool {self.name!r} optional argument {argument_name!r} "
+                            "has no registered default."
+                        )
+                    optional[argument_name] = dataclass_replace(
+                        argument_spec,
+                        planning=dataclass_replace(
+                            argument_planning,
+                            default_when_omitted=(
+                                "registered_tool_default"
+                                if parameter.default is not None
+                                and any(
+                                    issubclass(value_type, Path)
+                                    for value_type in argument_spec.accepted_types
+                                )
+                                else parameter.default
+                            ),
+                        ),
+                    )
         object.__setattr__(self, "required_arguments", MappingProxyType(required))
         object.__setattr__(self, "optional_arguments", MappingProxyType(optional))
         object.__setattr__(
@@ -873,14 +1110,74 @@ def _assert_signature_matches(spec: ToolSpec) -> None:
         )
 
 
+def _planning_argument(
+    accepted_types: tuple[type, ...],
+    description: str,
+    *,
+    choices: tuple[object, ...] = (),
+    source: PlanningSourceEligibility = (
+        PlanningSourceEligibility.REQUEST_INPUT_ONLY
+    ),
+    artifacts: tuple[ArtifactSemanticKind, ...] = (),
+    scientific_parameter: bool = False,
+    provenance: PlanningProvenanceRole | None = None,
+    conditional_note: str | None = None,
+) -> ArgumentSpec:
+    return ArgumentSpec(
+        accepted_types,
+        choices=choices,
+        planning=ArgumentPlanningSemantics(
+            description=description,
+            source_eligibility=source,
+            accepted_artifact_kinds=artifacts,
+            scientific_parameter=scientific_parameter,
+            provenance_role=provenance,
+            conditional_note=conditional_note,
+        ),
+    )
+
+
+def _planning_result(
+    description: str,
+    *,
+    bindable: bool,
+    artifact: ArtifactSemanticKind | None = None,
+    provenance: PlanningProvenanceRole | None = None,
+) -> ResultFieldPlanningSemantics:
+    return ResultFieldPlanningSemantics(
+        description=description,
+        downstream_bindable=bindable,
+        artifact_kind=artifact,
+        provenance_role=provenance,
+    )
+
+
+def _tool_planning(
+    role: PlanningToolRole,
+    description: str,
+    *conditional_notes: str,
+) -> ToolPlanningSemantics:
+    return ToolPlanningSemantics(role, description, tuple(conditional_notes))
+
+
 def build_default_tool_registry() -> ToolRegistry:
     """Build the fixed Milestone 3 allowlist from public scientific APIs."""
 
-    path_argument = ArgumentSpec((str, Path))
+    path_types = (str, Path)
+    direct = PlanningSourceEligibility.REQUEST_INPUT_ONLY
+    composable = PlanningSourceEligibility.REQUEST_INPUT_OR_UPSTREAM_RESULT
+    branch = PlanningProvenanceRole.BRANCH_PRESERVING
     inspect_spec = ToolSpec(
         name="inspect_scATAC",
         function=inspect_scATAC,
-        required_arguments={"path": path_argument},
+        required_arguments={
+            "path": _planning_argument(
+                path_types,
+                "Raw scATAC-seq H5AD dataset to inspect.",
+                source=direct,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+            )
+        },
         optional_arguments={},
         result_contract=ResultContract(
             name="ScATACInspection",
@@ -899,22 +1196,67 @@ def build_default_tool_registry() -> ToolRegistry:
                 "var_names_sample": (list,),
             },
             validator=_validate_inspection_result,
+            planning_fields={
+                "input_path": _planning_result(
+                    "Validated raw scATAC dataset path, preserving its branch identity.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.RAW_SCATAC,
+                    provenance=branch,
+                )
+            },
         ),
         exception_classifier=_classify_tool_exception,
         recovery_policy_version="inspect-scatac-v2",
+        planning=_tool_planning(
+            PlanningToolRole.INSPECTION,
+            "Inspect one raw scATAC dataset without producing embeddings or analysis.",
+        ),
     )
     embedding_spec = ToolSpec(
         name="epizoo_embed_cells",
         function=epizoo_embed_cells,
         required_arguments={
-            "input_path": path_argument,
-            "output_dir": path_argument,
-            "species": ArgumentSpec((str,), choices=("human", "mouse")),
+            "input_path": _planning_argument(
+                path_types,
+                "Raw scATAC dataset to embed.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+                provenance=branch,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for embedding artifacts.",
+                source=direct,
+            ),
+            "species": _planning_argument(
+                (str,),
+                "Species of the raw scATAC dataset.",
+                choices=("human", "mouse"),
+                source=direct,
+                scientific_parameter=True,
+                provenance=branch,
+            ),
         },
         optional_arguments={
-            "checkpoint_path": path_argument,
-            "device": ArgumentSpec((str,)),
-            "overwrite": ArgumentSpec((bool,)),
+            "checkpoint_path": _planning_argument(
+                path_types,
+                "Explicit EpiZoo checkpoint; omit to use the registered tool default.",
+                source=direct,
+                artifacts=(ArtifactSemanticKind.EPIZOO_CHECKPOINT,),
+                scientific_parameter=True,
+                provenance=branch,
+            ),
+            "device": _planning_argument(
+                (str,),
+                "Explicit model execution device.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical output may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="EpiZooEmbeddingToolResult",
@@ -934,23 +1276,94 @@ def build_default_tool_registry() -> ToolRegistry:
                 "device": (str,),
             },
             validator=_validate_embedding_result,
+            planning_fields={
+                "input_path": _planning_result(
+                    "Raw scATAC source used for this embedding.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.RAW_SCATAC,
+                    provenance=branch,
+                ),
+                "embedding_path": _planning_result(
+                    "Persisted EpiZoo cell-embedding matrix.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.EPIZOO_EMBEDDING,
+                    provenance=branch,
+                ),
+                "cell_ids_path": _planning_result(
+                    "Ordered cell IDs aligned row-for-row with the embedding.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.ORDERED_CELL_IDS,
+                    provenance=branch,
+                ),
+                "species": _planning_result(
+                    "Species provenance reported by the embedding operation.",
+                    bindable=True,
+                    provenance=branch,
+                ),
+                "checkpoint_path": _planning_result(
+                    "Checkpoint provenance reported by the embedding operation.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.EPIZOO_CHECKPOINT,
+                    provenance=branch,
+                ),
+            },
         ),
         exception_classifier=_classify_embedding_exception,
         recovery_policy_version="epizoo-embed-cells-v2",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Produce aligned EpiZoo embeddings and ordered cell IDs from raw scATAC.",
+        ),
     )
     neighbors_spec = ToolSpec(
         name="build_cell_neighbors",
         function=build_cell_neighbors,
         required_arguments={
-            "embedding_path": path_argument,
-            "cell_ids_path": path_argument,
-            "output_dir": path_argument,
+            "embedding_path": _planning_argument(
+                path_types,
+                "EpiZoo embedding matrix for the cells being analyzed.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.EPIZOO_EMBEDDING,),
+                provenance=branch,
+            ),
+            "cell_ids_path": _planning_argument(
+                path_types,
+                "Ordered cell IDs aligned with the selected embedding.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.ORDERED_CELL_IDS,),
+                provenance=branch,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the neighbors artifact.",
+                source=direct,
+            ),
         },
         optional_arguments={
-            "n_neighbors": ArgumentSpec((int,)),
-            "metric": ArgumentSpec((str,), choices=("euclidean", "cosine")),
-            "random_seed": ArgumentSpec((int,)),
-            "overwrite": ArgumentSpec((bool,)),
+            "n_neighbors": _planning_argument(
+                (int,),
+                "Explicit nearest-neighbor count.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "metric": _planning_argument(
+                (str,),
+                "Explicit neighbor distance metric.",
+                choices=("euclidean", "cosine"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "random_seed": _planning_argument(
+                (int,),
+                "Explicit random seed for reproducible neighbor construction.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical output may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="CellNeighborsToolResult",
@@ -974,21 +1387,57 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_neighbors_result,
+            planning_fields={
+                "analysis_path": _planning_result(
+                    "Compact analysis artifact containing the neighbor graph.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.NEIGHBORS_ANALYSIS,
+                    provenance=branch,
+                )
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="build-cell-neighbors-v1",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Build a neighbors-analysis artifact from an aligned embedding and cell IDs.",
+        ),
     )
     clustering_spec = ToolSpec(
         name="cluster_cells",
         function=cluster_cells,
         required_arguments={
-            "analysis_path": path_argument,
-            "output_dir": path_argument,
+            "analysis_path": _planning_argument(
+                path_types,
+                "Neighbors-analysis artifact to cluster.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.NEIGHBORS_ANALYSIS,),
+                provenance=branch,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the clustered artifact.",
+                source=direct,
+            ),
         },
         optional_arguments={
-            "resolution": ArgumentSpec((int, float)),
-            "random_seed": ArgumentSpec((int,)),
-            "overwrite": ArgumentSpec((bool,)),
+            "resolution": _planning_argument(
+                (int, float),
+                "Explicit Leiden clustering resolution.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "random_seed": _planning_argument(
+                (int,),
+                "Explicit random seed for reproducible clustering.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical output may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="CellClusteringToolResult",
@@ -1007,22 +1456,68 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_clustering_result,
+            planning_fields={
+                "analysis_path": _planning_result(
+                    "Compact analysis artifact containing fixed Leiden clusters.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.CLUSTERED_ANALYSIS,
+                    provenance=branch,
+                ),
+                "cluster_key": _planning_result(
+                    "Observation key containing the fixed cluster labels.",
+                    bindable=True,
+                    provenance=branch,
+                ),
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="cluster-cells-v1",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Produce fixed Leiden clusters from a neighbors-analysis artifact.",
+        ),
     )
     umap_spec = ToolSpec(
         name="compute_cell_umap",
         function=compute_cell_umap,
         required_arguments={
-            "analysis_path": path_argument,
-            "output_dir": path_argument,
+            "analysis_path": _planning_argument(
+                path_types,
+                "Clustered-analysis artifact to visualize with UMAP.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.CLUSTERED_ANALYSIS,),
+                provenance=branch,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the UMAP artifact.",
+                source=direct,
+            ),
         },
         optional_arguments={
-            "min_dist": ArgumentSpec((int, float)),
-            "spread": ArgumentSpec((int, float)),
-            "random_seed": ArgumentSpec((int,)),
-            "overwrite": ArgumentSpec((bool,)),
+            "min_dist": _planning_argument(
+                (int, float),
+                "Explicit UMAP minimum distance.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "spread": _planning_argument(
+                (int, float),
+                "Explicit UMAP spread.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "random_seed": _planning_argument(
+                (int,),
+                "Explicit random seed for reproducible UMAP coordinates.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical output may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="CellUMAPToolResult",
@@ -1043,22 +1538,68 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_umap_result,
+            planning_fields={
+                "analysis_path": _planning_result(
+                    "Compact clustered-analysis artifact augmented with UMAP coordinates.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.UMAP_ANALYSIS,
+                    provenance=branch,
+                )
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="compute-cell-umap-v1",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Add fixed two-dimensional UMAP coordinates to a clustered analysis.",
+        ),
     )
     evaluation_spec = ToolSpec(
         name="evaluate_cell_clustering",
         function=evaluate_cell_clustering,
         required_arguments={
-            "analysis_path": path_argument,
-            "reference_h5ad_path": path_argument,
-            "label_key": ArgumentSpec((str,)),
-            "output_dir": path_argument,
+            "analysis_path": _planning_argument(
+                path_types,
+                "Fixed clustered or UMAP analysis whose clusters will be evaluated.",
+                source=composable,
+                artifacts=(
+                    ArtifactSemanticKind.CLUSTERED_ANALYSIS,
+                    ArtifactSemanticKind.UMAP_ANALYSIS,
+                ),
+                provenance=branch,
+            ),
+            "reference_h5ad_path": _planning_argument(
+                path_types,
+                "Annotated raw scATAC dataset with identical ordered cell IDs.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+                provenance=PlanningProvenanceRole.GROUND_TRUTH,
+            ),
+            "label_key": _planning_argument(
+                (str,),
+                "Ground-truth observation column used only for evaluation.",
+                source=direct,
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.GROUND_TRUTH,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the clustering-evaluation report.",
+                source=direct,
+            ),
         },
         optional_arguments={
-            "cluster_key": ArgumentSpec((str,)),
-            "overwrite": ArgumentSpec((bool,)),
+            "cluster_key": _planning_argument(
+                (str,),
+                "Explicit observation key containing fixed predicted clusters.",
+                source=composable,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical report may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="CellClusteringEvaluationToolResult",
@@ -1084,34 +1625,138 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_evaluation_result,
+            planning_fields={
+                "report_path": _planning_result(
+                    "Persisted clustering-evaluation metrics report.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.CLUSTERING_EVALUATION_REPORT,
+                )
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="evaluate-cell-clustering-v1",
+        planning=_tool_planning(
+            PlanningToolRole.EVALUATION,
+            "Evaluate already-fixed clusters against ordered ground-truth labels.",
+            "Ground-truth labels are evaluation-only and must not influence clustering.",
+        ),
     )
     label_transfer_spec = ToolSpec(
         name="transfer_cell_labels",
         function=transfer_cell_labels,
         required_arguments={
-            "reference_embedding_path": path_argument,
-            "reference_cell_ids_path": path_argument,
-            "reference_h5ad_path": path_argument,
-            "reference_label_key": ArgumentSpec((str,)),
-            "query_embedding_path": path_argument,
-            "query_cell_ids_path": path_argument,
-            "query_h5ad_path": path_argument,
-            "output_dir": path_argument,
-            "reference_species": ArgumentSpec(
-                (str,), choices=("human", "mouse")
+            "reference_embedding_path": _planning_argument(
+                path_types,
+                "EpiZoo embedding for the annotated reference cells.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.EPIZOO_EMBEDDING,),
+                provenance=PlanningProvenanceRole.REFERENCE,
             ),
-            "query_species": ArgumentSpec((str,), choices=("human", "mouse")),
-            "reference_checkpoint_path": path_argument,
-            "query_checkpoint_path": path_argument,
+            "reference_cell_ids_path": _planning_argument(
+                path_types,
+                "Ordered cell IDs aligned with the reference embedding.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.ORDERED_CELL_IDS,),
+                provenance=PlanningProvenanceRole.REFERENCE,
+            ),
+            "reference_h5ad_path": _planning_argument(
+                path_types,
+                "Annotated raw scATAC dataset for the reference branch.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+                provenance=PlanningProvenanceRole.REFERENCE,
+            ),
+            "reference_label_key": _planning_argument(
+                (str,),
+                "Biological label column in the reference dataset.",
+                source=direct,
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.REFERENCE,
+            ),
+            "query_embedding_path": _planning_argument(
+                path_types,
+                "EpiZoo embedding for the unlabeled query cells.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.EPIZOO_EMBEDDING,),
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
+            "query_cell_ids_path": _planning_argument(
+                path_types,
+                "Ordered cell IDs aligned with the query embedding.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.ORDERED_CELL_IDS,),
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
+            "query_h5ad_path": _planning_argument(
+                path_types,
+                "Raw scATAC dataset for the query branch.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the cell-annotation artifact.",
+                source=direct,
+            ),
+            "reference_species": _planning_argument(
+                (str,),
+                "Species provenance for the reference embedding.",
+                choices=("human", "mouse"),
+                source=composable,
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.REFERENCE,
+            ),
+            "query_species": _planning_argument(
+                (str,),
+                "Species provenance for the query embedding.",
+                choices=("human", "mouse"),
+                source=composable,
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
+            "reference_checkpoint_path": _planning_argument(
+                path_types,
+                "Checkpoint provenance for the reference embedding.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.EPIZOO_CHECKPOINT,),
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.REFERENCE,
+            ),
+            "query_checkpoint_path": _planning_argument(
+                path_types,
+                "Checkpoint provenance for the query embedding.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.EPIZOO_CHECKPOINT,),
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
         },
         optional_arguments={
-            "n_neighbors": ArgumentSpec((int,)),
-            "metric": ArgumentSpec((str,), choices=("euclidean", "cosine")),
-            "min_confidence": ArgumentSpec((int, float)),
-            "overwrite": ArgumentSpec((bool,)),
+            "n_neighbors": _planning_argument(
+                (int,),
+                "Explicit number of reference neighbors used for transfer.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "metric": _planning_argument(
+                (str,),
+                "Explicit reference-to-query distance metric.",
+                choices=("euclidean", "cosine"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "min_confidence": _planning_argument(
+                (int, float),
+                "Explicit minimum uniform-vote assignment confidence.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical annotation may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="CellLabelTransferToolResult",
@@ -1155,20 +1800,64 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_label_transfer_result,
+            planning_fields={
+                "annotation_path": _planning_result(
+                    "Compact query cell-annotation artifact produced by label transfer.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.CELL_ANNOTATION,
+                    provenance=PlanningProvenanceRole.QUERY,
+                )
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="transfer-cell-labels-v1",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Transfer reference biological labels to query cells in EpiZoo space.",
+            "Reference and query embeddings must retain their own aligned cell IDs, "
+            "species, and checkpoint provenance; branch order is irrelevant.",
+            "Reference and query species must match and checkpoint paths must resolve "
+            "to the same checkpoint.",
+        ),
     )
     annotation_evaluation_spec = ToolSpec(
         name="evaluate_cell_annotation",
         function=evaluate_cell_annotation,
         required_arguments={
-            "annotation_path": path_argument,
-            "ground_truth_h5ad_path": path_argument,
-            "ground_truth_label_key": ArgumentSpec((str,)),
-            "output_dir": path_argument,
+            "annotation_path": _planning_argument(
+                path_types,
+                "Fixed transferred cell-annotation artifact to evaluate.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.CELL_ANNOTATION,),
+                provenance=PlanningProvenanceRole.QUERY,
+            ),
+            "ground_truth_h5ad_path": _planning_argument(
+                path_types,
+                "Raw query scATAC dataset containing ordered ground-truth labels.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+                provenance=PlanningProvenanceRole.GROUND_TRUTH,
+            ),
+            "ground_truth_label_key": _planning_argument(
+                (str,),
+                "Ground-truth biological label column used only for evaluation.",
+                source=direct,
+                scientific_parameter=True,
+                provenance=PlanningProvenanceRole.GROUND_TRUTH,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the annotation-evaluation report.",
+                source=direct,
+            ),
         },
-        optional_arguments={"overwrite": ArgumentSpec((bool,))},
+        optional_arguments={
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical report may be replaced.",
+                source=direct,
+            )
+        },
         result_contract=ResultContract(
             name="CellAnnotationEvaluationToolResult",
             required_fields={
@@ -1202,41 +1891,141 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_annotation_evaluation_result,
+            planning_fields={
+                "report_path": _planning_result(
+                    "Persisted annotation-evaluation and confidence report.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.ANNOTATION_EVALUATION_REPORT,
+                )
+            },
         ),
         exception_classifier=_classify_analysis_exception,
         recovery_policy_version="evaluate-cell-annotation-v1",
+        planning=_tool_planning(
+            PlanningToolRole.EVALUATION,
+            "Evaluate a fixed query annotation against ordered ground-truth labels.",
+            "Ground truth is evaluation-only and must not influence label transfer.",
+        ),
     )
     feature_space_spec = ToolSpec(
         name="validate_scATAC_feature_space",
         function=validate_scATAC_feature_space,
         required_arguments={
-            "input_path": path_argument,
-            "output_dir": path_argument,
-            "matrix_source": ArgumentSpec((str,), choices=("X", "layer")),
-            "matrix_semantics": ArgumentSpec(
+            "input_path": _planning_argument(
+                path_types,
+                "Raw sparse scATAC regulatory matrix to validate.",
+                source=direct,
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the feature-space manifest.",
+                source=direct,
+            ),
+            "matrix_source": _planning_argument(
                 (str,),
+                "Exact matrix source in the raw dataset.",
+                choices=("X", "layer"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "matrix_semantics": _planning_argument(
+                (str,),
+                "Declared scientific semantics of the regulatory matrix values.",
                 choices=(
                     "fragment_counts",
                     "insertion_counts",
                     "binary_accessibility",
                     "normalized_continuous",
                 ),
+                source=direct,
+                scientific_parameter=True,
             ),
-            "species": ArgumentSpec((str,), choices=("human", "mouse")),
-            "genome_assembly": ArgumentSpec((str,), choices=("hg38", "mm10")),
-            "coordinate_source": ArgumentSpec((str,), choices=("none", "var_columns")),
+            "species": _planning_argument(
+                (str,),
+                "Species of the raw scATAC feature space.",
+                choices=("human", "mouse"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "genome_assembly": _planning_argument(
+                (str,),
+                "Genome assembly matching the declared species.",
+                choices=("hg38", "mm10"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "coordinate_source": _planning_argument(
+                (str,),
+                "Whether genomic coordinates are absent or supplied by var columns.",
+                choices=("none", "var_columns"),
+                source=direct,
+                scientific_parameter=True,
+            ),
         },
         optional_arguments={
-            "layer_key": ArgumentSpec((str, type(None))),
-            "feature_chrom_key": ArgumentSpec((str, type(None))),
-            "feature_start_key": ArgumentSpec((str, type(None))),
-            "feature_end_key": ArgumentSpec((str, type(None))),
-            "coordinate_system": ArgumentSpec(
+            "layer_key": _planning_argument(
                 (str, type(None)),
-                choices=("zero_based_half_open", "one_based_closed", None),
+                "Layer name when matrix_source is layer; otherwise null or omitted.",
+                source=direct,
+                scientific_parameter=True,
+                conditional_note=(
+                    "Required when matrix_source is layer and incompatible with "
+                    "matrix_source X."
+                ),
             ),
-            "semantics_metadata_key": ArgumentSpec((str, type(None))),
-            "overwrite": ArgumentSpec((bool,)),
+            "feature_chrom_key": _planning_argument(
+                (str, type(None)),
+                "Chromosome var-column key when coordinates come from var columns.",
+                source=direct,
+                scientific_parameter=True,
+                conditional_note=(
+                    "Required when coordinate_source is var_columns; otherwise null "
+                    "or omitted."
+                ),
+            ),
+            "feature_start_key": _planning_argument(
+                (str, type(None)),
+                "Start-coordinate var-column key when coordinates use var columns.",
+                source=direct,
+                scientific_parameter=True,
+                conditional_note=(
+                    "Required when coordinate_source is var_columns; otherwise null "
+                    "or omitted."
+                ),
+            ),
+            "feature_end_key": _planning_argument(
+                (str, type(None)),
+                "End-coordinate var-column key when coordinates use var columns.",
+                source=direct,
+                scientific_parameter=True,
+                conditional_note=(
+                    "Required when coordinate_source is var_columns; otherwise null "
+                    "or omitted."
+                ),
+            ),
+            "coordinate_system": _planning_argument(
+                (str, type(None)),
+                "Coordinate convention when coordinates use var columns.",
+                choices=("zero_based_half_open", "one_based_closed", None),
+                source=direct,
+                scientific_parameter=True,
+                conditional_note=(
+                    "Required when coordinate_source is var_columns; otherwise null "
+                    "or omitted."
+                ),
+            ),
+            "semantics_metadata_key": _planning_argument(
+                (str, type(None)),
+                "Optional raw uns key corroborating the declared matrix semantics.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical manifest may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="ScATACFeatureSpaceToolResult",
@@ -1256,27 +2045,87 @@ def build_default_tool_registry() -> ToolRegistry:
                 "artifact_schema_version": (int,), "software_versions": (dict,),
             },
             validator=_validate_feature_space_result,
+            planning_fields={
+                "feature_space_path": _planning_result(
+                    "Verified feature-space provenance manifest.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.FEATURE_SPACE_MANIFEST,
+                )
+            },
         ),
         exception_classifier=_classify_m81_exception,
         recovery_policy_version="validate-scatac-feature-space-v1",
+        planning=_tool_planning(
+            PlanningToolRole.VALIDATION,
+            "Validate raw regulatory feature space and persist its provenance manifest.",
+            "Species and genome assembly must be compatible: human with hg38 or mouse with mm10.",
+            "Only fragment_counts, insertion_counts, or binary_accessibility are "
+            "eligible for replicate pseudobulk.",
+        ),
     )
     pseudobulk_spec = ToolSpec(
         name="build_replicate_pseudobulk",
         function=build_replicate_pseudobulk,
         required_arguments={
-            "feature_space_path": path_argument,
-            "replicate_key": ArgumentSpec((str,)),
-            "group_key": ArgumentSpec((str,)),
-            "condition_key": ArgumentSpec((str,)),
-            "output_dir": path_argument,
-            "group_source": ArgumentSpec(
-                (str,), choices=("raw_obs", "verified_annotation")
+            "feature_space_path": _planning_argument(
+                path_types,
+                "Verified regulatory feature-space manifest.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.FEATURE_SPACE_MANIFEST,),
+            ),
+            "replicate_key": _planning_argument(
+                (str,),
+                "Raw observation column identifying biological replicates.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "group_key": _planning_argument(
+                (str,),
+                "Biological group column or fixed predicted-label key.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "condition_key": _planning_argument(
+                (str,),
+                "Raw observation column identifying comparison conditions.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for the replicate-pseudobulk artifact.",
+                source=direct,
+            ),
+            "group_source": _planning_argument(
+                (str,),
+                "Whether groups come from raw observations or a verified annotation.",
+                choices=("raw_obs", "verified_annotation"),
+                source=direct,
+                scientific_parameter=True,
             ),
         },
         optional_arguments={
-            "group_annotation_path": ArgumentSpec((str, Path, type(None))),
-            "covariate_keys": ArgumentSpec((list, tuple)),
-            "overwrite": ArgumentSpec((bool,)),
+            "group_annotation_path": _planning_argument(
+                (str, Path, type(None)),
+                "Verified cell annotation supplying groups when requested.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.CELL_ANNOTATION,),
+                conditional_note=(
+                    "Required when group_source is verified_annotation; otherwise "
+                    "null or omitted."
+                ),
+            ),
+            "covariate_keys": _planning_argument(
+                (list, tuple),
+                "Ordered raw observation columns retained as pseudobulk covariates.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical pseudobulk may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="ReplicatePseudobulkToolResult",
@@ -1299,27 +2148,81 @@ def build_default_tool_registry() -> ToolRegistry:
                 "software_versions": (dict,),
             },
             validator=_validate_pseudobulk_result,
+            planning_fields={
+                "pseudobulk_path": _planning_result(
+                    "Replicate-aware sparse SUM pseudobulk artifact.",
+                    bindable=True,
+                    artifact=ArtifactSemanticKind.REPLICATE_PSEUDOBULK,
+                )
+            },
         ),
         exception_classifier=_classify_m81_exception,
         recovery_policy_version="build-replicate-pseudobulk-v1",
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Build replicate-aware sparse SUM pseudobulks from a verified feature space.",
+            "group_annotation_path is used only with group_source verified_annotation.",
+        ),
     )
     differential_accessibility_spec = ToolSpec(
         name="run_replicate_differential_accessibility",
         function=run_replicate_differential_accessibility,
         required_arguments={
-            "pseudobulk_path": path_argument,
-            "group_value": ArgumentSpec((str,)),
-            "condition_key": ArgumentSpec((str,)),
-            "numerator_condition": ArgumentSpec((str,)),
-            "denominator_condition": ArgumentSpec((str,)),
-            "design_type": ArgumentSpec(
-                (str,), choices=("independent", "paired")
+            "pseudobulk_path": _planning_argument(
+                path_types,
+                "Verified replicate-pseudobulk artifact to analyze.",
+                source=composable,
+                artifacts=(ArtifactSemanticKind.REPLICATE_PSEUDOBULK,),
             ),
-            "output_dir": path_argument,
+            "group_value": _planning_argument(
+                (str,),
+                "Exact biological group selected for the contrast.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "condition_key": _planning_argument(
+                (str,),
+                "Condition key recorded in the pseudobulk artifact.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "numerator_condition": _planning_argument(
+                (str,),
+                "Exact numerator condition for the directional contrast.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "denominator_condition": _planning_argument(
+                (str,),
+                "Exact denominator condition for the directional contrast.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "design_type": _planning_argument(
+                (str,),
+                "Explicit independent or paired replicate design.",
+                choices=("independent", "paired"),
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "output_dir": _planning_argument(
+                path_types,
+                "Destination directory for differential-accessibility results.",
+                source=direct,
+            ),
         },
         optional_arguments={
-            "covariates": ArgumentSpec((list, tuple)),
-            "overwrite": ArgumentSpec((bool,)),
+            "covariates": _planning_argument(
+                (list, tuple),
+                "Ordered additive covariate specifications for the design matrix.",
+                source=direct,
+                scientific_parameter=True,
+            ),
+            "overwrite": _planning_argument(
+                (bool,),
+                "Whether an existing identical result may be replaced.",
+                source=direct,
+            ),
         },
         result_contract=ResultContract(
             name="ReplicateDifferentialAccessibilityToolResult",
@@ -1358,11 +2261,28 @@ def build_default_tool_registry() -> ToolRegistry:
                 "package_versions": (dict,),
             },
             validator=_validate_differential_accessibility_result,
+            planning_fields={
+                "da_path": _planning_result(
+                    "Compact differential-accessibility result artifact.",
+                    bindable=True,
+                    artifact=(
+                        ArtifactSemanticKind.DIFFERENTIAL_ACCESSIBILITY_RESULT
+                    ),
+                )
+            },
         ),
         exception_classifier=_classify_m82_exception,
         retryable_error_codes=frozenset(),
         recovery_policy_version=(
             "run-replicate-differential-accessibility-edger-ql-v1"
+        ),
+        planning=_tool_planning(
+            PlanningToolRole.OPERATION,
+            "Run fixed replicate-aware differential accessibility on pseudobulk.",
+            "Numerator and denominator conditions must be distinct values present "
+            "under condition_key for the selected group.",
+            "A paired design requires compatible paired-replicate structure in the "
+            "pseudobulk artifact.",
         ),
     )
     specs = (

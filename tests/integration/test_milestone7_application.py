@@ -71,21 +71,18 @@ class _FixedPlanningModel:
         self.calls.append((prompt, response_schema))
         return json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "plan",
                 "steps": [
                     {
                         "step_id": "inspect",
                         "tool_name": "inspect_scATAC",
-                        "arguments": [
-                            {
-                                "name": "path",
+                        "arguments": {
+                            "path": {
                                 "binding_type": "input",
                                 "input_name": "input_path",
-                                "ref_step_id": None,
-                                "ref_output_key": None,
                             }
-                        ],
+                        },
                         "depends_on": [],
                         "description": "Inspect the supplied scATAC dataset.",
                     }
@@ -266,6 +263,6 @@ def test_llm_planner_report_language_stays_outside_tool_plan(tmp_path: Path) -> 
     prompt, schema = model.calls[0]
     assert "output_dir" in prompt
     assert isinstance(schema, Mapping)
-    assert schema["properties"]["schema_version"]["enum"] == (2,)
+    assert schema["properties"]["schema_version"]["enum"] == (3,)
     assert not _contains_callable(schema)
     assert len(application.registry.names()) == 11

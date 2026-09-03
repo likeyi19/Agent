@@ -600,23 +600,16 @@ def load_replay_overrides(path: str | Path) -> Mapping[str, object]:
     return dict(overrides)
 
 
-def _input_binding(argument_name: str, input_name: str) -> dict[str, object]:
+def _input_binding(input_name: str) -> dict[str, object]:
     return {
-        "name": argument_name,
         "binding_type": "input",
         "input_name": input_name,
-        "ref_step_id": None,
-        "ref_output_key": None,
     }
 
 
-def _ref_binding(
-    argument_name: str, producer_step_id: str, output_key: str
-) -> dict[str, object]:
+def _ref_binding(producer_step_id: str, output_key: str) -> dict[str, object]:
     return {
-        "name": argument_name,
         "binding_type": "ref",
-        "input_name": None,
         "ref_step_id": producer_step_id,
         "ref_output_key": output_key,
     }
@@ -628,7 +621,7 @@ def oracle_response(case: BenchmarkCase) -> str:
     if case.expected_outcome != "plan":
         return json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "unsupported",
                 "steps": [],
                 "reason": "Synthetic benchmark rejection text is not scored.",
@@ -639,24 +632,30 @@ def oracle_response(case: BenchmarkCase) -> str:
         str(step["role"]): f"provider-step-{index + 101}"
         for index, step in enumerate(case.expected_steps)
     }
+    registry = build_default_tool_registry()
     steps: list[dict[str, object]] = []
     for index, expected in enumerate(case.expected_steps):
-        arguments: list[dict[str, object]] = []
+        tool_name = str(expected["tool"])
+        spec = registry.get(tool_name)
+        arguments: dict[str, object] = {
+            argument_name: None for argument_name in spec.optional_arguments
+        }
         for argument_name, binding in expected["bindings"].items():
             if binding["kind"] == "input":
-                arguments.append(_input_binding(argument_name, binding["input_name"]))
+                arguments[argument_name] = _input_binding(binding["input_name"])
             else:
-                arguments.append(
-                    _ref_binding(
-                        argument_name,
-                        step_ids[binding["producer_role"]],
-                        binding["output_key"],
-                    )
+                arguments[argument_name] = _ref_binding(
+                    step_ids[binding["producer_role"]],
+                    binding["output_key"],
                 )
+        if set(spec.required_arguments).difference(arguments):
+            raise BenchmarkDefinitionError(
+                f"Case {case.case_id} omits a required wire argument."
+            )
         steps.append(
             {
                 "step_id": step_ids[str(expected["role"])],
-                "tool_name": expected["tool"],
+                "tool_name": tool_name,
                 "arguments": arguments,
                 "depends_on": [step_ids[role] for role in expected["depends_on"]],
                 "description": f"Provider prose {index} is deliberately ignored.",
@@ -664,7 +663,7 @@ def oracle_response(case: BenchmarkCase) -> str:
         )
     return json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "status": "plan",
             "steps": steps,
             "reason": None,
@@ -790,17 +789,16 @@ def _actual_binding_map(
     expected_roles: Sequence[str],
 ) -> Mapping[str, Mapping[str, object]]:
     if not isinstance(raw_step, Mapping) or not isinstance(
-        raw_step.get("arguments"), list
+        raw_step.get("arguments"), Mapping
     ):
         return {}
     result: dict[str, Mapping[str, object]] = {}
-    for binding_index, binding in enumerate(raw_step["arguments"]):
-        if not isinstance(binding, Mapping):
-            result[f"__invalid_{binding_index}"] = {"kind": "invalid"}
+    for name, binding in raw_step["arguments"].items():
+        if binding is None:
             continue
-        name = binding.get("name")
-        if not isinstance(name, str) or not name:
-            name = f"__invalid_{binding_index}"
+        if not isinstance(binding, Mapping):
+            result[name] = {"kind": "invalid"}
+            continue
         if binding.get("binding_type") == "input":
             result[name] = {
                 "kind": "input",
@@ -844,17 +842,16 @@ def _structural_binding_map(
     """Normalize bindings without retaining provider IDs or request values."""
 
     if not isinstance(raw_step, Mapping) or not isinstance(
-        raw_step.get("arguments"), list
+        raw_step.get("arguments"), Mapping
     ):
         return {}
     result: dict[str, Mapping[str, object]] = {}
-    for binding_index, binding in enumerate(raw_step["arguments"]):
-        if not isinstance(binding, Mapping):
-            result[f"__invalid_{binding_index}"] = {"kind": "invalid"}
+    for name, binding in raw_step["arguments"].items():
+        if binding is None:
             continue
-        name = binding.get("name")
-        if not isinstance(name, str) or not name:
-            name = f"__invalid_{binding_index}"
+        if not isinstance(binding, Mapping):
+            result[name] = {"kind": "invalid"}
+            continue
         if binding.get("binding_type") == "input":
             result[name] = {
                 "kind": "input",
@@ -1158,6 +1155,11 @@ def _score_case(
     raw_steps = payload.get("steps", []) if payload is not None else []
     if not isinstance(raw_steps, list):
         raw_steps = []
+    raw_plan_decision = bool(
+        payload is not None
+        and payload.get("status") == "plan"
+        and raw_steps
+    )
     emitted_tools = tuple(
         step["tool_name"]
         for step in raw_steps
@@ -1280,7 +1282,7 @@ def _score_case(
         case.expected_outcome == "plan" and error_code == "UNSUPPORTED_REQUEST"
     )
     unsupported_false_acceptance = bool(
-        case.expected_outcome == "unsupported" and syntactically_valid
+        case.expected_outcome == "unsupported" and raw_plan_decision
     )
     return CaseScore(
         case_id=case.case_id,

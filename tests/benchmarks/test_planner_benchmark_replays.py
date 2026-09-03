@@ -111,11 +111,12 @@ def test_hallucinated_tool_is_measured_and_fails_preflight(
     report: BenchmarkReport,
 ) -> None:
     score = _score(report, "hallucinated_tool_trap")
-    assert score.syntactically_valid_plan
+    assert not score.syntactically_valid_plan
     assert not score.preflight_valid_plan
     assert score.actual_error_code == "UNKNOWN_TOOL"
     assert score.hallucinated_tool_count == 1
     assert score.emitted_tool_count == 1
+    assert score.unsupported_false_acceptance
 
 
 def test_parser_and_bad_reference_failures_are_distinct(

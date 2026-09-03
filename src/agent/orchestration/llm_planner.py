@@ -19,7 +19,13 @@ from agent.schemas import (
 )
 
 from .planner import PlannerError
-from .planning_model import PlanningModel, PlanningModelError
+from .planning_diagnostics import (
+    DiagnosedPlanningAttempt,
+    PlanningDiagnostic,
+    PlanningDiagnosticContext,
+    PlanningDiagnosticStage,
+)
+from .planning_model import PlanningModel, PlanningModelError, PlanningModelProfile
 from .registry import ArgumentSpec, ToolRegistry
 
 
@@ -32,6 +38,16 @@ _MAX_IDENTIFIER_LENGTH = 128
 _MAX_DESCRIPTION_LENGTH = 2048
 _MAX_REASON_LENGTH = 2048
 _MAX_MODEL_ID_LENGTH = 256
+_PROVIDER_ERROR_CODES = frozenset(
+    {
+        "PLANNING_PROVIDER_ERROR",
+        "PROVIDER_AUTHENTICATION_FAILED",
+        "PROVIDER_RATE_LIMITED",
+        "PROVIDER_TIMEOUT",
+        "PROVIDER_CONNECTION_FAILED",
+        "PROVIDER_UNAVAILABLE",
+    }
+)
 
 _TOOL_DESCRIPTIONS = {
     "inspect_scATAC": (
@@ -384,6 +400,17 @@ def _sanitized_catalog(registry: ToolRegistry) -> tuple[Mapping[str, JsonValue],
     return tuple(tools)
 
 
+def _catalog_fingerprint(registry: ToolRegistry) -> str:
+    encoded = json.dumps(
+        _sanitized_catalog(registry),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _json_value_type(value: JsonValue) -> str:
     if value is None:
         return "null"
@@ -436,27 +463,57 @@ def _build_prompt(request: AgentRequest, registry: ToolRegistry) -> str:
 
 
 def _invalid_output(
-    message: str, *, code: str = "PLANNER_OUTPUT_INVALID"
+    message: str,
+    *,
+    code: str = "PLANNER_OUTPUT_INVALID",
+    stage: PlanningDiagnosticStage | None = None,
+    reason_code: str | None = None,
+    diagnostic_fields: Mapping[str, object] | None = None,
 ) -> PlannerError:
+    if stage is None:
+        stage = (
+            PlanningDiagnosticStage.ARGUMENT_BINDING
+            if code == "PLANNER_BINDING_INVALID"
+            else PlanningDiagnosticStage.DEPENDENCY_REFERENCE
+            if code == "PLANNER_STRUCTURE_INVALID"
+            else PlanningDiagnosticStage.SCHEMA
+        )
     return PlannerError(
         code,
         message,
         category=ErrorCategory.INTERNAL_AGENT_ERROR,
+        diagnostic_stage=stage,
+        diagnostic_reason_code=reason_code or (
+            "binding_invalid"
+            if stage is PlanningDiagnosticStage.ARGUMENT_BINDING
+            else "dependency_reference_invalid"
+            if stage is PlanningDiagnosticStage.DEPENDENCY_REFERENCE
+            else "wire_schema_invalid"
+        ),
+        diagnostic_fields=diagnostic_fields,
     )
 
 
 def _parse_json_response(response: object) -> dict[str, object]:
     if not isinstance(response, str):
-        raise _invalid_output("Planning model response must be a JSON text string.")
+        raise _invalid_output(
+            "Planning model response must be a JSON text string.",
+            stage=PlanningDiagnosticStage.PARSE,
+            reason_code="response_not_text",
+        )
     try:
         response_size = len(response.encode("utf-8"))
     except UnicodeEncodeError as exc:
         raise _invalid_output(
-            "Planning model response contains invalid Unicode text."
+            "Planning model response contains invalid Unicode text.",
+            stage=PlanningDiagnosticStage.PARSE,
+            reason_code="response_unicode_invalid",
         ) from exc
     if response_size > _MAX_RESPONSE_BYTES:
         raise _invalid_output(
-            f"Planning model response exceeds the {_MAX_RESPONSE_BYTES}-byte limit."
+            f"Planning model response exceeds the {_MAX_RESPONSE_BYTES}-byte limit.",
+            stage=PlanningDiagnosticStage.PARSE,
+            reason_code="response_too_large",
         )
     try:
         parsed = json.loads(
@@ -466,10 +523,16 @@ def _parse_json_response(response: object) -> dict[str, object]:
         )
     except (json.JSONDecodeError, _DuplicateJsonKey, RecursionError, ValueError) as exc:
         raise _invalid_output(
-            "Planning model response is not strict valid JSON."
+            "Planning model response is not strict valid JSON.",
+            stage=PlanningDiagnosticStage.PARSE,
+            reason_code="malformed_json",
         ) from exc
     if not isinstance(parsed, dict):
-        raise _invalid_output("Planning model response must be one JSON object.")
+        raise _invalid_output(
+            "Planning model response must be one JSON object.",
+            stage=PlanningDiagnosticStage.SCHEMA,
+            reason_code="root_not_object",
+        )
     _validate_tree_limits(parsed)
     return parsed
 
@@ -537,12 +600,23 @@ def _bounded_string(
 
 
 def _parse_argument_binding(
-    binding: object, request: AgentRequest, *, context: str
+    binding: object,
+    request: AgentRequest,
+    *,
+    context: str,
+    step_index: int,
+    binding_index: int,
 ) -> tuple[str, object]:
+    diagnostic_fields = {
+        "step_index": step_index,
+        "binding_index": binding_index,
+    }
     if not isinstance(binding, dict):
         raise _invalid_output(
             f"{context} must be a fixed argument-binding object.",
             code="PLANNER_BINDING_INVALID",
+            reason_code="binding_not_object",
+            diagnostic_fields=diagnostic_fields,
         )
     expected_fields = {
         "name",
@@ -555,6 +629,8 @@ def _parse_argument_binding(
         raise _invalid_output(
             f"{context} must contain every v2 binding field and no others.",
             code="PLANNER_BINDING_INVALID",
+            reason_code="binding_fields_invalid",
+            diagnostic_fields=diagnostic_fields,
         )
     argument_name = _bounded_string(
         binding["name"],
@@ -567,6 +643,11 @@ def _parse_argument_binding(
             raise _invalid_output(
                 f"{context} input binding must have null reference fields.",
                 code="PLANNER_BINDING_INVALID",
+                reason_code="input_binding_reference_fields_nonnull",
+                diagnostic_fields={
+                    **diagnostic_fields,
+                    "argument_name": argument_name,
+                },
             )
         input_name = _bounded_string(
             binding["input_name"],
@@ -579,6 +660,13 @@ def _parse_argument_binding(
                 "Planning response requested unavailable structured input "
                 f"{input_name!r}.",
                 category=ErrorCategory.USER_INPUT_ERROR,
+                diagnostic_stage=PlanningDiagnosticStage.ARGUMENT_BINDING,
+                diagnostic_reason_code="request_input_missing",
+                diagnostic_fields={
+                    **diagnostic_fields,
+                    "argument_name": argument_name,
+                    "input_name": input_name,
+                },
             )
         return argument_name, request.inputs[input_name]
     if binding_type == "ref":
@@ -586,6 +674,11 @@ def _parse_argument_binding(
             raise _invalid_output(
                 f"{context} reference binding must have null input_name.",
                 code="PLANNER_BINDING_INVALID",
+                reason_code="reference_binding_input_nonnull",
+                diagnostic_fields={
+                    **diagnostic_fields,
+                    "argument_name": argument_name,
+                },
             )
         return argument_name, StepOutputRef(
             step_id=_bounded_string(
@@ -602,6 +695,11 @@ def _parse_argument_binding(
     raise _invalid_output(
         f"{context}.binding_type must be 'input' or 'ref'.",
         code="PLANNER_BINDING_INVALID",
+        reason_code="binding_type_invalid",
+        diagnostic_fields={
+            **diagnostic_fields,
+            "argument_name": argument_name,
+        },
     )
 
 
@@ -648,11 +746,19 @@ def _parse_plan_steps(
                 binding,
                 request,
                 context=f"{context}.arguments[{binding_index}]",
+                step_index=index,
+                binding_index=binding_index,
             )
             if argument_name in arguments:
                 raise _invalid_output(
                     f"{context} contains duplicate argument {argument_name!r}.",
                     code="PLANNER_BINDING_INVALID",
+                    reason_code="duplicate_argument",
+                    diagnostic_fields={
+                        "step_index": index,
+                        "binding_index": binding_index,
+                        "argument_name": argument_name,
+                    },
                 )
             arguments[argument_name] = argument_value
 
@@ -689,6 +795,8 @@ def _parse_plan_steps(
             raise _invalid_output(
                 f"{context} violates the AgentPlan structure.",
                 code="PLANNER_STRUCTURE_INVALID",
+                reason_code="step_structure_invalid",
+                diagnostic_fields={"step_index": index},
             ) from exc
     return tuple(steps)
 
@@ -718,6 +826,8 @@ def _parse_response(response: object, request: AgentRequest) -> tuple[PlanStep, 
             "UNSUPPORTED_REQUEST",
             reason,
             category=ErrorCategory.USER_INPUT_ERROR,
+            diagnostic_stage=PlanningDiagnosticStage.UNSUPPORTED,
+            diagnostic_reason_code="explicit_unsupported_response",
         )
     if status != "plan":
         raise _invalid_output("Planning response has an unsupported status.")
@@ -759,12 +869,28 @@ def _plan_id(request: AgentRequest, steps: tuple[PlanStep, ...]) -> str:
 class LLMPlanner:
     """Convert one strict planning-model response into existing plan contracts."""
 
-    def __init__(self, model: PlanningModel) -> None:
+    def __init__(
+        self,
+        model: PlanningModel,
+        *,
+        profile: PlanningModelProfile | None = None,
+    ) -> None:
         if not callable(getattr(model, "complete", None)):
             raise TypeError("`model` must provide a callable complete() method.")
+        if profile is not None and not isinstance(profile, PlanningModelProfile):
+            raise TypeError("`profile` must be a PlanningModelProfile or None.")
+        if profile is not None and not profile.enabled:
+            raise ValueError("`profile` must be enabled.")
+        if profile is not None and not profile.supports_structured_output:
+            raise ValueError("`profile` must support structured output.")
         self._model = model
         self._model_id = _sanitize_model_id(getattr(model, "model_id", None))
-        self._name = f"llm:{self._model_id}"
+        self._profile = profile
+        self._name = (
+            f"llm:{self._model_id}"
+            if profile is None
+            else f"llm-profile:{profile.profile_id}"
+        )
 
     @property
     def model(self) -> PlanningModel:
@@ -774,12 +900,49 @@ class LLMPlanner:
     def name(self) -> str:
         return self._name
 
+    @property
+    def profile(self) -> PlanningModelProfile | None:
+        return self._profile
+
     def plan(self, request: AgentRequest, registry: ToolRegistry) -> AgentPlan:
+        """Return the accepted candidate while preserving the Planner protocol."""
+
+        return self.plan_with_diagnostics(request, registry).plan
+
+    def plan_with_diagnostics(
+        self,
+        request: AgentRequest,
+        registry: ToolRegistry,
+    ) -> DiagnosedPlanningAttempt:
+        """Construct one plan and sanitized diagnostics with exactly one model call."""
+
         if not isinstance(request, AgentRequest):
             raise TypeError("`request` must be an AgentRequest.")
         if not isinstance(registry, ToolRegistry):
             raise TypeError("`registry` must be a ToolRegistry.")
 
+        profile_id = "unprofiled" if self._profile is None else self._profile.profile_id
+        provider_id = "custom" if self._profile is None else self._profile.provider_id
+        model_identity = (
+            self._model_id if self._profile is None else self._profile.model_id
+        )
+        context = PlanningDiagnosticContext(
+            profile_id=profile_id,
+            provider_id=provider_id,
+            model_identity_digest=hashlib.sha256(
+                model_identity.encode("utf-8")
+            ).hexdigest(),
+            catalog_fingerprint=_catalog_fingerprint(registry),
+            offered_tool_names=registry.names(),
+            planning_wire_schema_version=_SCHEMA_VERSION,
+        )
+        diagnostics: list[PlanningDiagnostic] = [
+            context.diagnostic(
+                PlanningDiagnosticStage.PROVIDER,
+                "PROVIDER_CALL_STARTED",
+                "started",
+            )
+        ]
         prompt = _build_prompt(request, registry)
         try:
             response = self._model.complete(
@@ -787,31 +950,249 @@ class LLMPlanner:
                 response_schema=_response_schema(registry),
             )
         except PlanningModelError as exc:
+            provider_code = (
+                exc.code
+                if exc.code in _PROVIDER_ERROR_CODES
+                else "PLANNING_PROVIDER_ERROR"
+            )
+            diagnostics.append(
+                context.diagnostic(
+                    PlanningDiagnosticStage.PROVIDER,
+                    provider_code,
+                    "failed",
+                    reason_code="provider_call_failed",
+                )
+            )
             raise PlannerError(
-                exc.code,
-                str(exc),
+                provider_code,
+                "Planning provider request failed.",
                 category=ErrorCategory.ENVIRONMENT_ERROR,
+                diagnostics=tuple(diagnostics),
             ) from exc
         except Exception as exc:
+            diagnostics.append(
+                context.diagnostic(
+                    PlanningDiagnosticStage.PROVIDER,
+                    "PLANNING_PROVIDER_ERROR",
+                    "failed",
+                    reason_code="provider_call_failed",
+                )
+            )
             raise PlannerError(
                 "PLANNING_PROVIDER_ERROR",
                 "Planning model failed to produce a response.",
                 category=ErrorCategory.ENVIRONMENT_ERROR,
+                diagnostics=tuple(diagnostics),
             ) from exc
 
-        steps = _parse_response(response, request)
+        response_byte_count = _response_byte_count(response)
+        diagnostics.append(
+            context.diagnostic(
+                PlanningDiagnosticStage.PROVIDER,
+                "PROVIDER_RESPONSE_RECEIVED",
+                "succeeded",
+                response_byte_count=response_byte_count,
+            )
+        )
         try:
-            return AgentPlan(
+            steps = _parse_response(response, request)
+        except PlannerError as exc:
+            _append_preceding_success_diagnostics(
+                diagnostics,
+                context,
+                exc.diagnostic_stage,
+                response_byte_count=response_byte_count,
+            )
+            stage = exc.diagnostic_stage or PlanningDiagnosticStage.SCHEMA
+            fields = exc.diagnostic_fields
+            diagnostics.append(
+                context.diagnostic(
+                    stage,
+                    exc.code,
+                    "rejected" if stage is PlanningDiagnosticStage.UNSUPPORTED else "failed",
+                    response_byte_count=response_byte_count,
+                    step_index=_optional_nonnegative_int(fields.get("step_index")),
+                    argument_name=_known_argument_name(
+                        registry, fields.get("argument_name")
+                    ),
+                    input_name=_known_input_name(
+                        request, fields.get("input_name")
+                    ),
+                    producer_step_index=_optional_nonnegative_int(
+                        fields.get("producer_step_index")
+                    ),
+                    output_key=_known_output_key(
+                        registry, fields.get("output_key")
+                    ),
+                    tool_name=_known_tool_name(registry, fields.get("tool_name")),
+                    reason_code=exc.diagnostic_reason_code,
+                )
+            )
+            raise PlannerError(
+                exc.code,
+                (
+                    "Planning model classified the request as unsupported."
+                    if stage is PlanningDiagnosticStage.UNSUPPORTED
+                    else str(exc)
+                ),
+                category=exc.category,
+                diagnostics=tuple(diagnostics),
+            ) from exc
+
+        _append_successful_response_diagnostics(
+            diagnostics,
+            context,
+            response_byte_count=response_byte_count,
+        )
+        try:
+            plan = AgentPlan(
                 plan_id=_plan_id(request, steps),
                 request_id=request.request_id,
                 planner_name=self._name,
                 steps=steps,
             )
         except (TypeError, ValueError) as exc:
-            raise _invalid_output(
+            failure = _invalid_output(
                 "Planning response violates the AgentPlan structure.",
                 code="PLANNER_STRUCTURE_INVALID",
+                stage=PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+                reason_code="plan_structure_invalid",
+            )
+            diagnostics.append(
+                context.diagnostic(
+                    PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+                    failure.code,
+                    "failed",
+                    response_byte_count=response_byte_count,
+                    reason_code=failure.diagnostic_reason_code,
+                )
+            )
+            raise PlannerError(
+                failure.code,
+                str(failure),
+                category=failure.category,
+                diagnostics=tuple(diagnostics),
             ) from exc
+        diagnostics.append(
+            context.diagnostic(
+                PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+                "DEPENDENCY_REFERENCE_STRUCTURE_VALID",
+                "succeeded",
+                response_byte_count=response_byte_count,
+            )
+        )
+        diagnostics.append(
+            context.diagnostic(
+                PlanningDiagnosticStage.CANDIDATE,
+                "CANDIDATE_PLAN_CONSTRUCTED",
+                "succeeded",
+                response_byte_count=response_byte_count,
+                candidate_constructed=True,
+            )
+        )
+        return DiagnosedPlanningAttempt(plan, context, tuple(diagnostics))
+
+
+def _response_byte_count(response: object) -> int | None:
+    if not isinstance(response, str):
+        return None
+    try:
+        return len(response.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _known_argument_name(registry: ToolRegistry, value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    known = {
+        name
+        for tool_name in registry.names()
+        for name in (
+            *registry.get(tool_name).required_arguments,
+            *registry.get(tool_name).optional_arguments,
+        )
+    }
+    return value if value in known else None
+
+
+def _known_input_name(request: AgentRequest, value: object) -> str | None:
+    return value if isinstance(value, str) and value in request.inputs else None
+
+
+def _known_output_key(registry: ToolRegistry, value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    known = {
+        field
+        for tool_name in registry.names()
+        for field in registry.get(tool_name).result_contract.required_fields
+    }
+    return value if value in known else None
+
+
+def _known_tool_name(registry: ToolRegistry, value: object) -> str | None:
+    return value if isinstance(value, str) and registry.contains(value) else None
+
+
+def _append_preceding_success_diagnostics(
+    diagnostics: list[PlanningDiagnostic],
+    context: PlanningDiagnosticContext,
+    failed_stage: PlanningDiagnosticStage | None,
+    *,
+    response_byte_count: int | None,
+) -> None:
+    if failed_stage is PlanningDiagnosticStage.PARSE:
+        return
+    diagnostics.append(
+        context.diagnostic(
+            PlanningDiagnosticStage.PARSE,
+            "JSON_PARSE_SUCCEEDED",
+            "succeeded",
+            response_byte_count=response_byte_count,
+        )
+    )
+    if failed_stage is PlanningDiagnosticStage.SCHEMA:
+        return
+    diagnostics.append(
+        context.diagnostic(
+            PlanningDiagnosticStage.SCHEMA,
+            "WIRE_SCHEMA_VALID",
+            "succeeded",
+            response_byte_count=response_byte_count,
+        )
+    )
+    if failed_stage in {
+        PlanningDiagnosticStage.ARGUMENT_BINDING,
+        PlanningDiagnosticStage.UNSUPPORTED,
+    }:
+        return
+    diagnostics.append(
+        context.diagnostic(
+            PlanningDiagnosticStage.ARGUMENT_BINDING,
+            "ARGUMENT_BINDINGS_CONSTRUCTED",
+            "succeeded",
+            response_byte_count=response_byte_count,
+        )
+    )
+
+
+def _append_successful_response_diagnostics(
+    diagnostics: list[PlanningDiagnostic],
+    context: PlanningDiagnosticContext,
+    *,
+    response_byte_count: int | None,
+) -> None:
+    _append_preceding_success_diagnostics(
+        diagnostics,
+        context,
+        PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+        response_byte_count=response_byte_count,
+    )
 
 
 __all__ = ["LLMPlanner"]

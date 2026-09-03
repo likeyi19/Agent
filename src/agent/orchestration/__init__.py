@@ -39,6 +39,7 @@ from .planner import DeterministicPlanner, Planner, PlannerError
 from .planning_model import (
     PlanningModel,
     PlanningModelError,
+    PlanningModelProfile,
     classify_provider_exception,
 )
 from .registry import (
@@ -101,6 +102,7 @@ __all__ = [
     "PlannerError",
     "PlanningModel",
     "PlanningModelError",
+    "PlanningModelProfile",
     "PlanExecutor",
     "PlanStep",
     "PersistedRunState",

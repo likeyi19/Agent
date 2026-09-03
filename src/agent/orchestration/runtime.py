@@ -22,6 +22,7 @@ from agent.schemas import (
     RunMode,
     RunStatus,
     StepExecutionResult,
+    StepOutputRef,
     StepStatus,
     TraceEventType,
     VerificationResult,
@@ -36,6 +37,13 @@ from .executor import (
     _TraceRecorder,
 )
 from .error_policy import build_recovery_policy_snapshot, classified_agent_error
+from .planning_diagnostics import (
+    DiagnosedPlanningAttempt,
+    PlanningDiagnostic,
+    PlanningDiagnosticContext,
+    PlanningDiagnosticStage,
+    safe_diagnostic_identifier,
+)
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
 from .run_store import (
@@ -128,14 +136,13 @@ class AgentRuntime:
             details={"planner_name": type(self._planner).__name__},
         )
         try:
-            plan = self._planner.plan(request, self._registry)
-            if not isinstance(plan, AgentPlan):
-                raise TypeError("Planner returned a value that is not an AgentPlan.")
+            plan, diagnostic_context = self._invoke_planner(request, trace)
         except PlannerError as exc:
             error = classified_agent_error(
                 category=exc.category,
                 code=exc.code,
                 exception_type=type(exc).__name__,
+                details=_planner_error_details(exc),
             )
             trace.add(
                 TraceEventType.PLANNING,
@@ -185,10 +192,113 @@ class AgentRuntime:
             "Planner produced a structured AgentPlan.",
             details={"plan_id": plan.plan_id, "step_count": len(plan.steps)},
         )
+        candidate_preflight = self._diagnose_candidate_preflight(
+            plan,
+            trace,
+            diagnostic_context,
+        )
 
         if request.mode is RunMode.PLAN_ONLY:
-            return self._run_plan_only(request, plan, run_id, trace)
+            return self._run_plan_only(
+                request,
+                plan,
+                run_id,
+                trace,
+                preflight=candidate_preflight,
+            )
         return self._run_execute(request, plan, run_id, trace)
+
+    def _invoke_planner(
+        self,
+        request: AgentRequest,
+        trace: _TraceRecorder,
+    ) -> tuple[AgentPlan, PlanningDiagnosticContext | None]:
+        # M9.4 must add a cancellation checkpoint between any future attempts;
+        # M9.2 deliberately invokes one initial provider call only.
+        diagnosed_plan = getattr(self._planner, "plan_with_diagnostics", None)
+        if not callable(diagnosed_plan):
+            plan = self._planner.plan(request, self._registry)
+            if not isinstance(plan, AgentPlan):
+                raise TypeError("Planner returned a value that is not an AgentPlan.")
+            return plan, None
+        try:
+            attempt = diagnosed_plan(request, self._registry)
+        except PlannerError as exc:
+            _record_planning_diagnostics(trace, exc.diagnostics)
+            raise
+        if not isinstance(attempt, DiagnosedPlanningAttempt):
+            raise TypeError(
+                "Diagnostic planner returned an invalid planning-attempt value."
+            )
+        _record_planning_diagnostics(trace, attempt.diagnostics)
+        return attempt.plan, attempt.context
+
+    def _diagnose_candidate_preflight(
+        self,
+        plan: AgentPlan,
+        trace: _TraceRecorder,
+        context: PlanningDiagnosticContext | None,
+    ) -> VerificationResult | None:
+        if context is None:
+            return None
+        try:
+            preflight = self._executor.preflight(plan)
+        except Exception:
+            diagnostic = context.diagnostic(
+                PlanningDiagnosticStage.PREFLIGHT,
+                "PREFLIGHT_UNEXPECTED_ERROR",
+                "failed",
+                candidate_constructed=True,
+                candidate_preflight_passed=False,
+                reason_code="preflight_exception",
+            )
+            _record_planning_diagnostics(trace, (diagnostic,))
+            return None
+
+        if not preflight.passed:
+            diagnostic = _preflight_failure_diagnostic(
+                context,
+                plan,
+                preflight,
+                self._registry,
+            )
+            _record_planning_diagnostics(trace, (diagnostic,))
+            if preflight.error is not None:
+                safe_details = {
+                    "failure_count": preflight.error.details.get(
+                        "failure_count", 1
+                    ),
+                    **dict(diagnostic.to_details()),
+                }
+                preflight = replace(
+                    preflight,
+                    error=replace(
+                        preflight.error,
+                        step_id=None,
+                        tool_name=diagnostic.tool_name,
+                        details=safe_details,
+                    ),
+                )
+            return preflight
+
+        diagnostics = (
+            context.diagnostic(
+                PlanningDiagnosticStage.PREFLIGHT,
+                "CANDIDATE_PREFLIGHT_PASSED",
+                "succeeded",
+                candidate_constructed=True,
+                candidate_preflight_passed=True,
+            ),
+            context.diagnostic(
+                PlanningDiagnosticStage.ACCEPTED,
+                "FINAL_PLAN_ACCEPTED",
+                "succeeded",
+                candidate_constructed=True,
+                candidate_preflight_passed=True,
+            ),
+        )
+        _record_planning_diagnostics(trace, diagnostics)
+        return preflight
 
     def _run_plan_only(
         self,
@@ -198,6 +308,7 @@ class AgentRuntime:
         trace: _TraceRecorder,
         *,
         should_cancel: CancellationCheck | None = None,
+        preflight: VerificationResult | None = None,
     ) -> AgentRunResult:
         trace.add(
             TraceEventType.PLAN_VALIDATION,
@@ -205,7 +316,8 @@ class AgentRuntime:
             details={"plan_id": plan.plan_id},
         )
         try:
-            preflight = self._executor.preflight(plan)
+            if preflight is None:
+                preflight = self._executor.preflight(plan)
         except Exception as exc:
             error = _internal_error(
                 "PREFLIGHT_UNEXPECTED_ERROR",
@@ -335,9 +447,7 @@ class AgentRuntime:
         )
 
         try:
-            plan = self._planner.plan(request, self._registry)
-            if not isinstance(plan, AgentPlan):
-                raise TypeError("Planner returned a value that is not an AgentPlan.")
+            plan, diagnostic_context = self._invoke_planner(request, trace)
             if plan.request_id != request.request_id:
                 raise TypeError("Planner returned a plan for a different request ID.")
         except PlannerError as exc:
@@ -345,6 +455,7 @@ class AgentRuntime:
                 category=exc.category,
                 code=exc.code,
                 exception_type=type(exc).__name__,
+                details=_planner_error_details(exc),
             )
             trace.add(
                 TraceEventType.PLANNING,
@@ -396,6 +507,11 @@ class AgentRuntime:
             "Planner produced a structured AgentPlan.",
             details={"plan_id": plan.plan_id, "step_count": len(plan.steps)},
         )
+        candidate_preflight = self._diagnose_candidate_preflight(
+            plan,
+            trace,
+            diagnostic_context,
+        )
         recovery_policy_snapshot = (
             None
             if request.mode is RunMode.PLAN_ONLY
@@ -430,6 +546,7 @@ class AgentRuntime:
                 run_id,
                 trace,
                 should_cancel=self._cancellation_check(run_id),
+                preflight=candidate_preflight,
             )
             return self._persist_terminal(state, result)
         return self._run_durable_execute(request, plan, run_id, trace, state)
@@ -1258,6 +1375,179 @@ def _terminal_steps(
         else:
             terminal.append(step)
     return tuple(terminal)
+
+
+def _record_planning_diagnostics(
+    trace: _TraceRecorder,
+    diagnostics: Sequence[PlanningDiagnostic],
+) -> None:
+    for diagnostic in diagnostics:
+        trace.add(
+            TraceEventType.PLANNING,
+            "Sanitized planning diagnostic recorded.",
+            details=diagnostic.to_details(),
+        )
+
+
+def _planner_error_details(exc: PlannerError) -> dict[str, object]:
+    if not exc.diagnostics:
+        return {}
+    return dict(exc.diagnostics[-1].to_details())
+
+
+def _preflight_failure_diagnostic(
+    context: PlanningDiagnosticContext,
+    plan: AgentPlan,
+    preflight: VerificationResult,
+    registry: ToolRegistry,
+) -> PlanningDiagnostic:
+    error = preflight.error
+    code = "PLAN_PREFLIGHT_FAILED" if error is None else error.code
+    stage = {
+        "UNKNOWN_TOOL": PlanningDiagnosticStage.TOOL_SELECTION,
+        "INVALID_TOOL_ARGUMENTS": PlanningDiagnosticStage.ARGUMENT_BINDING,
+        "INVALID_OUTPUT_REFERENCE": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+        "INVALID_PLAN_STRUCTURE": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    }.get(code, PlanningDiagnosticStage.PREFLIGHT)
+    step_index = None
+    tool_name = None
+    argument_name = None
+    producer_step_index = None
+    output_key = None
+    reason_code = "candidate_preflight_failed"
+    step = None
+    if error is not None and error.step_id is not None:
+        step_index = next(
+            (
+                index
+                for index, candidate in enumerate(plan.steps)
+                if candidate.step_id == error.step_id
+            ),
+            None,
+        )
+        if step_index is not None:
+            step = plan.steps[step_index]
+            tool_name = (
+                safe_diagnostic_identifier(step.tool_name)
+                if registry.contains(step.tool_name)
+                else None
+            )
+
+    if code == "UNKNOWN_TOOL":
+        reason_code = "unknown_tool"
+    elif code == "INVALID_TOOL_ARGUMENTS" and step is not None:
+        reason_code, argument_name = _invalid_argument_diagnostic(step, registry)
+    elif code == "INVALID_OUTPUT_REFERENCE" and step is not None:
+        reason_code = "invalid_result_field_reference"
+        (
+            argument_name,
+            producer_step_index,
+            output_key,
+        ) = _invalid_reference_diagnostic(step, plan, registry)
+    elif code == "INVALID_PLAN_STRUCTURE":
+        reason_code = "dependency_structure_invalid"
+
+    return context.diagnostic(
+        stage,
+        code,
+        "failed",
+        candidate_constructed=True,
+        candidate_preflight_passed=False,
+        step_index=step_index,
+        argument_name=argument_name,
+        producer_step_index=producer_step_index,
+        output_key=output_key,
+        tool_name=tool_name,
+        reason_code=reason_code,
+    )
+
+
+def _invalid_argument_diagnostic(
+    step: object,
+    registry: ToolRegistry,
+) -> tuple[str, str | None]:
+    tool_name = getattr(step, "tool_name", None)
+    if not isinstance(tool_name, str) or not registry.contains(tool_name):
+        return "unknown_tool", None
+    spec = registry.get(tool_name)
+    arguments = getattr(step, "arguments", {})
+    supplied = set(arguments)
+    required = set(spec.required_arguments)
+    known = required.union(spec.optional_arguments)
+    missing = sorted(required.difference(supplied))
+    if missing:
+        return "missing_tool_argument", safe_diagnostic_identifier(missing[0])
+    unknown = sorted(supplied.difference(known))
+    if unknown:
+        globally_known = {
+            name
+            for offered_tool in registry.names()
+            for name in (
+                *registry.get(offered_tool).required_arguments,
+                *registry.get(offered_tool).optional_arguments,
+            )
+        }
+        return (
+            "unknown_tool_argument",
+            unknown[0] if unknown[0] in globally_known else None,
+        )
+    for name, value in arguments.items():
+        argument_spec = spec.required_arguments.get(
+            name, spec.optional_arguments.get(name)
+        )
+        if argument_spec is None:
+            continue
+        try:
+            argument_spec.validate(name, value)
+        except Exception:
+            return "invalid_tool_argument", safe_diagnostic_identifier(name)
+    return "invalid_tool_arguments", None
+
+
+def _invalid_reference_diagnostic(
+    step: object,
+    plan: AgentPlan,
+    registry: ToolRegistry,
+) -> tuple[str | None, int | None, str | None]:
+    steps_by_id = {candidate.step_id: candidate for candidate in plan.steps}
+    indices_by_id = {
+        candidate.step_id: index for index, candidate in enumerate(plan.steps)
+    }
+    arguments = getattr(step, "arguments", {})
+    dependencies = getattr(step, "depends_on", ())
+    step_id = getattr(step, "step_id", None)
+    for argument_name, argument in arguments.items():
+        if not isinstance(argument, StepOutputRef):
+            continue
+        producer = steps_by_id.get(argument.step_id)
+        valid = (
+            producer is not None
+            and argument.step_id in dependencies
+            and argument.step_id != step_id
+        )
+        if valid and producer is not None and registry.contains(producer.tool_name):
+            valid = (
+                argument.output_key
+                in registry.get(producer.tool_name).result_contract.required_fields
+            )
+        else:
+            valid = False
+        if not valid:
+            known_output_keys = {
+                field
+                for offered_tool in registry.names()
+                for field in registry.get(
+                    offered_tool
+                ).result_contract.required_fields
+            }
+            return (
+                safe_diagnostic_identifier(argument_name),
+                indices_by_id.get(argument.step_id),
+                argument.output_key
+                if argument.output_key in known_output_keys
+                else None,
+            )
+    return None, None, None
 
 
 def _internal_error(code: str, message: str, exception: Exception) -> AgentError:

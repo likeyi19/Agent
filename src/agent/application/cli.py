@@ -14,9 +14,9 @@ from agent.orchestration import (
     RunStoreError,
 )
 from agent.providers import (
-    GeminiPlanningModel,
-    GroqPlanningModel,
-    OpenAIPlanningModel,
+    BUILTIN_PLANNING_PROVIDER_IDS,
+    build_default_planning_model_factory_registry,
+    build_planning_model_profile,
 )
 from agent.schemas import AgentRequest, RunMode
 
@@ -53,7 +53,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--plan-only", action="store_true")
     run.add_argument(
         "--provider",
-        choices=("deterministic", "openai", "gemini", "groq"),
+        choices=("deterministic", *BUILTIN_PLANNING_PROVIDER_IDS),
         default="deterministic",
     )
     run.add_argument("--model")
@@ -105,18 +105,16 @@ def _planner(provider: str, model: str | None):
         return DeterministicPlanner()
     if not isinstance(model, str) or not model.strip():
         raise _CliInputError("External planning providers require --model.")
-    constructors = {
-        "openai": OpenAIPlanningModel,
-        "gemini": GeminiPlanningModel,
-        "groq": GroqPlanningModel,
-    }
     try:
-        planning_model = constructors[provider](model=model)
+        profile = build_planning_model_profile(provider, model.strip())
+        planning_model = build_default_planning_model_factory_registry().create(
+            profile
+        )
     except Exception as exc:
         raise _CliInputError(
             "Planning provider could not be initialized from environment configuration."
         ) from exc
-    return LLMPlanner(planning_model)
+    return LLMPlanner(planning_model, profile=profile)
 
 
 def _merge_run_inputs(arguments: argparse.Namespace) -> dict[str, object]:

@@ -10,6 +10,14 @@ from .groq_planning import (
     GroqPlanningError,
     GroqPlanningModel,
 )
+from .model_registry import (
+    BUILTIN_PLANNING_PROVIDER_IDS,
+    PlanningModelFactory,
+    PlanningModelFactoryError,
+    PlanningModelFactoryRegistry,
+    build_default_planning_model_factory_registry,
+    build_planning_model_profile,
+)
 from .openai_planning import (
     OpenAIPlanningDependencyError,
     OpenAIPlanningError,
@@ -17,6 +25,7 @@ from .openai_planning import (
 )
 
 __all__ = [
+    "BUILTIN_PLANNING_PROVIDER_IDS",
     "GeminiPlanningDependencyError",
     "GeminiPlanningError",
     "GeminiPlanningModel",
@@ -26,4 +35,9 @@ __all__ = [
     "OpenAIPlanningDependencyError",
     "OpenAIPlanningError",
     "OpenAIPlanningModel",
+    "PlanningModelFactory",
+    "PlanningModelFactoryError",
+    "PlanningModelFactoryRegistry",
+    "build_default_planning_model_factory_registry",
+    "build_planning_model_profile",
 ]

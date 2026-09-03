@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "overrides": {
+    "embedding_incorrect_result_reference_trap": {
+      "response": {
+        "schema_version": 2,
+        "status": "plan",
+        "steps": [
+          {
+            "step_id": "provider-inspection-id",
+            "tool_name": "inspect_scATAC",
+            "arguments": [
+              {
+                "name": "path",
+                "binding_type": "input",
+                "input_name": "input_path",
+                "ref_step_id": null,
+                "ref_output_key": null
+              }
+            ],
+            "depends_on": [],
+            "description": "Ignored provider prose."
+          },
+          {
+            "step_id": "provider-embedding-id",
+            "tool_name": "epizoo_embed_cells",
+            "arguments": [
+              {
+                "name": "input_path",
+                "binding_type": "ref",
+                "input_name": null,
+                "ref_step_id": "provider-inspection-id",
+                "ref_output_key": "invented_result_path"
+              },
+              {
+                "name": "output_dir",
+                "binding_type": "input",
+                "input_name": "output_dir",
+                "ref_step_id": null,
+                "ref_output_key": null
+              },
+              {
+                "name": "species",
+                "binding_type": "input",
+                "input_name": "species",
+                "ref_step_id": null,
+                "ref_output_key": null
+              }
+            ],
+            "depends_on": ["provider-inspection-id"],
+            "description": null
+          }
+        ],
+        "reason": null
+      }
+    },
+    "embedding_missing_output_dir": {
+      "raw_response": "```json\n{\"schema_version\":2,\"status\":\"unsupported\",\"steps\":[],\"reason\":\"ignored\"}\n```"
+    },
+    "hallucinated_tool_trap": {
+      "response": {
+        "schema_version": 2,
+        "status": "plan",
+        "steps": [
+          {
+            "step_id": "made-up-step",
+            "tool_name": "batch_correct_cells_v99",
+            "arguments": [],
+            "depends_on": [],
+            "description": "This deliberately exercises hallucination scoring."
+          }
+        ],
+        "reason": null
+      }
+    },
+    "inspect_verbose_context": {
+      "response": {
+        "schema_version": 2,
+        "status": "plan",
+        "steps": [
+          {
+            "step_id": "semantically-wrong-yet-executable",
+            "tool_name": "epizoo_embed_cells",
+            "arguments": [
+              {
+                "name": "input_path",
+                "binding_type": "input",
+                "input_name": "input_path",
+                "ref_step_id": null,
+                "ref_output_key": null
+              },
+              {
+                "name": "output_dir",
+                "binding_type": "input",
+                "input_name": "output_dir",
+                "ref_step_id": null,
+                "ref_output_key": null
+              },
+              {
+                "name": "species",
+                "binding_type": "input",
+                "input_name": "species",
+                "ref_step_id": null,
+                "ref_output_key": null
+              }
+            ],
+            "depends_on": [],
+            "description": "The scorer must ignore this wording."
+          }
+        ],
+        "reason": null
+      }
+    },
+    "unsupported_rna_analysis": {
+      "response": {
+        "schema_version": 2,
+        "status": "plan",
+        "steps": [
+          {
+            "step_id": "false-accepted-inspection",
+            "tool_name": "inspect_scATAC",
+            "arguments": [
+              {
+                "name": "path",
+                "binding_type": "input",
+                "input_name": "input_path",
+                "ref_step_id": null,
+                "ref_output_key": null
+              }
+            ],
+            "depends_on": [],
+            "description": "A structurally valid but semantically false acceptance."
+          }
+        ],
+        "reason": null
+      }
+    }
+  }
+}

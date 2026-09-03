@@ -139,10 +139,17 @@ def test_cli_provider_initialization_failure_is_sanitized(
 ) -> None:
     secret = "secret-provider-token"
 
-    def fail(**_: object) -> object:
-        raise RuntimeError(secret)
+    class FailingRegistry:
+        def create(self, profile) -> object:
+            assert profile.provider_id == "openai"
+            assert profile.model_id == "test-model"
+            raise RuntimeError(secret)
 
-    monkeypatch.setattr(cli_module, "OpenAIPlanningModel", fail)
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: FailingRegistry(),
+    )
     arguments = _run_args(tmp_path, request_id="provider-failure") + [
         "--provider",
         "openai",

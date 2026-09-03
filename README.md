@@ -7,7 +7,8 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 ## Current status
 
 Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
-are complete. Milestone 7 / Phase II is complete, and Phase III has begun.
+are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, and M9.3 are
+complete, while M9.4 Planning Recovery has not started.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -35,14 +36,53 @@ are complete. Milestone 7 / Phase II is complete, and Phase III has begun.
   sparse replicate-aware pseudobulk SUM aggregation
 - Milestone 8.2: independently verified replicate-aware differential
   accessibility through a pinned edgeR v4 quasi-likelihood workflow
+- Milestone 9.1: deterministic Planner robustness benchmark with calibrated
+  hard-semantic scoring and report schema v3
+- Milestone 9.2: structured, sanitized planning diagnostics schema v2
+- Milestone 9.2.5: provider/model abstraction through immutable
+  `PlanningModelProfile` and adapter-only `PlanningModelFactoryRegistry`
+- Milestone 9.3: planning wire schema v3, registry-derived tool-discriminated
+  schemas, and composable planning semantics
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
-error handling, dependency resolution, and execution tracing. `LLMPlanner`
-uses an injected `PlanningModel` and a strict versioned planning schema to
-produce the existing `AgentPlan`; Milestone 3 preflight, execution, and
-verification remain unchanged. Optional OpenAI, Gemini, and Groq adapters are
-available, while the default runtime remains deterministic and offline.
+error handling, dependency resolution, and execution tracing.
+
+## LLM planning architecture
+
+The Agent supports provider-neutral LLM planning. The LLM is an interchangeable
+candidate-plan generator that owns natural-language intent understanding, tool
+selection, and workflow composition. `LLMPlanner` converts its structured
+decision into the existing `AgentPlan`, while deterministic code validates the
+schema, tool allowlist, bindings, references, provenance, and complete plan
+before execution.
+
+`PlanningModelProfile` and `PlanningModelFactoryRegistry` decouple deployment
+configuration and provider-adapter construction from planning behavior. OpenAI,
+Gemini, Groq, and custom `PlanningModel` injection remain supported; no
+production model is hard-coded as the Agent's intelligence. The current default
+planner policy remains deterministic and offline rather than LLM-first.
+`DeterministicPlanner` remains available for deterministic/offline use and is
+not a semantic oracle for LLM plans.
+
+Planning wire schema v3 uses registry-derived, tool-discriminated structured
+output: the selected tool fixes its exact keyed argument contract, input and
+`StepOutputRef` bindings are distinct, request bindings are restricted to
+available input names, and executable literals remain prohibited. Sanitized
+registry metadata supplies artifact, data-flow, provenance, and scientific-
+parameter preservation guidance. Scientifically valid noncanonical DAGs remain
+allowed.
+
+The deterministic offline Planner benchmark separates hard semantic correctness
+from canonical workflow conformance and executes in PLAN_ONLY mode with zero
+scientific calls. Structured diagnostics record sanitized provider/model
+provenance without raw request values, provider responses, or credentials.
+
+Planning recovery is not implemented yet. The current Planner has no planning
+retry, plan repair, iterative re-planning, provider/model failover, automatic
+model switching, deterministic fallback, tool filtering, keyword/regex workflow
+routing, or default user-facing LLM-first policy change. These boundaries remain
+in place before M9.4 Planning Recovery.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

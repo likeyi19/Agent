@@ -1706,6 +1706,80 @@ peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
 
+### Milestone 9.1–9.3 — Planner robustness, diagnostics, and planning interface
+
+M9.1, M9.2, M9.2.5, and M9.3 are complete and accepted. Milestone 9 remains in
+progress; M9.4 Planning Recovery has not started.
+
+#### LLM and Planner responsibility boundary
+
+The LLM owns natural-language intent understanding, tool selection, and
+workflow composition as an interchangeable candidate-plan generator.
+Deterministic code owns schema validation, executable-tool allowlisting,
+binding and reference validation, provenance checks, full-plan preflight, and
+execution safety. Keyword routing, regex intent matching, deterministic
+workflow classifiers, canonical workflow tables, and production semantic
+oracles are prohibited. `DeterministicPlanner` is not an oracle for LLM output,
+and scientifically valid noncanonical DAGs remain admissible.
+
+#### Model and provider abstraction
+
+`PlanningModel.complete()` remains provider-neutral. Immutable
+`PlanningModelProfile` values describe deployment/model configuration, while
+`PlanningModelFactoryRegistry` constructs provider adapters only. The factory
+registry does not inspect intent, route, retry, repair, fall back, or execute
+scientific tools. No production model is hard-coded. Credentials remain
+provider/environment concerns and must not enter profiles, persisted
+diagnostics, or benchmark cases.
+
+#### Planning wire and metadata contracts
+
+Planning wire schema v3 has a closed response root and registry-derived tool
+step alternatives. The selected tool structurally fixes its exact keyed
+argument set, preventing cross-tool argument pollution. Each executable value
+is bound either to a currently available `AgentRequest.inputs` name or to an
+upstream `StepOutputRef`; executable literals are forbidden. Input and
+reference binding shapes are precise, and schema-v2 responses are not silently
+reinterpreted as v3. Accepted responses convert into the existing `AgentPlan`,
+`PlanStep`, and `StepOutputRef` contracts.
+
+All planning-facing metadata is registry-derived and sanitized. Tool roles are
+descriptive; argument source eligibility, artifact kinds and producer/consumer
+compatibility, reference/query/ground-truth provenance, scientific-parameter
+preservation, and result-field downstream-bindability are generation guidance.
+They do not create a runtime workflow engine or semantic preflight oracle. The
+authoritative runtime validation, execution, scientific-tool, and verification
+path is unchanged.
+
+#### Diagnostics and benchmark contracts
+
+Planning diagnostics use provider-neutral, structured diagnostic schema v2.
+Profile/provider provenance is sanitized, and model identity is retained only
+through approved safe provenance/digest behavior. Persisted diagnostics exclude
+raw prompts, structured input values and paths, raw provider output, provider
+exception bodies, HTTP bodies and headers, request IDs, credentials, and
+tokens. Run-state schema remains v3, and `AgentError.recoverable` retains its
+scientific same-step recovery meaning.
+
+Planner benchmark report schema v3 is deterministic and offline. Its semantic
+oracle is benchmark-only: hard semantic correctness is distinct from canonical
+workflow conformance, matching is structural rather than positional, and
+alternative valid workflows are accepted. Unsafe provenance swaps, invented
+bindings, lost scientific parameters, broken artifact flow, and unsupported
+substitutions remain failures. Benchmark execution is PLAN_ONLY with zero
+scientific calls; optional live-provider availability is evidence, not a normal
+offline acceptance dependency.
+
+#### Deferred Milestone 9 work
+
+M9.4 Planning Recovery will separately design and implement bounded transient
+provider retry, plan repair or re-planning, configured model/provider failover,
+cancellation between planning attempts, hard global call bounds, and final
+failure behavior. None is implemented yet. Deterministic fallback remains
+deferred for explicit review, the user-facing LLM-first default policy remains
+deferred, and tool filtering remains deferred unless future evidence justifies
+it.
+
 ## Development environment
 
 - Linux server

@@ -1859,6 +1859,41 @@ catalog. Structured HTTP 413 failures are terminally classified as sanitized
 The Planner architecture, recovery limits, catalog fingerprint semantics, and
 Milestone 9 completion status are unchanged.
 
+#### Post-M9.1/M9.2 planner-interface hardening checkpoint
+
+Post-M9.1/M9.2 establishes an experimental, provider-independent semantic
+compiler that is not connected to production `LLMPlanner` or `AgentRuntime`.
+Its planner-facing candidate contains step identity, selected tool, semantic
+source selections addressed to consumer-facing ports, and explicit control-only
+dependencies. The LLM or user retains every genuine semantic decision: tool
+selection, workflow/DAG composition, producer selection, reference/query/
+ground-truth branch assignment, direct request input versus upstream result,
+ambiguous source or channel choice, and ambiguous optional-parameter scope.
+
+Deterministic compilation is limited to explicitly authorized mechanical work:
+exact request-input binding, semantic-port/channel expansion into exact tool
+arguments and result fields, grouped `StepOutputRef` construction,
+reference-induced dependencies, optional/default handling, and strict
+construction of the existing `AgentPlan`. A unique, explicitly authorized
+mapping may be derived; zero or multiple valid mappings fail closed. The
+compiler never guesses from step order or names, string similarity, common
+workflow templates, reference/query position, or first-match behavior.
+
+Semantic-port/channel authority describes tool interfaces rather than
+hard-coded workflows. Existing descriptive planning metadata remains
+non-authoritative unless explicitly promoted through a reviewed compiler
+contract. The strict internal `AgentPlan`, preflight, executor, persistence and
+resume, cancellation, verification, scientific tools, provider adapters,
+recovery and diagnostics, and production planning wire schema v3 remain
+unchanged. No provider-facing planning wire schema v4 has been introduced.
+
+Accepted validation:
+
+- semantic compiler focused suite: 42 passed
+- orchestration, providers, and benchmarks: 785 passed
+- complete lightweight regression: 1201 passed, 54 skipped
+- existing planning wire schema v3 `LLMPlanner`: 77 passed
+
 ## Development environment
 
 - Linux server

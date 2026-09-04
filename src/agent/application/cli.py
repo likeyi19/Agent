@@ -10,6 +10,7 @@ from typing import Sequence
 
 from agent.orchestration import (
     DeterministicPlanner,
+    PlanningWireMode,
     RunStoreError,
 )
 from agent.providers import (
@@ -62,6 +63,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--model")
     run.add_argument(
+        "--wire-mode",
+        type=PlanningWireMode,
+        choices=tuple(PlanningWireMode),
+        metavar="{v3,v4}",
+        help="LLM planning wire contract (default: v3).",
+    )
+    run.add_argument(
         "--secondary-provider", choices=BUILTIN_PLANNING_PROVIDER_IDS
     )
     run.add_argument("--secondary-model")
@@ -112,6 +120,7 @@ def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
     model = arguments.model
     secondary_provider = arguments.secondary_provider
     secondary_model = arguments.secondary_model
+    wire_mode = getattr(arguments, "wire_mode", None)
 
     deterministic_alias = provider == "deterministic"
     deterministic_mode = planner_mode == "deterministic" or (
@@ -123,10 +132,11 @@ def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
             or model is not None
             or secondary_provider is not None
             or secondary_model is not None
+            or wire_mode is not None
         )
         if conflicting:
             raise _CliInputError(
-                "Deterministic planning cannot use provider/model configuration."
+                "Deterministic planning cannot use LLM planning configuration."
             )
         return {"planner": DeterministicPlanner()}
 
@@ -139,7 +149,7 @@ def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
             raise _CliInputError(
                 "A secondary planning profile requires a primary provider and model."
             )
-        return {}
+        return {} if wire_mode is None else {"planning_wire_mode": wire_mode}
     if provider is None or not isinstance(model, str) or not model.strip():
         raise _CliInputError("LLM planning requires --provider and --model.")
     if (secondary_provider is None) != (secondary_model is None):
@@ -164,6 +174,9 @@ def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
     return {
         "primary_planning_profile": primary_profile,
         "recovery_planning_profile": recovery_profile,
+        "planning_wire_mode": (
+            PlanningWireMode.V3 if wire_mode is None else wire_mode
+        ),
         "planning_model_factory_registry": (
             build_default_planning_model_factory_registry()
         ),

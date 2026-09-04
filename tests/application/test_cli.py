@@ -6,6 +6,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 from scipy import sparse
 
 import agent.application.cli as cli_module
@@ -49,33 +50,59 @@ def _run_args(
 class _FixedPlanningModel:
     model_id = "custom:cli-model"
 
-    def __init__(self) -> None:
+    def __init__(self, response: str | None = None) -> None:
         self.calls = 0
+        self.response_schemas: list[object] = []
+        self._response = _planning_response() if response is None else response
 
     def complete(self, *, prompt: str, response_schema: object) -> str:
-        del prompt, response_schema
+        del prompt
         self.calls += 1
-        return json.dumps(
-            {
-                "schema_version": 3,
-                "status": "plan",
+        self.response_schemas.append(response_schema)
+        return self._response
+
+
+def _planning_response() -> str:
+    return json.dumps(
+        {
+            "schema_version": 3,
+            "status": "plan",
+            "steps": [
+                {
+                    "step_id": "inspect",
+                    "tool_name": "inspect_scATAC",
+                    "arguments": {
+                        "path": {
+                            "binding_type": "input",
+                            "input_name": "input_path",
+                        }
+                    },
+                    "depends_on": [],
+                    "description": None,
+                }
+            ],
+            "reason": None,
+        }
+    )
+
+
+def _semantic_planning_response() -> str:
+    return json.dumps(
+        {
+            "schema_version": 4,
+            "decision": {
+                "kind": "plan",
                 "steps": [
                     {
                         "step_id": "inspect",
-                        "tool_name": "inspect_scATAC",
-                        "arguments": {
-                            "path": {
-                                "binding_type": "input",
-                                "input_name": "input_path",
-                            }
-                        },
-                        "depends_on": [],
-                        "description": None,
+                        "tool": "inspect_scATAC",
+                        "sources": [],
+                        "control_dependencies": [],
                     }
                 ],
-                "reason": None,
-            }
-        )
+            },
+        }
+    )
 
 
 def test_cli_default_mode_is_llm_and_requires_explicit_primary_profile(
@@ -116,6 +143,85 @@ def test_cli_default_llm_mode_uses_explicit_provider_model_without_hidden_defaul
     assert code == 0
     assert payload["status"] == "PLANNED"
     assert model.calls == 1
+    assert model.response_schemas[0]["properties"]["schema_version"][
+        "enum"
+    ] == (3,)
+
+
+def test_cli_explicit_wire_v3_preserves_v3_planning(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    model = _FixedPlanningModel()
+    factories = PlanningModelFactoryRegistry({"openai": lambda _: model})
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: factories,
+    )
+    arguments = _run_args(
+        tmp_path, request_id="explicit-v3", planner=None
+    ) + [
+        "--provider",
+        "openai",
+        "--model",
+        "configured-model",
+        "--wire-mode",
+        "v3",
+        "--plan-only",
+    ]
+
+    code = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "PLANNED"
+    assert model.calls == 1
+    assert model.response_schemas[0]["properties"]["schema_version"][
+        "enum"
+    ] == (3,)
+
+
+def test_cli_wire_v4_routes_through_application_owned_semantic_planner(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    model = _FixedPlanningModel(_semantic_planning_response())
+    profiles = []
+
+    def create(profile):
+        profiles.append(profile)
+        return model
+
+    factories = PlanningModelFactoryRegistry({"groq": create})
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: factories,
+    )
+    arguments = _run_args(
+        tmp_path, request_id="explicit-v4", planner=None
+    ) + [
+        "--provider",
+        "groq",
+        "--model",
+        "configured-model",
+        "--wire-mode",
+        "v4",
+        "--plan-only",
+    ]
+
+    code = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "PLANNED"
+    assert payload["tool_names"] == ["inspect_scATAC"]
+    assert model.calls == 1
+    assert model.response_schemas[0]["properties"]["schema_version"][
+        "enum"
+    ] == (4,)
+    assert len(profiles) == 1
+    assert profiles[0].provider_id == "groq"
+    assert profiles[0].model_id == "configured-model"
 
 
 def test_cli_deterministic_provider_alias_remains_explicit(
@@ -146,6 +252,54 @@ def test_cli_rejects_deterministic_and_llm_configuration_conflicts(
     assert code == 2
     assert captured.out == ""
     assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
+
+
+@pytest.mark.parametrize("wire_mode", ("v3", "v4"))
+def test_cli_rejects_wire_mode_for_deterministic_planning(
+    tmp_path: Path, capsys, wire_mode: str
+) -> None:
+    arguments = _run_args(
+        tmp_path, request_id=f"deterministic-{wire_mode}"
+    ) + ["--wire-mode", wire_mode]
+
+    code = main(arguments)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
+
+
+def test_cli_rejects_wire_mode_for_deterministic_provider_alias(
+    tmp_path: Path, capsys
+) -> None:
+    arguments = _run_args(
+        tmp_path, request_id="deterministic-alias-wire", planner=None
+    ) + ["--provider", "deterministic", "--wire-mode", "v4"]
+
+    code = main(arguments)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
+
+
+def test_cli_rejects_invalid_wire_mode_through_argparse(
+    tmp_path: Path, capsys
+) -> None:
+    arguments = _run_args(
+        tmp_path, request_id="invalid-wire", planner=None
+    ) + ["--wire-mode", "v5"]
+
+    with pytest.raises(SystemExit) as raised:
+        main(arguments)
+
+    assert raised.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--wire-mode" in captured.err
+    assert "{v3,v4}" in captured.err
 
 
 def test_cli_missing_credential_error_is_stable_and_never_falls_back(

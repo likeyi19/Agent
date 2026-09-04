@@ -1217,6 +1217,7 @@ ResearchAgentApplication(
     recovery_planning_profile=None,
     planning_model_factory_registry=None,
     planning_recovery_policy=None,
+    planning_wire_mode=None,
     registry=None,
     executor=None,
 )
@@ -2155,6 +2156,11 @@ Accepted final validation:
 The current Post-M9 Planner Interface Hardening cycle is closed. Further
 planner hardening should be driven by new empirical failures or project
 requirements, not by pursuit of perfect hosted-model consistency.
+
+The application CLI exposes the accepted wire selection as
+`--wire-mode {v3,v4}` for LLM-planned `run` commands. Omission remains wire v3;
+wire v4 is explicit opt-in, and deterministic planning rejects this
+LLM-specific setting rather than silently ignoring it.
 
 ## Development environment
 

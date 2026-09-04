@@ -24,6 +24,7 @@ from agent.orchestration import (
     LLMPlanner,
     PlanningModelError,
     PlanningModelProfile,
+    PlanningWireMode,
     RunAlreadyExistsError,
     ToolRegistry,
     build_default_tool_registry,
@@ -99,6 +100,25 @@ def _planning_response() -> str:
     )
 
 
+def _semantic_planning_response() -> str:
+    return json.dumps(
+        {
+            "schema_version": 4,
+            "decision": {
+                "kind": "plan",
+                "steps": [
+                    {
+                        "step_id": "inspect",
+                        "tool": "inspect_scATAC",
+                        "sources": [],
+                        "control_dependencies": [],
+                    }
+                ],
+            },
+        }
+    )
+
+
 class _ScriptedPlanningModel:
     def __init__(self, *responses: object, model_id: str = "custom:model") -> None:
         self.model_id = model_id
@@ -149,6 +169,7 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
     )
 
     assert isinstance(application.runtime.planner, LLMPlanner)
+    assert application.runtime.planner.wire_mode is PlanningWireMode.V3
     assert application.runtime.planner.recovery_policy.policy_version == (
         "planning-recovery-v3"
     )
@@ -160,6 +181,40 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
         event.details.get("final_recovery_outcome") == "repair_recovered"
         for event in result.run_result.trace
     )
+
+
+def test_application_explicit_wire_v4_reaches_owned_llm_planner(
+    tmp_path: Path,
+) -> None:
+    source = _tiny_h5ad(tmp_path / "tiny.h5ad")
+    model = _ScriptedPlanningModel(_semantic_planning_response())
+    created: list[PlanningModelProfile] = []
+
+    def create(profile: PlanningModelProfile) -> _ScriptedPlanningModel:
+        created.append(profile)
+        return model
+
+    profile = _profile(provider_id="groq", model_id="configured-model")
+    application = ResearchAgentApplication(
+        tmp_path / "workspace",
+        primary_planning_profile=profile,
+        planning_model_factory_registry=PlanningModelFactoryRegistry(
+            {"groq": create}
+        ),
+        planning_wire_mode=PlanningWireMode.V4,
+    )
+
+    result = application.run(
+        replace(_request(source, "application-v4"), mode=RunMode.PLAN_ONLY)
+    )
+
+    assert isinstance(application.runtime.planner, LLMPlanner)
+    assert application.runtime.planner.wire_mode is PlanningWireMode.V4
+    assert application.runtime.planner.profile is profile
+    assert created == [profile]
+    assert result.status is ApplicationStatus.PLANNED
+    assert result.run_status is RunStatus.PLANNED
+    assert model.calls == 1
 
 
 def test_application_optional_secondary_profile_uses_existing_failover(
@@ -237,6 +292,13 @@ def test_explicit_planner_is_authoritative_and_conflicting_profiles_are_rejected
             tmp_path / "conflict",
             planner=planner,
             primary_planning_profile=_profile(),
+        )
+    assert raised.value.error.code == "APP_PLANNING_CONFIGURATION_CONFLICT"
+    with pytest.raises(ApplicationServiceError) as raised:
+        ResearchAgentApplication(
+            tmp_path / "wire-conflict",
+            planner=planner,
+            planning_wire_mode=PlanningWireMode.V4,
         )
     assert raised.value.error.code == "APP_PLANNING_CONFIGURATION_CONFLICT"
 

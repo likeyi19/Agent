@@ -484,6 +484,7 @@ ResearchAgentApplication(
     recovery_planning_profile=None,
     planning_model_factory_registry=None,
     planning_recovery_policy=None,
+    planning_wire_mode=None,
     registry=None,
     executor=None,
 )
@@ -501,7 +502,9 @@ their logic.
 
 The CLI defaults new runs to LLM mode and requires explicit `--provider` and
 `--model` values. `--planner deterministic` selects offline deterministic
-planning; `--provider deterministic` remains a compatibility alias.
+planning; `--provider deterministic` remains a compatibility alias. LLM runs
+also accept `--wire-mode v3` or `--wire-mode v4`; omission remains v3, and v4
+is explicit opt-in.
 
 After successful execution, evidence is built or verified and reused, supported
 visualization kinds are queried explicitly, applicable figures are built or

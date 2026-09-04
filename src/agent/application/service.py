@@ -15,6 +15,7 @@ from agent.orchestration import (
     PlanningModelError,
     PlanningModelProfile,
     PlanningRecoveryPolicy,
+    PlanningWireMode,
     ToolRegistry,
 )
 from agent.providers import (
@@ -191,6 +192,7 @@ def _validate_recovery_profile(
 def _application_llm_planner(
     primary_profile: PlanningModelProfile,
     *,
+    wire_mode: PlanningWireMode,
     recovery_profile: PlanningModelProfile | None,
     model_factory_registry: PlanningModelFactoryRegistry | None,
     recovery_policy: PlanningRecoveryPolicy | None,
@@ -217,6 +219,10 @@ def _application_llm_planner(
         raise _planning_configuration_error(
             "PLANNING_PROVIDER_CONFIGURATION_FAILED"
         )
+    if not isinstance(wire_mode, PlanningWireMode):
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
 
     registry = (
         build_default_planning_model_factory_registry()
@@ -229,6 +235,7 @@ def _application_llm_planner(
         model = registry.create(primary_profile)
         return LLMPlanner(
             model,
+            wire_mode=wire_mode,
             profile=primary_profile,
             recovery_policy=recovery_policy,
             recovery_profiles=(
@@ -260,6 +267,7 @@ class ResearchAgentApplication:
         recovery_planning_profile: PlanningModelProfile | None = None,
         planning_model_factory_registry: PlanningModelFactoryRegistry | None = None,
         planning_recovery_policy: PlanningRecoveryPolicy | None = None,
+        planning_wire_mode: PlanningWireMode | None = None,
         registry: ToolRegistry | None = None,
         executor: PlanExecutor | None = None,
     ) -> None:
@@ -276,6 +284,7 @@ class ResearchAgentApplication:
                 recovery_planning_profile,
                 planning_model_factory_registry,
                 planning_recovery_policy,
+                planning_wire_mode,
             )
         )
         if planner is not None and application_planning_configured:
@@ -289,6 +298,11 @@ class ResearchAgentApplication:
         if planner is None and primary_planning_profile is not None:
             planner = _application_llm_planner(
                 primary_planning_profile,
+                wire_mode=(
+                    PlanningWireMode.V3
+                    if planning_wire_mode is None
+                    else planning_wire_mode
+                ),
                 recovery_profile=recovery_planning_profile,
                 model_factory_registry=planning_model_factory_registry,
                 recovery_policy=planning_recovery_policy,

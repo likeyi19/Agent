@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import hashlib
 import json
-from typing import TypeAlias
+from typing import Mapping, TypeAlias
 
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, StepOutputRef
 
@@ -28,11 +28,18 @@ from .registry import (
 class SemanticPlanCompileError(ValueError):
     """Fail-closed semantic compilation error with a stable reason code."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        diagnostic_fields: Mapping[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         if not isinstance(code, str) or not code.strip():
             raise ValueError("Compiler error `code` must be a non-empty string.")
         self.code = code
+        self.diagnostic_fields = dict(diagnostic_fields or {})
 
 
 def _nonempty(value: object, name: str) -> str:
@@ -403,8 +410,15 @@ def _plan_id(
     return f"{request.request_id}:semantic:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
-def _raise_compile(code: str, message: str) -> None:
-    raise SemanticPlanCompileError(code, message)
+def _raise_compile(
+    code: str,
+    message: str,
+    *,
+    diagnostic_fields: Mapping[str, object] | None = None,
+) -> None:
+    raise SemanticPlanCompileError(
+        code, message, diagnostic_fields=diagnostic_fields
+    )
 
 
 @dataclass
@@ -434,6 +448,12 @@ def _bind_request_group(
         _raise_compile(
             "MISSING_REQUEST_SOURCE_MEMBER",
             f"Semantic request source is missing companion inputs {missing}.",
+            diagnostic_fields={
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "target_port": rules[0].target_port,
+                "input_name": rules[0].selector,
+            },
         )
     for rule in rules:
         if rule.argument_name in state.arguments:
@@ -441,6 +461,11 @@ def _bind_request_group(
                 "OVERLAPPING_SOURCE_MEMBERS",
                 f"Multiple semantic sources target {step.tool_name}."
                 f"{rule.argument_name}.",
+                diagnostic_fields={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                    "target_port": rule.target_port,
+                },
             )
         argument = _argument_spec(registry, step.tool_name, rule.argument_name)
         value = request.inputs[rule.input_name]
@@ -451,6 +476,12 @@ def _bind_request_group(
                 "INVALID_REQUEST_BINDING",
                 f"Authorized request input {rule.input_name!r} is invalid for "
                 f"{step.tool_name}.{rule.argument_name}.",
+                diagnostic_fields={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                    "target_port": rule.target_port,
+                    "input_name": rule.selector,
+                },
             ) from exc
     first = rules[0]
     for rule in rules:
@@ -465,6 +496,12 @@ def _bind_request_group(
             "BROKEN_BRANCH_LINEAGE",
             f"Request source for {step.tool_name}.{first.target_port} does not "
             f"carry required {first.required_lineage.value!r} lineage.",
+            diagnostic_fields={
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "target_port": first.target_port,
+                "input_name": first.selector,
+            },
         )
     if first.lineage is not None:
         state.lineages[first.target_port] = first.lineage
@@ -489,8 +526,16 @@ def _select_channel(
     contract: PlanningCompilerContract,
     producer_tool_name: str,
     consumer_tool_name: str,
+    consumer_step_id: str,
     source: SemanticStepOutputSource,
 ) -> StepOutputChannelRule:
+    diagnostic_fields = {
+        "step_id": consumer_step_id,
+        "tool_name": consumer_tool_name,
+        "target_port": source.target_port,
+        "producer_step_id": source.step_id,
+        "source_port": source.source_port,
+    }
     candidates = [
         rule
         for rule in contract.step_output_channels
@@ -508,6 +553,7 @@ def _select_channel(
                 f"Producer {producer_tool_name!r} does not expose authorized "
                 f"source port {source.source_port!r} for target "
                 f"{consumer_tool_name}.{source.target_port}.",
+                diagnostic_fields=diagnostic_fields,
             )
     else:
         selected = candidates
@@ -517,18 +563,21 @@ def _select_channel(
                 "AMBIGUOUS_SOURCE_PORT",
                 f"Target {consumer_tool_name}.{source.target_port} accepts "
                 "multiple producer semantic ports; source_port is required.",
+                diagnostic_fields=diagnostic_fields,
             )
     if not selected:
         _raise_compile(
             "ZERO_VALID_CHANNELS",
             f"No authorized channel connects {producer_tool_name!r} to "
             f"{consumer_tool_name}.{source.target_port}.",
+            diagnostic_fields=diagnostic_fields,
         )
     if len(selected) > 1:
         _raise_compile(
             "MULTIPLE_VALID_CHANNELS",
             f"Channel selection for {consumer_tool_name}."
             f"{source.target_port} is not unique.",
+            diagnostic_fields=diagnostic_fields,
         )
     return selected[0]
 
@@ -602,12 +651,22 @@ def compile_semantic_plan(
                     "UNKNOWN_TARGET_PORT",
                     f"Tool {step.tool_name!r} has no authorized target port "
                     f"{source.target_port!r}.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": source.target_port,
+                    },
                 )
             if source.target_port in state.target_ports:
                 _raise_compile(
                     "DUPLICATE_TARGET_SOURCE",
                     f"Step {step.step_id!r} selects target port "
                     f"{source.target_port!r} more than once.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": source.target_port,
+                    },
                 )
             if isinstance(source, SemanticRequestInputSource):
                 if source.input_name not in request.inputs:
@@ -615,6 +674,12 @@ def compile_semantic_plan(
                         "UNKNOWN_REQUEST_INPUT",
                         f"Semantic source names unavailable request input "
                         f"{source.input_name!r}.",
+                        diagnostic_fields={
+                            "step_id": step.step_id,
+                            "tool_name": step.tool_name,
+                            "target_port": source.target_port,
+                            "input_name": source.input_name,
+                        },
                     )
                 rules = [
                     rule
@@ -628,6 +693,12 @@ def compile_semantic_plan(
                         "UNAUTHORIZED_REQUEST_INPUT",
                         f"Request input {source.input_name!r} is not authorized "
                         f"for {step.tool_name}.{source.target_port}.",
+                        diagnostic_fields={
+                            "step_id": step.step_id,
+                            "tool_name": step.tool_name,
+                            "target_port": source.target_port,
+                            "input_name": source.input_name,
+                        },
                     )
                 _bind_request_group(
                     request=request,
@@ -648,11 +719,19 @@ def compile_semantic_plan(
                     "UNKNOWN_DEPENDENCY",
                     f"Semantic source names unknown producer step "
                     f"{source.step_id!r}.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": source.target_port,
+                        "producer_step_id": source.step_id,
+                        "source_port": source.source_port,
+                    },
                 )
             channel = _select_channel(
                 contract=contract,
                 producer_tool_name=producer.tool_name,
                 consumer_tool_name=step.tool_name,
+                consumer_step_id=step.step_id,
                 source=source,
             )
             for member in channel.members:
@@ -661,6 +740,13 @@ def compile_semantic_plan(
                         "OVERLAPPING_SOURCE_MEMBERS",
                         f"Multiple semantic sources target {step.tool_name}."
                         f"{member.argument_name}.",
+                        diagnostic_fields={
+                            "step_id": step.step_id,
+                            "tool_name": step.tool_name,
+                            "target_port": source.target_port,
+                            "producer_step_id": source.step_id,
+                            "source_port": source.source_port,
+                        },
                     )
                 state.arguments[member.argument_name] = StepOutputRef(
                     source.step_id, member.output_key
@@ -675,6 +761,11 @@ def compile_semantic_plan(
                     "UNKNOWN_DEPENDENCY",
                     f"Semantic step {step.step_id!r} names unknown control "
                     f"dependency {dependency!r}.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "producer_step_id": dependency,
+                    },
                 )
 
     request_rules_by_target: dict[
@@ -724,6 +815,12 @@ def compile_semantic_plan(
                 _raise_compile(
                     "MISSING_REQUEST_SOURCE_MEMBER",
                     f"Semantic request source is missing companion inputs {missing}.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": target_port,
+                        "input_name": partial[0][0],
+                    },
                 )
             available = [
                 (selector, rules)
@@ -735,6 +832,11 @@ def compile_semantic_plan(
                     "AMBIGUOUS_REQUEST_INPUT",
                     f"Target {step.tool_name}.{target_port} accepts multiple "
                     "available request inputs; explicit selection is required.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": target_port,
+                    },
                 )
             if not available:
                 continue
@@ -753,6 +855,11 @@ def compile_semantic_plan(
                     f"Target {step.tool_name}.{target_port} can use either a "
                     "request input or a selected producer; source selection "
                     "must be explicit.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": target_port,
+                    },
                 )
             if all(rule.argument_name in tool.optional_arguments for rule in rules):
                 if optional_occurrences[selector] > 1:
@@ -761,6 +868,12 @@ def compile_semantic_plan(
                             "AMBIGUOUS_OPTIONAL_INPUT_SCOPE",
                             f"Optional request input {selector!r} can apply "
                             "to multiple selected steps; scope must be explicit.",
+                            diagnostic_fields={
+                                "step_id": step.step_id,
+                                "tool_name": step.tool_name,
+                                "target_port": target_port,
+                                "input_name": selector,
+                            },
                         )
                     continue
             _bind_request_group(
@@ -796,6 +909,7 @@ def compile_semantic_plan(
             "UNAUTHORIZED_REQUEST_INPUT",
             "Selected tools have no explicit compiler use for matching request "
             f"inputs {unauthorized}.",
+            diagnostic_fields={"input_name": unauthorized[0]},
         )
 
     for step in candidate.steps:
@@ -828,6 +942,11 @@ def compile_semantic_plan(
                 f"Semantic step {step.step_id!r} has no authorized binding for "
                 f"required arguments {missing}; missing source ports "
                 f"{missing_ports}.",
+                diagnostic_fields={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                    "target_port": missing_ports[0] if missing_ports else None,
+                },
             )
         try:
             registry.validate_arguments(step.tool_name, state.arguments)
@@ -835,6 +954,10 @@ def compile_semantic_plan(
             raise SemanticPlanCompileError(
                 "INVALID_COMPILED_ARGUMENTS",
                 f"Compiled arguments are invalid for {step.tool_name!r}.",
+                diagnostic_fields={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                },
             ) from exc
 
     for step in _semantic_order(candidate):
@@ -853,6 +976,13 @@ def compile_semantic_plan(
                     "BROKEN_BRANCH_LINEAGE",
                     f"Source for {step.tool_name}.{channel.target_port} does not "
                     f"carry required {channel.required_lineage.value!r} lineage.",
+                    diagnostic_fields={
+                        "step_id": step.step_id,
+                        "tool_name": step.tool_name,
+                        "target_port": channel.target_port,
+                        "producer_step_id": producer_step_id,
+                        "source_port": channel.source_port,
+                    },
                 )
             if lineage is not None:
                 existing = state.lineages.get(channel.target_port)
@@ -861,6 +991,13 @@ def compile_semantic_plan(
                         "CONFLICTING_BRANCH_LINEAGE",
                         f"Target {step.tool_name}.{channel.target_port} receives "
                         "conflicting branch lineage.",
+                        diagnostic_fields={
+                            "step_id": step.step_id,
+                            "tool_name": step.tool_name,
+                            "target_port": channel.target_port,
+                            "producer_step_id": producer_step_id,
+                            "source_port": channel.source_port,
+                        },
                     )
                 state.lineages[channel.target_port] = lineage
 

@@ -320,6 +320,114 @@ def test_scientific_parameter_guidance_uses_semantic_port_names(
     ] is False
 
 
+def test_scoped_optional_request_inputs_are_exposed_only_to_intended_ports(
+    registry: ToolRegistry,
+) -> None:
+    request = _request("label_transfer_optional")
+    catalog = build_semantic_planning_catalog(request, registry)
+    embedding_overwrite = _tool(catalog, "epizoo_embed_cells")[TOOL_INPUTS][
+        "overwrite"
+    ]
+    transfer_overwrite = _tool(catalog, "transfer_cell_labels")[TOOL_INPUTS][
+        "overwrite"
+    ]
+    instructions = json.loads(
+        build_semantic_planning_prompt(request, registry)
+    )["instructions"]
+    deterministic_rule = next(
+        rule
+        for rule in instructions
+        if "deterministic_scoped" in rule
+    )
+
+    assert embedding_overwrite[PORT_REQUIRED] is False
+    assert transfer_overwrite[PORT_REQUIRED] is False
+    assert "transfer_overwrite" in request.inputs
+    assert "overwrite" not in request.inputs
+    assert embedding_overwrite[PORT_REQUEST_MODE] == "none_available"
+    assert transfer_overwrite[PORT_REQUEST_MODE] == "deterministic_scoped"
+    assert embedding_overwrite[PORT_REQUEST_SOURCES] == ()
+    assert transfer_overwrite[PORT_REQUEST_SOURCES] == (
+        ("transfer_overwrite", None),
+    )
+    assert embedding_overwrite[PORT_GUIDANCE][GUIDANCE_DEFAULT] is False
+    assert transfer_overwrite[PORT_GUIDANCE][GUIDANCE_DEFAULT] is False
+    assert embedding_overwrite[PORT_GUIDANCE][GUIDANCE_MEANING] != (
+        transfer_overwrite[PORT_GUIDANCE][GUIDANCE_MEANING]
+    )
+    assert "compiler-bound" in deterministic_rule
+    assert "do not emit" in deterministic_rule
+    assert "overwrite" not in deterministic_rule
+    assert "epizoo_embed_cells" not in deterministic_rule
+    assert "transfer_cell_labels" not in deterministic_rule
+
+    embedding_request_inputs = dict(request.inputs)
+    embedding_request_inputs.pop("transfer_overwrite")
+    embedding_request_inputs["embedding_overwrite"] = False
+    embedding_request = AgentRequest(
+        "embedding-scoped-overwrite",
+        request.prompt,
+        embedding_request_inputs,
+    )
+    embedding_catalog = build_semantic_planning_catalog(
+        embedding_request, registry
+    )
+    embedding_port = _tool(
+        embedding_catalog, "epizoo_embed_cells"
+    )[TOOL_INPUTS]["overwrite"]
+    transfer_port = _tool(
+        embedding_catalog, "transfer_cell_labels"
+    )[TOOL_INPUTS]["overwrite"]
+
+    assert embedding_port[PORT_REQUEST_SOURCES] == (
+        ("embedding_overwrite", None),
+    )
+    assert embedding_port[PORT_REQUEST_MODE] == "deterministic_scoped"
+    assert transfer_port[PORT_REQUEST_SOURCES] == ()
+
+
+def test_downstream_scoped_overwrites_are_deterministic_not_fanned_out(
+    registry: ToolRegistry,
+) -> None:
+    catalog = build_semantic_planning_catalog(
+        _request("downstream_explicit_steps"), registry
+    )
+    scoped = {
+        ("build_cell_neighbors", "overwrite"): "neighbors_overwrite",
+        ("cluster_cells", "overwrite"): "cluster_overwrite",
+        ("compute_cell_umap", "overwrite"): "umap_overwrite",
+        ("build_cell_neighbors", "random_seed"): "neighbors_random_seed",
+        ("cluster_cells", "random_seed"): "cluster_random_seed",
+        ("compute_cell_umap", "random_seed"): "umap_random_seed",
+    }
+
+    for (tool_name, port_name), selector in scoped.items():
+        port = _tool(catalog, tool_name)[TOOL_INPUTS][port_name]
+        assert port[PORT_REQUEST_MODE] == "deterministic_scoped"
+        assert port[PORT_REQUEST_SOURCES] == ((selector, None),)
+
+    all_sources = {
+        source[0]
+        for tool_name, _port_name in scoped
+        for port in _tool(catalog, tool_name)[TOOL_INPUTS].values()
+        for source in port[PORT_REQUEST_SOURCES]
+    }
+    assert "overwrite" not in all_sources
+    assert "random_seed" not in all_sources
+
+    paired = build_semantic_planning_catalog(
+        _request("differential_accessibility_paired_covariates"), registry
+    )
+    for tool_name in (
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
+        "run_replicate_differential_accessibility",
+    ):
+        assert _tool(paired, tool_name)[TOOL_INPUTS]["overwrite"][
+            PORT_REQUEST_MODE
+        ] == "optional_explicit"
+
+
 def test_paired_da_catalog_exposes_artifact_flow_parameters_and_rules(
     registry: ToolRegistry,
 ) -> None:
@@ -434,7 +542,12 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     assert "StepOutputRef" not in prompt
     assert "ref_output_key" not in prompt
     assert any("valid DAG" in rule for rule in payload["instructions"])
-    assert any("unsupported" in rule for rule in payload["instructions"])
+    unsupported_rule = next(
+        rule for rule in payload["instructions"] if "unsupported" in rule.lower()
+    )
+    assert "genuine capability/input insufficiency only" in unsupported_rule
+    assert "plan if the catalog can satisfy the request" in unsupported_rule
+    assert "downstream" not in unsupported_rule
 
 
 def test_structured_input_values_never_enter_catalog_or_prompt(

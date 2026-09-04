@@ -45,6 +45,7 @@ PAIRED_CASE = "differential_accessibility_paired_covariates"
 TRANSFER_CASE = "label_transfer_canonical"
 OPTIONAL_TRANSFER_CASE = "label_transfer_optional"
 DOWNSTREAM_CASE = "downstream_canonical"
+DOWNSTREAM_EXPLICIT_CASE = "downstream_explicit_steps"
 CLUSTERING_EVALUATION_CASE = "clustering_evaluation_canonical"
 ANNOTATION_EVALUATION_CASE = "annotation_evaluation_standalone"
 TRANSFER_EVALUATION_CASE = "transfer_and_annotation_evaluation"
@@ -140,7 +141,7 @@ def _transfer_candidate(*, optional: bool = False) -> SemanticPlanCandidate:
     if optional:
         reference_embedding_sources.append(_input("checkpoint", "checkpoint_path"))
         query_embedding_sources.append(_input("checkpoint", "checkpoint_path"))
-        transfer_sources.append(_input("overwrite", "overwrite"))
+        transfer_sources.append(_input("overwrite", "transfer_overwrite"))
     return SemanticPlanCandidate(
         (
             SemanticPlanStep(
@@ -304,12 +305,24 @@ def test_transfer_embedding_ports_expand_to_complete_coordinated_bundles(
         )
 
 
-def test_optional_scope_is_explicit_for_checkpoint_and_overwrite(
+def test_unique_transfer_scope_is_derived_without_wire_source_selection(
     registry: ToolRegistry,
 ) -> None:
+    candidate = _transfer_candidate(optional=True)
+    transfer = replace(
+        candidate.steps[-1],
+        sources=tuple(
+            source
+            for source in candidate.steps[-1].sources
+            if not (
+                isinstance(source, SemanticRequestInputSource)
+                and source.input_name == "transfer_overwrite"
+            )
+        ),
+    )
     plan = _compile(
         _request(OPTIONAL_TRANSFER_CASE),
-        _transfer_candidate(optional=True),
+        SemanticPlanCandidate((*candidate.steps[:-1], transfer)),
         registry,
     )
     reference_embed, query_embed, transfer = plan.steps[1], plan.steps[3], plan.steps[4]
@@ -322,6 +335,106 @@ def test_optional_scope_is_explicit_for_checkpoint_and_overwrite(
     assert transfer.arguments["n_neighbors"] == 25
     assert transfer.arguments["metric"] == "cosine"
     assert transfer.arguments["min_confidence"] == 0.7
+
+
+def test_unique_downstream_scopes_are_derived_without_wire_selections(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(DOWNSTREAM_EXPLICIT_CASE)
+    candidate = _downstream_candidate()
+    plan = _compile(request, candidate, registry)
+
+    assert _execution_fields(plan) == _execution_fields(
+        _v3_plan(DOWNSTREAM_EXPLICIT_CASE, request, registry)
+    )
+    overwrite_inputs = {
+        "epizoo_embed_cells": "embedding_overwrite",
+        "build_cell_neighbors": "neighbors_overwrite",
+        "cluster_cells": "cluster_overwrite",
+        "compute_cell_umap": "umap_overwrite",
+    }
+    for step in plan.steps:
+        selector = overwrite_inputs.get(step.tool_name)
+        if selector is not None:
+            assert step.arguments["overwrite"] == request.inputs[selector]
+            assert step.arguments["overwrite"] is False
+        if step.tool_name in {
+            "build_cell_neighbors",
+            "cluster_cells",
+            "compute_cell_umap",
+        }:
+            assert step.arguments["random_seed"] == 7
+    assert PlanExecutor(registry).preflight(plan).passed
+
+
+def test_scoped_selector_cannot_be_routed_to_an_unrelated_optional_port(
+    registry: ToolRegistry,
+) -> None:
+    candidate = _downstream_candidate()
+    neighbors = replace(
+        candidate.steps[2],
+        sources=(
+            *candidate.steps[2].sources,
+            _input("overwrite", "cluster_overwrite"),
+        ),
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(
+            _request(DOWNSTREAM_EXPLICIT_CASE),
+            SemanticPlanCandidate(
+                (*candidate.steps[:2], neighbors, *candidate.steps[3:])
+            ),
+            registry,
+        )
+
+    assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"
+
+
+def test_embedding_scoped_overwrite_applies_to_only_selected_embedding_step(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(
+        OPTIONAL_TRANSFER_CASE,
+        checkpoint_path=_MISSING,
+        transfer_overwrite=_MISSING,
+        embedding_overwrite=False,
+    )
+    candidate = _transfer_candidate()
+    reference_embed = replace(
+        candidate.steps[1],
+        sources=(
+            *candidate.steps[1].sources,
+            _input("overwrite", "embedding_overwrite"),
+        ),
+    )
+    plan = _compile(
+        request,
+        SemanticPlanCandidate(
+            (candidate.steps[0], reference_embed, *candidate.steps[2:])
+        ),
+        registry,
+    )
+
+    assert plan.steps[1].arguments["overwrite"] is False
+    assert "overwrite" not in plan.steps[3].arguments
+    assert "overwrite" not in plan.steps[4].arguments
+
+
+def test_omitted_scoped_overwrite_preserves_all_tool_defaults(
+    registry: ToolRegistry,
+) -> None:
+    plan = _compile(
+        _request(
+            OPTIONAL_TRANSFER_CASE,
+            checkpoint_path=_MISSING,
+            transfer_overwrite=_MISSING,
+        ),
+        _transfer_candidate(),
+        registry,
+    )
+
+    assert all("overwrite" not in step.arguments for step in plan.steps)
 
 
 def test_neighbors_uses_one_two_member_embedding_channel(
@@ -765,11 +878,13 @@ def test_scalar_values_false_sequences_and_explicit_none_are_preserved(
     assert plan.steps[0].arguments["values"] == ("a", "b")
 
 
-def test_omitted_optional_and_explicit_none_remain_distinct() -> None:
+def test_omitted_scoped_optional_and_explicit_none_remain_distinct() -> None:
     registry = _scalar_registry()
     contract = PlanningCompilerContract(
         request_bindings=(
-            RequestInputBindingRule("scalar", "nullable", "nullable", "nullable"),
+            RequestInputBindingRule(
+                "scalar", "nullable", "nullable", "scoped_nullable"
+            ),
         )
     )
     candidate = SemanticPlanCandidate((SemanticPlanStep("scalar", "scalar"),))
@@ -778,7 +893,7 @@ def test_omitted_optional_and_explicit_none_remain_distinct() -> None:
         AgentRequest("omitted", "Omit it.", {}), candidate, registry, contract
     )
     explicit = _compile(
-        AgentRequest("explicit", "Use null.", {"nullable": None}),
+        AgentRequest("explicit", "Use null.", {"scoped_nullable": None}),
         candidate,
         registry,
         contract,
@@ -974,10 +1089,28 @@ def test_repeated_tool_selection_is_rejected_when_branch_source_is_incomplete(
 def test_optional_input_fanout_without_explicit_scope_fails_closed(
     registry: ToolRegistry,
 ) -> None:
+    candidate = _paired_candidate()
+    without_explicit_overwrite = SemanticPlanCandidate(
+        tuple(
+            replace(
+                step,
+                sources=tuple(
+                    source
+                    for source in step.sources
+                    if not (
+                        isinstance(source, SemanticRequestInputSource)
+                        and source.input_name == "overwrite"
+                    )
+                ),
+            )
+            for step in candidate.steps
+        )
+    )
+
     with pytest.raises(SemanticPlanCompileError) as caught:
         _compile(
-            _request(OPTIONAL_TRANSFER_CASE),
-            _transfer_candidate(optional=False),
+            _request(PAIRED_CASE),
+            without_explicit_overwrite,
             registry,
         )
 
@@ -987,11 +1120,35 @@ def test_optional_input_fanout_without_explicit_scope_fails_closed(
 def test_unconfigured_scientific_input_is_not_silently_dropped(
     registry: ToolRegistry,
 ) -> None:
+    embed = registry.get("epizoo_embed_cells")
+    semantic = embed.semantic_planning
+    assert semantic is not None
+    incomplete_registry = ToolRegistry(
+        tuple(
+            (
+                replace(
+                    embed,
+                    semantic_planning=replace(
+                        semantic,
+                        consumer_ports=tuple(
+                            port
+                            for port in semantic.consumer_ports
+                            if port.name != "device"
+                        ),
+                    ),
+                )
+                if name == embed.name
+                else registry.get(name)
+            )
+            for name in registry.names()
+        )
+    )
+
     with pytest.raises(SemanticPlanCompileError) as caught:
         _compile(
             _request(TRANSFER_CASE, device="cuda"),
             _transfer_candidate(),
-            registry,
+            incomplete_registry,
         )
 
     assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"

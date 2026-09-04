@@ -88,6 +88,56 @@ class PlanningWireMode(str, Enum):
         return 3 if self is PlanningWireMode.V3 else 4
 
 
+_SEMANTIC_COMPILER_STAGES = {
+    "UNKNOWN_TOOL": PlanningDiagnosticStage.TOOL_SELECTION,
+    "MISSING_REQUEST_SOURCE_MEMBER": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "OVERLAPPING_SOURCE_MEMBERS": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "INVALID_REQUEST_BINDING": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "UNKNOWN_TARGET_PORT": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "DUPLICATE_TARGET_SOURCE": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "UNKNOWN_REQUEST_INPUT": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "UNAUTHORIZED_REQUEST_INPUT": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "AMBIGUOUS_REQUEST_INPUT": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "AMBIGUOUS_SOURCE_SELECTION": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "AMBIGUOUS_OPTIONAL_INPUT_SCOPE": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "MISSING_REQUIRED_SOURCE": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "MISSING_REQUIRED_BINDING": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "INVALID_COMPILED_ARGUMENTS": PlanningDiagnosticStage.ARGUMENT_BINDING,
+    "WRONG_SOURCE_PORT": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "AMBIGUOUS_SOURCE_PORT": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "ZERO_VALID_CHANNELS": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "MULTIPLE_VALID_CHANNELS": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "UNKNOWN_DEPENDENCY": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "BROKEN_BRANCH_LINEAGE": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "CONFLICTING_BRANCH_LINEAGE": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+    "INVALID_SEMANTIC_GRAPH": PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
+}
+_SEMANTIC_COMPILER_REASONS = {
+    "MISSING_REQUEST_SOURCE_MEMBER": "incomplete_request_bundle",
+    "OVERLAPPING_SOURCE_MEMBERS": "ambiguous_target_source",
+    "INVALID_REQUEST_BINDING": "invalid_request_source",
+    "UNKNOWN_TARGET_PORT": "unknown_target_port",
+    "DUPLICATE_TARGET_SOURCE": "duplicate_target_source",
+    "UNKNOWN_REQUEST_INPUT": "unknown_request_source",
+    "UNAUTHORIZED_REQUEST_INPUT": "unauthorized_request_source",
+    "AMBIGUOUS_REQUEST_INPUT": "ambiguous_request_source",
+    "AMBIGUOUS_SOURCE_SELECTION": "ambiguous_target_source",
+    "AMBIGUOUS_OPTIONAL_INPUT_SCOPE": "ambiguous_optional_input_scope",
+    "MISSING_REQUIRED_SOURCE": "missing_semantic_source",
+    "MISSING_REQUIRED_BINDING": "missing_semantic_binding",
+    "INVALID_COMPILED_ARGUMENTS": "invalid_compiled_semantics",
+    "WRONG_SOURCE_PORT": "producer_channel_incompatible",
+    "AMBIGUOUS_SOURCE_PORT": "ambiguous_source_port",
+    "ZERO_VALID_CHANNELS": "producer_channel_incompatible",
+    "MULTIPLE_VALID_CHANNELS": "ambiguous_source_port",
+    "UNKNOWN_DEPENDENCY": "unknown_producer_step",
+    "BROKEN_BRANCH_LINEAGE": "branch_lineage_mismatch",
+    "CONFLICTING_BRANCH_LINEAGE": "branch_lineage_conflict",
+    "INVALID_SEMANTIC_GRAPH": "invalid_semantic_graph",
+    "UNKNOWN_TOOL": "unknown_tool",
+}
+
+
 class PlanningModelFactoryResolver(Protocol):
     """Structural view of the accepted non-routing model factory registry."""
 
@@ -624,7 +674,11 @@ def _invalid_output(
     )
 
 
-def _parse_json_response(response: object) -> dict[str, object]:
+def _parse_json_response(
+    response: object,
+    *,
+    tree_limit_stage: PlanningDiagnosticStage | None = None,
+) -> dict[str, object]:
     if not isinstance(response, str):
         raise _invalid_output(
             "Planning model response must be a JSON text string.",
@@ -663,25 +717,45 @@ def _parse_json_response(response: object) -> dict[str, object]:
             stage=PlanningDiagnosticStage.SCHEMA,
             reason_code="root_not_object",
         )
-    _validate_tree_limits(parsed)
+    _validate_tree_limits(parsed, stage=tree_limit_stage)
     return parsed
 
 
-def _validate_tree_limits(value: object) -> None:
+def _validate_tree_limits(
+    value: object,
+    *,
+    stage: PlanningDiagnosticStage | None = None,
+) -> None:
     node_count = 0
 
     def visit(nested: object, depth: int) -> None:
         nonlocal node_count
         node_count += 1
         if node_count > _MAX_RESPONSE_NODES:
-            raise _invalid_output("Planning model response contains too many values.")
+            raise _invalid_output(
+                "Planning model response contains too many values.",
+                stage=stage,
+                reason_code=(
+                    "response_node_limit_exceeded" if stage is not None else None
+                ),
+            )
         if depth > _MAX_RESPONSE_DEPTH:
-            raise _invalid_output("Planning model response is nested too deeply.")
+            raise _invalid_output(
+                "Planning model response is nested too deeply.",
+                stage=stage,
+                reason_code=(
+                    "response_depth_limit_exceeded" if stage is not None else None
+                ),
+            )
         if isinstance(nested, dict):
             for key, child in nested.items():
                 if len(key) > _MAX_DESCRIPTION_LENGTH:
                     raise _invalid_output(
-                        "Planning model response contains an oversized key."
+                        "Planning model response contains an oversized key.",
+                        stage=stage,
+                        reason_code=(
+                            "response_key_too_large" if stage is not None else None
+                        ),
                     )
                 visit(child, depth + 1)
         elif isinstance(nested, list):
@@ -689,7 +763,11 @@ def _validate_tree_limits(value: object) -> None:
                 visit(child, depth + 1)
         elif isinstance(nested, str) and len(nested) > _MAX_RESPONSE_BYTES:
             raise _invalid_output(
-                "Planning model response contains an oversized string."
+                "Planning model response contains an oversized string.",
+                stage=stage,
+                reason_code=(
+                    "response_string_too_large" if stage is not None else None
+                ),
             )
 
     visit(value, 0)
@@ -1038,12 +1116,12 @@ def _semantic_v4_plan(
     response: object,
     request: AgentRequest,
     registry: ToolRegistry,
+    compiler_contract: object,
     *,
     planner_name: str,
 ) -> AgentPlan:
     from .semantic_compiler import (
         SemanticPlanCompileError,
-        build_semantic_compiler_contract,
         compile_semantic_plan,
     )
     from .semantic_wire_v4 import parse_semantic_wire_v4
@@ -1065,7 +1143,7 @@ def _semantic_v4_plan(
             request,
             candidate,
             registry,
-            build_semantic_compiler_contract(registry),
+            compiler_contract,
             planner_name=planner_name,
         )
     except SemanticPlanCompileError as exc:
@@ -1073,8 +1151,13 @@ def _semantic_v4_plan(
             exc.code,
             str(exc),
             category=ErrorCategory.INTERNAL_AGENT_ERROR,
-            diagnostic_stage=PlanningDiagnosticStage.CANDIDATE,
-            diagnostic_reason_code="semantic_compilation_failed",
+            diagnostic_stage=_SEMANTIC_COMPILER_STAGES.get(
+                exc.code, PlanningDiagnosticStage.CANDIDATE
+            ),
+            diagnostic_reason_code=_SEMANTIC_COMPILER_REASONS.get(
+                exc.code, "semantic_compilation_failed"
+            ),
+            diagnostic_fields=exc.diagnostic_fields,
         ) from exc
 
 
@@ -1296,6 +1379,7 @@ class LLMPlanner:
                 "started",
             )
         )
+        semantic_contract: object | None = None
         if self._wire_mode is PlanningWireMode.V3:
             prompt = _build_prompt(
                 request,
@@ -1316,10 +1400,35 @@ class LLMPlanner:
             )
             response_schema = _response_schema(registry, request)
         else:
+            from .semantic_compiler import build_semantic_compiler_contract
             from .semantic_prompt import build_semantic_planning_prompt
             from .semantic_wire_v4 import build_semantic_wire_v4_schema
 
-            prompt = build_semantic_planning_prompt(request, registry)
+            try:
+                semantic_contract = build_semantic_compiler_contract(registry)
+            except ValueError as exc:
+                raise PlannerError(
+                    "PLANNER_CATALOG_INVALID",
+                    "Semantic planner authority is incomplete or invalid.",
+                    category=ErrorCategory.INTERNAL_AGENT_ERROR,
+                ) from exc
+            prompt = build_semantic_planning_prompt(
+                request,
+                registry,
+                repair_context=(
+                    repair_context
+                    if attempt_kind is PlanningAttemptKind.REPAIR
+                    else None
+                ),
+                failover_context=(
+                    repair_context
+                    if attempt_kind is PlanningAttemptKind.FAILOVER
+                    and repair_context is not None
+                    and repair_context.previous_failure_stage
+                    is not PlanningDiagnosticStage.PROVIDER
+                    else None
+                ),
+            )
             response_schema = build_semantic_wire_v4_schema(registry, request)
         try:
             response = self._model.complete(
@@ -1378,10 +1487,12 @@ class LLMPlanner:
             if self._wire_mode is PlanningWireMode.V3:
                 steps = _parse_response(response, request, registry)
             else:
+                assert semantic_contract is not None
                 plan = _semantic_v4_plan(
                     response,
                     request,
                     registry,
+                    semantic_contract,
                     planner_name=self._name,
                 )
         except PlannerError as exc:
@@ -1400,6 +1511,7 @@ class LLMPlanner:
                     "rejected" if stage is PlanningDiagnosticStage.UNSUPPORTED else "failed",
                     response_byte_count=response_byte_count,
                     step_index=_optional_nonnegative_int(fields.get("step_index")),
+                    step_id=fields.get("step_id"),
                     argument_name=_known_argument_name(
                         registry, fields.get("argument_name")
                     ),
@@ -1409,10 +1521,13 @@ class LLMPlanner:
                     producer_step_index=_optional_nonnegative_int(
                         fields.get("producer_step_index")
                     ),
+                    producer_step_id=fields.get("producer_step_id"),
                     output_key=_known_output_key(
                         registry, fields.get("output_key")
                     ),
                     tool_name=_known_tool_name(registry, fields.get("tool_name")),
+                    target_port=fields.get("target_port"),
+                    source_port=fields.get("source_port"),
                     reason_code=exc.diagnostic_reason_code,
                 )
             )
@@ -1466,7 +1581,11 @@ class LLMPlanner:
         diagnostics.append(
             context.diagnostic(
                 PlanningDiagnosticStage.DEPENDENCY_REFERENCE,
-                "DEPENDENCY_REFERENCE_STRUCTURE_VALID",
+                (
+                    "DEPENDENCY_REFERENCE_STRUCTURE_VALID"
+                    if self._wire_mode is PlanningWireMode.V3
+                    else "SEMANTIC_DEPENDENCIES_COMPILED"
+                ),
                 "succeeded",
                 response_byte_count=response_byte_count,
             )
@@ -1474,7 +1593,11 @@ class LLMPlanner:
         diagnostics.append(
             context.diagnostic(
                 PlanningDiagnosticStage.CANDIDATE,
-                "CANDIDATE_PLAN_CONSTRUCTED",
+                (
+                    "CANDIDATE_PLAN_CONSTRUCTED"
+                    if self._wire_mode is PlanningWireMode.V3
+                    else "SEMANTIC_CANDIDATE_COMPILED"
+                ),
                 "succeeded",
                 response_byte_count=response_byte_count,
                 candidate_constructed=True,
@@ -1670,6 +1793,11 @@ def _append_preceding_success_diagnostics(
             response_byte_count=response_byte_count,
         )
     )
+    if (
+        context.planning_wire_schema_version == 4
+        and failed_stage is PlanningDiagnosticStage.TOOL_SELECTION
+    ):
+        return
     if failed_stage in {
         PlanningDiagnosticStage.ARGUMENT_BINDING,
         PlanningDiagnosticStage.UNSUPPORTED,
@@ -1678,7 +1806,11 @@ def _append_preceding_success_diagnostics(
     diagnostics.append(
         context.diagnostic(
             PlanningDiagnosticStage.ARGUMENT_BINDING,
-            "ARGUMENT_BINDINGS_CONSTRUCTED",
+            (
+                "ARGUMENT_BINDINGS_CONSTRUCTED"
+                if context.planning_wire_schema_version == 3
+                else "SEMANTIC_SOURCES_RESOLVED"
+            ),
             "succeeded",
             response_byte_count=response_byte_count,
         )

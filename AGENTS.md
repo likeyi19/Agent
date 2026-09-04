@@ -2050,6 +2050,112 @@ Accepted validation:
 - complete lightweight regression: 1332 passed, 54 skipped
 - production-runtime PLAN_ONLY proof: zero scientific tool calls
 
+#### Final Post-M9 Planner Interface Hardening closeout
+
+The Post-M9 Planner Interface Hardening cycle is complete. Production and
+application planning remain on wire v3 by default; semantic wire v4 is an
+explicit opt-in `LLMPlanner` mode. There is no schema auto-detection,
+automatic v3/v4 switching, combined schema, or cross-version recovery
+fallback. V4 is architecturally accepted and substantially reduces mechanical
+planner serialization burden, but it is not the default because live hosted
+planning still has non-negligible semantic source/port variability on a
+complex downstream workflow.
+
+The accepted opt-in semantic path is:
+
+```text
+AgentRequest
+→ registry-driven semantic planning catalog/prompt
+→ provider-neutral PlanningModel
+→ semantic wire v4
+→ strict v4 parser
+→ SemanticPlanCandidate
+→ registry-derived deterministic semantic compiler
+→ existing strict AgentPlan
+→ existing preflight/runtime
+```
+
+The LLM or user owns natural-language intent, tool selection, workflow/DAG
+composition, producer/source selection where semantically ambiguous,
+reference/query/ground-truth roles, scientific parameter selection, and every
+genuinely ambiguous scope or source decision. Deterministic Agent code owns
+reviewed unique request-source binding, semantic-port expansion, grouped
+result binding, exact `StepOutputRef` construction, induced dependencies,
+optional/default serialization, canonicalization of mechanically redundant
+graph representation, strict validation, recovery diagnostics, and whole-plan
+preflight.
+
+The governing rule remains: unique and explicitly authorized mappings may be
+derived deterministically; zero or multiple semantic choices fail closed.
+Workflow guessing, step-order or step-name inference, first-match behavior,
+generic-input fanout, and hidden scientific inference are prohibited.
+
+Generic optional selectors with multiple legitimate destinations remain
+ambiguous. An explicitly scoped structured selector represents request/user
+semantic intent and may be bound without redundant LLM serialization only when
+it has exactly one reviewed semantic destination and no competing source.
+Omission preserves the existing tool default, while explicit `False` and legal
+explicit `None` remain distinct from omission. This registry-driven rule
+covers reviewed embedding, transfer, and downstream parameters and is not
+workflow-specific logic.
+
+Wire v4 reuses the existing `PlanningRecoveryCoordinator`, retry, repair,
+failover ceilings, and unchanged maximum provider-call budget. Semantic parser
+and compiler failures produce sanitized semantic diagnostics that may identify
+the step, producer step, target port, source port, tool, and safe input name.
+Raw structured request values and raw provider response bodies are never
+persisted, and no v4-to-v3 recovery fallback exists. Wire-v3 diagnostics and
+recovery behavior remain unchanged.
+
+OpenAI, Groq, and Gemini adapters transported the same generic semantic-v4
+interface in mocked offline tests. No adapter implementation required v4-
+specific semantic behavior, and no provider-specific semantic schema was
+introduced. Live PLAN_ONLY acceptance used Groq `openai/gpt-oss-120b`;
+OpenAI and Gemini live tests were not run because credentials/configuration
+were unavailable, which is not a planner failure.
+
+Successful Groq wire-v4 PLAN_ONLY runs demonstrated inspection, complete
+downstream DAGs, canonical and optional parameter-heavy label transfer, paired
+differential accessibility with covariates, grouped semantic channels,
+deterministically scoped parameters, whole-plan preflight, and zero scientific
+tool execution. The v3 mechanical binding/serialization failure class did not
+recur. V4 removes model-authored raw argument dictionaries, binding
+discriminators, raw result-field names, `StepOutputRef`, duplicated
+dependency/reference structures, and large nullable optional-argument
+inventories. Representative request/schema and response burden is materially
+smaller than v3.
+
+The primary remaining limitation is hosted-model semantic source/port
+variability. Groq can produce the correct complete five-step downstream plan,
+but repeated hosted responses were not consistently correct. Observed errors
+included invalid or unknown semantic target ports, earlier omitted or incorrect
+semantic sources before scoped-input hardening, and occasional incomplete or
+unsupported candidates. Explicit scoped inputs resolved deterministic optional-
+scope ambiguity, but not all hosted source/port reasoning variability. This is
+not a mechanical serialization failure, executor/preflight defect,
+`ToolRegistry` allowlist defect, or persistence/recovery defect, and it does not
+justify workflow heuristics or hidden semantic inference. It is the reason v4
+remains opt-in.
+
+Accepted final validation:
+
+- semantic registry metadata: 23 passed
+- semantic compiler: 57 passed
+- semantic prompt: 21 passed
+- semantic wire v4: 54 passed
+- focused v4 `LLMPlanner`: 26 passed
+- v4 recovery: 11 passed
+- semantic-v4 provider transport: 7 passed
+- semantic-v4 benchmark acceptance: 30 passed
+- existing wire-v3 `LLMPlanner`: 77 passed
+- Milestone 9 recovery: 117 passed
+- all planner benchmarks: 69 passed
+- complete lightweight regression: 1388 passed, 54 skipped
+
+The current Post-M9 Planner Interface Hardening cycle is closed. Further
+planner hardening should be driven by new empirical failures or project
+requirements, not by pursuit of perfect hosted-model consistency.
+
 ## Development environment
 
 - Linux server

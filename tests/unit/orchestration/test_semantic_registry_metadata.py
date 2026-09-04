@@ -480,6 +480,42 @@ def test_every_planner_visible_tool_has_authoritative_semantic_metadata() -> Non
     build_semantic_compiler_contract(registry)
 
 
+def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> None:
+    registry = build_default_tool_registry()
+    contract = build_semantic_compiler_contract(registry)
+    expected = {
+        "embedding_overwrite": ("epizoo_embed_cells", "overwrite", "overwrite"),
+        "neighbors_overwrite": ("build_cell_neighbors", "overwrite", "overwrite"),
+        "cluster_overwrite": ("cluster_cells", "overwrite", "overwrite"),
+        "umap_overwrite": ("compute_cell_umap", "overwrite", "overwrite"),
+        "transfer_overwrite": ("transfer_cell_labels", "overwrite", "overwrite"),
+        "neighbors_random_seed": (
+            "build_cell_neighbors",
+            "random_seed",
+            "random_seed",
+        ),
+        "cluster_random_seed": ("cluster_cells", "random_seed", "random_seed"),
+        "umap_random_seed": (
+            "compute_cell_umap",
+            "random_seed",
+            "random_seed",
+        ),
+    }
+
+    destinations = {
+        selector: {
+            (rule.tool_name, rule.target_port, rule.argument_name)
+            for rule in contract.request_bindings
+            if rule.selector == selector
+        }
+        for selector in expected
+    }
+
+    assert destinations == {
+        selector: {destination} for selector, destination in expected.items()
+    }
+
+
 def test_grouped_direct_embedding_source_expands_request_inputs() -> None:
     registry = build_default_tool_registry()
     request = AgentRequest(

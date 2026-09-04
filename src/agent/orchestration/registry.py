@@ -1760,7 +1760,12 @@ def build_default_tool_registry() -> ToolRegistry:
                     required=False,
                     port_name="checkpoint",
                 ),
-                _semantic_argument_port("overwrite", required=False),
+                _semantic_argument_port("device", required=False),
+                _semantic_argument_port(
+                    "overwrite",
+                    required=False,
+                    input_name="embedding_overwrite",
+                ),
             ),
             producer_ports=(
                 SemanticProducerPortSpec(
@@ -1885,6 +1890,18 @@ def build_default_tool_registry() -> ToolRegistry:
                     accepted_upstream_types=("epizoo_embedding_bundle.v1",),
                 ),
                 _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("n_neighbors", required=False),
+                _semantic_argument_port("metric", required=False),
+                _semantic_argument_port(
+                    "random_seed",
+                    required=False,
+                    input_name="neighbors_random_seed",
+                ),
+                _semantic_argument_port(
+                    "overwrite",
+                    required=False,
+                    input_name="neighbors_overwrite",
+                ),
             ),
             producer_ports=(
                 SemanticProducerPortSpec(
@@ -1985,8 +2002,16 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("resolution", required=False),
-                _semantic_argument_port("random_seed", required=False),
-                _semantic_argument_port("overwrite", required=False),
+                _semantic_argument_port(
+                    "random_seed",
+                    required=False,
+                    input_name="cluster_random_seed",
+                ),
+                _semantic_argument_port(
+                    "overwrite",
+                    required=False,
+                    input_name="cluster_overwrite",
+                ),
             ),
             producer_ports=(
                 SemanticProducerPortSpec(
@@ -2097,8 +2122,16 @@ def build_default_tool_registry() -> ToolRegistry:
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("min_dist", required=False),
                 _semantic_argument_port("spread", required=False),
-                _semantic_argument_port("random_seed", required=False),
-                _semantic_argument_port("overwrite", required=False),
+                _semantic_argument_port(
+                    "random_seed",
+                    required=False,
+                    input_name="umap_random_seed",
+                ),
+                _semantic_argument_port(
+                    "overwrite",
+                    required=False,
+                    input_name="umap_overwrite",
+                ),
             ),
             producer_ports=(
                 SemanticProducerPortSpec(
@@ -2537,7 +2570,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 _semantic_argument_port("n_neighbors", required=False),
                 _semantic_argument_port("metric", required=False),
                 _semantic_argument_port("min_confidence", required=False),
-                _semantic_argument_port("overwrite", required=False),
+                _semantic_argument_port(
+                    "overwrite",
+                    required=False,
+                    input_name="transfer_overwrite",
+                ),
             ),
             producer_ports=(
                 SemanticProducerPortSpec(
@@ -2972,6 +3009,24 @@ def build_default_tool_registry() -> ToolRegistry:
                     True,
                     accepted_upstream_types=("validated_feature_space.v1",),
                 ),
+                SemanticConsumerPortSpec(
+                    "group_annotation",
+                    (
+                        _semantic_member(
+                            "annotation", "group_annotation_path"
+                        ),
+                    ),
+                    False,
+                    request_sources=(
+                        _semantic_request(
+                            "group_annotation_path",
+                            _semantic_request_member(
+                                "annotation", "group_annotation_path"
+                            ),
+                        ),
+                    ),
+                    accepted_upstream_types=("cell_annotation.v1",),
+                ),
                 *(
                     _semantic_argument_port(argument, required=required)
                     for argument, required in (
@@ -3120,6 +3175,14 @@ def build_default_tool_registry() -> ToolRegistry:
                     "pseudobulk",
                     (_semantic_member("artifact", "pseudobulk_path"),),
                     True,
+                    request_sources=(
+                        _semantic_request(
+                            "pseudobulk_path",
+                            _semantic_request_member(
+                                "artifact", "pseudobulk_path"
+                            ),
+                        ),
+                    ),
                     accepted_upstream_types=("replicate_pseudobulk.v1",),
                 ),
                 *(

@@ -139,7 +139,7 @@ def _transfer_steps(*, optional: bool = False) -> tuple[dict[str, object], ...]:
             _input("checkpoint", "checkpoint_path")
         )
         query_embedding_sources.append(_input("checkpoint", "checkpoint_path"))
-        transfer_sources.append(_input("overwrite", "overwrite"))
+        transfer_sources.append(_input("overwrite", "transfer_overwrite"))
     return (
         _wire_step(
             "provider-step-101",
@@ -440,7 +440,7 @@ def test_dual_branch_transfer_round_trip_preserves_semantic_choices(
             "checkpoint", "checkpoint_path"
         )
         assert transfer_sources[-1] == SemanticRequestInputSource(
-            "overwrite", "overwrite"
+            "overwrite", "transfer_overwrite"
         )
 
 
@@ -508,6 +508,29 @@ def test_control_only_dependencies_round_trip_separately_from_sources(
 
     assert candidate.steps[1].sources == ()
     assert candidate.steps[1].control_dependencies == ("first",)
+
+
+def test_value_dependency_redundantly_listed_as_control_is_canonicalized(
+    registry: ToolRegistry,
+) -> None:
+    payload = _payload(
+        _wire_step("inspect", "inspect_scATAC"),
+        _wire_step(
+            "embed",
+            "epizoo_embed_cells",
+            sources=[_step_source("dataset", "inspect")],
+            control_dependencies=["inspect"],
+        ),
+    )
+
+    candidate = parse_semantic_wire_v4(
+        _encoded(payload), _request("embedding_canonical"), registry
+    )
+
+    assert candidate.steps[1].sources == (
+        SemanticStepOutputSource("dataset", "inspect"),
+    )
+    assert candidate.steps[1].control_dependencies == ()
 
 
 @pytest.mark.parametrize("version", [0, 3, 5, "4", True])

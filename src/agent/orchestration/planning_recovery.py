@@ -145,10 +145,15 @@ class PlanningRepairContext:
     previous_failure_code: str
     reason_code: str | None = None
     step_index: int | None = None
+    step_id: str | None = None
     argument_name: str | None = None
+    input_name: str | None = None
     producer_step_index: int | None = None
+    producer_step_id: str | None = None
     output_key: str | None = None
     tool_name: str | None = None
+    target_port: str | None = None
+    source_port: str | None = None
     candidate_constructed: bool = False
     candidate_preflight_passed: bool | None = None
 
@@ -161,10 +166,15 @@ class PlanningRepairContext:
             previous_failure_code=diagnostic.code,
             reason_code=diagnostic.reason_code,
             step_index=diagnostic.step_index,
+            step_id=diagnostic.step_id,
             argument_name=diagnostic.argument_name,
+            input_name=diagnostic.input_name,
             producer_step_index=diagnostic.producer_step_index,
+            producer_step_id=diagnostic.producer_step_id,
             output_key=diagnostic.output_key,
             tool_name=diagnostic.tool_name,
+            target_port=diagnostic.target_port,
+            source_port=diagnostic.source_port,
             candidate_constructed=diagnostic.candidate_constructed,
             candidate_preflight_passed=diagnostic.candidate_preflight_passed,
         )
@@ -179,10 +189,37 @@ class PlanningRepairContext:
         optional: dict[str, JsonValue] = {
             "reason_code": self.reason_code,
             "step_index": self.step_index,
+            "step_id": self.step_id,
             "argument_name": self.argument_name,
             "producer_step_index": self.producer_step_index,
+            "producer_step_id": self.producer_step_id,
             "output_key": self.output_key,
             "tool_name": self.tool_name,
+            "target_port": self.target_port,
+            "source_port": self.source_port,
+        }
+        values.update(
+            {key: value for key, value in optional.items() if value is not None}
+        )
+        return values
+
+    def to_semantic_prompt_dict(self) -> dict[str, JsonValue]:
+        """Return only semantic, identifier-safe evidence for wire-v4 repair."""
+
+        values: dict[str, JsonValue] = {
+            "previous_failure_stage": self.previous_failure_stage.value,
+            "previous_failure_code": self.previous_failure_code,
+            "candidate_constructed": self.candidate_constructed,
+            "candidate_preflight_passed": self.candidate_preflight_passed,
+        }
+        optional: dict[str, JsonValue] = {
+            "reason_code": self.reason_code,
+            "step_id": self.step_id,
+            "producer_step_id": self.producer_step_id,
+            "tool_name": self.tool_name,
+            "target_port": self.target_port,
+            "source_port": self.source_port,
+            "input_name": self.input_name,
         }
         values.update(
             {key: value for key, value in optional.items() if value is not None}

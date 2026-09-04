@@ -455,7 +455,7 @@
           "species": "mouse",
           "checkpoint_path": "/synthetic/epizoo.ckpt",
           "device": "cuda",
-          "overwrite": false
+          "embedding_overwrite": false
         }
       },
       "expected": {
@@ -500,7 +500,7 @@
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "embedding_overwrite"
               }
             },
             "depends_on": [
@@ -870,11 +870,16 @@
           "device": "cuda",
           "n_neighbors": 20,
           "metric": "cosine",
-          "random_seed": 7,
+          "neighbors_random_seed": 7,
+          "cluster_random_seed": 7,
+          "umap_random_seed": 7,
           "resolution": 1.2,
           "min_dist": 0.3,
           "spread": 1.1,
-          "overwrite": false
+          "embedding_overwrite": false,
+          "neighbors_overwrite": false,
+          "cluster_overwrite": false,
+          "umap_overwrite": false
         }
       },
       "expected": {
@@ -919,7 +924,7 @@
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "embedding_overwrite"
               }
             },
             "depends_on": [
@@ -954,11 +959,11 @@
               },
               "random_seed": {
                 "kind": "input",
-                "input_name": "random_seed"
+                "input_name": "neighbors_random_seed"
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "neighbors_overwrite"
               }
             },
             "depends_on": [
@@ -984,11 +989,11 @@
               },
               "random_seed": {
                 "kind": "input",
-                "input_name": "random_seed"
+                "input_name": "cluster_random_seed"
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "cluster_overwrite"
               }
             },
             "depends_on": [
@@ -1018,11 +1023,11 @@
               },
               "random_seed": {
                 "kind": "input",
-                "input_name": "random_seed"
+                "input_name": "umap_random_seed"
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "umap_overwrite"
               }
             },
             "depends_on": [
@@ -2071,7 +2076,7 @@
           "n_neighbors": 25,
           "metric": "cosine",
           "min_confidence": 0.7,
-          "overwrite": false
+          "transfer_overwrite": false
         }
       },
       "expected": {
@@ -2228,7 +2233,7 @@
               },
               "overwrite": {
                 "kind": "input",
-                "input_name": "overwrite"
+                "input_name": "transfer_overwrite"
               }
             },
             "depends_on": [

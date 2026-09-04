@@ -20,6 +20,7 @@ from .llm_planner import (
     _require_fields,
 )
 from .planner import PlannerError
+from .planning_diagnostics import PlanningDiagnosticStage
 from .registry import ToolRegistry
 from .semantic_compiler import (
     SemanticPlanCandidate,
@@ -174,6 +175,8 @@ def _parse_source(
     *,
     request: AgentRequest,
     context: str,
+    step_index: int,
+    step_id: str,
 ) -> SemanticRequestInputSource | SemanticStepOutputSource:
     if not isinstance(raw_source, dict):
         raise _invalid_output(f"{context} must be an object.")
@@ -189,7 +192,16 @@ def _parse_source(
         )
         if input_name not in request.inputs:
             raise _invalid_output(
-                f"{context}.input is not available in the current request."
+                f"{context}.input is not available in the current request.",
+                code="UNKNOWN_REQUEST_INPUT",
+                stage=PlanningDiagnosticStage.ARGUMENT_BINDING,
+                reason_code="unknown_request_source",
+                diagnostic_fields={
+                    "step_index": step_index,
+                    "step_id": step_id,
+                    "target_port": raw_source.get("target"),
+                    "input_name": input_name,
+                },
             )
         return SemanticRequestInputSource(
             _bounded_string(
@@ -269,8 +281,17 @@ def _parse_steps(
             raw_step["tool"], field_name=f"{context}.tool"
         )
         if tool_name not in offered_tools:
-            raise _invalid_output(
-                f"{context}.tool is not planner-visible in the current registry."
+            raise PlannerError(
+                "UNKNOWN_TOOL",
+                "Wire-v4 step selected a tool outside the planner-visible registry.",
+                category=ErrorCategory.INTERNAL_AGENT_ERROR,
+                diagnostic_stage=PlanningDiagnosticStage.TOOL_SELECTION,
+                diagnostic_reason_code="unknown_tool",
+                diagnostic_fields={
+                    "step_index": step_index,
+                    "step_id": step_id,
+                    "tool_name": tool_name,
+                },
             )
 
         raw_sources = raw_step["sources"]
@@ -286,6 +307,8 @@ def _parse_steps(
                 source,
                 request=request,
                 context=f"{context}.sources[{source_index}]",
+                step_index=step_index,
+                step_id=step_id,
             )
             for source_index, source in enumerate(raw_sources)
         )
@@ -312,6 +335,18 @@ def _parse_steps(
             )
             for dependency_index, dependency in enumerate(raw_control)
         )
+        value_dependencies = {
+            source.step_id
+            for source in sources
+            if isinstance(source, SemanticStepOutputSource)
+        }
+        # A value source already creates the same DAG edge during compilation.
+        # Retain only genuinely control-only edges in the semantic candidate.
+        control_dependencies = tuple(
+            dependency
+            for dependency in control_dependencies
+            if dependency not in value_dependencies
+        )
         try:
             steps.append(
                 SemanticPlanStep(
@@ -323,14 +358,23 @@ def _parse_steps(
             )
         except (TypeError, ValueError) as exc:
             raise _invalid_output(
-                f"{context} violates the semantic candidate structure."
+                f"{context} violates the semantic candidate structure.",
+                stage=PlanningDiagnosticStage.CANDIDATE,
+                reason_code="semantic_candidate_invalid",
+                diagnostic_fields={
+                    "step_index": step_index,
+                    "step_id": step_id,
+                    "tool_name": tool_name,
+                },
             ) from exc
 
     try:
         return SemanticPlanCandidate(tuple(steps))
     except (TypeError, ValueError) as exc:
         raise _invalid_output(
-            "Wire-v4 steps violate the semantic candidate structure."
+            "Wire-v4 steps violate the semantic candidate structure.",
+            stage=PlanningDiagnosticStage.CANDIDATE,
+            reason_code="semantic_candidate_invalid",
         ) from exc
 
 
@@ -345,7 +389,9 @@ def parse_semantic_wire_v4(
         raise TypeError("`request` must be an AgentRequest.")
     if not isinstance(registry, ToolRegistry):
         raise TypeError("`registry` must be a ToolRegistry.")
-    payload = _parse_json_response(response)
+    payload = _parse_json_response(
+        response, tree_limit_stage=PlanningDiagnosticStage.PARSE
+    )
     _require_fields(
         payload,
         required=frozenset({"schema_version", "decision"}),

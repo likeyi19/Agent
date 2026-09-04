@@ -127,17 +127,19 @@ tools. Reliable HTTP 413 failures are reported terminally as sanitized
 `PROVIDER_REQUEST_TOO_LARGE`; they are not retried, repaired, or treated as 429
 rate limiting.
 
-Post-M9 planner-interface hardening has established an experimental,
-registry-driven semantic planning foundation across all currently
-planner-visible tools. Semantic tool-interface metadata generates deterministic
-compiler authority while keeping LLM reasoning and source selection separate
-from binding, dependency construction, and serialization. Current tools are not
-treated as a permanent closed set. `LLMPlanner` now has an explicit opt-in
-semantic wire-v4 path that composes the registry-driven semantic planning
-catalog/prompt, provider-neutral `PlanningModel` interface, v4 parser, and
-deterministic semantic compiler into the existing strict `AgentPlan`. Wire v3
-remains the default, provider adapters are unchanged, and semantic recovery and
-diagnostic integration plus live-provider acceptance remain pending.
+Post-M9 Planner Interface Hardening is complete. `LLMPlanner` has an explicit
+opt-in semantic wire-v4 path that separates LLM semantic reasoning from
+registry-authorized deterministic binding, dependency construction, and
+serialization into the existing strict `AgentPlan`. It materially reduces the
+model's mechanical serialization burden while preserving the existing tool
+allowlist, whole-plan preflight, execution, persistence/resume, cancellation,
+verification, recovery, diagnostics, provenance, and PLAN_ONLY guarantees.
+
+Wire v3 remains the production/application default. Wire v4 remains opt-in
+because live hosted-model responses still show semantic source/port variability
+in some complex workflows, despite eliminating the original mechanical binding
+failure class. Provider adapters remain generic and unchanged; no automatic
+v3/v4 switching or cross-version recovery fallback is implemented.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

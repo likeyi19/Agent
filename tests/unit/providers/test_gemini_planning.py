@@ -13,8 +13,12 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     DeterministicPlanner,
+    LLMPlanner,
     PlanningModel,
+    PlanningWireMode,
     build_default_tool_registry,
+    build_semantic_planning_prompt,
+    build_semantic_wire_v4_schema,
 )
 from agent.orchestration.llm_planner import _response_schema
 from agent.providers import (
@@ -27,6 +31,22 @@ from agent.providers import (
 _OUTPUT = (
     '{"schema_version":3,"status":"unsupported","steps":[],'
     '"reason":"safe"}'
+)
+_V4_OUTPUT = json.dumps(
+    {
+        "schema_version": 4,
+        "decision": {
+            "kind": "plan",
+            "steps": [
+                {
+                    "step_id": "inspect",
+                    "tool": "inspect_scATAC",
+                    "sources": [],
+                    "control_dependencies": [],
+                }
+            ],
+        },
+    }
 )
 
 
@@ -171,6 +191,37 @@ def test_success_returns_exact_output_text_without_normalization() -> None:
     returned = adapter.complete(prompt="prompt", response_schema=_schema())
 
     assert returned == exact
+
+
+def test_semantic_v4_round_trip_uses_generic_interactions_transport() -> None:
+    secret = "/private/GEMINI-V4-SECRET.h5ad"
+    request = AgentRequest(
+        "gemini-v4", "Inspect the supplied dataset.", {"input_path": secret}
+    )
+    registry = build_default_tool_registry()
+    adapter, client = _adapter(_interaction(output_text=_V4_OUTPUT))
+
+    plan = LLMPlanner(adapter, wire_mode=PlanningWireMode.V4).plan(
+        request, registry
+    )
+
+    transmitted = client.interactions.calls[0]
+    assert transmitted["input"] == build_semantic_planning_prompt(
+        request, registry
+    )
+    assert transmitted["response_format"]["schema"] == json.loads(
+        json.dumps(build_semantic_wire_v4_schema(registry, request))
+    )
+    serialized = json.dumps(transmitted, sort_keys=True)
+    assert secret not in serialized
+    assert "tools" not in transmitted
+    assert transmitted["response_format"]["schema"]["$defs"]["step"][
+        "properties"
+    ]["tool"]["enum"] == sorted(registry.names())
+    assert transmitted["response_format"]["schema"]["$defs"][
+        "input_source"
+    ]["properties"]["input"]["enum"] == ["input_path"]
+    assert plan.steps[0].arguments == {"path": secret}
 
 
 @pytest.mark.parametrize("missing", [None, "", "   ", 3])

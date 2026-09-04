@@ -149,7 +149,7 @@ def _transfer_steps(*, optional: bool = False) -> tuple[dict[str, object], ...]:
     if optional:
         reference_embedding.append(_input("checkpoint", "checkpoint_path"))
         query_embedding.append(_input("checkpoint", "checkpoint_path"))
-        transfer_sources.append(_input("overwrite", "overwrite"))
+        transfer_sources.append(_input("overwrite", "transfer_overwrite"))
     return (
         _step(
             "provider-step-101",
@@ -353,7 +353,7 @@ def test_wire_mode_is_never_auto_detected(registry: ToolRegistry) -> None:
         ),
         (
             _payload(_step("inspect", "not_a_registered_tool")),
-            "PLANNER_OUTPUT_INVALID",
+            "UNKNOWN_TOOL",
         ),
     ),
 )
@@ -421,7 +421,9 @@ def test_v4_semantic_compiler_failures_are_stable_planner_errors(
         LLMPlanner(model, wire_mode=PlanningWireMode.V4).plan(request, registry)
 
     assert caught.value.code == code
-    assert caught.value.diagnostics[-1].stage is PlanningDiagnosticStage.CANDIDATE
+    assert caught.value.diagnostics[-1].stage is (
+        PlanningDiagnosticStage.ARGUMENT_BINDING
+    )
 
 
 def test_v4_ambiguous_producer_port_fails_closed(
@@ -494,14 +496,20 @@ def test_v4_reference_query_lineage_swap_fails_closed(
 def test_v4_unrepresented_scientific_parameter_fails_closed(
     registry: ToolRegistry,
 ) -> None:
-    case = _case("downstream_canonical")
-    inputs = {**case.inputs, "n_neighbors": 17}
+    case = _case("differential_accessibility_paired_covariates")
+    inputs = {**case.inputs, "layer_key": "counts"}
 
     with pytest.raises(PlannerError) as caught:
         LLMPlanner(
-            CapturingPlanningModel(_payload(*_downstream_steps())),
+            CapturingPlanningModel(_payload(*_paired_da_steps())),
             wire_mode=PlanningWireMode.V4,
-        ).plan(_request("downstream_canonical", inputs=inputs), registry)
+        ).plan(
+            _request(
+                "differential_accessibility_paired_covariates",
+                inputs=inputs,
+            ),
+            registry,
+        )
 
     assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"
 

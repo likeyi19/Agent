@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from agent.schemas import AgentRequest, ErrorCategory, JsonValue
 
@@ -23,9 +23,33 @@ from .semantic_wire_v4 import (
     _planner_visible_tool_names,
 )
 
+if TYPE_CHECKING:
+    from .planning_recovery import PlanningRepairContext
+
 
 SEMANTIC_PLANNING_CATALOG_VERSION = 1
 SEMANTIC_PLANNING_PROMPT_VERSION = 1
+_SEMANTIC_REPAIR_CORRECTIONS = {
+    "malformed_json": "regenerate_strict_wire_v4_json",
+    "response_not_text": "regenerate_strict_wire_v4_json",
+    "wire_schema_invalid": "regenerate_valid_wire_v4_structure",
+    "unknown_tool": "select_offered_tool",
+    "unknown_target_port": "select_authorized_target_port",
+    "duplicate_target_source": "select_one_source_for_target_port",
+    "unknown_request_source": "select_available_request_source",
+    "unauthorized_request_source": "select_authorized_request_source",
+    "ambiguous_request_source": "select_request_source_explicitly",
+    "ambiguous_target_source": "select_one_semantic_source_explicitly",
+    "ambiguous_optional_input_scope": "select_optional_source_scope_explicitly",
+    "incomplete_request_bundle": "select_complete_request_source_bundle",
+    "missing_semantic_source": "select_required_semantic_source",
+    "producer_channel_incompatible": "select_compatible_producer_channel",
+    "ambiguous_source_port": "select_source_port_explicitly",
+    "unknown_producer_step": "select_existing_producer_step",
+    "branch_lineage_mismatch": "select_producer_with_required_lineage",
+    "branch_lineage_conflict": "select_consistent_branch_lineage",
+    "invalid_semantic_graph": "produce_acyclic_semantic_dag",
+}
 
 
 def _catalog_error(message: str) -> PlannerError:
@@ -122,6 +146,7 @@ def _consumer_port_catalog(
     tool: ToolSpec,
     port: SemanticConsumerPortSpec,
     request: AgentRequest,
+    deterministic_scoped_selectors: frozenset[str],
 ) -> tuple[JsonValue, ...]:
     available_sources: list[JsonValue] = []
     for source in sorted(port.request_sources, key=lambda item: item.selector):
@@ -138,6 +163,15 @@ def _consumer_port_catalog(
         request_source_mode = "not_allowed"
     elif not available_sources:
         request_source_mode = "none_available"
+    elif (
+        not port.required
+        and len(available_sources) == 1
+        and available_sources[0][0] in deterministic_scoped_selectors
+        and not port.accepted_upstream_types
+    ):
+        request_source_mode = "deterministic_scoped"
+    elif not port.required:
+        request_source_mode = "optional_explicit"
     elif len(available_sources) == 1:
         request_source_mode = "unique_available"
     else:
@@ -165,6 +199,7 @@ def _producer_port_catalog(
 def _tool_catalog(
     tool: ToolSpec,
     request: AgentRequest,
+    deterministic_scoped_selectors: frozenset[str],
 ) -> tuple[JsonValue, ...]:
     semantic = tool.semantic_planning
     planning = tool.planning
@@ -175,7 +210,9 @@ def _tool_catalog(
     return (
         planning.description,
         {
-            port.name: _consumer_port_catalog(tool, port, request)
+            port.name: _consumer_port_catalog(
+                tool, port, request, deterministic_scoped_selectors
+            )
             for port in sorted(semantic.consumer_ports, key=lambda item: item.name)
         },
         {
@@ -197,6 +234,28 @@ def build_semantic_planning_catalog(
     if not isinstance(registry, ToolRegistry):
         raise TypeError("`registry` must be a ToolRegistry.")
     tool_names = _planner_visible_tool_names(registry)
+    scoped_selector_destinations: dict[str, set[tuple[str, str]]] = {}
+    for name in tool_names:
+        semantic = registry.get(name).semantic_planning
+        if semantic is None:
+            continue
+        for port in semantic.consumer_ports:
+            execution_fields = {
+                member.name: member.field_name for member in port.members
+            }
+            for source in port.request_sources:
+                if any(
+                    member.input_name != execution_fields[member.name]
+                    for member in source.members
+                ):
+                    scoped_selector_destinations.setdefault(
+                        source.selector, set()
+                    ).add((name, port.name))
+    deterministic_scoped_selectors = frozenset(
+        selector
+        for selector, destinations in scoped_selector_destinations.items()
+        if len(destinations) == 1
+    )
     return {
         "semantic_catalog_version": SEMANTIC_PLANNING_CATALOG_VERSION,
         "request_inputs": {
@@ -222,19 +281,11 @@ def build_semantic_planning_catalog(
                 "constraint",
             ),
             "output_port": ("semantic_type", "lineage_from"),
-            "source_kinds": (
-                "request_input when request_source_mode is not not_allowed",
-                "prior_step when accepted_upstream_types is nonempty",
-            ),
-            "request_source_modes": (
-                "not_allowed",
-                "none_available",
-                "unique_available",
-                "explicit_choice_required",
-            ),
         },
         "tools": {
-            name: _tool_catalog(registry.get(name), request)
+            name: _tool_catalog(
+                registry.get(name), request, deterministic_scoped_selectors
+            )
             for name in tool_names
         },
     }
@@ -243,29 +294,31 @@ def build_semantic_planning_catalog(
 def build_semantic_planning_prompt(
     request: AgentRequest,
     registry: ToolRegistry,
+    *,
+    repair_context: PlanningRepairContext | None = None,
+    failover_context: PlanningRepairContext | None = None,
 ) -> str:
     """Build deterministic semantic planning context without executable values."""
+
+    if repair_context is not None and failover_context is not None:
+        raise ValueError("Semantic prompt cannot contain repair and failover together.")
 
     catalog = build_semantic_planning_catalog(request, registry)
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
-            "Choose only offered tools needed for the user's scientific intent and "
-            "compose a valid DAG.",
-            "Use only offered structured input names and compatible prior-step "
-            "semantic outputs; never invent inputs, capabilities, or literal values.",
-            "Preserve reference, query, and ground-truth roles and every required "
-            "lineage constraint.",
-            "Explicitly select a semantic source whenever alternatives exist, "
-            "including request-versus-prior-step choices.",
-            "A unique request source may be omitted only when no selected producer "
-            "can also satisfy that port.",
-            "Select optional request sources on each intended step when their "
-            "application scope could otherwise be ambiguous.",
-            "Use control_dependencies only for ordering without value flow; source "
-            "references already create value dependencies.",
-            "Return unsupported when the offered tools and inputs cannot safely "
-            "satisfy the request.",
+            "Choose offered tools; compose a valid DAG.",
+            "Use offered inputs/compatible outputs; invent no values or capabilities.",
+            "Preserve lineage; resolve source choices explicitly.",
+            "Ports marked deterministic_scoped are compiler-bound from explicit "
+            "request scope; do not emit their request source.",
+            "Ports marked optional_explicit are per-step choices: select only request "
+            "sources whose scope matches that step; availability never implies "
+            "fanout; omission preserves defaults.",
+            "Required ports use a unique input unless a producer fits. Sources add "
+            "dependencies; controls only order.",
+            "Unsupported means genuine capability/input insufficiency only; otherwise "
+            "plan if the catalog can satisfy the request.",
         ),
         "user_request": request.prompt,
         "catalog": catalog,
@@ -285,6 +338,44 @@ def build_semantic_planning_prompt(
             },
         },
     }
+    regeneration_context = (
+        repair_context if repair_context is not None else failover_context
+    )
+    if regeneration_context is not None:
+        key = "repair" if repair_context is not None else "failover"
+        action = (
+            "repairing a rejected semantic planning decision"
+            if repair_context is not None
+            else "making the final planning attempt after a rejected decision"
+        )
+        diagnostic = regeneration_context.to_semantic_prompt_dict()
+        correction = _SEMANTIC_REPAIR_CORRECTIONS.get(
+            regeneration_context.reason_code or ""
+        )
+        if (
+            correction is None
+            and regeneration_context.previous_failure_stage.value == "parse"
+        ):
+            correction = "regenerate_strict_wire_v4_json"
+        if (
+            correction is None
+            and regeneration_context.previous_failure_stage.value == "schema"
+        ):
+            correction = "regenerate_valid_wire_v4_structure"
+        if correction is not None:
+            diagnostic["required_correction"] = correction
+        payload[key] = {
+            "instruction": (
+                f"The planning model is {action}.",
+                "Generate one complete new wire-v4 decision from the original "
+                "request and unchanged semantic catalog.",
+                "Correct the diagnosed semantic constraint; do not patch, quote, "
+                "or reproduce the previous response.",
+                "Use only semantic ports and source selectors exposed by the "
+                "catalog; never emit executor bindings or literal values.",
+            ),
+            "diagnostic": diagnostic,
+        }
     return json.dumps(
         payload,
         ensure_ascii=False,

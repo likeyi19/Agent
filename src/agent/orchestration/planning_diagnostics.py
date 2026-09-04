@@ -13,6 +13,7 @@ from agent.schemas import AgentPlan, JsonValue
 
 
 PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 3
+_SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 4
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
 
@@ -101,11 +102,15 @@ class PlanningDiagnosticContext:
         candidate_constructed: bool = False,
         candidate_preflight_passed: bool | None = None,
         step_index: int | None = None,
+        step_id: str | None = None,
         argument_name: str | None = None,
         input_name: str | None = None,
         producer_step_index: int | None = None,
+        producer_step_id: str | None = None,
         output_key: str | None = None,
         tool_name: str | None = None,
+        target_port: str | None = None,
+        source_port: str | None = None,
         reason_code: str | None = None,
         retry_after_seconds: float | None = None,
         previous_failure_stage: PlanningDiagnosticStage | None = None,
@@ -128,11 +133,15 @@ class PlanningDiagnosticContext:
             candidate_constructed=candidate_constructed,
             candidate_preflight_passed=candidate_preflight_passed,
             step_index=step_index,
+            step_id=safe_diagnostic_identifier(step_id),
             argument_name=safe_diagnostic_identifier(argument_name),
             input_name=safe_diagnostic_identifier(input_name),
             producer_step_index=producer_step_index,
+            producer_step_id=safe_diagnostic_identifier(producer_step_id),
             output_key=safe_diagnostic_identifier(output_key),
             tool_name=safe_diagnostic_identifier(tool_name),
+            target_port=safe_diagnostic_identifier(target_port),
+            source_port=safe_diagnostic_identifier(source_port),
             reason_code=safe_diagnostic_identifier(reason_code),
             retry_after_seconds=retry_after_seconds,
             previous_failure_stage=previous_failure_stage,
@@ -166,11 +175,15 @@ class PlanningDiagnostic:
     candidate_constructed: bool = False
     candidate_preflight_passed: bool | None = None
     step_index: int | None = None
+    step_id: str | None = None
     argument_name: str | None = None
     input_name: str | None = None
     producer_step_index: int | None = None
+    producer_step_id: str | None = None
     output_key: str | None = None
     tool_name: str | None = None
+    target_port: str | None = None
+    source_port: str | None = None
     reason_code: str | None = None
     retry_after_seconds: float | None = None
     previous_failure_stage: PlanningDiagnosticStage | None = None
@@ -232,10 +245,14 @@ class PlanningDiagnostic:
         ):
             raise TypeError("`candidate_preflight_passed` must be boolean or None.")
         for field_name in (
+            "step_id",
             "argument_name",
             "input_name",
+            "producer_step_id",
             "output_key",
             "tool_name",
+            "target_port",
+            "source_port",
             "reason_code",
             "previous_failure_code",
             "recovery_action",
@@ -248,7 +265,11 @@ class PlanningDiagnostic:
 
     def to_details(self) -> Mapping[str, JsonValue]:
         details: dict[str, JsonValue] = {
-            "diagnostic_schema_version": PLANNING_DIAGNOSTIC_SCHEMA_VERSION,
+            "diagnostic_schema_version": (
+                PLANNING_DIAGNOSTIC_SCHEMA_VERSION
+                if self.context.planning_wire_schema_version != 4
+                else _SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION
+            ),
             "stage": self.stage.value,
             "code": self.code,
             "outcome": self.outcome,
@@ -284,11 +305,15 @@ class PlanningDiagnostic:
         optional = {
             "response_byte_count": self.response_byte_count,
             "step_index": self.step_index,
+            "step_id": self.step_id,
             "argument_name": self.argument_name,
             "input_name": self.input_name,
             "producer_step_index": self.producer_step_index,
+            "producer_step_id": self.producer_step_id,
             "output_key": self.output_key,
             "tool_name": self.tool_name,
+            "target_port": self.target_port,
+            "source_port": self.source_port,
             "reason_code": self.reason_code,
             "retry_after_seconds": self.retry_after_seconds,
             "previous_failure_stage": (

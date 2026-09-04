@@ -2009,6 +2009,47 @@ Accepted validation:
 - orchestration, providers, and benchmarks: 890 passed
 - complete lightweight regression: 1306 passed, 54 skipped
 
+#### Post-M9.4.1 opt-in semantic `LLMPlanner` integration
+
+`LLMPlanner` now accepts an explicit typed planning-wire mode for v3 or v4.
+Construction without an explicit mode remains exactly wire v3; wire v4 is
+opt-in only and is not the application default. There is no schema-version
+auto-detection, combined v3/v4 schema, or cross-version syntax fallback.
+
+The opt-in v4 path composes the accepted Post-M9 components:
+
+```text
+semantic prompt/catalog
+→ existing provider-neutral PlanningModel.complete()
+→ semantic wire-v4 parser
+→ SemanticPlanCandidate
+→ registry-derived semantic compiler
+→ existing strict AgentPlan
+→ existing authoritative preflight/runtime path
+```
+
+Provider adapters remain unchanged and unaware of semantic-planning internals.
+V4 compilation does not bypass `ToolRegistry` allowlisting, strict plan
+validation, whole-plan preflight, provenance, or zero-side-effect guarantees.
+It fails closed when reviewed semantic metadata is incomplete or cannot
+authorize a required binding, with no fallback to argument-name guessing,
+descriptive planning guidance, literals, or v3 serialization.
+
+The v3 prompt, schema, parser, planner identity, plan identity, and behavior
+remain unchanged. Secondary/failover planner construction preserves the
+selected wire mode. Semantic repair and diagnostic integration is not yet
+implemented; v4 is not the default, and no live-provider acceptance has been
+performed.
+
+Accepted validation:
+
+- focused v4 `LLMPlanner` integration: 26 passed
+- existing v3 `LLMPlanner`: 77 passed
+- semantic prompt/wire/compiler/registry suites: 147 passed
+- orchestration, providers, and benchmarks: 916 passed
+- complete lightweight regression: 1332 passed, 54 skipped
+- production-runtime PLAN_ONLY proof: zero scientific tool calls
+
 ## Development environment
 
 - Linux server

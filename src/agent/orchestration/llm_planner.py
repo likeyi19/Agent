@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 import hashlib
 import inspect
 import json
@@ -74,6 +75,17 @@ _FACTORY_CONFIGURATION_CODES = frozenset(
         "PLANNING_PROVIDER_CONFIGURATION_FAILED",
     }
 )
+
+
+class PlanningWireMode(str, Enum):
+    """Explicit planning wire contract selected by an LLMPlanner caller."""
+
+    V3 = "v3"
+    V4 = "v4"
+
+    @property
+    def schema_version(self) -> int:
+        return 3 if self is PlanningWireMode.V3 else 4
 
 
 class PlanningModelFactoryResolver(Protocol):
@@ -1022,6 +1034,50 @@ def _plan_id(request: AgentRequest, steps: tuple[PlanStep, ...]) -> str:
     return f"{request.request_id}:llm:{digest}"
 
 
+def _semantic_v4_plan(
+    response: object,
+    request: AgentRequest,
+    registry: ToolRegistry,
+    *,
+    planner_name: str,
+) -> AgentPlan:
+    from .semantic_compiler import (
+        SemanticPlanCompileError,
+        build_semantic_compiler_contract,
+        compile_semantic_plan,
+    )
+    from .semantic_wire_v4 import parse_semantic_wire_v4
+
+    try:
+        candidate = parse_semantic_wire_v4(response, request, registry)
+    except PlannerError as exc:
+        if exc.code != "UNSUPPORTED_REQUEST" or exc.diagnostic_stage is not None:
+            raise
+        raise PlannerError(
+            exc.code,
+            str(exc),
+            category=exc.category,
+            diagnostic_stage=PlanningDiagnosticStage.UNSUPPORTED,
+            diagnostic_reason_code="explicit_unsupported_response",
+        ) from exc
+    try:
+        return compile_semantic_plan(
+            request,
+            candidate,
+            registry,
+            build_semantic_compiler_contract(registry),
+            planner_name=planner_name,
+        )
+    except SemanticPlanCompileError as exc:
+        raise PlannerError(
+            exc.code,
+            str(exc),
+            category=ErrorCategory.INTERNAL_AGENT_ERROR,
+            diagnostic_stage=PlanningDiagnosticStage.CANDIDATE,
+            diagnostic_reason_code="semantic_compilation_failed",
+        ) from exc
+
+
 class LLMPlanner:
     """Convert one strict planning-model response into existing plan contracts."""
 
@@ -1029,6 +1085,7 @@ class LLMPlanner:
         self,
         model: PlanningModel,
         *,
+        wire_mode: PlanningWireMode = PlanningWireMode.V3,
         profile: PlanningModelProfile | None = None,
         recovery_policy: PlanningRecoveryPolicy | None = None,
         retry_sleeper: PlanningSleeper | None = None,
@@ -1037,6 +1094,8 @@ class LLMPlanner:
     ) -> None:
         if not callable(getattr(model, "complete", None)):
             raise TypeError("`model` must provide a callable complete() method.")
+        if not isinstance(wire_mode, PlanningWireMode):
+            raise TypeError("`wire_mode` must be a PlanningWireMode.")
         if profile is not None and not isinstance(profile, PlanningModelProfile):
             raise TypeError("`profile` must be a PlanningModelProfile or None.")
         if profile is not None and not profile.enabled:
@@ -1096,13 +1155,19 @@ class LLMPlanner:
                 )
         self._model = model
         self._model_id = _sanitize_model_id(getattr(model, "model_id", None))
+        self._wire_mode = wire_mode
         self._profile = profile
         self._recovery_profiles = recovery_profiles
         self._model_factory_registry = model_factory_registry
-        self._name = (
+        base_name = (
             f"llm:{self._model_id}"
             if profile is None
             else f"llm-profile:{profile.profile_id}"
+        )
+        self._name = (
+            base_name
+            if wire_mode is PlanningWireMode.V3
+            else f"{base_name}:wire-v4"
         )
         coordinator_kwargs = {}
         if retry_sleeper is not None:
@@ -1122,6 +1187,10 @@ class LLMPlanner:
     @property
     def profile(self) -> PlanningModelProfile | None:
         return self._profile
+
+    @property
+    def wire_mode(self) -> PlanningWireMode:
+        return self._wire_mode
 
     @property
     def recovery_policy(self) -> PlanningRecoveryPolicy:
@@ -1177,7 +1246,7 @@ class LLMPlanner:
             ).hexdigest(),
             catalog_fingerprint=_catalog_fingerprint(registry),
             offered_tool_names=registry.names(),
-            planning_wire_schema_version=_SCHEMA_VERSION,
+            planning_wire_schema_version=self._wire_mode.schema_version,
             attempt_kind=attempt_kind,
             logical_attempt_index=logical_attempt_index,
             provider_call_index=provider_call_index,
@@ -1227,24 +1296,31 @@ class LLMPlanner:
                 "started",
             )
         )
-        prompt = _build_prompt(
-            request,
-            registry,
-            repair_context=(
-                repair_context
-                if attempt_kind is PlanningAttemptKind.REPAIR
-                else None
-            ),
-            failover_context=(
-                repair_context
-                if attempt_kind is PlanningAttemptKind.FAILOVER
-                and repair_context is not None
-                and repair_context.previous_failure_stage
-                is not PlanningDiagnosticStage.PROVIDER
-                else None
-            ),
-        )
-        response_schema = _response_schema(registry, request)
+        if self._wire_mode is PlanningWireMode.V3:
+            prompt = _build_prompt(
+                request,
+                registry,
+                repair_context=(
+                    repair_context
+                    if attempt_kind is PlanningAttemptKind.REPAIR
+                    else None
+                ),
+                failover_context=(
+                    repair_context
+                    if attempt_kind is PlanningAttemptKind.FAILOVER
+                    and repair_context is not None
+                    and repair_context.previous_failure_stage
+                    is not PlanningDiagnosticStage.PROVIDER
+                    else None
+                ),
+            )
+            response_schema = _response_schema(registry, request)
+        else:
+            from .semantic_prompt import build_semantic_planning_prompt
+            from .semantic_wire_v4 import build_semantic_wire_v4_schema
+
+            prompt = build_semantic_planning_prompt(request, registry)
+            response_schema = build_semantic_wire_v4_schema(registry, request)
         try:
             response = self._model.complete(
                 prompt=prompt,
@@ -1296,8 +1372,18 @@ class LLMPlanner:
                 response_byte_count=response_byte_count,
             )
         )
+        plan: AgentPlan | None = None
+        steps: tuple[PlanStep, ...] | None = None
         try:
-            steps = _parse_response(response, request, registry)
+            if self._wire_mode is PlanningWireMode.V3:
+                steps = _parse_response(response, request, registry)
+            else:
+                plan = _semantic_v4_plan(
+                    response,
+                    request,
+                    registry,
+                    planner_name=self._name,
+                )
         except PlannerError as exc:
             _append_preceding_success_diagnostics(
                 diagnostics,
@@ -1347,12 +1433,14 @@ class LLMPlanner:
             response_byte_count=response_byte_count,
         )
         try:
-            plan = AgentPlan(
-                plan_id=_plan_id(request, steps),
-                request_id=request.request_id,
-                planner_name=self._name,
-                steps=steps,
-            )
+            if plan is None:
+                assert steps is not None
+                plan = AgentPlan(
+                    plan_id=_plan_id(request, steps),
+                    request_id=request.request_id,
+                    planner_name=self._name,
+                    steps=steps,
+                )
         except (TypeError, ValueError) as exc:
             failure = _invalid_output(
                 "Planning response violates the AgentPlan structure.",
@@ -1427,6 +1515,7 @@ class LLMPlanner:
                 )
                 secondary_planner = LLMPlanner(
                     secondary_model,
+                    wire_mode=self._wire_mode,
                     profile=secondary_profile,
                     recovery_policy=self._recovery.policy,
                 )
@@ -1445,7 +1534,7 @@ class LLMPlanner:
                     ).hexdigest(),
                     catalog_fingerprint=_catalog_fingerprint(registry),
                     offered_tool_names=registry.names(),
-                    planning_wire_schema_version=_SCHEMA_VERSION,
+                    planning_wire_schema_version=self._wire_mode.schema_version,
                     attempt_kind=PlanningAttemptKind.FAILOVER,
                     logical_attempt_index=logical_index,
                     provider_call_index=provider_call_index,
@@ -1610,4 +1699,4 @@ def _append_successful_response_diagnostics(
     )
 
 
-__all__ = ["LLMPlanner"]
+__all__ = ["LLMPlanner", "PlanningWireMode"]

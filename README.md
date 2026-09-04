@@ -119,6 +119,14 @@ PLAN_ONLY executes zero scientific tools, while resume and cancel require no
 provider, model, SDK, or credential. Final acceptance retains benchmark report
 schema v4 and sanitized planning diagnostic schema v3.
 
+Post-Milestone-9 provider compatibility hardening keeps planning wire schema v3
+strict and tool-discriminated while using reusable closed `$defs`/`$ref`
+binding schemas. Optional bindings use one flat input/ref/null union, and the
+prompt carries a compact semantic catalog while still exposing all eleven
+tools. Reliable HTTP 413 failures are reported terminally as sanitized
+`PROVIDER_REQUEST_TOO_LARGE`; they are not retried, repaired, or treated as 429
+rate limiting.
+
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables
 and cannot directly execute scientific tools.

@@ -201,6 +201,9 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "PROVIDER_AUTHENTICATION_FAILED": ErrorPolicyEntry(
         "Planning-provider authentication failed.", _USER
     ),
+    "PROVIDER_REQUEST_TOO_LARGE": ErrorPolicyEntry(
+        "The planning request exceeds the provider's accepted size.", _USER
+    ),
     "PROVIDER_RATE_LIMITED": ErrorPolicyEntry(
         "The planning provider rejected the request due to a rate limit.", _USER
     ),

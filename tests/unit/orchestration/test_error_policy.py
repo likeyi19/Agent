@@ -154,6 +154,10 @@ def test_host_memory_and_artifact_write_failures_are_safely_classified() -> None
     ("exception", "expected"),
     [
         (type("AuthenticationError", (RuntimeError,), {})(), "PROVIDER_AUTHENTICATION_FAILED"),
+        (
+            type("RequestTooLarge", (RuntimeError,), {"status_code": 413})(),
+            "PROVIDER_REQUEST_TOO_LARGE",
+        ),
         (type("RateLimitError", (RuntimeError,), {})(), "PROVIDER_RATE_LIMITED"),
         (TimeoutError(), "PROVIDER_TIMEOUT"),
         (ConnectionError(), "PROVIDER_CONNECTION_FAILED"),

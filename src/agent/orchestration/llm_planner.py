@@ -54,6 +54,7 @@ _PROVIDER_ERROR_CODES = frozenset(
     {
         "PLANNING_PROVIDER_ERROR",
         "PROVIDER_AUTHENTICATION_FAILED",
+        "PROVIDER_REQUEST_TOO_LARGE",
         "PROVIDER_RATE_LIMITED",
         "PROVIDER_TIMEOUT",
         "PROVIDER_CONNECTION_FAILED",
@@ -115,35 +116,89 @@ def _closed_object_schema(
 def _binding_schema(
     request: AgentRequest,
     argument_spec: ArgumentSpec,
+    *,
+    optional: bool = False,
 ) -> Mapping[str, JsonValue]:
-    alternatives: list[Mapping[str, JsonValue]] = []
-    input_names = tuple(sorted(request.inputs))
-    if input_names:
-        alternatives.append(
-            _closed_object_schema(
-                {
-                    "binding_type": {"type": "string", "enum": ("input",)},
-                    "input_name": {"type": "string", "enum": input_names},
-                }
-            )
-        )
-    if argument_spec.allow_step_output_ref:
-        alternatives.append(
-            _closed_object_schema(
-                {
-                    "binding_type": {"type": "string", "enum": ("ref",)},
-                    "ref_step_id": {"type": "string"},
-                    "ref_output_key": {"type": "string"},
-                }
-            )
-        )
-    if not alternatives:
+    has_inputs = bool(request.inputs)
+    if not has_inputs and not argument_spec.allow_step_output_ref:
         raise PlannerError(
             "PLANNER_CATALOG_INVALID",
             "A registered tool argument has no available binding source.",
             category=ErrorCategory.INTERNAL_AGENT_ERROR,
         )
-    return {"anyOf": tuple(alternatives)}
+    if optional:
+        definition = (
+            "input_or_ref_or_null"
+            if has_inputs and argument_spec.allow_step_output_ref
+            else "input_or_null"
+            if has_inputs
+            else "ref_or_null"
+        )
+    else:
+        definition = (
+            "input_or_ref"
+            if has_inputs and argument_spec.allow_step_output_ref
+            else "input"
+            if has_inputs
+            else "ref"
+        )
+    return {"$ref": f"#/$defs/{definition}"}
+
+
+def _binding_definitions(request: AgentRequest) -> Mapping[str, JsonValue]:
+    input_names = tuple(sorted(request.inputs))
+    definitions: dict[str, JsonValue] = {
+        "ref": _closed_object_schema(
+            {
+                "binding_type": {"type": "string", "enum": ("ref",)},
+                "ref_step_id": {"type": "string"},
+                "ref_output_key": {"type": "string"},
+            }
+        ),
+        "ref_or_null": {
+            "anyOf": (
+                {"$ref": "#/$defs/ref"},
+                {"type": "null"},
+            )
+        },
+    }
+    if input_names:
+        definitions.update(
+            {
+                "input": _closed_object_schema(
+                    {
+                        "binding_type": {
+                            "type": "string",
+                            "enum": ("input",),
+                        },
+                        "input_name": {
+                            "type": "string",
+                            "enum": input_names,
+                        },
+                    }
+                ),
+                "input_or_ref": {
+                    "anyOf": (
+                        {"$ref": "#/$defs/input"},
+                        {"$ref": "#/$defs/ref"},
+                    )
+                },
+                "input_or_null": {
+                    "anyOf": (
+                        {"$ref": "#/$defs/input"},
+                        {"type": "null"},
+                    )
+                },
+                "input_or_ref_or_null": {
+                    "anyOf": (
+                        {"$ref": "#/$defs/input"},
+                        {"$ref": "#/$defs/ref"},
+                        {"type": "null"},
+                    )
+                },
+            }
+        )
+    return definitions
 
 
 def _tool_step_schema(
@@ -156,12 +211,11 @@ def _tool_step_schema(
     for argument_name, argument_spec in sorted(spec.required_arguments.items()):
         argument_properties[argument_name] = _binding_schema(request, argument_spec)
     for argument_name, argument_spec in sorted(spec.optional_arguments.items()):
-        argument_properties[argument_name] = {
-            "anyOf": (
-                _binding_schema(request, argument_spec),
-                {"type": "null"},
-            )
-        }
+        argument_properties[argument_name] = _binding_schema(
+            request,
+            argument_spec,
+            optional=True,
+        )
     return _closed_object_schema(
         {
             "step_id": {"type": "string"},
@@ -196,7 +250,9 @@ def _response_schema(
         "steps": {"type": "array", "items": step_schema},
         "reason": {"type": ("string", "null")},
     }
-    return _closed_object_schema(root_properties)
+    schema = dict(_closed_object_schema(root_properties))
+    schema["$defs"] = _binding_definitions(request)
+    return schema
 
 
 def _python_type_to_json_type(value_type: type) -> str:
@@ -363,20 +419,74 @@ def _catalog_fingerprint(registry: ToolRegistry) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _json_value_type(value: JsonValue) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, tuple):
-        return "array"
-    return "object"
+def _prompt_catalog(registry: ToolRegistry) -> Mapping[str, JsonValue]:
+    """Keep scientific semantics while omitting syntax duplicated by the schema."""
+
+    source_codes = {
+        "request_input_only": "i",
+        "request_input_or_upstream_result": "ir",
+        "upstream_result_only": "r",
+    }
+    tools: dict[str, JsonValue] = {}
+    for tool in _sanitized_catalog(registry):
+        arguments: dict[str, JsonValue] = {}
+        for section_name in ("required_arguments", "optional_arguments"):
+            section = tool[section_name]
+            assert isinstance(section, Mapping)
+            for name, raw_metadata in section.items():
+                assert isinstance(name, str) and isinstance(raw_metadata, Mapping)
+                source = raw_metadata.get(
+                    "source_eligibility",
+                    "request_input_or_upstream_result"
+                    if raw_metadata.get("allows_step_output_ref") is True
+                    else "request_input_only",
+                )
+                assert isinstance(source, str) and source in source_codes
+                options: dict[str, JsonValue] = {}
+                optional_fields = {
+                    "accepted_artifact_kinds": "a",
+                    "provenance_role": "p",
+                    "conditional_note": "n",
+                    "choices": "c",
+                    "default_when_omitted": "d",
+                }
+                for source_name, compact_name in optional_fields.items():
+                    value = raw_metadata.get(source_name)
+                    if value not in (None, (), False):
+                        options[compact_name] = value
+                if raw_metadata.get("scientific_parameter") is True:
+                    options["s"] = True
+                arguments[name] = (
+                    raw_metadata.get(
+                        "description", "Registered tool argument."
+                    ),
+                    source_codes[source],
+                    options,
+                )
+
+        raw_results = tool["result_fields"]
+        assert isinstance(raw_results, Mapping)
+        result_semantics: dict[str, JsonValue] = {}
+        for name, raw_metadata in raw_results.items():
+            assert isinstance(name, str) and isinstance(raw_metadata, Mapping)
+            if "description" in raw_metadata:
+                result_semantics[name] = (
+                    raw_metadata["description"],
+                    raw_metadata.get("artifact_kind"),
+                    raw_metadata.get("provenance_role"),
+                    raw_metadata.get("downstream_bindable") is True,
+                )
+
+        name = tool["name"]
+        assert isinstance(name, str)
+        tools[name] = (
+            tool["planning_role"],
+            tool["description"],
+            arguments,
+            result_semantics,
+            tool["conditional_notes"],
+        )
+    return tools
 
 
 def _build_prompt(
@@ -386,50 +496,55 @@ def _build_prompt(
     repair_context: PlanningRepairContext | None = None,
     failover_context: PlanningRepairContext | None = None,
 ) -> str:
-    available_inputs = tuple(
-        {
-            "name": name,
-            "json_type": _json_value_type(request.inputs[name]),
-        }
-        for name in sorted(request.inputs)
-    )
     prompt_payload = {
         "planning_catalog_semantic_version": 1,
         "instructions": (
-            "Return only one complete JSON planning decision matching the supplied "
-            "schema.",
-            "Use only registered tools and choose only operations needed to fulfill "
-            "the request.",
-            "Bind executable values only from semantically matching AgentRequest "
-            "inputs or compatible upstream result fields; never match inputs by JSON "
-            "type alone.",
+            "Return one complete JSON decision matching the schema; select only "
+            "needed registered tools.",
+            "Bind executable values only from semantically matching named request "
+            "inputs or compatible upstream results; never match by JSON type alone.",
             "Never invent paths, species, metadata keys, parameters, artifacts, or "
             "other executable values.",
-            "If a supplied scientific parameter is used by a selected operation, "
-            "preserve its value exactly through the corresponding input binding; use "
-            "null for an unused optional argument so the tool default applies.",
-            "Use a reference binding when an upstream step in this plan creates a "
-            "required compatible artifact or provenance value.",
-            "Every dependency must reflect actual data or reference flow, and every "
-            "reference must name its producer step and result field.",
-            "Preserve reference, query, and ground-truth branch identity from argument "
-            "and result provenance metadata; independent branches need no fixed order.",
-            "Do not silently substitute a different available input when indispensable "
-            "information is missing.",
-            "Do not substitute a scientifically different available operation for the "
-            "requested operation.",
-            "Return unsupported with no steps for genuinely unsupported, ambiguous, "
-            "conflicting, or indispensably incomplete requests.",
-            "For a plan return non-empty steps and null reason; for unsupported return "
-            "empty steps and a non-empty reason.",
-            "Each step arguments object must contain every key fixed by its selected "
-            "tool branch, using exact input or reference binding fields.",
+            "Preserve every supplied scientific parameter used by a selected tool; "
+            "null means an unused optional argument and applies the tool default.",
+            "Use upstream references and dependencies only for actual artifact, data, "
+            "or provenance flow, naming the producer step and result field.",
+            "Preserve reference, query, and ground-truth provenance; independent "
+            "branches need no fixed order.",
+            "Do not substitute another input or scientific operation when required "
+            "information or capability is absent.",
+            "Return unsupported with no steps for unsupported, ambiguous, conflicting, "
+            "or indispensably incomplete requests.",
         ),
         "request": {
             "prompt": request.prompt,
-            "available_inputs": available_inputs,
+            "available_input_names": tuple(sorted(request.inputs)),
         },
-        "tools": _sanitized_catalog(registry),
+        "catalog_format": {
+            "tool": (
+                "role",
+                "meaning",
+                "arguments",
+                "bindable_results",
+                "notes",
+            ),
+            "argument": ("meaning", "source", "options"),
+            "result": ("meaning", "artifact", "provenance", "bindable"),
+            "source": {
+                "i": "request_input_only",
+                "ir": "request_input_or_upstream_result",
+                "r": "upstream_result_only",
+            },
+            "options": {
+                "a": "accepted_artifact_kinds",
+                "p": "provenance_role",
+                "n": "conditional_note",
+                "c": "choices",
+                "d": "default_when_omitted",
+                "s": "scientific_parameter",
+            },
+        },
+        "tools": _prompt_catalog(registry),
     }
     if repair_context is not None:
         prompt_payload["repair"] = {

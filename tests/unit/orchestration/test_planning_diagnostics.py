@@ -242,6 +242,7 @@ def test_profile_aware_diagnostics_preserve_identity_without_raw_model(
     "code",
     [
         "PROVIDER_AUTHENTICATION_FAILED",
+        "PROVIDER_REQUEST_TOO_LARGE",
         "PROVIDER_RATE_LIMITED",
         "PROVIDER_TIMEOUT",
         "PROVIDER_CONNECTION_FAILED",

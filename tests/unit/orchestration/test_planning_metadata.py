@@ -298,15 +298,15 @@ def test_generic_instructions_cover_composition_and_rejection_without_recipes(
 
     assert payload["planning_catalog_semantic_version"] == 1
     assert len(payload["tools"]) == 11
-    assert "preserve its value exactly" in instructions
-    assert "never match inputs by json type alone" in instructions
+    assert "preserve every supplied scientific parameter" in instructions
+    assert "never match by json type alone" in instructions
     assert "never invent paths" in instructions
-    assert "upstream step" in instructions and "reference binding" in instructions
-    assert "actual data or reference flow" in instructions
+    assert "upstream references" in instructions and "dependencies" in instructions
+    assert "artifact, data, or provenance flow" in instructions
     assert "reference, query, and ground-truth" in instructions
-    assert "indispensable information is missing" in instructions
+    assert "required information or capability is absent" in instructions
     assert "unsupported, ambiguous, conflicting" in instructions
-    assert "workflow" not in {key for tool in payload["tools"] for key in tool}
+    assert "workflow" not in catalog.casefold()
     assert private_path not in catalog
     for forbidden in (
         "function",
@@ -315,3 +315,64 @@ def test_generic_instructions_cover_composition_and_rejection_without_recipes(
         "retryable_error_codes",
     ):
         assert forbidden not in catalog
+
+
+def test_compact_prompt_retains_every_registered_scientific_semantic(
+    registry,
+) -> None:
+    payload = json.loads(
+        _build_prompt(
+            AgentRequest(
+                "compact-semantic-catalog",
+                "Plan against the complete catalog.",
+                {"input_path": "/synthetic/input.h5ad"},
+            ),
+            registry,
+        )
+    )
+    prompt_tools = payload["tools"]
+    source_codes = {
+        code: meaning
+        for code, meaning in payload["catalog_format"]["source"].items()
+    }
+
+    assert set(prompt_tools) == set(registry.names())
+    for tool_name in registry.names():
+        spec = registry.get(tool_name)
+        role, meaning, arguments, results, notes = prompt_tools[tool_name]
+        assert role == spec.planning.role.value
+        assert meaning == spec.planning.description
+        argument_specs = {**spec.required_arguments, **spec.optional_arguments}
+        assert set(arguments) == set(argument_specs)
+        for argument_name, argument_spec in argument_specs.items():
+            planning = argument_spec.planning
+            argument_meaning, source_code, options = arguments[argument_name]
+            assert argument_meaning == planning.description
+            assert source_codes[source_code] == planning.source_eligibility.value
+            if planning.accepted_artifact_kinds:
+                assert options["a"] == [
+                    kind.value for kind in planning.accepted_artifact_kinds
+                ]
+            if planning.provenance_role is not None:
+                assert options["p"] == planning.provenance_role.value
+            if planning.scientific_parameter:
+                assert options["s"] is True
+            if planning.conditional_note is not None:
+                assert options["n"] == planning.conditional_note
+
+        assert set(results) == set(spec.result_contract.planning_fields)
+        for result_name, planning in spec.result_contract.planning_fields.items():
+            result_meaning, artifact, provenance, bindable = results[result_name]
+            assert result_meaning == planning.description
+            assert artifact == (
+                None
+                if planning.artifact_kind is None
+                else planning.artifact_kind.value
+            )
+            assert provenance == (
+                None
+                if planning.provenance_role is None
+                else planning.provenance_role.value
+            )
+            assert bindable is planning.downstream_bindable
+        assert notes == list(spec.planning.conditional_notes)

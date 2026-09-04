@@ -1849,6 +1849,16 @@ and tokens remain excluded from durable diagnostics. Run-state schema remains
 v3, only a final preflight-passing Plan is durable, planning interruption is not
 automatically replayed, and resume/cancel remain provider-free.
 
+Post-closeout real-provider compatibility hardening preserves schema v3 strict
+Structured Outputs and all eleven tool branches while replacing repeated
+binding shapes with reusable closed `$defs`/`$ref` definitions. Optional
+arguments use a flat input/ref/null union, and the prompt omits schema-enforced
+syntax while retaining the complete registry-derived scientific semantic
+catalog. Structured HTTP 413 failures are terminally classified as sanitized
+`PROVIDER_REQUEST_TOO_LARGE`, distinct from retryable HTTP 429 rate limiting.
+The Planner architecture, recovery limits, catalog fingerprint semantics, and
+Milestone 9 completion status are unchanged.
+
 ## Development environment
 
 - Linux server

@@ -236,6 +236,23 @@ def test_api_exception_is_converted_to_sanitized_adapter_error() -> None:
     assert "request-id" not in str(raised.value)
 
 
+def test_http_413_is_terminal_request_too_large_without_raw_body() -> None:
+    error = RuntimeError("TPM limit and private provider response")
+    error.status_code = 413
+    adapter, _ = _adapter(error=error)
+
+    with pytest.raises(GroqPlanningError) as raised:
+        adapter.complete(prompt="prompt", response_schema=_schema())
+
+    assert raised.value.code == "PROVIDER_REQUEST_TOO_LARGE"
+    assert raised.value.retry_after_seconds is None
+    assert str(raised.value) == (
+        "The planning request exceeds the provider's accepted size."
+    )
+    assert "TPM" not in str(raised.value)
+    assert "private" not in str(raised.value)
+
+
 def test_real_client_uses_key_only_at_groq_boundary(monkeypatch) -> None:
     secret = "groq-test-do-not-copy"
     client = FakeClient()

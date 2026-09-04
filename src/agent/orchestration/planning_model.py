@@ -91,6 +91,8 @@ def classify_provider_exception(exception: Exception) -> tuple[str, str]:
     names = {base.__name__ for base in type(exception).__mro__}
     if status_code in {401, 403} or "AuthenticationError" in names:
         code = "PROVIDER_AUTHENTICATION_FAILED"
+    elif status_code == 413:
+        code = "PROVIDER_REQUEST_TOO_LARGE"
     elif status_code == 429 or "RateLimitError" in names:
         code = "PROVIDER_RATE_LIMITED"
     elif (

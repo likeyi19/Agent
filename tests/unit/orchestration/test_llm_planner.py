@@ -23,6 +23,11 @@ from agent.orchestration import (
     ToolRegistry,
     build_default_tool_registry,
 )
+from agent.orchestration.llm_planner import (
+    _build_prompt,
+    _catalog_fingerprint,
+    _response_schema,
+)
 
 
 class FakePlanningModel:
@@ -591,6 +596,14 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     schema = model.calls[0][1]
     assert schema["type"] == "object"
     assert "anyOf" not in schema
+    assert set(schema["$defs"]) == {
+        "input",
+        "ref",
+        "input_or_ref",
+        "input_or_null",
+        "input_or_ref_or_null",
+        "ref_or_null",
+    }
     assert schema["required"] == (
         "schema_version",
         "status",
@@ -637,9 +650,12 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "overwrite",
     }
 
-    input_variant, ref_variant = embed_arguments["properties"]["input_path"][
-        "anyOf"
-    ]
+    required_binding = schema["$defs"]["input_or_ref"]
+    input_ref, output_ref = required_binding["anyOf"]
+    assert input_ref == {"$ref": "#/$defs/input"}
+    assert output_ref == {"$ref": "#/$defs/ref"}
+    input_variant = schema["$defs"]["input"]
+    ref_variant = schema["$defs"]["ref"]
     assert input_variant["properties"]["input_name"]["enum"] == (
         "input_path",
         "output_dir",
@@ -653,7 +669,12 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     }
     assert ref_variant["properties"]["binding_type"]["enum"] == ("ref",)
     optional_schema = embed_arguments["properties"]["checkpoint_path"]
-    assert optional_schema["anyOf"][1] == {"type": "null"}
+    assert optional_schema == {"$ref": "#/$defs/input_or_ref_or_null"}
+    assert schema["$defs"]["input_or_ref_or_null"]["anyOf"] == (
+        {"$ref": "#/$defs/input"},
+        {"$ref": "#/$defs/ref"},
+        {"type": "null"},
+    )
 
     banned_keywords = {
         "oneOf",
@@ -668,6 +689,16 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     def visit(node: object) -> None:
         if isinstance(node, dict):
             assert banned_keywords.isdisjoint(node)
+            if set(node) == {"$ref"}:
+                reference = node["$ref"]
+                assert isinstance(reference, str)
+                assert reference.startswith("#/$defs/")
+                assert reference.removeprefix("#/$defs/") in schema["$defs"]
+            if set(node) == {"anyOf"}:
+                assert all(
+                    not (isinstance(value, dict) and set(value) == {"anyOf"})
+                    for value in node["anyOf"]
+                )
             if node.get("type") == "object":
                 assert node["additionalProperties"] is False
                 assert set(node["required"]) == set(node["properties"])
@@ -682,6 +713,132 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     visit(schema)
 
 
+def test_input_only_and_composable_binding_defs_preserve_requiredness() -> None:
+    source = build_default_tool_registry()
+    embed = source.get("epizoo_embed_cells")
+    required = dict(embed.required_arguments)
+    optional = dict(embed.optional_arguments)
+    required["species"] = replace(
+        required["species"], allow_step_output_ref=False
+    )
+    optional["device"] = replace(optional["device"], allow_step_output_ref=False)
+    registry = ToolRegistry(
+        tuple(
+            replace(
+                source.get(name),
+                required_arguments=required,
+                optional_arguments=optional,
+            )
+            if name == embed.name
+            else source.get(name)
+            for name in source.names()
+        )
+    )
+    schema = _response_schema(
+        registry,
+        _request({"input_path": "/data/input.h5ad", "species": "mouse"}),
+    )
+    branch = next(
+        item
+        for item in schema["properties"]["steps"]["items"]["anyOf"]
+        if item["properties"]["tool_name"]["enum"] == (embed.name,)
+    )
+    arguments = branch["properties"]["arguments"]["properties"]
+
+    assert arguments["species"] == {"$ref": "#/$defs/input"}
+    assert arguments["input_path"] == {"$ref": "#/$defs/input_or_ref"}
+    assert arguments["device"] == {"$ref": "#/$defs/input_or_null"}
+    assert arguments["checkpoint_path"] == {
+        "$ref": "#/$defs/input_or_ref_or_null"
+    }
+    assert schema["$defs"]["input_or_null"]["anyOf"] == (
+        {"$ref": "#/$defs/input"},
+        {"type": "null"},
+    )
+    assert "literal" not in json.dumps(schema, sort_keys=True)
+
+
+def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> None:
+    registry = build_default_tool_registry()
+    request = AgentRequest(
+        "size-regression",
+        "Inspect this scATAC-seq dataset and summarize its stored matrix metadata.",
+        {"input_path": "/synthetic/inspect.h5ad"},
+    )
+    catalog_fingerprint = _catalog_fingerprint(registry)
+    schema = _response_schema(registry, request)
+    repeated_schema = _response_schema(registry, request)
+    serialized_schema = json.dumps(
+        schema,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    prompt = _build_prompt(request, registry)
+
+    def count_key(value: object, key: str) -> int:
+        if isinstance(value, dict):
+            return int(key in value) + sum(
+                count_key(item, key) for item in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return sum(count_key(item, key) for item in value)
+        return 0
+
+    def count_objects(value: object) -> int:
+        if isinstance(value, dict):
+            return int(value.get("type") == "object") + sum(
+                count_objects(item) for item in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return sum(count_objects(item) for item in value)
+        return 0
+
+    assert schema == repeated_schema
+    assert _catalog_fingerprint(registry) == catalog_fingerprint
+    assert len(serialized_schema.encode("utf-8")) <= 13_000
+    assert len(prompt.encode("utf-8")) <= 18_000
+    assert len(serialized_schema.encode("utf-8")) + len(
+        prompt.encode("utf-8")
+    ) <= 31_000
+    assert count_key(schema, "anyOf") <= 5
+    assert count_objects(schema) <= 30
+    assert count_key(schema, "$ref") >= 80
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Inspect the supplied scATAC data.",
+        "Embed the cells.",
+        "Build neighbors, cluster cells, and compute UMAP.",
+        "Transfer reference labels to the query.",
+        "Build replicate pseudobulk counts.",
+        "Run differential accessibility.",
+        "Write an unsupported poem.",
+    ],
+)
+def test_every_request_exposes_the_same_complete_tool_catalog(
+    registry: ToolRegistry,
+    prompt: str,
+) -> None:
+    request = AgentRequest(
+        "full-catalog",
+        prompt,
+        {"input_path": "/synthetic/input.h5ad"},
+    )
+    prompt_payload = json.loads(_build_prompt(request, registry))
+    schema = _response_schema(registry, request)
+    schema_tools = tuple(
+        branch["properties"]["tool_name"]["enum"][0]
+        for branch in schema["properties"]["steps"]["items"]["anyOf"]
+    )
+
+    assert set(prompt_payload["tools"]) == set(registry.names())
+    assert schema_tools == registry.names()
+
+
 def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
     registry,
 ) -> None:
@@ -692,12 +849,13 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
 
     payload = json.loads(model.calls[0][0])
     assert secret_path not in model.calls[0][0]
-    assert payload["request"]["available_inputs"] == [
-        {"json_type": "string", "name": "input_path"},
-        {"json_type": "string", "name": "species"},
+    assert payload["request"]["available_input_names"] == [
+        "input_path",
+        "species",
     ]
-    assert [tool["name"] for tool in payload["tools"]] == list(registry.names())
-    assert payload["tools"][1]["required_arguments"]["species"]["choices"] == [
+    assert set(payload["tools"]) == set(registry.names())
+    species = payload["tools"]["epizoo_embed_cells"][2]["species"]
+    assert species[2]["c"] == [
         "human",
         "mouse",
     ]

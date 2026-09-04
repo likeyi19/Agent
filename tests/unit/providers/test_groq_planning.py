@@ -192,8 +192,9 @@ def test_missing_output_fails_cleanly(missing) -> None:
 def test_noncompleted_response_fails_cleanly(status) -> None:
     adapter, _ = _adapter(_response(status=status))
 
-    with pytest.raises(GroqPlanningError, match="was not completed"):
+    with pytest.raises(GroqPlanningError, match="was not completed") as raised:
         adapter.complete(prompt="prompt", response_schema=_schema())
+    assert raised.value.code == "PROVIDER_COMPLETION_INCOMPLETE"
 
 
 def test_provider_reported_error_fails_without_exposing_error_object() -> None:
@@ -218,6 +219,7 @@ def test_refusal_fails_without_exposing_refusal_text() -> None:
         adapter.complete(prompt="prompt", response_schema=_schema())
 
     assert refusal_text not in str(raised.value)
+    assert raised.value.code == "PROVIDER_REFUSED"
 
 
 def test_api_exception_is_converted_to_sanitized_adapter_error() -> None:
@@ -249,7 +251,13 @@ def test_real_client_uses_key_only_at_groq_boundary(monkeypatch) -> None:
     adapter = GroqPlanningModel(model="openai/gpt-oss-20b")
     output = adapter.complete(prompt="safe prompt", response_schema=_schema())
 
-    assert calls == [{"api_key": secret, "base_url": _GROQ_BASE_URL}]
+    assert calls == [
+        {
+            "api_key": secret,
+            "base_url": _GROQ_BASE_URL,
+            "max_retries": 0,
+        }
+    ]
     assert secret not in output
     assert secret not in json.dumps(client.responses.calls)
 
@@ -258,8 +266,11 @@ def test_missing_optional_sdk_has_clear_lazy_error(monkeypatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "configured-but-not-disclosed")
     monkeypatch.setitem(sys.modules, "openai", None)
 
-    with pytest.raises(GroqPlanningDependencyError, match="optional OpenAI SDK"):
+    with pytest.raises(
+        GroqPlanningDependencyError, match="optional OpenAI SDK"
+    ) as raised:
         GroqPlanningModel(model="openai/gpt-oss-20b")
+    assert raised.value.code == "PLANNING_PROVIDER_DEPENDENCY_MISSING"
 
 
 def test_missing_key_has_safe_provider_error(monkeypatch) -> None:
@@ -276,6 +287,7 @@ def test_missing_key_has_safe_provider_error(monkeypatch) -> None:
         GroqPlanningModel(model="openai/gpt-oss-20b")
 
     assert calls == []
+    assert raised.value.code == "PLANNING_PROVIDER_CONFIGURATION_FAILED"
     assert "authorization" not in str(raised.value).casefold()
 
 
@@ -292,6 +304,7 @@ def test_client_initialization_failure_is_sanitized(monkeypatch) -> None:
         GroqPlanningModel(model="openai/gpt-oss-20b")
 
     assert str(raised.value) == "Groq client initialization failed."
+    assert raised.value.code == "PLANNING_PROVIDER_CONFIGURATION_FAILED"
     assert "provider-secret" not in str(raised.value)
 
 

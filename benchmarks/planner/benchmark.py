@@ -1,4 +1,4 @@
-"""Deterministic benchmark harness for the unchanged production LLM planner.
+"""Deterministic benchmark harness for the production LLM planner.
 
 The semantic oracle in this module is benchmark-only.  Production planning and
 execution code must not import this package.
@@ -25,7 +25,7 @@ from agent.orchestration import (
 
 
 BENCHMARK_SCHEMA_VERSION = 1
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 _OUTCOMES = frozenset({"plan", "unsupported", "failure"})
 
 
@@ -711,6 +711,25 @@ class RecordingPlanningModel:
         return response
 
 
+class _RecordingModelFactoryResolver:
+    """Benchmark-only observer around an explicitly supplied factory registry."""
+
+    def __init__(self, delegate: object) -> None:
+        self._delegate = delegate
+        self.created: list[tuple[PlanningModelProfile, RecordingPlanningModel]] = []
+
+    @property
+    def provider_ids(self) -> tuple[str, ...]:
+        values = getattr(self._delegate, "provider_ids")
+        return tuple(values)
+
+    def create(self, profile: PlanningModelProfile) -> PlanningModel:
+        model = self._delegate.create(profile)
+        observed = RecordingPlanningModel(model)
+        self.created.append((profile, observed))
+        return observed
+
+
 class _ScientificCallGuard:
     def __init__(self) -> None:
         self.count = 0
@@ -1087,6 +1106,19 @@ class CaseScore:
     unsupported_false_acceptance: bool
     semantic_wrong_but_preflight_valid: bool
     provider_calls: int
+    first_attempt_semantic_correct: bool
+    transport_recovered: bool
+    retry_used: bool
+    repair_attempted: bool
+    repair_success: bool
+    failover_attempted: bool
+    failover_success: bool
+    recovery_path: str
+    final_recovery_source: str | None
+    ordered_profile_usage: tuple[str, ...]
+    final_planning_success: bool
+    final_failure_class: str | None
+    final_provider_failure: str | None
     scientific_calls: int
     actual_tool_sequence: tuple[str, ...]
     normalized_plan: tuple[Mapping[str, object], ...]
@@ -1119,6 +1151,19 @@ class CaseScore:
                 self.semantic_wrong_but_preflight_valid
             ),
             "provider_calls": self.provider_calls,
+            "first_attempt_semantic_correct": self.first_attempt_semantic_correct,
+            "transport_recovered": self.transport_recovered,
+            "retry_used": self.retry_used,
+            "repair_attempted": self.repair_attempted,
+            "repair_success": self.repair_success,
+            "failover_attempted": self.failover_attempted,
+            "failover_success": self.failover_success,
+            "recovery_path": self.recovery_path,
+            "final_recovery_source": self.final_recovery_source,
+            "ordered_profile_usage": list(self.ordered_profile_usage),
+            "final_planning_success": self.final_planning_success,
+            "final_failure_class": self.final_failure_class,
+            "final_provider_failure": self.final_provider_failure,
             "scientific_calls": self.scientific_calls,
             "actual_tool_sequence": list(self.actual_tool_sequence),
             "normalized_plan": [dict(step) for step in self.normalized_plan],
@@ -1139,18 +1184,35 @@ def _score_case(
     verification = getattr(result, "verification", None)
     errors = getattr(result, "errors", ())
     error_code = errors[0].code if errors else None
-    syntactically_valid = plan is not None
-    preflight_valid = bool(
-        syntactically_valid
-        and verification is not None
-        and verification.passed
+    trace = getattr(result, "trace", ())
+    recovery_summary = next(
+        (
+            event.details
+            for event in reversed(trace)
+            if event.details.get("diagnostic_schema_version") == 3
+            and event.details.get("code") == "PLANNING_RECOVERY_SUMMARY"
+        ),
+        {},
     )
-    actual_tools = () if plan is None else tuple(step.tool_name for step in plan.steps)
-    expected_tools = tuple(str(step["tool"]) for step in case.expected_steps)
-    exact_sequence = (
-        actual_tools == expected_tools if case.expected_outcome == "plan" else None
+    retry_used = bool(recovery_summary.get("retry_used", provider_calls > 1))
+    repair_used = bool(recovery_summary.get("repair_used", False))
+    failover_used = bool(recovery_summary.get("failover_used", False))
+    total_calls = recovery_summary.get("total_provider_call_count")
+    if isinstance(total_calls, int) and not isinstance(total_calls, bool):
+        provider_calls = total_calls
+    recovery_path = str(
+        recovery_summary.get(
+            "final_recovery_outcome",
+            "initial_success" if error_code is None else "failed",
+        )
     )
-
+    ordered_profile_usage = tuple(
+        str(event.details["profile_id"])
+        for event in trace
+        if event.details.get("diagnostic_schema_version") == 3
+        and event.details.get("code") == "PROVIDER_CALL_STARTED"
+        and isinstance(event.details.get("profile_id"), str)
+    )
     payload = _parse_raw_response(raw_response)
     raw_steps = payload.get("steps", []) if payload is not None else []
     if not isinstance(raw_steps, list):
@@ -1164,6 +1226,32 @@ def _score_case(
         step["tool_name"]
         for step in raw_steps
         if isinstance(step, Mapping) and isinstance(step.get("tool_name"), str)
+    )
+    syntactically_valid = bool(
+        plan is not None
+        or (
+            raw_plan_decision
+            and error_code
+            in {
+                "INVALID_OUTPUT_REFERENCE",
+                "INVALID_PLAN_STRUCTURE",
+                "PLAN_PREFLIGHT_FAILED",
+            }
+        )
+    )
+    preflight_valid = bool(
+        plan is not None
+        and verification is not None
+        and verification.passed
+    )
+    actual_tools = (
+        emitted_tools
+        if plan is None
+        else tuple(step.tool_name for step in plan.steps)
+    )
+    expected_tools = tuple(str(step["tool"]) for step in case.expected_steps)
+    exact_sequence = (
+        actual_tools == expected_tools if case.expected_outcome == "plan" else None
     )
     actual_id_to_index = {
         step["step_id"]: index
@@ -1309,6 +1397,47 @@ def _score_case(
         unsupported_false_acceptance=unsupported_false_acceptance,
         semantic_wrong_but_preflight_valid=preflight_valid and not hard_semantic,
         provider_calls=provider_calls,
+        first_attempt_semantic_correct=(
+            hard_semantic and not retry_used and not repair_used and not failover_used
+        ),
+        transport_recovered=(
+            hard_semantic and recovery_path == "transport_recovered"
+        ),
+        retry_used=retry_used,
+        repair_attempted=repair_used,
+        repair_success=hard_semantic and recovery_path == "repair_recovered",
+        failover_attempted=failover_used,
+        failover_success=hard_semantic and recovery_path == "failover_recovered",
+        recovery_path=recovery_path,
+        final_recovery_source={
+            "initial_success": "primary_initial",
+            "transport_recovered": "primary_transport_retry",
+            "repair_recovered": "primary_repair",
+            "failover_recovered": "secondary_failover",
+        }.get(recovery_path),
+        ordered_profile_usage=ordered_profile_usage,
+        final_planning_success=(
+            hard_semantic and case.expected_outcome == "plan" and plan is not None
+        ),
+        final_failure_class=(
+            None
+            if error_code is None
+            else "unsupported"
+            if error_code == "UNSUPPORTED_REQUEST"
+            else "provider"
+            if error_code.startswith("PROVIDER_")
+            or error_code.startswith("PLANNING_PROVIDER_")
+            else "candidate"
+        ),
+        final_provider_failure=(
+            error_code
+            if error_code is not None
+            and (
+                error_code.startswith("PROVIDER_")
+                or error_code.startswith("PLANNING_PROVIDER_")
+            )
+            else None
+        ),
         scientific_calls=scientific_calls,
         actual_tool_sequence=actual_tools,
         normalized_plan=normalized_plan,
@@ -1379,12 +1508,43 @@ def aggregate_metrics(scores: Sequence[CaseScore]) -> Mapping[str, object]:
             len(preflight_plans),
         ),
         "first_attempt_semantic_success_rate": _rate(
-            sum(score.hard_semantic_correct for score in scores), len(scores)
+            sum(score.first_attempt_semantic_correct for score in scores), len(scores)
         ),
-        "repair_success_rate": None,
+        "first_attempt_plan_success_rate": _rate(
+            sum(score.first_attempt_semantic_correct for score in supported),
+            len(supported),
+        ),
+        "transport_retry_rate": _rate(
+            sum(score.retry_used for score in scores), len(scores)
+        ),
+        "transport_recovery_success_rate": _rate(
+            sum(score.transport_recovered for score in scores),
+            sum(score.retry_used for score in scores),
+        ),
+        "repair_attempt_rate": _rate(
+            sum(score.repair_attempted for score in scores), len(scores)
+        ),
+        "repair_success_rate": _rate(
+            sum(score.repair_success for score in scores),
+            sum(score.repair_attempted for score in scores),
+        ),
+        "failover_attempt_rate": _rate(
+            sum(score.failover_attempted for score in scores), len(scores)
+        ),
+        "failover_success_rate": _rate(
+            sum(score.failover_success for score in scores),
+            sum(score.failover_attempted for score in scores),
+        ),
+        "failover_rate": _rate(
+            sum(score.failover_attempted for score in scores), len(scores)
+        ),
         "fallback_rate": None,
         "final_planning_success_rate": _rate(
             sum(score.hard_semantic_correct for score in scores), len(scores)
+        ),
+        "final_plan_success_rate": _rate(
+            sum(score.final_planning_success for score in supported),
+            len(supported),
         ),
         "provider_calls_per_request": _rate(provider_calls, len(scores)),
         "maximum_provider_calls": max(
@@ -1429,6 +1589,8 @@ def run_benchmark(
     replay_overrides: Mapping[str, object] | None = None,
     repetitions: int = 1,
     selected_case_ids: frozenset[str] | None = None,
+    recovery_profiles: tuple[PlanningModelProfile, ...] = (),
+    model_factory_registry: object | None = None,
 ) -> BenchmarkReport:
     """Run offline scripted or explicitly supplied live planning in PLAN_ONLY."""
 
@@ -1445,6 +1607,10 @@ def run_benchmark(
     if (model is None) != (model_profile is None):
         raise ValueError(
             "A live benchmark model and model profile must be supplied together."
+        )
+    if bool(recovery_profiles) != (model_factory_registry is not None):
+        raise ValueError(
+            "Recovery profiles and a model factory registry must be supplied together."
         )
     selected = tuple(
         case
@@ -1471,6 +1637,11 @@ def run_benchmark(
             else:
                 case_model = model
             observed = RecordingPlanningModel(case_model)
+            observed_factories = (
+                None
+                if model_factory_registry is None
+                else _RecordingModelFactoryResolver(model_factory_registry)
+            )
             registry, guard = guarded_registry()
             request = AgentRequest(
                 request_id=f"benchmark-{case.case_id}-{repetition}",
@@ -1479,10 +1650,30 @@ def run_benchmark(
                 mode=RunMode.PLAN_ONLY,
             )
             result = AgentRuntime(
-                planner=LLMPlanner(observed, profile=model_profile),
+                planner=LLMPlanner(
+                    observed,
+                    profile=model_profile,
+                    recovery_profiles=recovery_profiles,
+                    model_factory_registry=observed_factories,
+                ),
                 registry=registry,
             ).run(request)
-            raw_response = observed.responses[-1] if observed.responses else None
+            secondary_responses = (
+                []
+                if observed_factories is None
+                else [
+                    response
+                    for _, secondary in observed_factories.created
+                    for response in secondary.responses
+                ]
+            )
+            raw_response = (
+                secondary_responses[-1]
+                if secondary_responses
+                else observed.responses[-1]
+                if observed.responses
+                else None
+            )
             scores.append(
                 _score_case(
                     case,

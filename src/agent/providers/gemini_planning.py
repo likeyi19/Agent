@@ -10,6 +10,7 @@ from agent.schemas import JsonValue
 from agent.orchestration.planning_model import (
     PlanningModelError,
     classify_provider_exception,
+    normalized_retry_after_seconds,
 )
 
 
@@ -47,14 +48,16 @@ def _default_client() -> object:
     except ImportError as exc:
         raise GeminiPlanningDependencyError(
             "The optional Google Gen AI SDK is not installed. Install the "
-            "`google-genai` package to use GeminiPlanningModel."
+            "`google-genai` package to use GeminiPlanningModel.",
+            code="PLANNING_PROVIDER_DEPENDENCY_MISSING",
         ) from exc
     try:
-        return genai.Client()
+        return genai.Client(http_options={"retry_options": {"attempts": 1}})
     except Exception as exc:
         raise GeminiPlanningError(
             "Gemini client initialization failed. Ensure GEMINI_API_KEY is "
-            "configured in the runtime environment."
+            "configured in the runtime environment.",
+            code="PLANNING_PROVIDER_CONFIGURATION_FAILED",
         ) from exc
 
 
@@ -99,11 +102,31 @@ def _field(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
 
 
+def _contains_refusal(interaction: object) -> bool:
+    output = _field(interaction, "output", _field(interaction, "outputs", ()))
+    if not isinstance(output, (list, tuple)):
+        return False
+    for item in output:
+        content = _field(item, "content", ())
+        if isinstance(content, (list, tuple)) and any(
+            _field(part, "type") == "refusal" for part in content
+        ):
+            return True
+    return False
+
+
 def _completed_output_text(interaction: object) -> str:
     if _field(interaction, "error") is not None:
         raise GeminiPlanningError("Gemini planning interaction reported a failure.")
+    if _field(interaction, "status") == "refused" or _contains_refusal(interaction):
+        raise GeminiPlanningError(
+            "Gemini planning interaction was refused.", code="PROVIDER_REFUSED"
+        )
     if _field(interaction, "status") != "completed":
-        raise GeminiPlanningError("Gemini planning interaction was not completed.")
+        raise GeminiPlanningError(
+            "Gemini planning interaction was not completed.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
+        )
     try:
         output_text = _field(interaction, "output_text")
     except Exception as exc:
@@ -112,7 +135,8 @@ def _completed_output_text(interaction: object) -> str:
         ) from exc
     if not isinstance(output_text, str) or not output_text.strip():
         raise GeminiPlanningError(
-            "Gemini planning interaction did not contain output text."
+            "Gemini planning interaction did not contain output text.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
         )
     return output_text
 
@@ -179,6 +203,7 @@ class GeminiPlanningModel:
             raise GeminiPlanningError(
                 message,
                 code=code,
+                retry_after_seconds=normalized_retry_after_seconds(exc),
             ) from exc
         return _completed_output_text(interaction)
 

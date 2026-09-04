@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from agent.orchestration import PlanningModelProfile, build_default_tool_registry
+from agent.orchestration import (
+    PlanningModelError,
+    PlanningModelProfile,
+    build_default_tool_registry,
+)
+from agent.providers import PlanningModelFactoryRegistry
 from benchmarks.planner.benchmark import (
     BenchmarkCase,
     ScriptedPlanningModel,
@@ -421,13 +426,145 @@ def test_supplied_model_track_repeats_plan_only_without_scientific_calls(
     assert report.profile_id == "benchmark-test-model"
     assert report.provider_id == "custom"
     assert report.model_id == model.model_id
-    assert report.to_dict()["schema_version"] == 3
+    assert report.to_dict()["schema_version"] == 4
     assert report.repetitions == 2
     assert model.calls == 2
     assert report.metrics["provider_calls_per_request"] == 1.0
     assert report.metrics["maximum_provider_calls"] == 1
     assert report.metrics["scientific_call_count"] == 0
     assert all(score.semantically_correct for score in report.cases)
+
+
+def test_schema_v4_distinguishes_transport_recovered_success(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    case = _case(cases, "inspect_canonical")
+
+    class TransientThenValid:
+        model_id = "transport-recovery-test"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *, prompt, response_schema):
+            self.calls += 1
+            if self.calls == 1:
+                raise PlanningModelError(
+                    code="PROVIDER_TIMEOUT", retry_after_seconds=0
+                )
+            return oracle_response(case)
+
+    model = TransientThenValid()
+    profile = PlanningModelProfile(
+        "transport-recovery-test", "custom", model.model_id
+    )
+
+    report = run_benchmark((case,), model=model, model_profile=profile)
+    score = report.cases[0]
+
+    assert report.to_dict()["schema_version"] == 4
+    assert score.provider_calls == 2
+    assert score.retry_used
+    assert score.transport_recovered
+    assert not score.first_attempt_semantic_correct
+    assert score.final_provider_failure is None
+    assert report.metrics["transport_recovery_success_rate"] == 1.0
+    assert report.metrics["transport_retry_rate"] == 1.0
+    assert report.metrics["first_attempt_plan_success_rate"] == 0.0
+    assert report.metrics["final_plan_success_rate"] == 1.0
+
+
+def test_schema_v4_distinguishes_repair_recovered_success(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    case = _case(cases, "inspect_canonical")
+
+    class InvalidThenValid:
+        model_id = "plan-repair-test"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *, prompt, response_schema):
+            self.calls += 1
+            return "not-json" if self.calls == 1 else oracle_response(case)
+
+    model = InvalidThenValid()
+    profile = PlanningModelProfile("plan-repair-test", "custom", model.model_id)
+
+    report = run_benchmark((case,), model=model, model_profile=profile)
+    score = report.cases[0]
+
+    assert score.provider_calls == 2
+    assert score.repair_attempted
+    assert score.repair_success
+    assert not score.retry_used
+    assert score.recovery_path == "repair_recovered"
+    assert score.final_failure_class is None
+    assert report.metrics["repair_success_rate"] == 1.0
+    assert report.metrics["final_plan_success_rate"] == 1.0
+
+
+def test_schema_v4_records_configured_failover_success_and_profile_order(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    case = _case(cases, "inspect_canonical")
+
+    class ExhaustedPrimary:
+        model_id = "exhausted-primary"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *, prompt, response_schema):
+            del prompt, response_schema
+            self.calls += 1
+            raise PlanningModelError(
+                code="PROVIDER_TIMEOUT", retry_after_seconds=0
+            )
+
+    primary = ExhaustedPrimary()
+    primary_profile = PlanningModelProfile(
+        "benchmark-primary", "custom", primary.model_id
+    )
+    secondary_profile = PlanningModelProfile(
+        "benchmark-secondary", "backup", "secondary-model"
+    )
+    factory_calls: list[PlanningModelProfile] = []
+
+    def factory(profile: PlanningModelProfile):
+        factory_calls.append(profile)
+        return ScriptedPlanningModel(oracle_response(case))
+
+    factories = PlanningModelFactoryRegistry({"backup": factory})
+
+    report = run_benchmark(
+        (case,),
+        model=primary,
+        model_profile=primary_profile,
+        recovery_profiles=(secondary_profile,),
+        model_factory_registry=factories,
+    )
+    score = report.cases[0]
+
+    assert primary.calls == 2
+    assert factory_calls == [secondary_profile]
+    assert score.provider_calls == 3
+    assert score.failover_attempted
+    assert score.failover_success
+    assert not score.transport_recovered
+    assert score.final_planning_success
+    assert score.recovery_path == "failover_recovered"
+    assert score.final_recovery_source == "secondary_failover"
+    assert score.ordered_profile_usage == (
+        "benchmark-primary",
+        "benchmark-primary",
+        "benchmark-secondary",
+    )
+    assert report.metrics["failover_attempt_rate"] == 1.0
+    assert report.metrics["failover_success_rate"] == 1.0
+    assert report.metrics["final_plan_success_rate"] == 1.0
+    assert report.metrics["fallback_rate"] is None
 
 
 def test_schema_v3_uses_explicit_profile_provenance_without_model_id_parsing(
@@ -453,7 +590,7 @@ def test_schema_v3_uses_explicit_profile_provenance_without_model_id_parsing(
         (case,), model=model, model_profile=second_profile
     ).to_dict()
 
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
     assert first["profile_id"] == "groq-model-a"
     assert first["provider_id"] == "groq"
     assert first["model_id"] == "organization/model-a"

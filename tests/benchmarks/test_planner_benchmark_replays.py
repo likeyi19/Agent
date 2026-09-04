@@ -57,11 +57,18 @@ def test_offline_baseline_metrics_and_future_fields(report: BenchmarkReport) -> 
     assert metrics["unsupported_false_acceptance_rate"] == pytest.approx(2 / 7)
     assert metrics["semantic_wrong_but_preflight_valid_rate"] == pytest.approx(2 / 26)
     assert metrics["first_attempt_semantic_success_rate"] == pytest.approx(33 / 38)
+    assert metrics["first_attempt_plan_success_rate"] == pytest.approx(24 / 26)
+    assert metrics["transport_retry_rate"] == 0.0
     assert metrics["final_planning_success_rate"] == pytest.approx(33 / 38)
-    assert metrics["repair_success_rate"] is None
+    assert metrics["final_plan_success_rate"] == pytest.approx(24 / 26)
+    assert metrics["repair_attempt_rate"] == pytest.approx(3 / 38)
+    assert metrics["repair_success_rate"] == 0.0
+    assert metrics["failover_attempt_rate"] == 0.0
+    assert metrics["failover_success_rate"] is None
+    assert metrics["failover_rate"] == 0.0
     assert metrics["fallback_rate"] is None
-    assert metrics["provider_calls_per_request"] == 1.0
-    assert metrics["maximum_provider_calls"] == 1
+    assert metrics["provider_calls_per_request"] == pytest.approx(41 / 38)
+    assert metrics["maximum_provider_calls"] == 2
     assert metrics["scientific_call_count"] == 0
 
 
@@ -69,7 +76,7 @@ def test_report_persists_hard_and_canonical_assessments_separately(
     report: BenchmarkReport,
 ) -> None:
     payload = report.to_dict()
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["profile_id"] == "offline-scripted-m9.1"
     assert payload["provider_id"] == "offline"
     assert payload["model_id"] == "offline-scripted-m9.1"
@@ -127,7 +134,8 @@ def test_parser_and_bad_reference_failures_are_distinct(
 
     assert not malformed.syntactically_valid_plan
     assert malformed.actual_error_code == "PLANNER_OUTPUT_INVALID"
-    assert malformed.provider_calls == 1
+    assert malformed.provider_calls == 2
+    assert malformed.repair_attempted
 
     assert bad_reference.syntactically_valid_plan
     assert not bad_reference.preflight_valid_plan
@@ -139,14 +147,15 @@ def test_parser_and_bad_reference_failures_are_distinct(
     )
 
 
-def test_m91_has_one_attempt_and_no_repair_fallback_or_execution(
+def test_m942_recovery_is_bounded_without_failover_or_execution(
     report: BenchmarkReport,
 ) -> None:
-    assert all(score.provider_calls == 1 for score in report.cases)
+    assert all(score.provider_calls <= 2 for score in report.cases)
+    assert sum(score.repair_attempted for score in report.cases) == 3
     assert all(score.scientific_calls == 0 for score in report.cases)
     assert (
         report.metrics["first_attempt_semantic_success_rate"]
         == report.metrics["final_planning_success_rate"]
     )
-    assert report.metrics["repair_success_rate"] is None
+    assert report.metrics["repair_success_rate"] == 0.0
     assert report.metrics["fallback_rate"] is None

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Callable, Sequence
 
 from agent.schemas import (
     AgentError,
@@ -43,6 +43,10 @@ from .planning_diagnostics import (
     PlanningDiagnosticContext,
     PlanningDiagnosticStage,
     safe_diagnostic_identifier,
+)
+from .planning_recovery import (
+    PlanningRecoveryCancelled,
+    RecoveredPlanningAttempt,
 )
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
@@ -136,7 +140,9 @@ class AgentRuntime:
             details={"planner_name": type(self._planner).__name__},
         )
         try:
-            plan, diagnostic_context = self._invoke_planner(request, trace)
+            plan, diagnostic_context, candidate_preflight = self._invoke_planner(
+                request, trace
+            )
         except PlannerError as exc:
             error = classified_agent_error(
                 category=exc.category,
@@ -192,11 +198,12 @@ class AgentRuntime:
             "Planner produced a structured AgentPlan.",
             details={"plan_id": plan.plan_id, "step_count": len(plan.steps)},
         )
-        candidate_preflight = self._diagnose_candidate_preflight(
-            plan,
-            trace,
-            diagnostic_context,
-        )
+        if candidate_preflight is None:
+            candidate_preflight = self._diagnose_candidate_preflight(
+                plan,
+                trace,
+                diagnostic_context,
+            )
 
         if request.mode is RunMode.PLAN_ONLY:
             return self._run_plan_only(
@@ -212,15 +219,50 @@ class AgentRuntime:
         self,
         request: AgentRequest,
         trace: _TraceRecorder,
-    ) -> tuple[AgentPlan, PlanningDiagnosticContext | None]:
-        # M9.4 must add a cancellation checkpoint between any future attempts;
-        # M9.2 deliberately invokes one initial provider call only.
+        *,
+        should_cancel: CancellationCheck | None = None,
+        diagnostic_checkpoint: Callable[[], None] | None = None,
+    ) -> tuple[
+        AgentPlan,
+        PlanningDiagnosticContext | None,
+        VerificationResult | None,
+    ]:
+        recovered_plan = getattr(self._planner, "plan_with_recovery", None)
+        if callable(recovered_plan):
+
+            def sink(diagnostics: tuple[PlanningDiagnostic, ...]) -> None:
+                _record_planning_diagnostics(trace, diagnostics)
+                if diagnostic_checkpoint is not None:
+                    diagnostic_checkpoint()
+
+            def validate(
+                attempt: DiagnosedPlanningAttempt,
+            ) -> tuple[VerificationResult, tuple[PlanningDiagnostic, ...]]:
+                return self._candidate_preflight_observation(
+                    attempt.plan, attempt.context
+                )
+
+            recovered = recovered_plan(
+                request,
+                self._registry,
+                validate_candidate=validate,
+                diagnostic_sink=sink,
+                should_cancel=should_cancel,
+            )
+            if not isinstance(recovered, RecoveredPlanningAttempt):
+                raise TypeError("Recovery planner returned an invalid result.")
+            return (
+                recovered.attempt.plan,
+                recovered.attempt.context,
+                recovered.preflight,
+            )
+
         diagnosed_plan = getattr(self._planner, "plan_with_diagnostics", None)
         if not callable(diagnosed_plan):
             plan = self._planner.plan(request, self._registry)
             if not isinstance(plan, AgentPlan):
                 raise TypeError("Planner returned a value that is not an AgentPlan.")
-            return plan, None
+            return plan, None, None
         try:
             attempt = diagnosed_plan(request, self._registry)
         except PlannerError as exc:
@@ -231,30 +273,14 @@ class AgentRuntime:
                 "Diagnostic planner returned an invalid planning-attempt value."
             )
         _record_planning_diagnostics(trace, attempt.diagnostics)
-        return attempt.plan, attempt.context
+        return attempt.plan, attempt.context, None
 
-    def _diagnose_candidate_preflight(
+    def _candidate_preflight_observation(
         self,
         plan: AgentPlan,
-        trace: _TraceRecorder,
-        context: PlanningDiagnosticContext | None,
-    ) -> VerificationResult | None:
-        if context is None:
-            return None
-        try:
-            preflight = self._executor.preflight(plan)
-        except Exception:
-            diagnostic = context.diagnostic(
-                PlanningDiagnosticStage.PREFLIGHT,
-                "PREFLIGHT_UNEXPECTED_ERROR",
-                "failed",
-                candidate_constructed=True,
-                candidate_preflight_passed=False,
-                reason_code="preflight_exception",
-            )
-            _record_planning_diagnostics(trace, (diagnostic,))
-            return None
-
+        context: PlanningDiagnosticContext,
+    ) -> tuple[VerificationResult, tuple[PlanningDiagnostic, ...]]:
+        preflight = self._executor.preflight(plan)
         if not preflight.passed:
             diagnostic = _preflight_failure_diagnostic(
                 context,
@@ -262,26 +288,23 @@ class AgentRuntime:
                 preflight,
                 self._registry,
             )
-            _record_planning_diagnostics(trace, (diagnostic,))
             if preflight.error is not None:
-                safe_details = {
-                    "failure_count": preflight.error.details.get(
-                        "failure_count", 1
-                    ),
-                    **dict(diagnostic.to_details()),
-                }
                 preflight = replace(
                     preflight,
                     error=replace(
                         preflight.error,
                         step_id=None,
                         tool_name=diagnostic.tool_name,
-                        details=safe_details,
+                        details={
+                            "failure_count": preflight.error.details.get(
+                                "failure_count", 1
+                            ),
+                            **dict(diagnostic.to_details()),
+                        },
                     ),
                 )
-            return preflight
-
-        diagnostics = (
+            return preflight, (diagnostic,)
+        return preflight, (
             context.diagnostic(
                 PlanningDiagnosticStage.PREFLIGHT,
                 "CANDIDATE_PREFLIGHT_PASSED",
@@ -297,6 +320,31 @@ class AgentRuntime:
                 candidate_preflight_passed=True,
             ),
         )
+
+    def _diagnose_candidate_preflight(
+        self,
+        plan: AgentPlan,
+        trace: _TraceRecorder,
+        context: PlanningDiagnosticContext | None,
+    ) -> VerificationResult | None:
+        if context is None:
+            return self._executor.preflight(plan)
+        try:
+            preflight, diagnostics = self._candidate_preflight_observation(
+                plan, context
+            )
+        except Exception:
+            diagnostic = context.diagnostic(
+                PlanningDiagnosticStage.PREFLIGHT,
+                "PREFLIGHT_UNEXPECTED_ERROR",
+                "failed",
+                candidate_constructed=True,
+                candidate_preflight_passed=False,
+                reason_code="preflight_exception",
+            )
+            _record_planning_diagnostics(trace, (diagnostic,))
+            return None
+
         _record_planning_diagnostics(trace, diagnostics)
         return preflight
 
@@ -446,10 +494,36 @@ class AgentRuntime:
             details={"planner_name": type(self._planner).__name__},
         )
 
+        def checkpoint_planning_diagnostics() -> None:
+            nonlocal state
+            state = self._update_state(state, trace=trace.events)
+
         try:
-            plan, diagnostic_context = self._invoke_planner(request, trace)
+            plan, diagnostic_context, candidate_preflight = self._invoke_planner(
+                request,
+                trace,
+                should_cancel=self._cancellation_check(run_id),
+                diagnostic_checkpoint=checkpoint_planning_diagnostics,
+            )
             if plan.request_id != request.request_id:
                 raise TypeError("Planner returned a plan for a different request ID.")
+        except PlanningRecoveryCancelled as exc:
+            cancellation = self._load_cancellation(run_id)
+            if cancellation is None:
+                raise RuntimeError(
+                    "Planning cancellation requires durable cancellation intent."
+                ) from exc
+            return self._persist_cancelled(
+                state,
+                cancellation,
+                boundary="planning_recovery_checkpoint",
+            )
+        except CancellationRequestedError as exc:
+            return self._persist_cancelled(
+                state,
+                exc.request,
+                boundary="planning_diagnostic_checkpoint",
+            )
         except PlannerError as exc:
             error = classified_agent_error(
                 category=exc.category,
@@ -507,11 +581,38 @@ class AgentRuntime:
             "Planner produced a structured AgentPlan.",
             details={"plan_id": plan.plan_id, "step_count": len(plan.steps)},
         )
-        candidate_preflight = self._diagnose_candidate_preflight(
-            plan,
-            trace,
-            diagnostic_context,
-        )
+        if candidate_preflight is None:
+            candidate_preflight = self._diagnose_candidate_preflight(
+                plan,
+                trace,
+                diagnostic_context,
+            )
+        if candidate_preflight is None or not candidate_preflight.passed:
+            error = (
+                candidate_preflight.error
+                if candidate_preflight is not None
+                else _internal_error(
+                    "PREFLIGHT_UNEXPECTED_ERROR",
+                    "Plan preflight raised an unexpected orchestration error.",
+                    RuntimeError("preflight unavailable"),
+                )
+            )
+            trace.add(
+                TraceEventType.RUN_COMPLETION,
+                "Agent run completed with candidate preflight failure.",
+                details={"status": "FAILED", "error_code": error.code},
+            )
+            return self._persist_terminal(
+                state,
+                AgentRunResult(
+                    run_id=run_id,
+                    request_id=request.request_id,
+                    status=RunStatus.FAILED,
+                    planning_only=request.mode is RunMode.PLAN_ONLY,
+                    errors=(error,),
+                    trace=trace.events,
+                ),
+            )
         recovery_policy_snapshot = (
             None
             if request.mode is RunMode.PLAN_ONLY
@@ -952,6 +1053,19 @@ class AgentRuntime:
         preflight = state.preflight_verification
         run_verification = state.run_verification
         candidate_steps = state.steps
+        if (
+            not candidate_steps
+            and plan is not None
+            and state.request.mode is RunMode.EXECUTE
+        ):
+            candidate_steps = tuple(
+                StepExecutionResult(
+                    step.step_id,
+                    step.tool_name,
+                    StepStatus.PENDING,
+                )
+                for step in plan.steps
+            )
         candidate_errors = state.errors
         if result is not None:
             candidate_steps = _terminal_steps(state, result)
@@ -1392,7 +1506,16 @@ def _record_planning_diagnostics(
 def _planner_error_details(exc: PlannerError) -> dict[str, object]:
     if not exc.diagnostics:
         return {}
-    return dict(exc.diagnostics[-1].to_details())
+    diagnostic = next(
+        (
+            item
+            for item in reversed(exc.diagnostics)
+            if item.stage is not PlanningDiagnosticStage.RECOVERY
+            and item.outcome in {"failed", "rejected"}
+        ),
+        exc.diagnostics[-1],
+    )
+    return dict(diagnostic.to_details())
 
 
 def _preflight_failure_diagnostic(

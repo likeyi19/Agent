@@ -10,6 +10,7 @@ from agent.schemas import JsonValue
 from agent.orchestration.planning_model import (
     PlanningModelError,
     classify_provider_exception,
+    normalized_retry_after_seconds,
 )
 
 
@@ -48,14 +49,16 @@ def _default_client() -> object:
     except ImportError as exc:
         raise OpenAIPlanningDependencyError(
             "The optional OpenAI SDK is not installed. Install the `openai` "
-            "package to use OpenAIPlanningModel."
+            "package to use OpenAIPlanningModel.",
+            code="PLANNING_PROVIDER_DEPENDENCY_MISSING",
         ) from exc
     try:
-        return OpenAI()
+        return OpenAI(max_retries=0)
     except Exception as exc:
         raise OpenAIPlanningError(
             "OpenAI client initialization failed. Ensure OPENAI_API_KEY is "
-            "configured in the runtime environment."
+            "configured in the runtime environment.",
+            code="PLANNING_PROVIDER_CONFIGURATION_FAILED",
         ) from exc
 
 
@@ -118,10 +121,15 @@ def _contains_refusal(response: object) -> bool:
 def _completed_output_text(response: object) -> str:
     if _field(response, "error") is not None:
         raise OpenAIPlanningError("OpenAI planning response reported a failure.")
-    if _field(response, "status") != "completed":
-        raise OpenAIPlanningError("OpenAI planning response was not completed.")
     if _contains_refusal(response):
-        raise OpenAIPlanningError("OpenAI planning response was refused.")
+        raise OpenAIPlanningError(
+            "OpenAI planning response was refused.", code="PROVIDER_REFUSED"
+        )
+    if _field(response, "status") != "completed":
+        raise OpenAIPlanningError(
+            "OpenAI planning response was not completed.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
+        )
     try:
         output_text = _field(response, "output_text")
     except Exception as exc:
@@ -130,7 +138,8 @@ def _completed_output_text(response: object) -> str:
         ) from exc
     if not isinstance(output_text, str) or not output_text.strip():
         raise OpenAIPlanningError(
-            "OpenAI planning response did not contain output text."
+            "OpenAI planning response did not contain output text.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
         )
     return output_text
 
@@ -200,6 +209,7 @@ class OpenAIPlanningModel:
             raise OpenAIPlanningError(
                 message,
                 code=code,
+                retry_after_seconds=normalized_retry_after_seconds(exc),
             ) from exc
         return _completed_output_text(response)
 

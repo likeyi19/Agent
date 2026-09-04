@@ -1706,10 +1706,10 @@ peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
 
-### Milestone 9.1–9.3 — Planner robustness, diagnostics, and planning interface
+### Milestone 9.1–9.4 — Planner robustness, interface, and bounded recovery
 
-M9.1, M9.2, M9.2.5, and M9.3 are complete and accepted. Milestone 9 remains in
-progress; M9.4 Planning Recovery has not started.
+M9.1, M9.2, M9.2.5, M9.3, and M9.4 are complete and accepted. Milestone 9
+remains in progress pending later user-facing default-policy work.
 
 #### LLM and Planner responsibility boundary
 
@@ -1753,7 +1753,7 @@ path is unchanged.
 
 #### Diagnostics and benchmark contracts
 
-Planning diagnostics use provider-neutral, structured diagnostic schema v2.
+Planning diagnostics use provider-neutral, structured diagnostic schema v3.
 Profile/provider provenance is sanitized, and model identity is retained only
 through approved safe provenance/digest behavior. Persisted diagnostics exclude
 raw prompts, structured input values and paths, raw provider output, provider
@@ -1761,7 +1761,7 @@ exception bodies, HTTP bodies and headers, request IDs, credentials, and
 tokens. Run-state schema remains v3, and `AgentError.recoverable` retains its
 scientific same-step recovery meaning.
 
-Planner benchmark report schema v3 is deterministic and offline. Its semantic
+Planner benchmark report schema v4 is deterministic and offline. Its semantic
 oracle is benchmark-only: hard semantic correctness is distinct from canonical
 workflow conformance, matching is structural rather than positional, and
 alternative valid workflows are accepted. Unsafe provenance swaps, invented
@@ -1770,15 +1770,26 @@ substitutions remain failures. Benchmark execution is PLAN_ONLY with zero
 scientific calls; optional live-provider availability is evidence, not a normal
 offline acceptance dependency.
 
-#### Deferred Milestone 9 work
+#### Planning Recovery
 
-M9.4 Planning Recovery will separately design and implement bounded transient
-provider retry, plan repair or re-planning, configured model/provider failover,
-cancellation between planning attempts, hard global call bounds, and final
-failure behavior. None is implemented yet. Deterministic fallback remains
-deferred for explicit review, the user-facing LLM-first default policy remains
-deferred, and tool filtering remains deferred unless future evidence justifies
-it.
+M9.4 adds one bounded same-profile transport retry for explicit transient
+provider failures or one complete same-profile Plan repair for objectively
+invalid candidates; retry and repair are mutually exclusive. After exhausted
+primary recovery, one explicitly configured secondary profile may make the
+third and final call through `PlanningModelFactoryRegistry`. Built-in adapters
+disable SDK retries, and no recovery path may exceed three logical provider
+calls.
+
+Recovery remains cancellation-aware and checkpoints sanitized diagnostics and
+recovery decisions before later calls. Failed candidates and raw provider
+responses are never persisted as the run Plan. Only a final authoritative-
+preflight-passing Plan becomes durable; interrupted planning before that point
+is not automatically replayed, while resume after Plan persistence remains
+planner-free. Run-state schema remains v3.
+
+Deterministic fallback, automatic model routing/ranking, prompt-based routing,
+tool filtering, and the user-facing LLM-first default policy remain deferred.
+The default planner policy remains deterministic and offline.
 
 ## Development environment
 

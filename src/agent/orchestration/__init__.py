@@ -41,6 +41,15 @@ from .planning_model import (
     PlanningModelError,
     PlanningModelProfile,
     classify_provider_exception,
+    normalized_retry_after_seconds,
+)
+from .planning_recovery import (
+    PLANNING_RECOVERY_POLICY_VERSION,
+    PlanningRecoveryCancelled,
+    PlanningRecoveryCoordinator,
+    PlanningRecoveryPolicy,
+    PlanningRepairContext,
+    RecoveredPlanningAttempt,
 )
 from .registry import (
     ArgumentPlanningSemantics,
@@ -115,6 +124,12 @@ __all__ = [
     "PlanningModel",
     "PlanningModelError",
     "PlanningModelProfile",
+    "PlanningRecoveryCancelled",
+    "PlanningRecoveryCoordinator",
+    "PlanningRecoveryPolicy",
+    "PlanningRepairContext",
+    "RecoveredPlanningAttempt",
+    "PLANNING_RECOVERY_POLICY_VERSION",
     "PlanExecutor",
     "PlanStep",
     "PersistedRunState",
@@ -152,6 +167,7 @@ __all__ = [
     "VerificationResult",
     "build_default_tool_registry",
     "classify_provider_exception",
+    "normalized_retry_after_seconds",
     "verify_run",
     "verify_step",
 ]

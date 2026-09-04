@@ -1,6 +1,6 @@
 # LLM Planner Robustness Benchmark
 
-This benchmark is the Milestone 9.1 baseline for the unchanged production
+This benchmark began as the Milestone 9.1 baseline for production
 `LLMPlanner`. Its semantic workflow oracle exists only in
 `benchmarks.planner.benchmark`; production orchestration never imports it.
 
@@ -49,8 +49,14 @@ nondeterminism is reported rather than converted into a normal test failure.
 - Hallucinated-tool rate uses all emitted steps.
 - Unsupported rejection and false acceptance use expected-unsupported cases.
 - Semantic-wrong-but-preflight-valid rate uses all preflight-valid emitted plans.
-- First-attempt and final semantic success use all requests. They are identical
-  in M9.1 because retry and repair do not exist.
-- Repair success and fallback rate are JSON `null` in M9.1.
+- First-attempt and final semantic success use all requests. Schema-v4 reports
+  transport-recovered and repair-recovered successes separately from initial
+  attempt successes.
+- Repair-attempt and repair-success rates report bounded complete regeneration.
+  Failover-attempt and failover-success rates report use of the one explicitly
+  configured secondary profile. Fallback remains JSON `null` because
+  deterministic fallback is not implemented.
 - Provider calls count `PlanningModel.complete()` invocations, not opaque
-  SDK-internal HTTP retries.
+  SDK-internal behavior. Built-in adapters disable SDK automatic retries; a
+  custom injected model remains responsible for any behavior hidden inside one
+  `complete()` call.

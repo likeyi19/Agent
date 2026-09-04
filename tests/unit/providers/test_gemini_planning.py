@@ -185,8 +185,19 @@ def test_missing_output_fails_cleanly(missing) -> None:
 def test_noncompleted_interaction_fails_cleanly(status) -> None:
     adapter, _ = _adapter(_interaction(status=status))
 
-    with pytest.raises(GeminiPlanningError, match="was not completed"):
+    with pytest.raises(GeminiPlanningError, match="was not completed") as raised:
         adapter.complete(prompt="prompt", response_schema=_schema())
+    assert raised.value.code == "PROVIDER_COMPLETION_INCOMPLETE"
+
+
+def test_explicit_refusal_is_terminal_and_sanitized() -> None:
+    adapter, _ = _adapter(_interaction(status="refused", output_text="secret"))
+
+    with pytest.raises(GeminiPlanningError, match="was refused") as raised:
+        adapter.complete(prompt="prompt", response_schema=_schema())
+
+    assert raised.value.code == "PROVIDER_REFUSED"
+    assert "secret" not in str(raised.value)
 
 
 def test_provider_reported_error_fails_without_exposing_error_object() -> None:
@@ -274,8 +285,9 @@ def test_missing_optional_sdk_has_clear_lazy_error(monkeypatch) -> None:
 
     with pytest.raises(
         GeminiPlanningDependencyError, match="optional Google Gen AI SDK"
-    ):
+    ) as raised:
         GeminiPlanningModel(model="gemini-test")
+    assert raised.value.code == "PLANNING_PROVIDER_DEPENDENCY_MISSING"
 
 
 def test_client_initialization_failure_is_sanitized(monkeypatch) -> None:
@@ -300,6 +312,7 @@ def test_client_initialization_failure_is_sanitized(monkeypatch) -> None:
         GeminiPlanningModel(model="gemini-test")
 
     assert str(raised.value).startswith("Gemini client initialization failed")
+    assert raised.value.code == "PLANNING_PROVIDER_CONFIGURATION_FAILED"
     assert "provider-secret" not in str(raised.value)
 
 
@@ -318,3 +331,20 @@ def test_provider_neutral_orchestration_import_does_not_import_gemini_sdk(
 
 def test_default_runtime_remains_offline() -> None:
     assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+
+
+def test_default_client_explicitly_uses_one_sdk_attempt(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+
+    calls: list[dict[str, object]] = []
+    fake_genai = ModuleType("google.genai")
+    fake_genai.Client = lambda **kwargs: calls.append(kwargs) or FakeClient()
+    google = ModuleType("google")
+    google.genai = fake_genai
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+
+    GeminiPlanningModel(model="gemini-test")
+
+    assert calls == [{"http_options": {"retry_options": {"attempts": 1}}}]

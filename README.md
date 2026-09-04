@@ -7,8 +7,8 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 ## Current status
 
 Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
-are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, and M9.3 are
-complete, while M9.4 Planning Recovery has not started.
+are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, M9.3, and M9.4
+are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -37,12 +37,14 @@ complete, while M9.4 Planning Recovery has not started.
 - Milestone 8.2: independently verified replicate-aware differential
   accessibility through a pinned edgeR v4 quasi-likelihood workflow
 - Milestone 9.1: deterministic Planner robustness benchmark with calibrated
-  hard-semantic scoring and report schema v3
-- Milestone 9.2: structured, sanitized planning diagnostics schema v2
+  hard-semantic scoring, now extended through recovery-aware report schema v4
+- Milestone 9.2: structured, sanitized planning diagnostics, now at schema v3
 - Milestone 9.2.5: provider/model abstraction through immutable
   `PlanningModelProfile` and adapter-only `PlanningModelFactoryRegistry`
 - Milestone 9.3: planning wire schema v3, registry-derived tool-discriminated
   schemas, and composable planning semantics
+- Milestone 9.4: bounded Planning Recovery with transport retry, complete Plan
+  repair, and one explicitly configured final profile failover
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -75,14 +77,21 @@ allowed.
 
 The deterministic offline Planner benchmark separates hard semantic correctness
 from canonical workflow conformance and executes in PLAN_ONLY mode with zero
-scientific calls. Structured diagnostics record sanitized provider/model
+scientific calls. Recovery-aware report schema v4 distinguishes first-attempt,
+transport-recovered, repair-recovered, and configured-failover outcomes.
+Diagnostic schema v3 records sanitized attempt ordering and provider/model
 provenance without raw request values, provider responses, or credentials.
 
-Planning recovery is not implemented yet. The current Planner has no planning
-retry, plan repair, iterative re-planning, provider/model failover, automatic
-model switching, deterministic fallback, tool filtering, keyword/regex workflow
-routing, or default user-facing LLM-first policy change. These boundaries remain
-in place before M9.4 Planning Recovery.
+Planning recovery is bounded to one initial call, either one same-profile
+transport retry or one complete same-profile Plan repair, and—only when
+explicitly configured—one final secondary-profile failover. Retry and repair
+are mutually exclusive, failover is always the last call, and the hard ceiling
+is three logical provider calls. Built-in provider adapters disable SDK retries.
+Only the final preflight-passing Plan is persisted; interrupted planning is not
+automatically replayed on resume. Deterministic fallback, automatic model
+routing/ranking, tool filtering, keyword/regex routing, and the user-facing
+LLM-first default-policy change remain unimplemented. The default planner policy
+remains deterministic and offline.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

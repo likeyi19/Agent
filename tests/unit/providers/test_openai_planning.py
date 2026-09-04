@@ -173,8 +173,9 @@ def test_missing_output_fails_cleanly(missing) -> None:
 def test_noncompleted_response_fails_cleanly(status) -> None:
     adapter, _ = _adapter(_response(status=status))
 
-    with pytest.raises(OpenAIPlanningError, match="was not completed"):
+    with pytest.raises(OpenAIPlanningError, match="was not completed") as raised:
         adapter.complete(prompt="prompt", response_schema=_schema())
+    assert raised.value.code == "PROVIDER_COMPLETION_INCOMPLETE"
 
 
 def test_provider_reported_error_fails_without_exposing_error_object() -> None:
@@ -199,6 +200,7 @@ def test_refusal_fails_without_exposing_refusal_text() -> None:
         adapter.complete(prompt="prompt", response_schema=_schema())
 
     assert refusal_text not in str(raised.value)
+    assert raised.value.code == "PROVIDER_REFUSED"
 
 
 def test_sdk_exception_is_converted_to_sanitized_adapter_error() -> None:
@@ -212,6 +214,23 @@ def test_sdk_exception_is_converted_to_sanitized_adapter_error() -> None:
     assert str(raised.value) == "OpenAI planning request failed."
     assert "api-secret" not in str(raised.value)
     assert "HTTP" not in str(raised.value)
+
+
+def test_numeric_retry_after_is_normalized_without_persisting_headers() -> None:
+    error = RuntimeError("raw provider body")
+    error.status_code = 429
+    error.response = SimpleNamespace(
+        headers={"Retry-After": "2.5", "Authorization": "Bearer secret"}
+    )
+    adapter, _ = _adapter(error=error)
+
+    with pytest.raises(OpenAIPlanningError) as raised:
+        adapter.complete(prompt="prompt", response_schema=_schema())
+
+    assert raised.value.code == "PROVIDER_RATE_LIMITED"
+    assert raised.value.retry_after_seconds == 2.5
+    assert "Authorization" not in str(raised.value)
+    assert "secret" not in str(raised.value)
 
 
 def test_credentials_are_not_copied_into_request_or_result(monkeypatch) -> None:
@@ -259,8 +278,11 @@ def test_invalid_prompt_or_schema_is_rejected_before_request() -> None:
 def test_optional_sdk_absence_has_clear_lazy_error(monkeypatch) -> None:
     monkeypatch.setitem(__import__("sys").modules, "openai", None)
 
-    with pytest.raises(OpenAIPlanningDependencyError, match="optional OpenAI SDK"):
+    with pytest.raises(
+        OpenAIPlanningDependencyError, match="optional OpenAI SDK"
+    ) as raised:
         OpenAIPlanningModel(model="gpt-test")
+    assert raised.value.code == "PLANNING_PROVIDER_DEPENDENCY_MISSING"
 
 
 def test_provider_neutral_orchestration_import_does_not_import_openai(
@@ -274,3 +296,17 @@ def test_provider_neutral_orchestration_import_does_not_import_openai(
 
     assert "openai" not in sys.modules
     assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+
+
+def test_default_client_disables_sdk_retries(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+
+    calls: list[dict[str, object]] = []
+    fake = ModuleType("openai")
+    fake.OpenAI = lambda **kwargs: calls.append(kwargs) or FakeClient()
+    monkeypatch.setitem(sys.modules, "openai", fake)
+
+    OpenAIPlanningModel(model="gpt-test")
+
+    assert calls == [{"max_retries": 0}]

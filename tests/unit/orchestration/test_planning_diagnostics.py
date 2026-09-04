@@ -145,6 +145,7 @@ def _run(
     request: AgentRequest | None = None,
     run_store: FileRunStore | None = None,
     profile: PlanningModelProfile | None = None,
+    expected_calls: int | None = None,
 ):
     registry, guard = _guarded_registry()
     result = AgentRuntime(
@@ -153,7 +154,8 @@ def _run(
         run_store=run_store,
     ).run(request or _request())
     guard.assert_not_called()
-    assert model.calls == 1
+    if expected_calls is not None:
+        assert model.calls == expected_calls
     return result
 
 
@@ -163,6 +165,14 @@ def _diagnostics(result) -> list[dict[str, object]]:
         for event in result.trace
         if "diagnostic_schema_version" in event.details
     ]
+
+
+def _last_attempt_diagnostic(result) -> dict[str, object]:
+    return next(
+        item
+        for item in reversed(_diagnostics(result))
+        if item["stage"] != "recovery"
+    )
 
 
 def test_successful_planning_emits_complete_sanitized_diagnostics() -> None:
@@ -182,15 +192,17 @@ def test_successful_planning_emits_complete_sanitized_diagnostics() -> None:
         "candidate",
         "preflight",
         "accepted",
+        "recovery",
     ]
-    assert diagnostics[-1]["code"] == "FINAL_PLAN_ACCEPTED"
-    assert diagnostics[-1]["candidate_constructed"] is True
-    assert diagnostics[-1]["candidate_preflight_passed"] is True
+    assert diagnostics[-2]["code"] == "FINAL_PLAN_ACCEPTED"
+    assert diagnostics[-1]["code"] == "PLANNING_RECOVERY_SUMMARY"
+    assert diagnostics[-2]["candidate_constructed"] is True
+    assert diagnostics[-2]["candidate_preflight_passed"] is True
     assert diagnostics[-1]["total_provider_call_count"] == 1
     assert diagnostics[-1]["repair_used"] is False
     assert diagnostics[-1]["retry_used"] is False
-    assert diagnostics[-1]["fallback_used"] is False
-    assert diagnostics[-1]["diagnostic_schema_version"] == 2
+    assert diagnostics[-1]["failover_used"] is False
+    assert diagnostics[-1]["diagnostic_schema_version"] == 3
     assert diagnostics[-1]["planning_wire_schema_version"] == 3
     assert diagnostics[-1]["profile_id"] == "unprofiled"
     assert diagnostics[-1]["provider_id"] == "custom"
@@ -219,7 +231,7 @@ def test_profile_aware_diagnostics_preserve_identity_without_raw_model(
     diagnostic = _diagnostics(restored)[-1]
     rendered = json.dumps(restored.to_dict())
 
-    assert diagnostic["diagnostic_schema_version"] == 2
+    assert diagnostic["diagnostic_schema_version"] == 3
     assert diagnostic["profile_id"] == "primary-planner"
     assert diagnostic["provider_id"] == "groq"
     assert len(diagnostic["model_identity_digest"]) == 64
@@ -237,20 +249,26 @@ def test_profile_aware_diagnostics_preserve_identity_without_raw_model(
         "PLANNING_PROVIDER_ERROR",
     ],
 )
-def test_provider_failures_are_distinct_and_never_retried(code: str) -> None:
+def test_provider_failures_are_distinct_and_transport_codes_retry_once(code: str) -> None:
     model = DiagnosticPlanningModel(
         error=PlanningModelError("raw provider body secret", code=code)
     )
 
-    result = _run(model)
-    diagnostic = _diagnostics(result)[-1]
+    expected_calls = 2 if code in {
+        "PROVIDER_RATE_LIMITED",
+        "PROVIDER_TIMEOUT",
+        "PROVIDER_CONNECTION_FAILED",
+        "PROVIDER_UNAVAILABLE",
+    } else 1
+    result = _run(model, expected_calls=expected_calls)
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.status is RunStatus.FAILED
     assert result.errors[0].code == code
     assert diagnostic["stage"] == "provider"
     assert diagnostic["code"] == code
     assert diagnostic["outcome"] == "failed"
-    assert diagnostic["total_provider_call_count"] == 1
+    assert _diagnostics(result)[-1]["total_provider_call_count"] == expected_calls
     assert "secret" not in json.dumps(result.to_dict()).casefold()
 
 
@@ -262,7 +280,7 @@ def test_unclassified_provider_exception_is_sanitized() -> None:
     result = _run(model)
 
     assert result.errors[0].code == "PLANNING_PROVIDER_ERROR"
-    assert _diagnostics(result)[-1]["stage"] == "provider"
+    assert _last_attempt_diagnostic(result)["stage"] == "provider"
     assert "api-secret" not in json.dumps(result.to_dict()).casefold()
     assert "authorization" not in json.dumps(result.to_dict()).casefold()
 
@@ -283,7 +301,7 @@ def test_untrusted_provider_error_code_is_not_persisted() -> None:
 @pytest.mark.parametrize("response", ["not json", "```json\n{}\n```"])
 def test_malformed_and_markdown_json_fail_at_parse(response: str) -> None:
     result = _run(DiagnosticPlanningModel(response))
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "PLANNER_OUTPUT_INVALID"
     assert diagnostic["stage"] == "parse"
@@ -296,7 +314,7 @@ def test_wire_schema_invalid_output_is_distinguished_from_parse() -> None:
             json.dumps({"schema_version": 3, "status": "plan", "steps": []})
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert diagnostic["stage"] == "schema"
     assert diagnostic["reason_code"] == "wire_schema_invalid"
@@ -310,7 +328,7 @@ def test_invalid_binding_reports_safe_local_position() -> None:
             _plan_response(_inspect_step(arguments={"path": invalid}))
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "PLANNER_BINDING_INVALID"
     assert diagnostic["stage"] == "argument_binding"
@@ -329,7 +347,7 @@ def test_missing_model_requested_input_reports_name_without_value() -> None:
             )
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "MISSING_REQUIRED_INPUT"
     assert diagnostic["stage"] == "argument_binding"
@@ -345,7 +363,7 @@ def test_unknown_tool_is_diagnosed_during_candidate_parsing() -> None:
             )
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "UNKNOWN_TOOL"
     assert diagnostic["stage"] == "tool_selection"
@@ -378,7 +396,7 @@ def test_missing_and_unknown_tool_arguments_are_diagnosed(
             _plan_response(_inspect_step(arguments=arguments))
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "INVALID_TOOL_ARGUMENTS"
     assert diagnostic["stage"] == "argument_binding"
@@ -392,7 +410,7 @@ def test_invalid_dependency_is_diagnosed_before_candidate_construction() -> None
             _plan_response(_inspect_step(depends_on=["missing-step"]))
         )
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "PLANNER_STRUCTURE_INVALID"
     assert diagnostic["stage"] == "dependency_reference"
@@ -426,7 +444,7 @@ def test_invalid_result_field_reference_has_safe_structural_detail() -> None:
             }
         ),
     )
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
 
     assert result.errors[0].code == "INVALID_OUTPUT_REFERENCE"
     assert diagnostic["stage"] == "dependency_reference"
@@ -448,7 +466,7 @@ def test_explicit_unsupported_response_has_no_refusal_prose() -> None:
     )
 
     result = _run(DiagnosticPlanningModel(response))
-    diagnostic = _diagnostics(result)[-1]
+    diagnostic = _last_attempt_diagnostic(result)
     serialized = json.dumps(result.to_dict())
 
     assert result.errors[0].code == "UNSUPPORTED_REQUEST"
@@ -471,7 +489,7 @@ def test_diagnostics_survive_durable_success_and_failure(tmp_path) -> None:
         run_store=success_store,
     )
     restored_success = success_store.load(success.run_id).to_run_result()
-    assert _diagnostics(restored_success)[-1]["code"] == "FINAL_PLAN_ACCEPTED"
+    assert _diagnostics(restored_success)[-1]["code"] == "PLANNING_RECOVERY_SUMMARY"
 
     failure_store = FileRunStore(tmp_path / "failure")
     failure = _run(
@@ -481,7 +499,7 @@ def test_diagnostics_survive_durable_success_and_failure(tmp_path) -> None:
     )
     restored_failure = failure_store.load(failure.run_id).to_run_result()
     assert restored_failure.errors[0].details["stage"] == "parse"
-    assert _diagnostics(restored_failure)[-1]["stage"] == "parse"
+    assert _last_attempt_diagnostic(restored_failure)["stage"] == "parse"
 
     unsupported_store = FileRunStore(tmp_path / "unsupported")
     unsupported_response = json.dumps(
@@ -501,7 +519,7 @@ def test_diagnostics_survive_durable_success_and_failure(tmp_path) -> None:
         unsupported.run_id
     ).to_run_result()
     assert restored_unsupported.errors[0].details["stage"] == "unsupported"
-    assert _diagnostics(restored_unsupported)[-1]["stage"] == "unsupported"
+    assert _last_attempt_diagnostic(restored_unsupported)["stage"] == "unsupported"
 
 
 def test_durable_diagnostics_do_not_leak_prompt_input_or_response_values(
@@ -571,4 +589,4 @@ def test_noncanonical_direct_embedding_remains_preflight_valid() -> None:
 
     assert result.status is RunStatus.PLANNED
     assert result.verification is not None and result.verification.passed
-    assert _diagnostics(result)[-1]["code"] == "FINAL_PLAN_ACCEPTED"
+    assert _last_attempt_diagnostic(result)["code"] == "FINAL_PLAN_ACCEPTED"

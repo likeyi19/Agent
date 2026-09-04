@@ -11,6 +11,7 @@ from agent.schemas import JsonValue
 from agent.orchestration.planning_model import (
     PlanningModelError,
     classify_provider_exception,
+    normalized_retry_after_seconds,
 )
 
 
@@ -50,19 +51,24 @@ def _default_client() -> object:
     except ImportError as exc:
         raise GroqPlanningDependencyError(
             "The optional OpenAI SDK is not installed. Install the `openai` "
-            "package to use GroqPlanningModel."
+            "package to use GroqPlanningModel.",
+            code="PLANNING_PROVIDER_DEPENDENCY_MISSING",
         ) from exc
 
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key or not api_key.strip():
         raise GroqPlanningError(
             "Groq client initialization failed. Ensure GROQ_API_KEY is "
-            "configured in the runtime environment."
+            "configured in the runtime environment.",
+            code="PLANNING_PROVIDER_CONFIGURATION_FAILED",
         )
     try:
-        return OpenAI(api_key=api_key, base_url=_GROQ_BASE_URL)
+        return OpenAI(api_key=api_key, base_url=_GROQ_BASE_URL, max_retries=0)
     except Exception as exc:
-        raise GroqPlanningError("Groq client initialization failed.") from exc
+        raise GroqPlanningError(
+            "Groq client initialization failed.",
+            code="PLANNING_PROVIDER_CONFIGURATION_FAILED",
+        ) from exc
 
 
 def _validate_client(client: object) -> object:
@@ -124,10 +130,15 @@ def _contains_refusal(response: object) -> bool:
 def _completed_output_text(response: object) -> str:
     if _field(response, "error") is not None:
         raise GroqPlanningError("Groq planning response reported a failure.")
-    if _field(response, "status") != "completed":
-        raise GroqPlanningError("Groq planning response was not completed.")
     if _contains_refusal(response):
-        raise GroqPlanningError("Groq planning response was refused.")
+        raise GroqPlanningError(
+            "Groq planning response was refused.", code="PROVIDER_REFUSED"
+        )
+    if _field(response, "status") != "completed":
+        raise GroqPlanningError(
+            "Groq planning response was not completed.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
+        )
     try:
         output_text = _field(response, "output_text")
     except Exception as exc:
@@ -136,7 +147,8 @@ def _completed_output_text(response: object) -> str:
         ) from exc
     if not isinstance(output_text, str) or not output_text.strip():
         raise GroqPlanningError(
-            "Groq planning response did not contain output text."
+            "Groq planning response did not contain output text.",
+            code="PROVIDER_COMPLETION_INCOMPLETE",
         )
     return output_text
 
@@ -201,7 +213,11 @@ class GroqPlanningModel:
             code, message = classify_provider_exception(exc)
             if code == "PLANNING_PROVIDER_ERROR":
                 message = "Groq planning request failed."
-            raise GroqPlanningError(message, code=code) from exc
+            raise GroqPlanningError(
+                message,
+                code=code,
+                retry_after_seconds=normalized_retry_after_seconds(exc),
+            ) from exc
         return _completed_output_text(response)
 
 

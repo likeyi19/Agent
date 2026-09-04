@@ -68,8 +68,19 @@ class PlanningModelError(RuntimeError):
         message: str = "Planning provider request failed.",
         *,
         code: str = "PLANNING_PROVIDER_ERROR",
+        retry_after_seconds: float | None = None,
     ) -> None:
+        if retry_after_seconds is not None and (
+            isinstance(retry_after_seconds, bool)
+            or not isinstance(retry_after_seconds, (int, float))
+            or not math.isfinite(float(retry_after_seconds))
+            or retry_after_seconds < 0
+        ):
+            raise ValueError("`retry_after_seconds` must be nonnegative or None.")
         self.code = code
+        self.retry_after_seconds = (
+            None if retry_after_seconds is None else float(retry_after_seconds)
+        )
         super().__init__(message)
 
 
@@ -82,8 +93,10 @@ def classify_provider_exception(exception: Exception) -> tuple[str, str]:
         code = "PROVIDER_AUTHENTICATION_FAILED"
     elif status_code == 429 or "RateLimitError" in names:
         code = "PROVIDER_RATE_LIMITED"
-    elif isinstance(exception, TimeoutError) or names.intersection(
-        {"APITimeoutError", "ReadTimeout", "ConnectTimeout"}
+    elif (
+        status_code == 408
+        or isinstance(exception, TimeoutError)
+        or names.intersection({"APITimeoutError", "ReadTimeout", "ConnectTimeout"})
     ):
         code = "PROVIDER_TIMEOUT"
     elif isinstance(exception, ConnectionError) or names.intersection(
@@ -95,6 +108,32 @@ def classify_provider_exception(exception: Exception) -> tuple[str, str]:
     else:
         code = "PLANNING_PROVIDER_ERROR"
     return code, safe_message_for(code)
+
+
+def normalized_retry_after_seconds(exception: Exception) -> float | None:
+    """Read only a safe numeric Retry-After value from structured headers."""
+
+    response = getattr(exception, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        headers = getattr(exception, "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    raw = next(
+        (
+            value
+            for key, value in headers.items()
+            if isinstance(key, str) and key.lower() == "retry-after"
+        ),
+        None,
+    )
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
 
 
 @runtime_checkable
@@ -119,4 +158,5 @@ __all__ = [
     "PlanningModelError",
     "PlanningModelProfile",
     "classify_provider_exception",
+    "normalized_retry_after_seconds",
 ]

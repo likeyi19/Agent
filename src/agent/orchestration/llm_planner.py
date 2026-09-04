@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from agent.schemas import (
     AgentPlan,
@@ -22,11 +22,22 @@ from agent.schemas import (
 from .planner import PlannerError
 from .planning_diagnostics import (
     DiagnosedPlanningAttempt,
+    PlanningAttemptKind,
     PlanningDiagnostic,
     PlanningDiagnosticContext,
     PlanningDiagnosticStage,
 )
 from .planning_model import PlanningModel, PlanningModelError, PlanningModelProfile
+from .planning_recovery import (
+    CandidateValidator,
+    PlanningCancellationCheck,
+    PlanningDiagnosticSink,
+    PlanningRepairContext,
+    PlanningRecoveryCoordinator,
+    PlanningRecoveryPolicy,
+    PlanningSleeper,
+    RecoveredPlanningAttempt,
+)
 from .registry import ArgumentSpec, ResultFieldPlanningSemantics, ToolRegistry
 
 
@@ -47,8 +58,30 @@ _PROVIDER_ERROR_CODES = frozenset(
         "PROVIDER_TIMEOUT",
         "PROVIDER_CONNECTION_FAILED",
         "PROVIDER_UNAVAILABLE",
+        "PROVIDER_COMPLETION_INCOMPLETE",
+        "PROVIDER_REFUSED",
+        "PLANNING_PROVIDER_DEPENDENCY_MISSING",
+        "PLANNING_PROVIDER_CONFIGURATION_FAILED",
     }
 )
+_FACTORY_CONFIGURATION_CODES = frozenset(
+    {
+        "PLANNING_MODEL_PROFILE_DISABLED",
+        "PLANNING_MODEL_CAPABILITY_UNSUPPORTED",
+        "PLANNING_MODEL_PROVIDER_UNKNOWN",
+        "PLANNING_PROVIDER_DEPENDENCY_MISSING",
+        "PLANNING_PROVIDER_CONFIGURATION_FAILED",
+    }
+)
+
+
+class PlanningModelFactoryResolver(Protocol):
+    """Structural view of the accepted non-routing model factory registry."""
+
+    @property
+    def provider_ids(self) -> tuple[str, ...]: ...
+
+    def create(self, profile: PlanningModelProfile) -> PlanningModel: ...
 
 
 class _DuplicateJsonKey(ValueError):
@@ -346,7 +379,13 @@ def _json_value_type(value: JsonValue) -> str:
     return "object"
 
 
-def _build_prompt(request: AgentRequest, registry: ToolRegistry) -> str:
+def _build_prompt(
+    request: AgentRequest,
+    registry: ToolRegistry,
+    *,
+    repair_context: PlanningRepairContext | None = None,
+    failover_context: PlanningRepairContext | None = None,
+) -> str:
     available_inputs = tuple(
         {
             "name": name,
@@ -392,6 +431,31 @@ def _build_prompt(request: AgentRequest, registry: ToolRegistry) -> str:
         },
         "tools": _sanitized_catalog(registry),
     }
+    if repair_context is not None:
+        prompt_payload["repair"] = {
+            "instruction": (
+                "The previous candidate planning decision was rejected at the "
+                "specified structural stage. Generate a complete new planning "
+                "decision from the original request and contracts. Correct the "
+                "diagnosed planning error. Do not patch or quote the previous "
+                "output. Preserve all original request-supplied scientific "
+                "parameters and produce only a complete schema-v3 decision."
+            ),
+            "diagnostic": repair_context.to_prompt_dict(),
+        }
+    if failover_context is not None:
+        prompt_payload["failover"] = {
+            "instruction": (
+                "A configured secondary planning model is making the final "
+                "planning attempt after an objectively invalid candidate. "
+                "Generate a complete new planning decision from the original "
+                "request and contracts. Correct the diagnosed structural error. "
+                "Do not patch or quote any previous output. Preserve all original "
+                "request-supplied scientific parameters and produce only a "
+                "complete schema-v3 decision."
+            ),
+            "diagnostic": failover_context.to_prompt_dict(),
+        }
     return json.dumps(
         prompt_payload,
         ensure_ascii=False,
@@ -851,6 +915,10 @@ class LLMPlanner:
         model: PlanningModel,
         *,
         profile: PlanningModelProfile | None = None,
+        recovery_policy: PlanningRecoveryPolicy | None = None,
+        retry_sleeper: PlanningSleeper | None = None,
+        recovery_profiles: tuple[PlanningModelProfile, ...] = (),
+        model_factory_registry: PlanningModelFactoryResolver | None = None,
     ) -> None:
         if not callable(getattr(model, "complete", None)):
             raise TypeError("`model` must provide a callable complete() method.")
@@ -860,13 +928,72 @@ class LLMPlanner:
             raise ValueError("`profile` must be enabled.")
         if profile is not None and not profile.supports_structured_output:
             raise ValueError("`profile` must support structured output.")
+        if not isinstance(recovery_profiles, tuple) or not all(
+            isinstance(candidate, PlanningModelProfile)
+            for candidate in recovery_profiles
+        ):
+            raise TypeError(
+                "`recovery_profiles` must be a tuple of PlanningModelProfile values."
+            )
+        if len(recovery_profiles) > 1:
+            raise ValueError("At most one secondary recovery profile is supported.")
+        if recovery_profiles and profile is None:
+            raise ValueError("A secondary profile requires an explicit primary profile.")
+        if model_factory_registry is not None and not recovery_profiles:
+            raise ValueError(
+                "A model factory registry requires one configured recovery profile."
+            )
+        if recovery_profiles:
+            secondary = recovery_profiles[0]
+            if not secondary.enabled:
+                raise ValueError("The secondary recovery profile must be enabled.")
+            if not secondary.supports_structured_output:
+                raise ValueError(
+                    "The secondary recovery profile must support structured output."
+                )
+            assert profile is not None
+            duplicate_identity = (
+                secondary.provider_id,
+                secondary.model_id,
+                secondary.request_timeout_seconds,
+            ) == (
+                profile.provider_id,
+                profile.model_id,
+                profile.request_timeout_seconds,
+            )
+            if secondary.profile_id == profile.profile_id or duplicate_identity:
+                raise ValueError(
+                    "The secondary recovery profile must differ from the primary."
+                )
+            if model_factory_registry is None:
+                raise ValueError(
+                    "A secondary recovery profile requires a model factory registry."
+                )
+            provider_ids = getattr(model_factory_registry, "provider_ids", None)
+            if (
+                not isinstance(provider_ids, tuple)
+                or not all(isinstance(value, str) for value in provider_ids)
+                or secondary.provider_id not in provider_ids
+                or not callable(getattr(model_factory_registry, "create", None))
+            ):
+                raise ValueError(
+                    "The secondary recovery profile provider is not registered."
+                )
         self._model = model
         self._model_id = _sanitize_model_id(getattr(model, "model_id", None))
         self._profile = profile
+        self._recovery_profiles = recovery_profiles
+        self._model_factory_registry = model_factory_registry
         self._name = (
             f"llm:{self._model_id}"
             if profile is None
             else f"llm-profile:{profile.profile_id}"
+        )
+        coordinator_kwargs = {}
+        if retry_sleeper is not None:
+            coordinator_kwargs["sleeper"] = retry_sleeper
+        self._recovery = PlanningRecoveryCoordinator(
+            recovery_policy, **coordinator_kwargs
         )
 
     @property
@@ -881,6 +1008,14 @@ class LLMPlanner:
     def profile(self) -> PlanningModelProfile | None:
         return self._profile
 
+    @property
+    def recovery_policy(self) -> PlanningRecoveryPolicy:
+        return self._recovery.policy
+
+    @property
+    def recovery_profiles(self) -> tuple[PlanningModelProfile, ...]:
+        return self._recovery_profiles
+
     def plan(self, request: AgentRequest, registry: ToolRegistry) -> AgentPlan:
         """Return the accepted candidate while preserving the Planner protocol."""
 
@@ -890,6 +1025,11 @@ class LLMPlanner:
         self,
         request: AgentRequest,
         registry: ToolRegistry,
+        *,
+        attempt_kind: PlanningAttemptKind = PlanningAttemptKind.INITIAL,
+        logical_attempt_index: int = 1,
+        provider_call_index: int = 1,
+        repair_context: PlanningRepairContext | None = None,
     ) -> DiagnosedPlanningAttempt:
         """Construct one plan and sanitized diagnostics with exactly one model call."""
 
@@ -897,6 +1037,17 @@ class LLMPlanner:
             raise TypeError("`request` must be an AgentRequest.")
         if not isinstance(registry, ToolRegistry):
             raise TypeError("`registry` must be a ToolRegistry.")
+        if attempt_kind is PlanningAttemptKind.REPAIR and repair_context is None:
+            raise ValueError(
+                "Repair attempts require one sanitized candidate-failure context."
+            )
+        if attempt_kind not in {
+            PlanningAttemptKind.REPAIR,
+            PlanningAttemptKind.FAILOVER,
+        } and repair_context is not None:
+            raise ValueError(
+                "Candidate-failure context is allowed only for regeneration."
+            )
 
         profile_id = "unprofiled" if self._profile is None else self._profile.profile_id
         provider_id = "custom" if self._profile is None else self._profile.provider_id
@@ -912,19 +1063,77 @@ class LLMPlanner:
             catalog_fingerprint=_catalog_fingerprint(registry),
             offered_tool_names=registry.names(),
             planning_wire_schema_version=_SCHEMA_VERSION,
+            attempt_kind=attempt_kind,
+            logical_attempt_index=logical_attempt_index,
+            provider_call_index=provider_call_index,
         )
-        diagnostics: list[PlanningDiagnostic] = [
+        diagnostics: list[PlanningDiagnostic] = []
+        if attempt_kind is PlanningAttemptKind.REPAIR:
+            assert repair_context is not None
+            diagnostics.append(
+                context.diagnostic(
+                    PlanningDiagnosticStage.RECOVERY,
+                    "PLAN_REPAIR_CALL_STARTED",
+                    "started",
+                    previous_failure_stage=(
+                        repair_context.previous_failure_stage
+                    ),
+                    previous_failure_code=repair_context.previous_failure_code,
+                    recovery_action="repair",
+                    repair_used=True,
+                    recovery_policy_fingerprint=self._recovery.policy.fingerprint,
+                )
+            )
+        elif attempt_kind is PlanningAttemptKind.FAILOVER:
+            diagnostics.append(
+                context.diagnostic(
+                    PlanningDiagnosticStage.RECOVERY,
+                    "PROFILE_FAILOVER_CALL_STARTED",
+                    "started",
+                    previous_failure_stage=(
+                        None
+                        if repair_context is None
+                        else repair_context.previous_failure_stage
+                    ),
+                    previous_failure_code=(
+                        None
+                        if repair_context is None
+                        else repair_context.previous_failure_code
+                    ),
+                    recovery_action="failover",
+                    failover_used=True,
+                    recovery_policy_fingerprint=self._recovery.policy.fingerprint,
+                )
+            )
+        diagnostics.append(
             context.diagnostic(
                 PlanningDiagnosticStage.PROVIDER,
                 "PROVIDER_CALL_STARTED",
                 "started",
             )
-        ]
-        prompt = _build_prompt(request, registry)
+        )
+        prompt = _build_prompt(
+            request,
+            registry,
+            repair_context=(
+                repair_context
+                if attempt_kind is PlanningAttemptKind.REPAIR
+                else None
+            ),
+            failover_context=(
+                repair_context
+                if attempt_kind is PlanningAttemptKind.FAILOVER
+                and repair_context is not None
+                and repair_context.previous_failure_stage
+                is not PlanningDiagnosticStage.PROVIDER
+                else None
+            ),
+        )
+        response_schema = _response_schema(registry, request)
         try:
             response = self._model.complete(
                 prompt=prompt,
-                response_schema=_response_schema(registry, request),
+                response_schema=response_schema,
             )
         except PlanningModelError as exc:
             provider_code = (
@@ -938,6 +1147,7 @@ class LLMPlanner:
                     provider_code,
                     "failed",
                     reason_code="provider_call_failed",
+                    retry_after_seconds=exc.retry_after_seconds,
                 )
             )
             raise PlannerError(
@@ -1068,6 +1278,119 @@ class LLMPlanner:
             )
         )
         return DiagnosedPlanningAttempt(plan, context, tuple(diagnostics))
+
+    def plan_with_recovery(
+        self,
+        request: AgentRequest,
+        registry: ToolRegistry,
+        *,
+        validate_candidate: CandidateValidator,
+        diagnostic_sink: PlanningDiagnosticSink,
+        should_cancel: PlanningCancellationCheck | None = None,
+    ) -> RecoveredPlanningAttempt:
+        """Acquire one Plan with bounded primary recovery and configured failover."""
+
+        secondary_planner: LLMPlanner | None = None
+
+        def configured_secondary(
+            logical_index: int,
+            provider_call_index: int,
+            failure_context: PlanningRepairContext | None,
+        ) -> None:
+            nonlocal secondary_planner
+            if secondary_planner is not None:
+                return
+            if (
+                not self._recovery_profiles
+                or self._model_factory_registry is None
+            ):  # pragma: no cover - coordinator/configuration invariant
+                raise RuntimeError("Failover was attempted without configuration.")
+            secondary_profile = self._recovery_profiles[0]
+            try:
+                secondary_model = self._model_factory_registry.create(
+                    secondary_profile
+                )
+                secondary_planner = LLMPlanner(
+                    secondary_model,
+                    profile=secondary_profile,
+                    recovery_policy=self._recovery.policy,
+                )
+            except Exception as exc:
+                raw_code = getattr(exc, "code", None)
+                code = (
+                    raw_code
+                    if raw_code in _FACTORY_CONFIGURATION_CODES
+                    else "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+                )
+                context = PlanningDiagnosticContext(
+                    profile_id=secondary_profile.profile_id,
+                    provider_id=secondary_profile.provider_id,
+                    model_identity_digest=hashlib.sha256(
+                        secondary_profile.model_id.encode("utf-8")
+                    ).hexdigest(),
+                    catalog_fingerprint=_catalog_fingerprint(registry),
+                    offered_tool_names=registry.names(),
+                    planning_wire_schema_version=_SCHEMA_VERSION,
+                    attempt_kind=PlanningAttemptKind.FAILOVER,
+                    logical_attempt_index=logical_index,
+                    provider_call_index=provider_call_index,
+                )
+                diagnostic = context.diagnostic(
+                    PlanningDiagnosticStage.PROVIDER,
+                    code,
+                    "failed",
+                    previous_failure_stage=(
+                        None
+                        if failure_context is None
+                        else failure_context.previous_failure_stage
+                    ),
+                    previous_failure_code=(
+                        None
+                        if failure_context is None
+                        else failure_context.previous_failure_code
+                    ),
+                    reason_code="failover_model_construction_failed",
+                    recovery_action="failover",
+                    failover_used=True,
+                    recovery_policy_fingerprint=self._recovery.policy.fingerprint,
+                )
+                raise PlannerError(
+                    code,
+                    "Configured secondary planning model could not be constructed.",
+                    category=ErrorCategory.ENVIRONMENT_ERROR,
+                    diagnostics=(diagnostic,),
+                ) from exc
+            return
+
+        def attempt(
+            kind: PlanningAttemptKind,
+            logical_index: int,
+            provider_call_index: int,
+            repair_context: PlanningRepairContext | None,
+        ) -> DiagnosedPlanningAttempt:
+            planner = self
+            if kind is PlanningAttemptKind.FAILOVER:
+                if secondary_planner is None:  # pragma: no cover - invariant
+                    raise RuntimeError("Failover model was not prepared.")
+                planner = secondary_planner
+            return planner.plan_with_diagnostics(
+                request,
+                registry,
+                attempt_kind=kind,
+                logical_attempt_index=logical_index,
+                provider_call_index=provider_call_index,
+                repair_context=repair_context,
+            )
+
+        return self._recovery.acquire(
+            attempt=attempt,
+            validate_candidate=validate_candidate,
+            diagnostic_sink=diagnostic_sink,
+            should_cancel=should_cancel,
+            prepare_failover=(
+                configured_secondary if self._recovery_profiles else None
+            ),
+        )
 
 
 def _response_byte_count(response: object) -> int | None:

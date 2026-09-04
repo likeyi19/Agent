@@ -213,6 +213,19 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "PROVIDER_UNAVAILABLE": ErrorPolicyEntry(
         "The planning provider is unavailable.", _USER
     ),
+    "PROVIDER_COMPLETION_INCOMPLETE": ErrorPolicyEntry(
+        "The planning provider returned an incomplete completion.", _USER
+    ),
+    "PROVIDER_REFUSED": ErrorPolicyEntry(
+        "The planning provider refused the request.", _NO
+    ),
+    "PLANNING_PROVIDER_DEPENDENCY_MISSING": ErrorPolicyEntry(
+        "A required planning-provider dependency is unavailable.", _USER
+    ),
+    "PLANNING_PROVIDER_CONFIGURATION_FAILED": ErrorPolicyEntry(
+        "The planning provider could not be initialized from its configuration.",
+        _USER,
+    ),
     "MISSING_REQUIRED_INPUT": ErrorPolicyEntry(
         "The request is missing a required structured input.", _USER
     ),

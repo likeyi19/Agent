@@ -7,8 +7,7 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 ## Current status
 
 Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
-are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, M9.3, M9.4,
-and M9.4.5 are complete.
+are complete. Milestone 9 is complete through M9.5.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -47,6 +46,8 @@ and M9.4.5 are complete.
   repair, and one explicitly configured final profile failover
 - Milestone 9.4.5: LLM-first user-facing new-run policy with explicit
   deterministic mode and provider-free resume/cancel
+- Milestone 9.5: final LLM Planner robustness acceptance and Milestone 9
+  closeout
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -96,6 +97,27 @@ automatically replayed on resume. Application-owned LLM construction uses this
 recovery path automatically, including an optional explicitly configured
 secondary profile. Deterministic fallback, automatic model routing/ranking,
 tool filtering, and keyword/regex routing remain unimplemented.
+
+Milestone 9 is complete. Its final accepted planning path is:
+
+```text
+User Request
+→ LLM-first Planner
+→ exact tool/schema/data-flow planning interface
+→ candidate AgentPlan
+→ deterministic validation
+→ bounded retry / repair / configured failover
+→ final AgentPlan
+→ authoritative preflight
+→ scientific execution
+```
+
+The Planner core remains provider/model independent, deterministic planning is
+explicit offline infrastructure, and no automatic deterministic fallback is
+implemented. Planning Recovery permits at most three logical provider calls.
+PLAN_ONLY executes zero scientific tools, while resume and cancel require no
+provider, model, SDK, or credential. Final acceptance retains benchmark report
+schema v4 and sanitized planning diagnostic schema v3.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

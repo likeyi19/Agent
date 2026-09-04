@@ -57,6 +57,52 @@ SUPPORTED_WORKFLOWS = {
     "raw-to-replicate-differential-accessibility",
 }
 
+REPRESENTATIVE_ACCEPTANCE_DAGS = {
+    "inspect_canonical": ("inspect_scATAC",),
+    "embedding_terse": ("inspect_scATAC", "epizoo_embed_cells"),
+    "downstream_canonical": (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "build_cell_neighbors",
+        "cluster_cells",
+        "compute_cell_umap",
+    ),
+    "clustering_evaluation_canonical": (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "build_cell_neighbors",
+        "cluster_cells",
+        "evaluate_cell_clustering",
+    ),
+    "label_transfer_canonical": (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "transfer_cell_labels",
+    ),
+    "transfer_and_annotation_evaluation": (
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "inspect_scATAC",
+        "epizoo_embed_cells",
+        "transfer_cell_labels",
+        "evaluate_cell_annotation",
+    ),
+    "pseudobulk_canonical": (
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
+    ),
+    "differential_accessibility_fixed": (
+        "run_replicate_differential_accessibility",
+    ),
+    "differential_accessibility_raw": (
+        "validate_scATAC_feature_space",
+        "build_replicate_pseudobulk",
+        "run_replicate_differential_accessibility",
+    ),
+}
+
 
 @pytest.fixture(scope="module")
 def cases() -> tuple[BenchmarkCase, ...]:
@@ -135,6 +181,32 @@ def test_corpus_oracle_responses_match_every_structural_expectation(
 
     assert all(score.semantically_correct for score in report.cases)
     assert report.metrics["scientific_call_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_tools"), REPRESENTATIVE_ACCEPTANCE_DAGS.items()
+)
+def test_final_supported_workflow_dags_are_semantic_preflight_valid_plans(
+    cases: tuple[BenchmarkCase, ...],
+    case_id: str,
+    expected_tools: tuple[str, ...],
+) -> None:
+    """Exercise the complete representative DAG through the production Planner."""
+
+    score = run_benchmark((_case(cases, case_id),)).cases[0]
+
+    assert score.hard_semantic_correct
+    assert score.syntactically_valid_plan
+    assert score.preflight_valid_plan
+    assert score.final_planning_success
+    assert score.actual_tool_sequence == expected_tools
+    assert score.binding_correct == score.binding_total
+    assert (
+        score.dependency_reference_correct
+        == score.dependency_reference_total
+    )
+    assert score.provider_calls == 1
+    assert score.scientific_calls == 0
 
 
 def test_provider_step_ids_and_descriptions_are_normalized_away(

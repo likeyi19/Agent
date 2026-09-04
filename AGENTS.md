@@ -1715,10 +1715,10 @@ peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
 
-### Milestone 9.1–9.4.5 — Planner robustness, recovery, and LLM-first application
+### Milestone 9.1–9.5 — Robust LLM planning and recovery
 
-M9.1, M9.2, M9.2.5, M9.3, M9.4, and M9.4.5 are complete. Milestone 9 remains
-in progress pending final robustness acceptance.
+M9.1, M9.2, M9.2.5, M9.3, M9.4, M9.4.5, and M9.5 are complete. Milestone 9 is
+complete.
 
 #### LLM and Planner responsibility boundary
 
@@ -1813,6 +1813,41 @@ prompt-based routing, and tool filtering remain deferred. The CLI defaults to
 LLM mode with explicit provider/model configuration, exposes
 `--planner deterministic`, and temporarily retains `--provider deterministic`
 as a compatibility alias.
+
+#### Final Milestone 9 acceptance
+
+The accepted end-to-end planning path is:
+
+```text
+User Request
+→ LLM-first Planner
+→ exact tool/schema/data-flow planning interface
+→ candidate AgentPlan
+→ deterministic validation
+→ bounded retry / repair / configured failover
+→ final AgentPlan
+→ authoritative preflight
+→ scientific execution
+```
+
+Deterministic offline acceptance covers inspection, embedding, downstream
+analysis, clustering evaluation, label transfer and evaluation, pseudobulk,
+and both fixed-artifact and raw-to-pseudobulk differential accessibility. It
+checks input and `StepOutputRef` provenance, dependencies, scientific parameter
+preservation, reference/query separation, evaluation-only ground truth,
+alternative valid DAGs, terminal rejection, and zero scientific execution in
+PLAN_ONLY. The global recovery ceiling remains three logical provider calls:
+one initial call, one mutually exclusive same-profile retry or complete Plan
+repair, and one explicitly configured final failover call. Failover cannot
+nestedly recover, and no fourth call or automatic deterministic fallback is
+possible.
+
+The Planner core remains provider/model independent. Benchmark report schema
+v4 and diagnostic schema v3 remain authoritative; raw prompts, structured input
+values, provider responses, exception prose, request IDs, headers, credentials,
+and tokens remain excluded from durable diagnostics. Run-state schema remains
+v3, only a final preflight-passing Plan is durable, planning interruption is not
+automatically replayed, and resume/cancel remain provider-free.
 
 ## Development environment
 

@@ -13,6 +13,7 @@ from agent.application import ApplicationStatus, ResearchAgentApplication
 from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
+    DeterministicPlanner,
     PlanStep,
     RunStatus,
     StepOutputRef,
@@ -96,7 +97,9 @@ def test_runtime_evidence_and_figureless_report_complete_for_m81(tmp_path: Path)
 
 def test_application_completes_and_terminal_resume_reuses_m81_outputs(tmp_path: Path) -> None:
     source = _raw(tmp_path / "raw.h5ad")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = ResearchAgentApplication(
+        tmp_path / "workspace", planner=DeterministicPlanner()
+    )
     result = application.run(
         AgentRequest(
             "m81-application",

@@ -1213,6 +1213,10 @@ ResearchAgentApplication(
     workspace_root,
     *,
     planner=None,
+    primary_planning_profile=None,
+    recovery_planning_profile=None,
+    planning_model_factory_registry=None,
+    planning_recovery_policy=None,
     registry=None,
     executor=None,
 )
@@ -1224,6 +1228,11 @@ workspace. Scientific execution remains exclusively in the existing
 `AgentRuntime`; the application composes accepted public APIs and contains no
 second planner, executor, verifier, scientific pipeline, or cancellation state
 system.
+
+Application-owned new runs require an explicit primary LLM profile unless an
+explicit Planner, including `DeterministicPlanner`, is injected. Missing LLM
+configuration is rejected before durable run-state creation. Resume and cancel
+do not require planning configuration.
 
 The immutable JSON-safe application schemas are:
 
@@ -1706,10 +1715,10 @@ peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
 
-### Milestone 9.1–9.4 — Planner robustness, interface, and bounded recovery
+### Milestone 9.1–9.4.5 — Planner robustness, recovery, and LLM-first application
 
-M9.1, M9.2, M9.2.5, M9.3, and M9.4 are complete and accepted. Milestone 9
-remains in progress pending later user-facing default-policy work.
+M9.1, M9.2, M9.2.5, M9.3, M9.4, and M9.4.5 are complete. Milestone 9 remains
+in progress pending final robustness acceptance.
 
 #### LLM and Planner responsibility boundary
 
@@ -1787,9 +1796,23 @@ preflight-passing Plan becomes durable; interrupted planning before that point
 is not automatically replayed, while resume after Plan persistence remains
 planner-free. Run-state schema remains v3.
 
-Deterministic fallback, automatic model routing/ranking, prompt-based routing,
-tool filtering, and the user-facing LLM-first default policy remain deferred.
-The default planner policy remains deterministic and offline.
+#### User-facing default policy
+
+Application-owned new runs are LLM-first and require an explicit primary
+`PlanningModelProfile`; missing configuration fails before durable run-state
+creation. An explicitly injected Planner remains authoritative, and
+deterministic application planning requires explicit selection. Configured LLM
+runs automatically use the existing M9.4 recovery layer, with at most one
+explicit optional secondary profile. No provider or model is inferred from
+credentials, prompts, or benchmark results.
+
+Low-level `AgentRuntime()` remains deterministic by default for compatibility
+and offline infrastructure. Resume and cancel remain planner-, provider-, SDK-,
+and credential-free. Deterministic fallback, automatic model routing/ranking,
+prompt-based routing, and tool filtering remain deferred. The CLI defaults to
+LLM mode with explicit provider/model configuration, exposes
+`--planner deterministic`, and temporarily retains `--provider deterministic`
+as a compatibility alias.
 
 ## Development environment
 

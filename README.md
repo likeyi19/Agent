@@ -7,8 +7,8 @@ Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embeddin
 ## Current status
 
 Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
-are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, M9.3, and M9.4
-are complete.
+are complete. Milestone 9 is in progress: M9.1, M9.2, M9.2.5, M9.3, M9.4,
+and M9.4.5 are complete.
 
 - Milestone 1: validated EpiZoo scientific backend
 - Milestone 2: reusable scientific tool layer
@@ -45,6 +45,8 @@ are complete.
   schemas, and composable planning semantics
 - Milestone 9.4: bounded Planning Recovery with transport retry, complete Plan
   repair, and one explicitly configured final profile failover
+- Milestone 9.4.5: LLM-first user-facing new-run policy with explicit
+  deterministic mode and provider-free resume/cancel
 
 The current Agent can construct and execute validated scientific workflows
 through an explicit tool registry, with structured planning, verification,
@@ -62,10 +64,12 @@ before execution.
 `PlanningModelProfile` and `PlanningModelFactoryRegistry` decouple deployment
 configuration and provider-adapter construction from planning behavior. OpenAI,
 Gemini, Groq, and custom `PlanningModel` injection remain supported; no
-production model is hard-coded as the Agent's intelligence. The current default
-planner policy remains deterministic and offline rather than LLM-first.
-`DeterministicPlanner` remains available for deterministic/offline use and is
-not a semantic oracle for LLM plans.
+production model is hard-coded as the Agent's intelligence. User-facing new
+runs are LLM-first when supplied an explicit primary profile; missing LLM
+configuration fails clearly instead of silently selecting deterministic
+planning. `DeterministicPlanner` remains available through explicit application
+selection and as the unchanged default of low-level `AgentRuntime`; it is not a
+semantic oracle for LLM plans.
 
 Planning wire schema v3 uses registry-derived, tool-discriminated structured
 output: the selected tool fixes its exact keyed argument contract, input and
@@ -88,10 +92,10 @@ explicitly configured—one final secondary-profile failover. Retry and repair
 are mutually exclusive, failover is always the last call, and the hard ceiling
 is three logical provider calls. Built-in provider adapters disable SDK retries.
 Only the final preflight-passing Plan is persisted; interrupted planning is not
-automatically replayed on resume. Deterministic fallback, automatic model
-routing/ranking, tool filtering, keyword/regex routing, and the user-facing
-LLM-first default-policy change remain unimplemented. The default planner policy
-remains deterministic and offline.
+automatically replayed on resume. Application-owned LLM construction uses this
+recovery path automatically, including an optional explicitly configured
+secondary profile. Deterministic fallback, automatic model routing/ranking,
+tool filtering, and keyword/regex routing remain unimplemented.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables
@@ -432,6 +436,10 @@ ResearchAgentApplication(
     workspace_root,
     *,
     planner=None,
+    primary_planning_profile=None,
+    recovery_planning_profile=None,
+    planning_model_factory_registry=None,
+    planning_recovery_policy=None,
     registry=None,
     executor=None,
 )
@@ -439,9 +447,17 @@ ResearchAgentApplication(
 
 It exposes `run(request)`, `resume(run_id)`, and `cancel(run_id)`. The
 application owns its `FileRunStore`, while all scientific execution continues
-to occur exclusively through `AgentRuntime`. It composes the existing evidence,
-visualization, and deterministic-report APIs rather than duplicating their
-logic.
+to occur exclusively through `AgentRuntime`. An explicitly injected Planner is
+authoritative. Otherwise a new run requires an explicit primary model profile,
+or explicit deterministic selection; optional secondary-profile failover uses
+the same factory registry and M9.4 recovery implementation. Resume and cancel
+require none of those planning settings. The application composes the existing
+evidence, visualization, and deterministic-report APIs rather than duplicating
+their logic.
+
+The CLI defaults new runs to LLM mode and requires explicit `--provider` and
+`--model` values. `--planner deterministic` selects offline deterministic
+planning; `--provider deterministic` remains a compatibility alias.
 
 After successful execution, evidence is built or verified and reused, supported
 visualization kinds are queried explicitly, applicable figures are built or

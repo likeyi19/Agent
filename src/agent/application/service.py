@@ -8,9 +8,19 @@ from pathlib import Path
 from agent.orchestration import (
     AgentRuntime,
     FileRunStore,
+    LLMPlanner,
     PlanExecutor,
     Planner,
+    PlannerError,
+    PlanningModelError,
+    PlanningModelProfile,
+    PlanningRecoveryPolicy,
     ToolRegistry,
+)
+from agent.providers import (
+    PlanningModelFactoryError,
+    PlanningModelFactoryRegistry,
+    build_default_planning_model_factory_registry,
 )
 from agent.report import (
     ANALYSIS_EVIDENCE_ARTIFACT_TYPE,
@@ -30,7 +40,14 @@ from agent.report import (
     verify_analysis_report,
     verify_analysis_visualizations,
 )
-from agent.schemas import AgentRequest, AgentRunResult, CancellationReceipt, RunStatus
+from agent.schemas import (
+    AgentPlan,
+    AgentRequest,
+    AgentRunResult,
+    CancellationReceipt,
+    ErrorCategory,
+    RunStatus,
+)
 
 from .schemas import (
     ApplicationError,
@@ -65,7 +82,39 @@ _APPLICATION_MESSAGES = {
     "APP_EVIDENCE_FAILED": "Verified analysis evidence could not be completed.",
     "APP_VISUALIZATION_FAILED": "Verified analysis visualization could not be completed.",
     "APP_REPORT_FAILED": "Verified analysis report could not be completed.",
+    "APP_PLANNING_CONFIGURATION_CONFLICT": (
+        "Explicit Planner injection cannot be combined with application-owned "
+        "planning-model configuration."
+    ),
+    "PLANNING_MODEL_PROFILE_REQUIRED": (
+        "A primary planning-model profile is required for an LLM-planned new run."
+    ),
+    "PLANNING_MODEL_PROVIDER_UNKNOWN": (
+        "The selected planning-model provider is not registered."
+    ),
+    "PLANNING_MODEL_PROFILE_DISABLED": (
+        "The selected planning-model profile is disabled."
+    ),
+    "PLANNING_MODEL_CAPABILITY_UNSUPPORTED": (
+        "The selected planning model lacks required structured output."
+    ),
+    "PLANNING_PROVIDER_DEPENDENCY_MISSING": (
+        "A required planning-provider dependency is unavailable."
+    ),
+    "PLANNING_PROVIDER_CONFIGURATION_FAILED": (
+        "The planning provider could not be initialized from its configuration."
+    ),
 }
+
+_STABLE_PLANNING_CONFIGURATION_CODES = frozenset(
+    {
+        "PLANNING_MODEL_PROVIDER_UNKNOWN",
+        "PLANNING_MODEL_PROFILE_DISABLED",
+        "PLANNING_MODEL_CAPABILITY_UNSUPPORTED",
+        "PLANNING_PROVIDER_DEPENDENCY_MISSING",
+        "PLANNING_PROVIDER_CONFIGURATION_FAILED",
+    }
+)
 
 
 class ApplicationServiceError(ValueError):
@@ -91,6 +140,18 @@ class _StageFailure(Exception):
         )
 
 
+class _PlanningProfileRequiredPlanner:
+    """Fail closed if callers bypass the application new-run configuration gate."""
+
+    def plan(self, request: AgentRequest, registry: ToolRegistry) -> AgentPlan:
+        del request, registry
+        raise PlannerError(
+            "PLANNING_MODEL_PROFILE_REQUIRED",
+            _APPLICATION_MESSAGES["PLANNING_MODEL_PROFILE_REQUIRED"],
+            category=ErrorCategory.ENVIRONMENT_ERROR,
+        )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -104,6 +165,89 @@ def _app_error(code: str, stage: ApplicationStage) -> ApplicationError:
     return ApplicationError(code, message, stage)
 
 
+def _planning_configuration_error(code: str) -> ApplicationServiceError:
+    stable_code = (
+        code
+        if code in _STABLE_PLANNING_CONFIGURATION_CODES
+        else "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+    )
+    return ApplicationServiceError(_app_error(stable_code, ApplicationStage.RUNTIME))
+
+
+def _validate_recovery_profile(
+    profile: PlanningModelProfile,
+    registry: PlanningModelFactoryRegistry,
+) -> None:
+    if not profile.enabled:
+        raise _planning_configuration_error("PLANNING_MODEL_PROFILE_DISABLED")
+    if not profile.supports_structured_output:
+        raise _planning_configuration_error(
+            "PLANNING_MODEL_CAPABILITY_UNSUPPORTED"
+        )
+    if profile.provider_id not in registry.provider_ids:
+        raise _planning_configuration_error("PLANNING_MODEL_PROVIDER_UNKNOWN")
+
+
+def _application_llm_planner(
+    primary_profile: PlanningModelProfile,
+    *,
+    recovery_profile: PlanningModelProfile | None,
+    model_factory_registry: PlanningModelFactoryRegistry | None,
+    recovery_policy: PlanningRecoveryPolicy | None,
+) -> LLMPlanner:
+    if not isinstance(primary_profile, PlanningModelProfile):
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
+    if recovery_profile is not None and not isinstance(
+        recovery_profile, PlanningModelProfile
+    ):
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
+    if model_factory_registry is not None and not isinstance(
+        model_factory_registry, PlanningModelFactoryRegistry
+    ):
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
+    if recovery_policy is not None and not isinstance(
+        recovery_policy, PlanningRecoveryPolicy
+    ):
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
+
+    registry = (
+        build_default_planning_model_factory_registry()
+        if model_factory_registry is None
+        else model_factory_registry
+    )
+    if recovery_profile is not None:
+        _validate_recovery_profile(recovery_profile, registry)
+    try:
+        model = registry.create(primary_profile)
+        return LLMPlanner(
+            model,
+            profile=primary_profile,
+            recovery_policy=recovery_policy,
+            recovery_profiles=(
+                () if recovery_profile is None else (recovery_profile,)
+            ),
+            model_factory_registry=(
+                None if recovery_profile is None else registry
+            ),
+        )
+    except ApplicationServiceError:
+        raise
+    except (PlanningModelFactoryError, PlanningModelError) as exc:
+        raise _planning_configuration_error(exc.code) from exc
+    except Exception as exc:
+        raise _planning_configuration_error(
+            "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        ) from exc
+
+
 class ResearchAgentApplication:
     """Own one durable runtime and compose its verified post-run products."""
 
@@ -112,6 +256,10 @@ class ResearchAgentApplication:
         workspace_root: str | Path,
         *,
         planner: Planner | None = None,
+        primary_planning_profile: PlanningModelProfile | None = None,
+        recovery_planning_profile: PlanningModelProfile | None = None,
+        planning_model_factory_registry: PlanningModelFactoryRegistry | None = None,
+        planning_recovery_policy: PlanningRecoveryPolicy | None = None,
         registry: ToolRegistry | None = None,
         executor: PlanExecutor | None = None,
     ) -> None:
@@ -121,6 +269,32 @@ class ResearchAgentApplication:
             raise ApplicationServiceError(
                 _app_error(exc.code, ApplicationStage.RUNTIME)
             ) from exc
+        application_planning_configured = any(
+            value is not None
+            for value in (
+                primary_planning_profile,
+                recovery_planning_profile,
+                planning_model_factory_registry,
+                planning_recovery_policy,
+            )
+        )
+        if planner is not None and application_planning_configured:
+            raise ApplicationServiceError(
+                _app_error(
+                    "APP_PLANNING_CONFIGURATION_CONFLICT",
+                    ApplicationStage.RUNTIME,
+                )
+            )
+        missing_primary_profile = planner is None and primary_planning_profile is None
+        if planner is None and primary_planning_profile is not None:
+            planner = _application_llm_planner(
+                primary_planning_profile,
+                recovery_profile=recovery_planning_profile,
+                model_factory_registry=planning_model_factory_registry,
+                recovery_policy=planning_recovery_policy,
+            )
+        elif missing_primary_profile:
+            planner = _PlanningProfileRequiredPlanner()
         store = FileRunStore(workspace.run_state)
         runtime = AgentRuntime(
             planner=planner,
@@ -131,6 +305,7 @@ class ResearchAgentApplication:
         self._workspace = workspace
         self._run_store = store
         self._runtime = runtime
+        self._missing_primary_profile = missing_primary_profile
 
     @property
     def workspace_root(self) -> Path:
@@ -151,6 +326,13 @@ class ResearchAgentApplication:
     def run(self, request: AgentRequest) -> ApplicationResult:
         """Plan, execute, and compose verified reporting for one request."""
 
+        if self._missing_primary_profile:
+            raise ApplicationServiceError(
+                _app_error(
+                    "PLANNING_MODEL_PROFILE_REQUIRED",
+                    ApplicationStage.RUNTIME,
+                )
+            )
         effective, run = self._prepare_request(request)
         result = self._runtime.run(effective)
         return self._complete(result, run)

@@ -10,6 +10,8 @@ from scipy import sparse
 
 import agent.application.cli as cli_module
 from agent.application.cli import main
+from agent.orchestration import PlanningModelError
+from agent.providers import PlanningModelFactoryRegistry
 
 
 def _tiny_h5ad(path: Path) -> Path:
@@ -21,9 +23,14 @@ def _tiny_h5ad(path: Path) -> Path:
     return path
 
 
-def _run_args(tmp_path: Path, *, request_id: str = "cli-run") -> list[str]:
+def _run_args(
+    tmp_path: Path,
+    *,
+    request_id: str = "cli-run",
+    planner: str | None = "deterministic",
+) -> list[str]:
     source = _tiny_h5ad(tmp_path / f"{request_id}.h5ad")
-    return [
+    arguments = [
         "run",
         "--request-id",
         request_id,
@@ -34,6 +41,189 @@ def _run_args(tmp_path: Path, *, request_id: str = "cli-run") -> list[str]:
         "--input",
         str(source),
     ]
+    if planner is not None:
+        arguments.extend(("--planner", planner))
+    return arguments
+
+
+class _FixedPlanningModel:
+    model_id = "custom:cli-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, *, prompt: str, response_schema: object) -> str:
+        del prompt, response_schema
+        self.calls += 1
+        return json.dumps(
+            {
+                "schema_version": 3,
+                "status": "plan",
+                "steps": [
+                    {
+                        "step_id": "inspect",
+                        "tool_name": "inspect_scATAC",
+                        "arguments": {
+                            "path": {
+                                "binding_type": "input",
+                                "input_name": "input_path",
+                            }
+                        },
+                        "depends_on": [],
+                        "description": None,
+                    }
+                ],
+                "reason": None,
+            }
+        )
+
+
+def test_cli_default_mode_is_llm_and_requires_explicit_primary_profile(
+    tmp_path: Path, capsys
+) -> None:
+    arguments = _run_args(tmp_path, request_id="missing-profile", planner=None)
+
+    code = main(arguments)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["code"] == (
+        "PLANNING_MODEL_PROFILE_REQUIRED"
+    )
+    run_state = tmp_path / "workspace" / "run_state"
+    assert run_state.is_dir()
+    assert tuple(run_state.iterdir()) == ()
+
+
+def test_cli_default_llm_mode_uses_explicit_provider_model_without_hidden_default(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    model = _FixedPlanningModel()
+    factories = PlanningModelFactoryRegistry({"openai": lambda _: model})
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: factories,
+    )
+    arguments = _run_args(
+        tmp_path, request_id="default-llm", planner=None
+    ) + ["--provider", "openai", "--model", "configured-model", "--plan-only"]
+
+    code = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "PLANNED"
+    assert model.calls == 1
+
+
+def test_cli_deterministic_provider_alias_remains_explicit(
+    tmp_path: Path, capsys
+) -> None:
+    arguments = _run_args(
+        tmp_path, request_id="deterministic-alias", planner=None
+    ) + ["--provider", "deterministic", "--plan-only"]
+
+    code = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "PLANNED"
+    assert payload["tool_names"] == ["inspect_scATAC"]
+
+
+def test_cli_rejects_deterministic_and_llm_configuration_conflicts(
+    tmp_path: Path, capsys
+) -> None:
+    arguments = _run_args(
+        tmp_path, request_id="planner-conflict", planner="deterministic"
+    ) + ["--provider", "openai", "--model", "configured-model"]
+
+    code = main(arguments)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
+
+
+def test_cli_missing_credential_error_is_stable_and_never_falls_back(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    secret = "missing-credential-secret"
+
+    def fail(_):
+        raise PlanningModelError(
+            secret, code="PLANNING_PROVIDER_CONFIGURATION_FAILED"
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: PlanningModelFactoryRegistry({"openai": fail}),
+    )
+    arguments = _run_args(
+        tmp_path, request_id="missing-credential", planner=None
+    ) + ["--provider", "openai", "--model", "configured-model"]
+
+    code = main(arguments)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert secret not in captured.err
+    assert json.loads(captured.err)["error"]["code"] == (
+        "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+    )
+
+
+def test_cli_optional_secondary_profile_uses_existing_final_failover(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    class TimeoutPlanningModel:
+        model_id = "custom:primary-timeout"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *, prompt: str, response_schema: object) -> str:
+            del prompt, response_schema
+            self.calls += 1
+            raise PlanningModelError(
+                code="PROVIDER_TIMEOUT", retry_after_seconds=0
+            )
+
+    primary = TimeoutPlanningModel()
+    secondary = _FixedPlanningModel()
+    factories = PlanningModelFactoryRegistry(
+        {"openai": lambda _: primary, "groq": lambda _: secondary}
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "build_default_planning_model_factory_registry",
+        lambda: factories,
+    )
+    arguments = _run_args(
+        tmp_path, request_id="cli-failover", planner=None
+    ) + [
+        "--provider",
+        "openai",
+        "--model",
+        "primary-model",
+        "--secondary-provider",
+        "groq",
+        "--secondary-model",
+        "secondary-model",
+        "--plan-only",
+    ]
+
+    code = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "PLANNED"
+    assert primary.calls == 2
+    assert secondary.calls == 1
 
 
 def test_cli_run_prints_compact_success_json(tmp_path: Path, capsys) -> None:
@@ -122,10 +312,12 @@ def test_cli_rejects_reserved_output_root_from_json(tmp_path: Path, capsys) -> N
             "reserved",
             "--request",
             "Inspect this dataset.",
-            "--workspace",
-            str(tmp_path / "workspace"),
-            "--inputs-json",
-            str(inputs),
+                "--workspace",
+                str(tmp_path / "workspace"),
+                "--planner",
+                "deterministic",
+                "--inputs-json",
+                str(inputs),
         ]
     )
 
@@ -139,18 +331,19 @@ def test_cli_provider_initialization_failure_is_sanitized(
 ) -> None:
     secret = "secret-provider-token"
 
-    class FailingRegistry:
-        def create(self, profile) -> object:
-            assert profile.provider_id == "openai"
-            assert profile.model_id == "test-model"
-            raise RuntimeError(secret)
+    def fail(profile) -> object:
+        assert profile.provider_id == "openai"
+        assert profile.model_id == "test-model"
+        raise RuntimeError(secret)
 
     monkeypatch.setattr(
         cli_module,
         "build_default_planning_model_factory_registry",
-        lambda: FailingRegistry(),
+        lambda: PlanningModelFactoryRegistry({"openai": fail}),
     )
-    arguments = _run_args(tmp_path, request_id="provider-failure") + [
+    arguments = _run_args(
+        tmp_path, request_id="provider-failure", planner="llm"
+    ) + [
         "--provider",
         "openai",
         "--model",
@@ -163,7 +356,10 @@ def test_cli_provider_initialization_failure_is_sanitized(
     assert code == 2
     assert secret not in captured.err
     assert secret not in captured.out
-    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
+    assert (
+        json.loads(captured.err)["error"]["code"]
+        == "PLANNING_PROVIDER_CONFIGURATION_FAILED"
+    )
 
 
 def test_cli_runtime_failure_has_nonzero_exit_and_safe_compact_error(
@@ -178,6 +374,8 @@ def test_cli_runtime_failure_has_nonzero_exit_and_safe_compact_error(
             "Write a poem.",
             "--workspace",
             str(tmp_path / "workspace"),
+            "--planner",
+            "deterministic",
         ]
     )
 

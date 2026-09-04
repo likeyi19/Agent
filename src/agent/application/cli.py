@@ -10,7 +10,6 @@ from typing import Sequence
 
 from agent.orchestration import (
     DeterministicPlanner,
-    LLMPlanner,
     RunStoreError,
 )
 from agent.providers import (
@@ -52,11 +51,20 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--inputs-json", type=Path)
     run.add_argument("--plan-only", action="store_true")
     run.add_argument(
+        "--planner",
+        choices=("llm", "deterministic"),
+        help="New-run planning mode (default: llm).",
+    )
+    run.add_argument(
         "--provider",
         choices=("deterministic", *BUILTIN_PLANNING_PROVIDER_IDS),
-        default="deterministic",
+        help="Explicit LLM provider; deterministic is a compatibility alias.",
     )
     run.add_argument("--model")
+    run.add_argument(
+        "--secondary-provider", choices=BUILTIN_PLANNING_PROVIDER_IDS
+    )
+    run.add_argument("--secondary-model")
 
     resume = commands.add_parser("resume", help="Resume one durable run.")
     resume.add_argument("--workspace", required=True)
@@ -98,23 +106,68 @@ def _strict_inputs(path: Path | None) -> dict[str, object]:
     return value
 
 
-def _planner(provider: str, model: str | None):
-    if provider == "deterministic":
-        if model is not None:
-            raise _CliInputError("The deterministic planner does not accept --model.")
-        return DeterministicPlanner()
-    if not isinstance(model, str) or not model.strip():
-        raise _CliInputError("External planning providers require --model.")
+def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
+    planner_mode = arguments.planner
+    provider = arguments.provider
+    model = arguments.model
+    secondary_provider = arguments.secondary_provider
+    secondary_model = arguments.secondary_model
+
+    deterministic_alias = provider == "deterministic"
+    deterministic_mode = planner_mode == "deterministic" or (
+        planner_mode is None and deterministic_alias
+    )
+    if deterministic_mode:
+        conflicting = bool(
+            (provider is not None and provider != "deterministic")
+            or model is not None
+            or secondary_provider is not None
+            or secondary_model is not None
+        )
+        if conflicting:
+            raise _CliInputError(
+                "Deterministic planning cannot use provider/model configuration."
+            )
+        return {"planner": DeterministicPlanner()}
+
+    if deterministic_alias:
+        raise _CliInputError(
+            "The deterministic provider alias conflicts with LLM planner mode."
+        )
+    if provider is None and model is None:
+        if secondary_provider is not None or secondary_model is not None:
+            raise _CliInputError(
+                "A secondary planning profile requires a primary provider and model."
+            )
+        return {}
+    if provider is None or not isinstance(model, str) or not model.strip():
+        raise _CliInputError("LLM planning requires --provider and --model.")
+    if (secondary_provider is None) != (secondary_model is None):
+        raise _CliInputError(
+            "Secondary planning requires both --secondary-provider and "
+            "--secondary-model."
+        )
     try:
-        profile = build_planning_model_profile(provider, model.strip())
-        planning_model = build_default_planning_model_factory_registry().create(
-            profile
+        primary_profile = build_planning_model_profile(provider, model.strip())
+        recovery_profile = (
+            None
+            if secondary_provider is None
+            else build_planning_model_profile(
+                secondary_provider,
+                secondary_model.strip(),  # type: ignore[union-attr]
+            )
         )
     except Exception as exc:
         raise _CliInputError(
-            "Planning provider could not be initialized from environment configuration."
+            "Planning-model profile configuration is invalid."
         ) from exc
-    return LLMPlanner(planning_model, profile=profile)
+    return {
+        "primary_planning_profile": primary_profile,
+        "recovery_planning_profile": recovery_profile,
+        "planning_model_factory_registry": (
+            build_default_planning_model_factory_registry()
+        ),
+    }
 
 
 def _merge_run_inputs(arguments: argparse.Namespace) -> dict[str, object]:
@@ -184,9 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         if arguments.command == "run":
-            planner = _planner(arguments.provider, arguments.model)
             application = ResearchAgentApplication(
-                arguments.workspace, planner=planner
+                arguments.workspace, **_planning_options(arguments)
             )
             request = AgentRequest(
                 arguments.request_id,

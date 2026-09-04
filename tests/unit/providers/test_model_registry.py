@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -233,15 +234,33 @@ def test_cli_and_benchmark_use_the_same_profile_factory_contract(
         lambda: registry,
     )
 
-    planner = cli_module._planner("groq", "model-a")
+    application_options = cli_module._planning_options(
+        SimpleNamespace(
+            planner=None,
+            provider="groq",
+            model="model-a",
+            secondary_provider=None,
+            secondary_model=None,
+        )
+    )
     benchmark_profile, benchmark_model = benchmark_cli._live_model(
         "groq", "model-a", 60.0
     )
 
-    assert planner.profile == benchmark_profile
+    assert application_options["primary_planning_profile"] == benchmark_profile
+    assert application_options["planning_model_factory_registry"] is registry
     assert benchmark_model.model_id == "groq:model-a"
-    assert registry.profiles == [benchmark_profile, benchmark_profile]
-    assert isinstance(cli_module._planner("deterministic", None), DeterministicPlanner)
+    assert registry.profiles == [benchmark_profile]
+    deterministic = cli_module._planning_options(
+        SimpleNamespace(
+            planner="deterministic",
+            provider=None,
+            model=None,
+            secondary_provider=None,
+            secondary_model=None,
+        )
+    )
+    assert isinstance(deterministic["planner"], DeterministicPlanner)
 
 
 def test_profile_and_registry_never_receive_environment_credentials(

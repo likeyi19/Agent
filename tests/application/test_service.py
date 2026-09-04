@@ -19,10 +19,16 @@ from agent.application import (
     ResearchAgentApplication,
 )
 from agent.orchestration import (
+    AgentRuntime,
+    DeterministicPlanner,
+    LLMPlanner,
+    PlanningModelError,
+    PlanningModelProfile,
     RunAlreadyExistsError,
     ToolRegistry,
     build_default_tool_registry,
 )
+from agent.providers import PlanningModelFactoryRegistry
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, RunMode, RunStatus, StepStatus
 
 
@@ -61,12 +67,261 @@ def _request(path: Path, request_id: str = "application-inspect") -> AgentReques
     )
 
 
+def _deterministic_application(
+    workspace: Path, **kwargs: object
+) -> ResearchAgentApplication:
+    return ResearchAgentApplication(
+        workspace, planner=DeterministicPlanner(), **kwargs
+    )
+
+
+def _planning_response() -> str:
+    return json.dumps(
+        {
+            "schema_version": 3,
+            "status": "plan",
+            "steps": [
+                {
+                    "step_id": "inspect",
+                    "tool_name": "inspect_scATAC",
+                    "arguments": {
+                        "path": {
+                            "binding_type": "input",
+                            "input_name": "input_path",
+                        }
+                    },
+                    "depends_on": [],
+                    "description": None,
+                }
+            ],
+            "reason": None,
+        }
+    )
+
+
+class _ScriptedPlanningModel:
+    def __init__(self, *responses: object, model_id: str = "custom:model") -> None:
+        self.model_id = model_id
+        self.responses = list(responses)
+        self.calls = 0
+
+    def complete(self, *, prompt: str, response_schema: object) -> str:
+        del prompt, response_schema
+        response = self.responses[self.calls]
+        self.calls += 1
+        if isinstance(response, Exception):
+            raise response
+        assert isinstance(response, str)
+        return response
+
+
+def _profile(
+    profile_id: str = "primary-profile",
+    provider_id: str = "custom",
+    model_id: str = "custom/model",
+    **changes: object,
+) -> PlanningModelProfile:
+    values: dict[str, object] = {
+        "profile_id": profile_id,
+        "provider_id": provider_id,
+        "model_id": model_id,
+    }
+    values.update(changes)
+    return PlanningModelProfile(**values)  # type: ignore[arg-type]
+
+
+def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only(
+    tmp_path: Path,
+) -> None:
+    source = _tiny_h5ad(tmp_path / "tiny.h5ad")
+    scientific_calls: list[str] = []
+    model = _ScriptedPlanningModel("not-json", _planning_response())
+    factories = PlanningModelFactoryRegistry({"custom": lambda _: model})
+    application = ResearchAgentApplication(
+        tmp_path / "workspace",
+        primary_planning_profile=_profile(),
+        planning_model_factory_registry=factories,
+        registry=_counting_registry(scientific_calls),
+    )
+
+    result = application.run(
+        replace(_request(source, "llm-first-plan-only"), mode=RunMode.PLAN_ONLY)
+    )
+
+    assert isinstance(application.runtime.planner, LLMPlanner)
+    assert application.runtime.planner.recovery_policy.policy_version == (
+        "planning-recovery-v3"
+    )
+    assert result.status is ApplicationStatus.PLANNED
+    assert result.run_status is RunStatus.PLANNED
+    assert model.calls == 2
+    assert scientific_calls == []
+    assert any(
+        event.details.get("final_recovery_outcome") == "repair_recovered"
+        for event in result.run_result.trace
+    )
+
+
+def test_application_optional_secondary_profile_uses_existing_failover(
+    tmp_path: Path,
+) -> None:
+    source = _tiny_h5ad(tmp_path / "tiny.h5ad")
+    primary = _ScriptedPlanningModel(
+        PlanningModelError(code="PROVIDER_TIMEOUT", retry_after_seconds=0),
+        PlanningModelError(code="PROVIDER_TIMEOUT", retry_after_seconds=0),
+        model_id="primary:model",
+    )
+    secondary = _ScriptedPlanningModel(
+        _planning_response(), model_id="secondary:model"
+    )
+    created: list[str] = []
+
+    def primary_factory(profile: PlanningModelProfile) -> _ScriptedPlanningModel:
+        created.append(profile.profile_id)
+        return primary
+
+    def secondary_factory(profile: PlanningModelProfile) -> _ScriptedPlanningModel:
+        created.append(profile.profile_id)
+        return secondary
+
+    factories = PlanningModelFactoryRegistry(
+        {"primary": primary_factory, "secondary": secondary_factory}
+    )
+    application = ResearchAgentApplication(
+        tmp_path / "workspace",
+        primary_planning_profile=_profile(
+            provider_id="primary", model_id="primary/model"
+        ),
+        recovery_planning_profile=_profile(
+            "secondary-profile", "secondary", "secondary/model"
+        ),
+        planning_model_factory_registry=factories,
+    )
+
+    result = application.run(
+        replace(_request(source, "configured-failover"), mode=RunMode.PLAN_ONLY)
+    )
+
+    assert result.status is ApplicationStatus.PLANNED
+    assert primary.calls == 2
+    assert secondary.calls == 1
+    assert created == ["primary-profile", "secondary-profile"]
+    assert any(
+        event.details.get("final_recovery_outcome") == "failover_recovered"
+        for event in result.run_result.trace
+    )
+
+
+def test_missing_primary_profile_fails_before_durable_state_creation(
+    tmp_path: Path,
+) -> None:
+    application = ResearchAgentApplication(tmp_path / "workspace")
+
+    with pytest.raises(ApplicationServiceError) as raised:
+        application.run(AgentRequest("missing-profile", "Inspect this data.", {}))
+
+    assert raised.value.error.code == "PLANNING_MODEL_PROFILE_REQUIRED"
+    assert tuple(application._workspace.run_state.iterdir()) == ()
+    assert not isinstance(application.runtime.planner, DeterministicPlanner)
+
+
+def test_explicit_planner_is_authoritative_and_conflicting_profiles_are_rejected(
+    tmp_path: Path,
+) -> None:
+    planner = DeterministicPlanner()
+    application = ResearchAgentApplication(tmp_path / "explicit", planner=planner)
+
+    assert application.runtime.planner is planner
+    with pytest.raises(ApplicationServiceError) as raised:
+        ResearchAgentApplication(
+            tmp_path / "conflict",
+            planner=planner,
+            primary_planning_profile=_profile(),
+        )
+    assert raised.value.error.code == "APP_PLANNING_CONFIGURATION_CONFLICT"
+
+
+@pytest.mark.parametrize(
+    ("profile", "factories", "code"),
+    [
+        (
+            _profile(enabled=False),
+            PlanningModelFactoryRegistry(
+                {"custom": lambda _: _ScriptedPlanningModel(_planning_response())}
+            ),
+            "PLANNING_MODEL_PROFILE_DISABLED",
+        ),
+        (
+            _profile(supports_structured_output=False),
+            PlanningModelFactoryRegistry(
+                {"custom": lambda _: _ScriptedPlanningModel(_planning_response())}
+            ),
+            "PLANNING_MODEL_CAPABILITY_UNSUPPORTED",
+        ),
+        (
+            _profile(provider_id="unknown"),
+            PlanningModelFactoryRegistry(
+                {"custom": lambda _: _ScriptedPlanningModel(_planning_response())}
+            ),
+            "PLANNING_MODEL_PROVIDER_UNKNOWN",
+        ),
+    ],
+)
+def test_application_preserves_stable_profile_configuration_errors(
+    tmp_path: Path,
+    profile: PlanningModelProfile,
+    factories: PlanningModelFactoryRegistry,
+    code: str,
+) -> None:
+    with pytest.raises(ApplicationServiceError) as raised:
+        ResearchAgentApplication(
+            tmp_path / code,
+            primary_planning_profile=profile,
+            planning_model_factory_registry=factories,
+        )
+
+    assert raised.value.error.code == code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "PLANNING_PROVIDER_DEPENDENCY_MISSING",
+        "PLANNING_PROVIDER_CONFIGURATION_FAILED",
+    ],
+)
+def test_application_preserves_sanitized_provider_construction_errors(
+    tmp_path: Path, code: str
+) -> None:
+    secret = "provider-secret"
+
+    def fail(_: PlanningModelProfile) -> _ScriptedPlanningModel:
+        raise PlanningModelError(secret, code=code)
+
+    with pytest.raises(ApplicationServiceError) as raised:
+        ResearchAgentApplication(
+            tmp_path / code,
+            primary_planning_profile=_profile(),
+            planning_model_factory_registry=PlanningModelFactoryRegistry(
+                {"custom": fail}
+            ),
+        )
+
+    assert raised.value.error.code == code
+    assert secret not in str(raised.value)
+    assert secret not in raised.value.error.message
+
+
+def test_low_level_runtime_default_remains_deterministic() -> None:
+    assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+
+
 def test_figureless_application_run_is_verified_json_safe_and_nonmutating(
     tmp_path: Path,
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     request = _request(source)
@@ -93,14 +348,15 @@ def test_terminal_resume_reuses_verified_reporting_without_scientific_execution(
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "resume-success"))
     evidence_bytes = Path(first.evidence.path).read_bytes()  # type: ignore[union-attr]
     report_bytes = Path(first.report.path).read_bytes()  # type: ignore[union-attr]
 
-    second = application.resume(first.run_id)
+    lifecycle_application = ResearchAgentApplication(tmp_path / "workspace")
+    second = lifecycle_application.resume(first.run_id)
 
     assert second.status is ApplicationStatus.SUCCEEDED
     assert calls == ["inspect_scATAC"]
@@ -112,7 +368,7 @@ def test_duplicate_run_preserves_run_store_semantics_and_requires_resume(
     tmp_path: Path,
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = _deterministic_application(tmp_path / "workspace")
     request = _request(source, "duplicate-run")
     first = application.run(request)
 
@@ -125,7 +381,7 @@ def test_duplicate_run_preserves_run_store_semantics_and_requires_resume(
 def test_missing_report_is_rebuilt_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "rebuild-report"))
@@ -142,7 +398,7 @@ def test_missing_report_is_rebuilt_without_rerunning_science(tmp_path: Path) -> 
 def test_missing_evidence_is_rebuilt_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "rebuild-evidence"))
@@ -158,7 +414,7 @@ def test_missing_evidence_is_rebuilt_without_rerunning_science(tmp_path: Path) -
 def test_tampered_evidence_fails_closed_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "tampered-evidence"))
@@ -176,7 +432,7 @@ def test_tampered_evidence_fails_closed_without_rerunning_science(tmp_path: Path
 def test_tampered_report_fails_closed_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "tampered-report"))
@@ -195,7 +451,7 @@ def test_tampered_report_fails_closed_without_rerunning_science(tmp_path: Path) 
 def test_plan_only_has_zero_execution_and_zero_reporting(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = ResearchAgentApplication(
+    application = _deterministic_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     request = replace(_request(source, "plan-only"), mode=RunMode.PLAN_ONLY)
@@ -211,7 +467,7 @@ def test_plan_only_has_zero_execution_and_zero_reporting(tmp_path: Path) -> None
 def test_planning_failure_preserves_runtime_error_and_skips_reporting(
     tmp_path: Path,
 ) -> None:
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = _deterministic_application(tmp_path / "workspace")
     request = AgentRequest("unsupported", "Write a poem.", {})
 
     result = application.run(request)
@@ -240,7 +496,9 @@ def test_execution_failure_and_terminal_resume_preserve_sanitized_runtime_error(
             for spec in (default.get(name) for name in default.names())
         )
     )
-    application = ResearchAgentApplication(tmp_path / "workspace", registry=registry)
+    application = _deterministic_application(
+        tmp_path / "workspace", registry=registry
+    )
 
     first = application.run(_request(source, "execution-failure"))
     resumed = application.resume(first.run_id)
@@ -290,7 +548,7 @@ def test_preflight_failure_executes_no_tool_and_creates_no_reporting(
 def test_reserved_or_overwriting_request_inputs_are_rejected(
     tmp_path: Path, inputs: dict[str, object]
 ) -> None:
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = _deterministic_application(tmp_path / "workspace")
 
     with pytest.raises(ApplicationServiceError) as caught:
         application.run(AgentRequest("invalid", "Inspect this dataset.", inputs))
@@ -300,7 +558,7 @@ def test_reserved_or_overwriting_request_inputs_are_rejected(
 
 def test_incomplete_evidence_destination_fails_as_output_conflict(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = _deterministic_application(tmp_path / "workspace")
     run = application._workspace.run_paths("conflict:run")
     (run.evidence / "partial.tmp").write_text("partial", encoding="utf-8")
 
@@ -313,7 +571,7 @@ def test_incomplete_evidence_destination_fails_as_output_conflict(tmp_path: Path
 
 def test_active_composition_lock_fails_safely(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = _deterministic_application(tmp_path / "workspace")
     first = application.run(_request(source, "active-composer"))
     run = application._workspace.run_paths(first.run_id)
 
@@ -327,8 +585,9 @@ def test_active_composition_lock_fails_safely(tmp_path: Path) -> None:
 
 def test_cancel_delegates_to_runtime_receipt(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
+    producer = _deterministic_application(tmp_path / "workspace")
+    completed = producer.run(_request(source, "terminal-cancel"))
     application = ResearchAgentApplication(tmp_path / "workspace")
-    completed = application.run(_request(source, "terminal-cancel"))
 
     receipt = application.cancel(completed.run_id)
 
@@ -356,7 +615,9 @@ def test_cooperative_runtime_cancellation_produces_no_reporting(tmp_path: Path) 
             for spec in (default.get(name) for name in default.names())
         )
     )
-    application = ResearchAgentApplication(tmp_path / "workspace", registry=registry)
+    application = _deterministic_application(
+        tmp_path / "workspace", registry=registry
+    )
     request = _request(source, "cancel-running")
     holder: dict[str, object] = {}
 

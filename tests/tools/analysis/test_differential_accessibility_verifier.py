@@ -23,6 +23,7 @@ from agent.orchestration import (
     AgentPlan,
     AgentRequest,
     AgentRuntime,
+    DeterministicPlanner,
     ErrorCategory,
     FileRunStore,
     PlanStep,
@@ -734,7 +735,9 @@ def test_figureless_evidence_report_and_application_paths(
     _, pseudobulk = _source_and_pseudobulk(
         tmp_path / "fixture", low_replication=True
     )
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = ResearchAgentApplication(
+        tmp_path / "workspace", planner=DeterministicPlanner()
+    )
     request = AgentRequest(
         "m82-application",
         "Run replicate-aware differential accessibility and produce a report.",
@@ -787,7 +790,9 @@ def test_complete_raw_to_da_application_chain_is_figureless(
     tmp_path: Path,
 ) -> None:
     raw, _ = _source_and_pseudobulk(tmp_path / "fixture")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = ResearchAgentApplication(
+        tmp_path / "workspace", planner=DeterministicPlanner()
+    )
     result = application.run(
         AgentRequest(
             "m82-chained-application",
@@ -831,7 +836,9 @@ def test_terminal_application_composition_rejects_da_drift(
     tmp_path: Path, mutation: str
 ) -> None:
     _, pseudobulk = _source_and_pseudobulk(tmp_path / "fixture")
-    application = ResearchAgentApplication(tmp_path / "workspace")
+    application = ResearchAgentApplication(
+        tmp_path / "workspace", planner=DeterministicPlanner()
+    )
     result = application.run(
         AgentRequest(
             f"m82-composition-{mutation}",

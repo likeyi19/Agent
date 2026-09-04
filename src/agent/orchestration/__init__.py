@@ -92,6 +92,13 @@ from .semantic_compiler import (
     build_semantic_compiler_contract,
     compile_semantic_plan,
 )
+from .semantic_wire_v4 import (
+    SEMANTIC_WIRE_MAX_CONTROL_DEPENDENCIES_PER_STEP,
+    SEMANTIC_WIRE_MAX_SOURCES_PER_STEP,
+    SEMANTIC_WIRE_SCHEMA_VERSION,
+    build_semantic_wire_v4_schema,
+    parse_semantic_wire_v4,
+)
 from .run_store import (
     CANCELLATION_STATE_FORMAT,
     CancellationRequestedError,
@@ -177,6 +184,9 @@ __all__ = [
     "RunStoreError",
     "RunStoreIOError",
     "RunStatus",
+    "SEMANTIC_WIRE_MAX_CONTROL_DEPENDENCIES_PER_STEP",
+    "SEMANTIC_WIRE_MAX_SOURCES_PER_STEP",
+    "SEMANTIC_WIRE_SCHEMA_VERSION",
     "SemanticConsumerPortSpec",
     "SemanticLineage",
     "SemanticPortMember",
@@ -207,9 +217,11 @@ __all__ = [
     "build_default_tool_registry",
     "build_m92_semantic_compiler_contract",
     "build_semantic_compiler_contract",
+    "build_semantic_wire_v4_schema",
     "classify_provider_exception",
     "compile_semantic_plan",
     "normalized_retry_after_seconds",
+    "parse_semantic_wire_v4",
     "verify_run",
     "verify_step",
 ]

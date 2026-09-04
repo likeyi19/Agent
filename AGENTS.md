@@ -1929,6 +1929,46 @@ Accepted validation:
 - existing planning wire schema v3 `LLMPlanner`: 77 passed
 - complete lightweight regression: 1234 passed, 54 skipped
 
+#### Post-M9.3.3 semantic planning wire-v4 foundation
+
+Post-M9.3.3 adds a disconnected, provider-facing semantic wire schema v4 and
+strict parser. Production `LLMPlanner` continues to use wire schema v3; there
+is no v4 production configuration switch or provider integration. The current
+v4 path ends at:
+
+```text
+wire-v4 JSON
+→ strict v4 parser
+→ existing SemanticPlanCandidate
+```
+
+Wire v4 contains only the plan-versus-unsupported decision, step identity,
+selected tool, semantic source selections, and explicit control-only
+dependencies. It excludes executor-oriented argument dictionaries, binding
+objects, raw result-field names, `StepOutputRef`, reference-induced
+dependencies, and execution descriptions.
+
+Structural schema legality is separate from semantic compiler legality. Tool
+names are derived from the planner-visible registry, and request-input enums
+contain request-specific names but never values. Tool and port authority is not
+duplicated in JSON Schema. The closed structural variants are provider-neutral,
+retain the existing hardened JSON behavior and parsing safety limits, and do
+not hard-code the current tools as a permanent set.
+
+The semantic compiler, strict internal `AgentPlan`, executor, runtime,
+persistence, recovery, provider adapters, and scientific tools remain
+unchanged. Representative v4 schemas are about 80% smaller than v3; complex v4
+responses are about 61–73% smaller for the tested downstream, transfer, and
+differential-accessibility workflows.
+
+Accepted validation:
+
+- wire-v4 focused suite: 53 passed
+- semantic compiler/registry suites: 75 passed
+- existing planning wire schema v3 `LLMPlanner`: 77 passed
+- orchestration, providers, and benchmarks: 871 passed
+- complete lightweight regression: 1287 passed, 54 skipped
+
 ## Development environment
 
 - Linux server

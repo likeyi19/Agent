@@ -9,14 +9,20 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from enum import Enum
 import hashlib
 import json
 from typing import TypeAlias
 
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, StepOutputRef
 
-from .registry import ArgumentSpec, ToolRegistry, UnknownToolError
+from .registry import (
+    ArgumentSpec,
+    SemanticLineage,
+    SemanticProducerPortSpec,
+    ToolRegistry,
+    UnknownToolError,
+    build_default_tool_registry,
+)
 
 
 class SemanticPlanCompileError(ValueError):
@@ -42,14 +48,6 @@ def _unique_strings(values: object, name: str) -> tuple[str, ...]:
     if len(set(result)) != len(result):
         raise ValueError(f"`{name}` must not contain duplicates.")
     return result
-
-
-class SemanticLineage(str, Enum):
-    """Authoritatively declared source identity carried through a branch."""
-
-    REFERENCE = "reference"
-    QUERY = "query"
-    GROUND_TRUTH = "ground_truth"
 
 
 @dataclass(frozen=True)
@@ -149,16 +147,30 @@ class RequestInputBindingRule:
     argument_name: str
     input_name: str
     lineage: SemanticLineage | None = None
+    source_name: str | None = None
+    required_lineage: SemanticLineage | None = None
 
     def __post_init__(self) -> None:
         _nonempty(self.tool_name, "tool_name")
         _nonempty(self.target_port, "target_port")
         _nonempty(self.argument_name, "argument_name")
         _nonempty(self.input_name, "input_name")
+        if self.source_name is not None:
+            _nonempty(self.source_name, "source_name")
         if self.lineage is not None and not isinstance(
             self.lineage, SemanticLineage
         ):
             raise TypeError("`lineage` must be a SemanticLineage or None.")
+        if self.required_lineage is not None and not isinstance(
+            self.required_lineage, SemanticLineage
+        ):
+            raise TypeError(
+                "`required_lineage` must be a SemanticLineage or None."
+            )
+
+    @property
+    def selector(self) -> str:
+        return self.input_name if self.source_name is None else self.source_name
 
 
 @dataclass(frozen=True)
@@ -284,15 +296,42 @@ def _validate_contract(
     registry: ToolRegistry, contract: PlanningCompilerContract
 ) -> None:
     target_shapes: dict[tuple[str, str], set[str]] = {}
+    request_groups: dict[
+        tuple[str, str, str], list[RequestInputBindingRule]
+    ] = defaultdict(list)
     for rule in contract.request_bindings:
         _argument_spec(registry, rule.tool_name, rule.argument_name)
-        key = (rule.tool_name, rule.target_port)
-        shape = {rule.argument_name}
+        request_groups[
+            (rule.tool_name, rule.target_port, rule.selector)
+        ].append(rule)
+
+    for (tool_name, target_port, selector), rules in request_groups.items():
+        argument_names = [rule.argument_name for rule in rules]
+        input_names = [rule.input_name for rule in rules]
+        if len(set(argument_names)) != len(argument_names):
+            raise ValueError("A request-source group overlaps consumer arguments.")
+        if len(set(input_names)) != len(input_names):
+            raise ValueError("A request-source group repeats a request input.")
+        if selector not in input_names:
+            raise ValueError(
+                "A request-source selector must name one grouped request input."
+            )
+        lineages = {rule.lineage for rule in rules}
+        required_lineages = {rule.required_lineage for rule in rules}
+        if len(lineages) != 1 or len(required_lineages) != 1:
+            raise ValueError("A request-source group has conflicting lineage.")
+        lineage = rules[0].lineage
+        required_lineage = rules[0].required_lineage
+        if required_lineage is not None and lineage is not required_lineage:
+            raise ValueError("A request-source group has invalid required lineage.")
+        key = (tool_name, target_port)
+        shape = set(argument_names)
         existing = target_shapes.setdefault(key, shape)
         if existing != shape:
-            raise ValueError(
+            raise SemanticPlanCompileError(
+                "MISSING_REQUIRED_BINDING",
                 "Request alternatives for a semantic port must bind the same "
-                "consumer argument."
+                "consumer arguments."
             )
 
     for rule in contract.step_output_channels:
@@ -331,7 +370,8 @@ def _validate_contract(
         shape = {member.argument_name for member in rule.members}
         existing = target_shapes.setdefault(key, shape)
         if existing != shape:
-            raise ValueError(
+            raise SemanticPlanCompileError(
+                "MISSING_REQUIRED_BINDING",
                 "Alternatives for a semantic target port must bind the same "
                 "consumer arguments."
             )
@@ -379,35 +419,55 @@ class _StepCompilation:
     )
 
 
-def _bind_request_value(
+def _bind_request_group(
     *,
     request: AgentRequest,
     registry: ToolRegistry,
     step: SemanticPlanStep,
     state: _StepCompilation,
-    rule: RequestInputBindingRule,
+    rules: tuple[RequestInputBindingRule, ...],
 ) -> None:
-    if rule.argument_name in state.arguments:
+    missing = sorted(
+        rule.input_name for rule in rules if rule.input_name not in request.inputs
+    )
+    if missing:
         _raise_compile(
-            "OVERLAPPING_SOURCE_MEMBERS",
-            f"Multiple semantic sources target {step.tool_name}."
-            f"{rule.argument_name}.",
+            "MISSING_REQUEST_SOURCE_MEMBER",
+            f"Semantic request source is missing companion inputs {missing}.",
         )
-    argument = _argument_spec(registry, step.tool_name, rule.argument_name)
-    value = request.inputs[rule.input_name]
-    try:
-        argument.validate(rule.argument_name, value)
-    except ValueError as exc:
-        raise SemanticPlanCompileError(
-            "INVALID_REQUEST_BINDING",
-            f"Authorized request input {rule.input_name!r} is invalid for "
-            f"{step.tool_name}.{rule.argument_name}.",
-        ) from exc
-    state.arguments[rule.argument_name] = value
-    state.target_ports.add(rule.target_port)
-    state.request_inputs.add(rule.input_name)
-    if rule.lineage is not None:
-        state.lineages[rule.target_port] = rule.lineage
+    for rule in rules:
+        if rule.argument_name in state.arguments:
+            _raise_compile(
+                "OVERLAPPING_SOURCE_MEMBERS",
+                f"Multiple semantic sources target {step.tool_name}."
+                f"{rule.argument_name}.",
+            )
+        argument = _argument_spec(registry, step.tool_name, rule.argument_name)
+        value = request.inputs[rule.input_name]
+        try:
+            argument.validate(rule.argument_name, value)
+        except ValueError as exc:
+            raise SemanticPlanCompileError(
+                "INVALID_REQUEST_BINDING",
+                f"Authorized request input {rule.input_name!r} is invalid for "
+                f"{step.tool_name}.{rule.argument_name}.",
+            ) from exc
+    first = rules[0]
+    for rule in rules:
+        state.arguments[rule.argument_name] = request.inputs[rule.input_name]
+        state.request_inputs.add(rule.input_name)
+    state.target_ports.add(first.target_port)
+    if (
+        first.required_lineage is not None
+        and first.lineage is not first.required_lineage
+    ):
+        _raise_compile(
+            "BROKEN_BRANCH_LINEAGE",
+            f"Request source for {step.tool_name}.{first.target_port} does not "
+            f"carry required {first.required_lineage.value!r} lineage.",
+        )
+    if first.lineage is not None:
+        state.lineages[first.target_port] = first.lineage
 
 
 def _known_target_ports(
@@ -561,7 +621,7 @@ def compile_semantic_plan(
                     for rule in contract.request_bindings
                     if rule.tool_name == step.tool_name
                     and rule.target_port == source.target_port
-                    and rule.input_name == source.input_name
+                    and rule.selector == source.input_name
                 ]
                 if not rules:
                     _raise_compile(
@@ -569,20 +629,16 @@ def compile_semantic_plan(
                         f"Request input {source.input_name!r} is not authorized "
                         f"for {step.tool_name}.{source.target_port}.",
                     )
-                if len(rules) > 1:
-                    _raise_compile(
-                        "MULTIPLE_VALID_REQUEST_MAPPINGS",
-                        f"Request source for {step.tool_name}."
-                        f"{source.target_port} is not unique.",
-                    )
-                _bind_request_value(
+                _bind_request_group(
                     request=request,
                     registry=registry,
                     step=step,
                     state=state,
-                    rule=rules[0],
+                    rules=tuple(rules),
                 )
-                if rules[0].argument_name in tool.optional_arguments:
+                if all(
+                    rule.argument_name in tool.optional_arguments for rule in rules
+                ):
                     explicit_optional_inputs.add(source.input_name)
                 continue
 
@@ -622,30 +678,58 @@ def compile_semantic_plan(
                 )
 
     request_rules_by_target: dict[
-        tuple[str, str], list[RequestInputBindingRule]
-    ] = defaultdict(list)
+        tuple[str, str], dict[str, list[RequestInputBindingRule]]
+    ] = defaultdict(lambda: defaultdict(list))
     for rule in contract.request_bindings:
-        request_rules_by_target[(rule.tool_name, rule.target_port)].append(rule)
+        request_rules_by_target[(rule.tool_name, rule.target_port)][
+            rule.selector
+        ].append(rule)
 
     optional_occurrences: dict[str, int] = defaultdict(int)
     for step in candidate.steps:
         tool = registry.get(step.tool_name)
-        for (tool_name, _target_port), rules in request_rules_by_target.items():
+        for (tool_name, _target_port), grouped in request_rules_by_target.items():
             if tool_name != step.tool_name:
                 continue
-            available = [rule for rule in rules if rule.input_name in request.inputs]
+            available = [
+                (selector, rules)
+                for selector, rules in grouped.items()
+                if all(rule.input_name in request.inputs for rule in rules)
+            ]
             if len(available) != 1:
                 continue
-            if available[0].argument_name in tool.optional_arguments:
-                optional_occurrences[available[0].input_name] += 1
+            selector, rules = available[0]
+            if all(rule.argument_name in tool.optional_arguments for rule in rules):
+                optional_occurrences[selector] += 1
 
     for step in candidate.steps:
         tool = registry.get(step.tool_name)
         state = states[step.step_id]
-        for (tool_name, target_port), rules in request_rules_by_target.items():
+        for (tool_name, target_port), grouped in request_rules_by_target.items():
             if tool_name != step.tool_name or target_port in state.target_ports:
                 continue
-            available = [rule for rule in rules if rule.input_name in request.inputs]
+            partial = [
+                (selector, rules)
+                for selector, rules in grouped.items()
+                if selector in request.inputs
+                and not all(rule.input_name in request.inputs for rule in rules)
+            ]
+            if partial:
+                missing = sorted(
+                    rule.input_name
+                    for _selector, rules in partial
+                    for rule in rules
+                    if rule.input_name not in request.inputs
+                )
+                _raise_compile(
+                    "MISSING_REQUEST_SOURCE_MEMBER",
+                    f"Semantic request source is missing companion inputs {missing}.",
+                )
+            available = [
+                (selector, rules)
+                for selector, rules in grouped.items()
+                if all(rule.input_name in request.inputs for rule in rules)
+            ]
             if len(available) > 1:
                 _raise_compile(
                     "AMBIGUOUS_REQUEST_INPUT",
@@ -654,7 +738,7 @@ def compile_semantic_plan(
                 )
             if not available:
                 continue
-            rule = available[0]
+            selector, rules = available[0]
             selected_producer_is_available = any(
                 producer.step_id != step.step_id
                 and channel.producer_tool_name == producer.tool_name
@@ -670,21 +754,21 @@ def compile_semantic_plan(
                     "request input or a selected producer; source selection "
                     "must be explicit.",
                 )
-            if rule.argument_name in tool.optional_arguments:
-                if optional_occurrences[rule.input_name] > 1:
-                    if rule.input_name not in explicit_optional_inputs:
+            if all(rule.argument_name in tool.optional_arguments for rule in rules):
+                if optional_occurrences[selector] > 1:
+                    if selector not in explicit_optional_inputs:
                         _raise_compile(
                             "AMBIGUOUS_OPTIONAL_INPUT_SCOPE",
-                            f"Optional request input {rule.input_name!r} can apply "
+                            f"Optional request input {selector!r} can apply "
                             "to multiple selected steps; scope must be explicit.",
                         )
                     continue
-            _bind_request_value(
+            _bind_request_group(
                 request=request,
                 registry=registry,
                 step=step,
                 state=state,
-                rule=rule,
+                rules=tuple(rules),
             )
 
 
@@ -810,216 +894,93 @@ def compile_semantic_plan(
         ) from exc
 
 
-def _request_rule(
-    tool: str,
-    argument: str,
-    *,
-    target: str | None = None,
-    input_name: str | None = None,
-    lineage: SemanticLineage | None = None,
-) -> RequestInputBindingRule:
-    return RequestInputBindingRule(
-        tool,
-        target or argument,
-        argument,
-        input_name or argument,
-        lineage,
+def build_semantic_compiler_contract(
+    registry: ToolRegistry,
+) -> PlanningCompilerContract:
+    """Derive compiler authority exclusively from registered semantic metadata."""
+
+    if not isinstance(registry, ToolRegistry):
+        raise TypeError("`registry` must be a ToolRegistry.")
+
+    request_bindings: list[RequestInputBindingRule] = []
+    channels: list[StepOutputChannelRule] = []
+    producers: dict[
+        str, list[tuple[str, SemanticProducerPortSpec]]
+    ] = defaultdict(list)
+
+    for tool_name in registry.names():
+        tool = registry.get(tool_name)
+        semantic = tool.semantic_planning
+        if semantic is None:
+            continue
+        for producer in semantic.producer_ports:
+            producers[producer.semantic_type].append((tool_name, producer))
+        for consumer in semantic.consumer_ports:
+            arguments = {
+                member.name: member.field_name for member in consumer.members
+            }
+            for source in consumer.request_sources:
+                for member in source.members:
+                    request_bindings.append(
+                        RequestInputBindingRule(
+                            tool_name=tool_name,
+                            target_port=consumer.name,
+                            argument_name=arguments[member.name],
+                            input_name=member.input_name,
+                            lineage=source.lineage,
+                            source_name=source.selector,
+                            required_lineage=consumer.required_lineage,
+                        )
+                    )
+
+    for consumer_tool_name in registry.names():
+        tool = registry.get(consumer_tool_name)
+        semantic = tool.semantic_planning
+        if semantic is None:
+            continue
+        for consumer in semantic.consumer_ports:
+            consumer_members = {
+                member.name: member.field_name for member in consumer.members
+            }
+            for semantic_type in consumer.accepted_upstream_types:
+                for producer_tool_name, producer in producers[semantic_type]:
+                    producer_members = {
+                        member.name: member.field_name
+                        for member in producer.members
+                    }
+                    channels.append(
+                        StepOutputChannelRule(
+                            producer_tool_name=producer_tool_name,
+                            source_port=producer.name,
+                            consumer_tool_name=consumer_tool_name,
+                            target_port=consumer.name,
+                            members=tuple(
+                                ChannelMember(
+                                    producer_members[logical_name],
+                                    argument_name,
+                                )
+                                for logical_name, argument_name in (
+                                    consumer_members.items()
+                                )
+                            ),
+                            producer_lineage_port=producer.lineage_from_port,
+                            required_lineage=consumer.required_lineage,
+                        )
+                    )
+
+    contract = PlanningCompilerContract(tuple(request_bindings), tuple(channels))
+    _validate_contract(registry, contract)
+    return contract
+
+
+def build_m92_semantic_compiler_contract(
+    registry: ToolRegistry | None = None,
+) -> PlanningCompilerContract:
+    """Build accepted M9.2 authority from registry-attached metadata."""
+
+    return build_semantic_compiler_contract(
+        build_default_tool_registry() if registry is None else registry
     )
-
-
-def _member(output_key: str, argument_name: str | None = None) -> ChannelMember:
-    return ChannelMember(output_key, argument_name or output_key)
-
-
-def build_m92_semantic_compiler_contract() -> PlanningCompilerContract:
-    """Return only authority proven by the M9.1 and M9.2 fixtures."""
-
-    inspect = "inspect_scATAC"
-    embed = "epizoo_embed_cells"
-    neighbors = "build_cell_neighbors"
-    transfer = "transfer_cell_labels"
-    feature = "validate_scATAC_feature_space"
-    pseudobulk = "build_replicate_pseudobulk"
-    da = "run_replicate_differential_accessibility"
-    request_bindings = (
-        _request_rule(inspect, "path", target="dataset", input_name="input_path"),
-        _request_rule(
-            inspect,
-            "path",
-            target="dataset",
-            input_name="reference_input_path",
-            lineage=SemanticLineage.REFERENCE,
-        ),
-        _request_rule(
-            inspect,
-            "path",
-            target="dataset",
-            input_name="query_input_path",
-            lineage=SemanticLineage.QUERY,
-        ),
-        _request_rule(
-            embed,
-            "input_path",
-            target="dataset",
-            input_name="input_path",
-        ),
-        _request_rule(
-            embed,
-            "input_path",
-            target="dataset",
-            input_name="reference_input_path",
-            lineage=SemanticLineage.REFERENCE,
-        ),
-        _request_rule(
-            embed,
-            "input_path",
-            target="dataset",
-            input_name="query_input_path",
-            lineage=SemanticLineage.QUERY,
-        ),
-        _request_rule(embed, "output_dir"),
-        _request_rule(embed, "species"),
-        _request_rule(embed, "checkpoint_path", target="checkpoint"),
-        _request_rule(embed, "overwrite"),
-        _request_rule(neighbors, "output_dir"),
-        _request_rule(
-            transfer,
-            "reference_h5ad_path",
-            target="reference_dataset",
-            input_name="reference_input_path",
-            lineage=SemanticLineage.REFERENCE,
-        ),
-        _request_rule(
-            transfer,
-            "query_h5ad_path",
-            target="query_dataset",
-            input_name="query_input_path",
-            lineage=SemanticLineage.QUERY,
-        ),
-        _request_rule(transfer, "reference_label_key"),
-        _request_rule(transfer, "output_dir"),
-        _request_rule(transfer, "n_neighbors"),
-        _request_rule(transfer, "metric"),
-        _request_rule(transfer, "min_confidence"),
-        _request_rule(transfer, "overwrite"),
-        *(
-            _request_rule(feature, argument)
-            for argument in (
-                "input_path",
-                "output_dir",
-                "matrix_source",
-                "matrix_semantics",
-                "species",
-                "genome_assembly",
-                "coordinate_source",
-                "overwrite",
-            )
-        ),
-        *(
-            _request_rule(pseudobulk, argument)
-            for argument in (
-                "replicate_key",
-                "group_key",
-                "condition_key",
-                "output_dir",
-                "group_source",
-                "covariate_keys",
-                "overwrite",
-            )
-        ),
-        *(
-            _request_rule(da, argument)
-            for argument in (
-                "group_value",
-                "condition_key",
-                "numerator_condition",
-                "denominator_condition",
-                "design_type",
-                "output_dir",
-                "covariates",
-                "overwrite",
-            )
-        ),
-    )
-    channels = (
-        StepOutputChannelRule(
-            inspect,
-            "dataset",
-            embed,
-            "dataset",
-            (_member("input_path"),),
-            producer_lineage_port="dataset",
-        ),
-        StepOutputChannelRule(
-            embed,
-            "embedding",
-            neighbors,
-            "embedding",
-            (_member("embedding_path"), _member("cell_ids_path")),
-            producer_lineage_port="dataset",
-        ),
-        StepOutputChannelRule(
-            inspect,
-            "dataset",
-            transfer,
-            "reference_dataset",
-            (_member("input_path", "reference_h5ad_path"),),
-            producer_lineage_port="dataset",
-            required_lineage=SemanticLineage.REFERENCE,
-        ),
-        StepOutputChannelRule(
-            inspect,
-            "dataset",
-            transfer,
-            "query_dataset",
-            (_member("input_path", "query_h5ad_path"),),
-            producer_lineage_port="dataset",
-            required_lineage=SemanticLineage.QUERY,
-        ),
-        StepOutputChannelRule(
-            embed,
-            "embedding",
-            transfer,
-            "reference_embedding",
-            (
-                _member("embedding_path", "reference_embedding_path"),
-                _member("cell_ids_path", "reference_cell_ids_path"),
-                _member("species", "reference_species"),
-                _member("checkpoint_path", "reference_checkpoint_path"),
-            ),
-            producer_lineage_port="dataset",
-            required_lineage=SemanticLineage.REFERENCE,
-        ),
-        StepOutputChannelRule(
-            embed,
-            "embedding",
-            transfer,
-            "query_embedding",
-            (
-                _member("embedding_path", "query_embedding_path"),
-                _member("cell_ids_path", "query_cell_ids_path"),
-                _member("species", "query_species"),
-                _member("checkpoint_path", "query_checkpoint_path"),
-            ),
-            producer_lineage_port="dataset",
-            required_lineage=SemanticLineage.QUERY,
-        ),
-        StepOutputChannelRule(
-            feature,
-            "feature_space",
-            pseudobulk,
-            "feature_space",
-            (_member("feature_space_path"),),
-        ),
-        StepOutputChannelRule(
-            pseudobulk,
-            "pseudobulk",
-            da,
-            "pseudobulk",
-            (_member("pseudobulk_path"),),
-        ),
-    )
-    return PlanningCompilerContract(request_bindings, channels)
 
 
 __all__ = [
@@ -1035,5 +996,6 @@ __all__ = [
     "SemanticStepOutputSource",
     "StepOutputChannelRule",
     "build_m92_semantic_compiler_contract",
+    "build_semantic_compiler_contract",
     "compile_semantic_plan",
 ]

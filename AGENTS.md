@@ -1894,6 +1894,41 @@ Accepted validation:
 - complete lightweight regression: 1201 passed, 54 skipped
 - existing planning wire schema v3 `LLMPlanner`: 77 passed
 
+#### Post-M9.3 registry-driven semantic metadata foundation
+
+Post-M9.3 moves authoritative semantic planning metadata alongside each
+`ToolSpec`, separate from the existing descriptive, non-authoritative planning
+guidance. This metadata describes tool interfaces rather than workflows:
+semantic consumer and producer ports, logical port members, grouped request
+sources, exact execution argument/result mappings, request and upstream source
+permissions, lineage constraints, and safe deterministic compiler authority.
+
+The experimental compiler derives its authority generically from registry
+metadata and no longer uses a central tool-name-specific mapping catalog.
+Grouped request-input sources are supported, while every executable value still
+originates from structured `AgentRequest.inputs`. The accepted Post-M9.2
+semantic candidate representation remains unchanged.
+
+Every currently planner-visible production tool has validated authoritative
+semantic metadata. Coverage is derived dynamically from the registry; the
+current eleven tools are not treated as a permanent closed set. A normal future
+tool should ordinarily become planner-visible through its implementation,
+execution contract, `ToolSpec` registration, semantic planning metadata, and
+focused tests and benchmarks, without changes to provider adapters, generic
+compiler logic, executor, runtime, persistence, or recovery.
+
+Production planning still uses wire schema v3. No provider-facing wire schema
+v4 or production LLM integration has been introduced. Existing `LLMPlanner`,
+providers, runtime, executor, persistence, cancellation, recovery, diagnostics,
+and scientific tools remain unchanged.
+
+Accepted validation:
+
+- semantic registry/compiler focused suite: 75 passed
+- orchestration, providers, and benchmarks: 818 passed
+- existing planning wire schema v3 `LLMPlanner`: 77 passed
+- complete lightweight regression: 1234 passed, 54 skipped
+
 ## Development environment
 
 - Linux server

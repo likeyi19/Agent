@@ -45,6 +45,9 @@ PAIRED_CASE = "differential_accessibility_paired_covariates"
 TRANSFER_CASE = "label_transfer_canonical"
 OPTIONAL_TRANSFER_CASE = "label_transfer_optional"
 DOWNSTREAM_CASE = "downstream_canonical"
+CLUSTERING_EVALUATION_CASE = "clustering_evaluation_canonical"
+ANNOTATION_EVALUATION_CASE = "annotation_evaluation_standalone"
+TRANSFER_EVALUATION_CASE = "transfer_and_annotation_evaluation"
 _MISSING = object()
 
 
@@ -169,6 +172,68 @@ def _transfer_candidate(*, optional: bool = False) -> SemanticPlanCandidate:
     )
 
 
+def _downstream_candidate() -> SemanticPlanCandidate:
+    return SemanticPlanCandidate(
+        (
+            SemanticPlanStep("provider-step-101", "inspect_scATAC"),
+            SemanticPlanStep(
+                "provider-step-102",
+                "epizoo_embed_cells",
+                sources=(_step("dataset", "provider-step-101"),),
+            ),
+            SemanticPlanStep(
+                "provider-step-103",
+                "build_cell_neighbors",
+                sources=(_step("embedding", "provider-step-102"),),
+            ),
+            SemanticPlanStep(
+                "provider-step-104",
+                "cluster_cells",
+                sources=(_step("analysis", "provider-step-103"),),
+            ),
+            SemanticPlanStep(
+                "provider-step-105",
+                "compute_cell_umap",
+                sources=(_step("analysis", "provider-step-104"),),
+            ),
+        )
+    )
+
+
+def _clustering_evaluation_candidate() -> SemanticPlanCandidate:
+    downstream = _downstream_candidate().steps[:4]
+    return SemanticPlanCandidate(
+        (
+            *downstream,
+            SemanticPlanStep(
+                "provider-step-105",
+                "evaluate_cell_clustering",
+                sources=(
+                    _step("analysis", "provider-step-104"),
+                    _step("ground_truth_dataset", "provider-step-101"),
+                ),
+            ),
+        )
+    )
+
+
+def _transfer_evaluation_candidate() -> SemanticPlanCandidate:
+    transfer = _transfer_candidate()
+    return SemanticPlanCandidate(
+        (
+            *transfer.steps,
+            SemanticPlanStep(
+                "provider-step-106",
+                "evaluate_cell_annotation",
+                sources=(
+                    _step("annotation", "provider-step-105"),
+                    _input("ground_truth_dataset", "ground_truth_h5ad_path"),
+                ),
+            ),
+        )
+    )
+
+
 def _compile(
     request: AgentRequest,
     candidate: SemanticPlanCandidate,
@@ -179,7 +244,7 @@ def _compile(
         request,
         candidate,
         registry,
-        contract or build_m92_semantic_compiler_contract(),
+        contract or build_m92_semantic_compiler_contract(registry),
     )
 
 
@@ -281,6 +346,9 @@ def test_neighbors_uses_one_two_member_embedding_channel(
     plan = _compile(request, candidate, registry)
     neighbors = plan.steps[-1]
 
+    assert _execution_fields(plan) == _execution_fields(
+        _v3_plan(DOWNSTREAM_CASE, request, registry)
+    )[:3]
     assert neighbors.arguments["embedding_path"] == StepOutputRef(
         "provider-step-102", "embedding_path"
     )
@@ -288,6 +356,244 @@ def test_neighbors_uses_one_two_member_embedding_channel(
         "provider-step-102", "cell_ids_path"
     )
     assert neighbors.depends_on == ("provider-step-102",)
+
+
+def test_complete_downstream_workflow_matches_v3_execution_semantics(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(DOWNSTREAM_CASE)
+    compiled = _compile(request, _downstream_candidate(), registry)
+
+    assert _execution_fields(compiled) == _execution_fields(
+        _v3_plan(DOWNSTREAM_CASE, request, registry)
+    )
+    assert PlanExecutor(registry).preflight(compiled).passed
+
+
+def test_clustering_evaluation_matches_v3_execution_semantics(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(CLUSTERING_EVALUATION_CASE)
+    compiled = _compile(
+        request, _clustering_evaluation_candidate(), registry
+    )
+
+    assert _execution_fields(compiled) == _execution_fields(
+        _v3_plan(CLUSTERING_EVALUATION_CASE, request, registry)
+    )
+    assert PlanExecutor(registry).preflight(compiled).passed
+
+
+def test_standalone_annotation_evaluation_matches_v3_execution_semantics(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(ANNOTATION_EVALUATION_CASE)
+    candidate = SemanticPlanCandidate(
+        (
+            SemanticPlanStep(
+                "provider-step-101", "evaluate_cell_annotation"
+            ),
+        )
+    )
+    compiled = _compile(request, candidate, registry)
+
+    assert _execution_fields(compiled) == _execution_fields(
+        _v3_plan(ANNOTATION_EVALUATION_CASE, request, registry)
+    )
+    assert PlanExecutor(registry).preflight(compiled).passed
+
+
+def test_transfer_and_annotation_evaluation_matches_v3_execution_semantics(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(TRANSFER_EVALUATION_CASE)
+    compiled = _compile(
+        request, _transfer_evaluation_candidate(), registry
+    )
+
+    assert _execution_fields(compiled) == _execution_fields(
+        _v3_plan(TRANSFER_EVALUATION_CASE, request, registry)
+    )
+    assert PlanExecutor(registry).preflight(compiled).passed
+
+
+def test_clustering_evaluation_rejects_embedding_as_analysis(
+    registry: ToolRegistry,
+) -> None:
+    candidate = SemanticPlanCandidate(
+        (
+            SemanticPlanStep("inspect", "inspect_scATAC"),
+            SemanticPlanStep(
+                "embed",
+                "epizoo_embed_cells",
+                sources=(_step("dataset", "inspect"),),
+            ),
+            SemanticPlanStep(
+                "evaluate",
+                "evaluate_cell_clustering",
+                sources=(
+                    _step("analysis", "embed"),
+                    _step("ground_truth_dataset", "inspect"),
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(_request(CLUSTERING_EVALUATION_CASE), candidate, registry)
+
+    assert caught.value.code == "ZERO_VALID_CHANNELS"
+
+
+def test_multiple_analysis_producers_are_not_chosen_implicitly(
+    registry: ToolRegistry,
+) -> None:
+    candidate = SemanticPlanCandidate(
+        (
+            *_downstream_candidate().steps,
+            SemanticPlanStep(
+                "provider-step-106",
+                "evaluate_cell_clustering",
+                sources=(
+                    _step("ground_truth_dataset", "provider-step-101"),
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(_request(CLUSTERING_EVALUATION_CASE), candidate, registry)
+
+    assert caught.value.code == "MISSING_REQUIRED_SOURCE"
+
+
+def test_clustering_evaluation_requires_ground_truth_source(
+    registry: ToolRegistry,
+) -> None:
+    request = AgentRequest(
+        "missing-ground-truth",
+        "Evaluate fixed clusters.",
+        {
+            "analysis_path": "/synthetic/clustered.h5ad",
+            "label_key": "celltype",
+            "output_dir": "/synthetic/output",
+        },
+    )
+    candidate = SemanticPlanCandidate(
+        (
+            SemanticPlanStep(
+                "evaluate",
+                "evaluate_cell_clustering",
+                sources=(_input("analysis", "analysis_path"),),
+            ),
+        )
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(request, candidate, registry)
+
+    assert caught.value.code == "MISSING_REQUIRED_SOURCE"
+
+
+def test_annotation_evaluation_rejects_query_lineage_as_ground_truth(
+    registry: ToolRegistry,
+) -> None:
+    request = AgentRequest(
+        "wrong-ground-truth-lineage",
+        "Evaluate this annotation.",
+        {
+            "annotation_path": "/synthetic/annotation.h5ad",
+            "query_input_path": "/synthetic/query.h5ad",
+            "ground_truth_label_key": "celltype",
+            "output_dir": "/synthetic/output",
+        },
+    )
+    candidate = SemanticPlanCandidate(
+        (
+            SemanticPlanStep(
+                "inspect_query",
+                "inspect_scATAC",
+                sources=(_input("dataset", "query_input_path"),),
+            ),
+            SemanticPlanStep(
+                "evaluate",
+                "evaluate_cell_annotation",
+                sources=(
+                    _input("annotation", "annotation_path"),
+                    _step("ground_truth_dataset", "inspect_query"),
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(request, candidate, registry)
+
+    assert caught.value.code == "BROKEN_BRANCH_LINEAGE"
+
+
+def test_clustering_evaluation_requires_explicit_cluster_key_source(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(CLUSTERING_EVALUATION_CASE, cluster_key="clusters")
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(request, _clustering_evaluation_candidate(), registry)
+
+    assert caught.value.code == "AMBIGUOUS_SOURCE_SELECTION"
+
+
+def test_annotation_evaluation_rejects_clustered_analysis_as_annotation(
+    registry: ToolRegistry,
+) -> None:
+    candidate = SemanticPlanCandidate(
+        (
+            *_downstream_candidate().steps[:4],
+            SemanticPlanStep(
+                "provider-step-105",
+                "evaluate_cell_annotation",
+                sources=(
+                    _step("annotation", "provider-step-104"),
+                    _input(
+                        "ground_truth_dataset", "ground_truth_h5ad_path"
+                    ),
+                ),
+            ),
+        )
+    )
+    request = _request(
+        DOWNSTREAM_CASE,
+        ground_truth_h5ad_path="/synthetic/ground-truth.h5ad",
+        ground_truth_label_key="celltype",
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(request, candidate, registry)
+
+    assert caught.value.code == "ZERO_VALID_CHANNELS"
+
+
+def test_annotation_evaluation_rejects_unauthorized_request_source(
+    registry: ToolRegistry,
+) -> None:
+    request = _request(
+        ANNOTATION_EVALUATION_CASE,
+        input_path="/synthetic/not-an-annotation.h5ad",
+    )
+    candidate = SemanticPlanCandidate(
+        (
+            SemanticPlanStep(
+                "evaluate",
+                "evaluate_cell_annotation",
+                sources=(_input("annotation", "input_path"),),
+            ),
+        )
+    )
+
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        _compile(request, candidate, registry)
+
+    assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"
 
 
 def test_control_only_dependencies_remain_separate(registry: ToolRegistry) -> None:

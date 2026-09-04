@@ -127,12 +127,13 @@ tools. Reliable HTTP 413 failures are reported terminally as sanitized
 `PROVIDER_REQUEST_TOO_LARGE`; they are not retried, repaired, or treated as 429
 rate limiting.
 
-Post-M9 planner-interface hardening has also established an experimental
-semantic-plan compiler that separates LLM semantic reasoning and source
-selection from deterministic binding, semantic-port expansion, dependency
-construction, and serialization. It is not connected to production planning:
-`LLMPlanner` continues to use planning wire schema v3, and no provider-facing
-wire schema v4 has been introduced.
+Post-M9 planner-interface hardening has established an experimental,
+registry-driven semantic planning foundation across all currently
+planner-visible tools. Semantic tool-interface metadata generates deterministic
+compiler authority while keeping LLM reasoning and source selection separate
+from binding, dependency construction, and serialization. Current tools are not
+treated as a permanent closed set. Production `LLMPlanner` continues to use
+planning wire schema v3; provider-facing wire schema v4 has not been implemented.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

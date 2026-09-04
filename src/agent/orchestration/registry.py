@@ -112,6 +112,14 @@ class PlanningProvenanceRole(str, Enum):
     BRANCH_PRESERVING = "branch_preserving"
 
 
+class SemanticLineage(str, Enum):
+    """Authoritative branch identity for semantic compilation."""
+
+    REFERENCE = "reference"
+    QUERY = "query"
+    GROUND_TRUTH = "ground_truth"
+
+
 def _planning_text(value: object, name: str, maximum: int) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TypeError(f"`{name}` must be a non-empty string.")
@@ -221,6 +229,134 @@ class ToolPlanningSemantics:
             raise TypeError("`conditional_notes` must be a tuple.")
         for note in self.conditional_notes:
             _planning_text(note, "conditional_note", _MAX_PLANNING_NOTE_LENGTH)
+
+
+@dataclass(frozen=True)
+class SemanticPortMember:
+    """Map one logical semantic member to an execution-contract field."""
+
+    name: str
+    field_name: str
+
+    def __post_init__(self) -> None:
+        _planning_text(self.name, "semantic member name", 128)
+        _planning_text(self.field_name, "semantic member field_name", 128)
+
+
+@dataclass(frozen=True)
+class SemanticRequestMember:
+    """Supply one logical semantic member from one structured request input."""
+
+    name: str
+    input_name: str
+
+    def __post_init__(self) -> None:
+        _planning_text(self.name, "request member name", 128)
+        _planning_text(self.input_name, "request member input_name", 128)
+
+
+@dataclass(frozen=True)
+class SemanticRequestSourceSpec:
+    """Authorize one selectable, possibly grouped, structured request source."""
+
+    selector: str
+    members: tuple[SemanticRequestMember, ...]
+    lineage: SemanticLineage | None = None
+
+    def __post_init__(self) -> None:
+        _planning_text(self.selector, "request source selector", 128)
+        if not isinstance(self.members, tuple) or not self.members or not all(
+            isinstance(member, SemanticRequestMember) for member in self.members
+        ):
+            raise TypeError(
+                "Semantic request sources require SemanticRequestMember values."
+            )
+        if self.lineage is not None and not isinstance(
+            self.lineage, SemanticLineage
+        ):
+            raise TypeError("Semantic request-source lineage is invalid.")
+
+
+@dataclass(frozen=True)
+class SemanticConsumerPortSpec:
+    """Authoritative semantic input mapped onto exact tool arguments."""
+
+    name: str
+    members: tuple[SemanticPortMember, ...]
+    required: bool
+    request_sources: tuple[SemanticRequestSourceSpec, ...] = ()
+    accepted_upstream_types: tuple[str, ...] = ()
+    required_lineage: SemanticLineage | None = None
+
+    def __post_init__(self) -> None:
+        _planning_text(self.name, "consumer port name", 128)
+        if not isinstance(self.members, tuple) or not self.members or not all(
+            isinstance(member, SemanticPortMember) for member in self.members
+        ):
+            raise TypeError(
+                "Semantic consumer ports require SemanticPortMember values."
+            )
+        if not isinstance(self.required, bool):
+            raise TypeError("Semantic consumer-port `required` must be boolean.")
+        if not isinstance(self.request_sources, tuple) or not all(
+            isinstance(source, SemanticRequestSourceSpec)
+            for source in self.request_sources
+        ):
+            raise TypeError(
+                "Semantic consumer request sources have invalid types."
+            )
+        if not isinstance(self.accepted_upstream_types, tuple):
+            raise TypeError("Accepted upstream semantic types must be a tuple.")
+        for semantic_type in self.accepted_upstream_types:
+            _planning_text(semantic_type, "accepted upstream type", 128)
+        if self.required_lineage is not None and not isinstance(
+            self.required_lineage, SemanticLineage
+        ):
+            raise TypeError("Semantic consumer-port lineage is invalid.")
+
+
+@dataclass(frozen=True)
+class SemanticProducerPortSpec:
+    """Authoritative semantic output mapped onto exact result fields."""
+
+    name: str
+    semantic_type: str
+    members: tuple[SemanticPortMember, ...]
+    lineage_from_port: str | None = None
+
+    def __post_init__(self) -> None:
+        _planning_text(self.name, "producer port name", 128)
+        _planning_text(self.semantic_type, "producer semantic_type", 128)
+        if not isinstance(self.members, tuple) or not self.members or not all(
+            isinstance(member, SemanticPortMember) for member in self.members
+        ):
+            raise TypeError(
+                "Semantic producer ports require SemanticPortMember values."
+            )
+        if self.lineage_from_port is not None:
+            _planning_text(
+                self.lineage_from_port, "producer lineage_from_port", 128
+            )
+
+
+@dataclass(frozen=True)
+class SemanticToolSpec:
+    """Authoritative semantic compiler interface for one registered tool."""
+
+    consumer_ports: tuple[SemanticConsumerPortSpec, ...] = ()
+    producer_ports: tuple[SemanticProducerPortSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.consumer_ports, tuple) or not all(
+            isinstance(port, SemanticConsumerPortSpec)
+            for port in self.consumer_ports
+        ):
+            raise TypeError("Semantic consumer ports have invalid types.")
+        if not isinstance(self.producer_ports, tuple) or not all(
+            isinstance(port, SemanticProducerPortSpec)
+            for port in self.producer_ports
+        ):
+            raise TypeError("Semantic producer ports have invalid types.")
 
 
 @dataclass(frozen=True)
@@ -366,6 +502,7 @@ class ToolSpec:
     retryable_error_codes: frozenset[str] = field(default_factory=frozenset)
     recovery_policy_version: str = "1"
     planning: ToolPlanningSemantics | None = None
+    semantic_planning: SemanticToolSpec | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -397,6 +534,12 @@ class ToolSpec:
             self.planning, ToolPlanningSemantics
         ):
             raise TypeError("`planning` must be ToolPlanningSemantics or None.")
+        if self.semantic_planning is not None and not isinstance(
+            self.semantic_planning, SemanticToolSpec
+        ):
+            raise TypeError(
+                "`semantic_planning` must be SemanticToolSpec or None."
+            )
         if self.planning is not None:
             missing_planning = sorted(
                 name
@@ -445,6 +588,201 @@ class ToolSpec:
         object.__setattr__(
             self, "retryable_error_codes", frozenset(self.retryable_error_codes)
         )
+        if self.semantic_planning is not None:
+            _validate_semantic_tool_spec(self)
+
+
+def _unique_semantic_members(
+    members: tuple[SemanticPortMember, ...], context: str
+) -> dict[str, str]:
+    logical = [member.name for member in members]
+    fields = [member.field_name for member in members]
+    if len(set(logical)) != len(logical):
+        raise ValueError(f"{context} repeats a logical member name.")
+    if len(set(fields)) != len(fields):
+        raise ValueError(f"{context} maps overlapping execution fields.")
+    return {member.name: member.field_name for member in members}
+
+
+def _validate_semantic_tool_spec(spec: ToolSpec) -> None:
+    semantic = spec.semantic_planning
+    assert semantic is not None
+    consumer_names = [port.name for port in semantic.consumer_ports]
+    producer_names = [port.name for port in semantic.producer_ports]
+    if len(set(consumer_names)) != len(consumer_names):
+        raise ValueError(f"Tool {spec.name!r} repeats a semantic consumer port.")
+    if len(set(producer_names)) != len(producer_names):
+        raise ValueError(f"Tool {spec.name!r} repeats a semantic producer port.")
+
+    consumer_fields: set[str] = set()
+    for port in semantic.consumer_ports:
+        members = _unique_semantic_members(
+            port.members, f"Tool {spec.name!r} consumer port {port.name!r}"
+        )
+        overlap = consumer_fields.intersection(members.values())
+        if overlap:
+            raise ValueError(
+                f"Tool {spec.name!r} maps execution arguments {sorted(overlap)} "
+                "through multiple semantic consumer ports."
+            )
+        consumer_fields.update(members.values())
+        for argument_name in members.values():
+            argument = spec.required_arguments.get(
+                argument_name, spec.optional_arguments.get(argument_name)
+            )
+            if argument is None:
+                raise ValueError(
+                    f"Semantic consumer port {spec.name}.{port.name} names "
+                    f"unknown argument {argument_name!r}."
+                )
+            is_required = argument_name in spec.required_arguments
+            if is_required is not port.required:
+                raise ValueError(
+                    f"Semantic consumer port {spec.name}.{port.name} has "
+                    "inconsistent required/optional execution members."
+                )
+            if port.accepted_upstream_types and not argument.allow_step_output_ref:
+                raise ValueError(
+                    f"Semantic consumer port {spec.name}.{port.name} authorizes "
+                    "an upstream source for a non-reference argument."
+                )
+        if not port.request_sources and not port.accepted_upstream_types:
+            raise ValueError(
+                f"Semantic consumer port {spec.name}.{port.name} has no source."
+            )
+        if len(set(port.accepted_upstream_types)) != len(
+            port.accepted_upstream_types
+        ):
+            raise ValueError(
+                f"Semantic consumer port {spec.name}.{port.name} repeats an "
+                "accepted upstream type."
+            )
+        selectors = [source.selector for source in port.request_sources]
+        if len(set(selectors)) != len(selectors):
+            raise ValueError(
+                f"Semantic consumer port {spec.name}.{port.name} repeats a "
+                "request-source selector."
+            )
+        for source in port.request_sources:
+            logical = [member.name for member in source.members]
+            inputs = [member.input_name for member in source.members]
+            if len(set(logical)) != len(logical):
+                raise ValueError("A semantic request source repeats a member.")
+            if len(set(inputs)) != len(inputs):
+                raise ValueError("A semantic request source repeats an input.")
+            if set(logical) != set(members):
+                raise ValueError(
+                    f"Semantic request source {source.selector!r} does not "
+                    f"completely populate {spec.name}.{port.name}."
+                )
+            if source.selector not in inputs:
+                raise ValueError(
+                    "A semantic request-source selector must name one member input."
+                )
+            if (
+                port.required_lineage is not None
+                and source.lineage is not port.required_lineage
+            ):
+                raise ValueError(
+                    f"Semantic request source {source.selector!r} has invalid "
+                    f"lineage for {spec.name}.{port.name}."
+                )
+
+    consumer_set = set(consumer_names)
+    for port in semantic.producer_ports:
+        members = _unique_semantic_members(
+            port.members, f"Tool {spec.name!r} producer port {port.name!r}"
+        )
+        for result_field in members.values():
+            if result_field not in spec.result_contract.required_fields:
+                raise ValueError(
+                    f"Semantic producer port {spec.name}.{port.name} names "
+                    f"unknown result field {result_field!r}."
+                )
+        if (
+            port.lineage_from_port is not None
+            and port.lineage_from_port not in consumer_set
+        ):
+            raise ValueError(
+                f"Semantic producer port {spec.name}.{port.name} names invalid "
+                "lineage source port."
+            )
+
+
+def _semantic_result_fits_argument(
+    result_types: tuple[type, ...], argument_types: tuple[type, ...]
+) -> bool:
+    for result_type in result_types:
+        if result_type is bool and bool not in argument_types:
+            return False
+        if not any(
+            issubclass(result_type, accepted) for accepted in argument_types
+        ):
+            return False
+    return True
+
+
+def _validate_semantic_registry(specs: tuple[ToolSpec, ...]) -> None:
+    producers: dict[str, list[tuple[ToolSpec, SemanticProducerPortSpec]]] = {}
+    for spec in specs:
+        semantic = spec.semantic_planning
+        if semantic is None:
+            continue
+        for port in semantic.producer_ports:
+            producers.setdefault(port.semantic_type, []).append((spec, port))
+
+    for consumer_spec in specs:
+        semantic = consumer_spec.semantic_planning
+        if semantic is None:
+            continue
+        for consumer in semantic.consumer_ports:
+            consumer_members = {
+                member.name: member.field_name for member in consumer.members
+            }
+            for semantic_type in consumer.accepted_upstream_types:
+                candidates = producers.get(semantic_type, ())
+                if not candidates:
+                    continue
+                for producer_spec, producer in candidates:
+                    if (
+                        consumer.required_lineage is not None
+                        and producer.lineage_from_port is None
+                    ):
+                        raise ValueError(
+                            f"Semantic type {semantic_type!r} does not provide "
+                            f"lineage required by {consumer_spec.name}."
+                            f"{consumer.name}."
+                        )
+                    producer_members = {
+                        member.name: member.field_name
+                        for member in producer.members
+                    }
+                    missing = set(consumer_members).difference(producer_members)
+                    if missing:
+                        raise ValueError(
+                            f"Semantic type {semantic_type!r} does not provide "
+                            f"members {sorted(missing)} required by "
+                            f"{consumer_spec.name}.{consumer.name}."
+                        )
+                    for logical_name, argument_name in consumer_members.items():
+                        result_name = producer_members[logical_name]
+                        argument = consumer_spec.required_arguments.get(
+                            argument_name,
+                            consumer_spec.optional_arguments.get(argument_name),
+                        )
+                        assert argument is not None
+                        result_types = producer_spec.result_contract.required_fields[
+                            result_name
+                        ]
+                        if not _semantic_result_fits_argument(
+                            result_types, argument.accepted_types
+                        ):
+                            raise ValueError(
+                                f"Semantic type {semantic_type!r} maps "
+                                f"incompatible fields {producer_spec.name}."
+                                f"{result_name} and {consumer_spec.name}."
+                                f"{argument_name}."
+                            )
 
 
 class ToolRegistry:
@@ -460,6 +798,7 @@ class ToolRegistry:
         names = tuple(spec.name for spec in specs)
         if len(set(names)) != len(names):
             raise ValueError("Tool registry names must be unique.")
+        _validate_semantic_registry(specs)
         object.__setattr__(
             self, "_specs", MappingProxyType({spec.name: spec for spec in specs})
         )
@@ -1160,6 +1499,45 @@ def _tool_planning(
     return ToolPlanningSemantics(role, description, tuple(conditional_notes))
 
 
+def _semantic_member(name: str, field_name: str | None = None) -> SemanticPortMember:
+    return SemanticPortMember(name, field_name or name)
+
+
+def _semantic_request_member(
+    name: str, input_name: str | None = None
+) -> SemanticRequestMember:
+    return SemanticRequestMember(name, input_name or name)
+
+
+def _semantic_request(
+    selector: str,
+    *members: SemanticRequestMember,
+    lineage: SemanticLineage | None = None,
+) -> SemanticRequestSourceSpec:
+    return SemanticRequestSourceSpec(selector, tuple(members), lineage)
+
+
+def _semantic_argument_port(
+    argument_name: str,
+    *,
+    required: bool,
+    port_name: str | None = None,
+    input_name: str | None = None,
+) -> SemanticConsumerPortSpec:
+    selected_input = input_name or argument_name
+    return SemanticConsumerPortSpec(
+        port_name or argument_name,
+        (_semantic_member("value", argument_name),),
+        required,
+        request_sources=(
+            _semantic_request(
+                selected_input,
+                _semantic_request_member("value", selected_input),
+            ),
+        ),
+    )
+
+
 def build_default_tool_registry() -> ToolRegistry:
     """Build the fixed Milestone 3 allowlist from public scientific APIs."""
 
@@ -1210,6 +1588,41 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.INSPECTION,
             "Inspect one raw scATAC dataset without producing embeddings or analysis.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "dataset",
+                    (_semantic_member("dataset", "path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "input_path",
+                            _semantic_request_member("dataset", "input_path"),
+                        ),
+                        _semantic_request(
+                            "reference_input_path",
+                            _semantic_request_member(
+                                "dataset", "reference_input_path"
+                            ),
+                            lineage=SemanticLineage.REFERENCE,
+                        ),
+                        _semantic_request(
+                            "query_input_path",
+                            _semantic_request_member("dataset", "query_input_path"),
+                            lineage=SemanticLineage.QUERY,
+                        ),
+                    ),
+                ),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "dataset",
+                    "raw_scatac_dataset.v1",
+                    (_semantic_member("dataset", "input_path"),),
+                    lineage_from_port="dataset",
+                ),
+            ),
         ),
     )
     embedding_spec = ToolSpec(
@@ -1314,6 +1727,55 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.OPERATION,
             "Produce aligned EpiZoo embeddings and ordered cell IDs from raw scATAC.",
         ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "dataset",
+                    (_semantic_member("dataset", "input_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "input_path",
+                            _semantic_request_member("dataset", "input_path"),
+                        ),
+                        _semantic_request(
+                            "reference_input_path",
+                            _semantic_request_member(
+                                "dataset", "reference_input_path"
+                            ),
+                            lineage=SemanticLineage.REFERENCE,
+                        ),
+                        _semantic_request(
+                            "query_input_path",
+                            _semantic_request_member("dataset", "query_input_path"),
+                            lineage=SemanticLineage.QUERY,
+                        ),
+                    ),
+                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                ),
+                _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("species", required=True),
+                _semantic_argument_port(
+                    "checkpoint_path",
+                    required=False,
+                    port_name="checkpoint",
+                ),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "embedding",
+                    "epizoo_embedding_bundle.v1",
+                    (
+                        _semantic_member("embedding", "embedding_path"),
+                        _semantic_member("cell_ids", "cell_ids_path"),
+                        _semantic_member("species"),
+                        _semantic_member("checkpoint", "checkpoint_path"),
+                    ),
+                    lineage_from_port="dataset",
+                ),
+            ),
+        ),
     )
     neighbors_spec = ToolSpec(
         name="build_cell_neighbors",
@@ -1402,6 +1864,37 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.OPERATION,
             "Build a neighbors-analysis artifact from an aligned embedding and cell IDs.",
         ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "embedding",
+                    (
+                        _semantic_member("embedding", "embedding_path"),
+                        _semantic_member("cell_ids", "cell_ids_path"),
+                    ),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "embedding_path",
+                            _semantic_request_member(
+                                "embedding", "embedding_path"
+                            ),
+                            _semantic_request_member("cell_ids", "cell_ids_path"),
+                        ),
+                    ),
+                    accepted_upstream_types=("epizoo_embedding_bundle.v1",),
+                ),
+                _semantic_argument_port("output_dir", required=True),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "neighbors",
+                    "cell_neighbors.v1",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    lineage_from_port="embedding",
+                ),
+            ),
+        ),
     )
     clustering_spec = ToolSpec(
         name="cluster_cells",
@@ -1475,6 +1968,40 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Produce fixed Leiden clusters from a neighbors-analysis artifact.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "analysis",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "analysis_path",
+                            _semantic_request_member("analysis", "analysis_path"),
+                        ),
+                    ),
+                    accepted_upstream_types=("cell_neighbors.v1",),
+                ),
+                _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("resolution", required=False),
+                _semantic_argument_port("random_seed", required=False),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "clustered_analysis",
+                    "clustered_analysis.v1",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    lineage_from_port="analysis",
+                ),
+                SemanticProducerPortSpec(
+                    "cluster_key",
+                    "cluster_key.v1",
+                    (_semantic_member("value", "cluster_key"),),
+                    lineage_from_port="analysis",
+                ),
+            ),
         ),
     )
     umap_spec = ToolSpec(
@@ -1552,6 +2079,35 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Add fixed two-dimensional UMAP coordinates to a clustered analysis.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "analysis",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "analysis_path",
+                            _semantic_request_member("analysis", "analysis_path"),
+                        ),
+                    ),
+                    accepted_upstream_types=("clustered_analysis.v1",),
+                ),
+                _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("min_dist", required=False),
+                _semantic_argument_port("spread", required=False),
+                _semantic_argument_port("random_seed", required=False),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "umap_analysis",
+                    "umap_analysis.v1",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    lineage_from_port="analysis",
+                ),
+            ),
         ),
     )
     evaluation_spec = ToolSpec(
@@ -1639,6 +2195,67 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.EVALUATION,
             "Evaluate already-fixed clusters against ordered ground-truth labels.",
             "Ground-truth labels are evaluation-only and must not influence clustering.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "analysis",
+                    (_semantic_member("analysis", "analysis_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "analysis_path",
+                            _semantic_request_member("analysis", "analysis_path"),
+                        ),
+                    ),
+                    accepted_upstream_types=(
+                        "clustered_analysis.v1",
+                        "umap_analysis.v1",
+                    ),
+                ),
+                SemanticConsumerPortSpec(
+                    "ground_truth_dataset",
+                    (_semantic_member("dataset", "reference_h5ad_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "reference_h5ad_path",
+                            _semantic_request_member(
+                                "dataset", "reference_h5ad_path"
+                            ),
+                            lineage=SemanticLineage.GROUND_TRUTH,
+                        ),
+                        _semantic_request(
+                            "input_path",
+                            _semantic_request_member("dataset", "input_path"),
+                            lineage=SemanticLineage.GROUND_TRUTH,
+                        ),
+                    ),
+                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                ),
+                _semantic_argument_port("label_key", required=True),
+                _semantic_argument_port("output_dir", required=True),
+                SemanticConsumerPortSpec(
+                    "cluster_key",
+                    (_semantic_member("value", "cluster_key"),),
+                    False,
+                    request_sources=(
+                        _semantic_request(
+                            "cluster_key",
+                            _semantic_request_member("value", "cluster_key"),
+                        ),
+                    ),
+                    accepted_upstream_types=("cluster_key.v1",),
+                ),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "clustering_evaluation",
+                    "clustering_evaluation.v1",
+                    (_semantic_member("report", "report_path"),),
+                ),
+            ),
         ),
     )
     label_transfer_spec = ToolSpec(
@@ -1819,6 +2436,118 @@ def build_default_tool_registry() -> ToolRegistry:
             "Reference and query species must match and checkpoint paths must resolve "
             "to the same checkpoint.",
         ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "reference_dataset",
+                    (_semantic_member("dataset", "reference_h5ad_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "reference_input_path",
+                            _semantic_request_member(
+                                "dataset", "reference_input_path"
+                            ),
+                            lineage=SemanticLineage.REFERENCE,
+                        ),
+                    ),
+                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    required_lineage=SemanticLineage.REFERENCE,
+                ),
+                SemanticConsumerPortSpec(
+                    "query_dataset",
+                    (_semantic_member("dataset", "query_h5ad_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "query_input_path",
+                            _semantic_request_member("dataset", "query_input_path"),
+                            lineage=SemanticLineage.QUERY,
+                        ),
+                    ),
+                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    required_lineage=SemanticLineage.QUERY,
+                ),
+                SemanticConsumerPortSpec(
+                    "reference_embedding",
+                    (
+                        _semantic_member(
+                            "embedding", "reference_embedding_path"
+                        ),
+                        _semantic_member("cell_ids", "reference_cell_ids_path"),
+                        _semantic_member("species", "reference_species"),
+                        _semantic_member(
+                            "checkpoint", "reference_checkpoint_path"
+                        ),
+                    ),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "reference_embedding_path",
+                            _semantic_request_member(
+                                "embedding", "reference_embedding_path"
+                            ),
+                            _semantic_request_member(
+                                "cell_ids", "reference_cell_ids_path"
+                            ),
+                            _semantic_request_member(
+                                "species", "reference_species"
+                            ),
+                            _semantic_request_member(
+                                "checkpoint", "reference_checkpoint_path"
+                            ),
+                            lineage=SemanticLineage.REFERENCE,
+                        ),
+                    ),
+                    accepted_upstream_types=("epizoo_embedding_bundle.v1",),
+                    required_lineage=SemanticLineage.REFERENCE,
+                ),
+                SemanticConsumerPortSpec(
+                    "query_embedding",
+                    (
+                        _semantic_member("embedding", "query_embedding_path"),
+                        _semantic_member("cell_ids", "query_cell_ids_path"),
+                        _semantic_member("species", "query_species"),
+                        _semantic_member(
+                            "checkpoint", "query_checkpoint_path"
+                        ),
+                    ),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "query_embedding_path",
+                            _semantic_request_member(
+                                "embedding", "query_embedding_path"
+                            ),
+                            _semantic_request_member(
+                                "cell_ids", "query_cell_ids_path"
+                            ),
+                            _semantic_request_member("species", "query_species"),
+                            _semantic_request_member(
+                                "checkpoint", "query_checkpoint_path"
+                            ),
+                            lineage=SemanticLineage.QUERY,
+                        ),
+                    ),
+                    accepted_upstream_types=("epizoo_embedding_bundle.v1",),
+                    required_lineage=SemanticLineage.QUERY,
+                ),
+                _semantic_argument_port("reference_label_key", required=True),
+                _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("n_neighbors", required=False),
+                _semantic_argument_port("metric", required=False),
+                _semantic_argument_port("min_confidence", required=False),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "annotation",
+                    "cell_annotation.v1",
+                    (_semantic_member("annotation", "annotation_path"),),
+                    lineage_from_port="query_dataset",
+                ),
+            ),
+        ),
     )
     annotation_evaluation_spec = ToolSpec(
         name="evaluate_cell_annotation",
@@ -1905,6 +2634,56 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.EVALUATION,
             "Evaluate a fixed query annotation against ordered ground-truth labels.",
             "Ground truth is evaluation-only and must not influence label transfer.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "annotation",
+                    (_semantic_member("annotation", "annotation_path"),),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "annotation_path",
+                            _semantic_request_member("annotation", "annotation_path"),
+                            lineage=SemanticLineage.QUERY,
+                        ),
+                    ),
+                    accepted_upstream_types=("cell_annotation.v1",),
+                    required_lineage=SemanticLineage.QUERY,
+                ),
+                SemanticConsumerPortSpec(
+                    "ground_truth_dataset",
+                    (
+                        _semantic_member(
+                            "dataset", "ground_truth_h5ad_path"
+                        ),
+                    ),
+                    True,
+                    request_sources=(
+                        _semantic_request(
+                            "ground_truth_h5ad_path",
+                            _semantic_request_member(
+                                "dataset", "ground_truth_h5ad_path"
+                            ),
+                            lineage=SemanticLineage.GROUND_TRUTH,
+                        ),
+                    ),
+                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    required_lineage=SemanticLineage.GROUND_TRUTH,
+                ),
+                _semantic_argument_port(
+                    "ground_truth_label_key", required=True
+                ),
+                _semantic_argument_port("output_dir", required=True),
+                _semantic_argument_port("overwrite", required=False),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "annotation_evaluation",
+                    "annotation_evaluation.v1",
+                    (_semantic_member("report", "report_path"),),
+                ),
+            ),
         ),
     )
     feature_space_spec = ToolSpec(
@@ -2062,6 +2841,28 @@ def build_default_tool_registry() -> ToolRegistry:
             "Only fragment_counts, insertion_counts, or binary_accessibility are "
             "eligible for replicate pseudobulk.",
         ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=tuple(
+                _semantic_argument_port(argument, required=required)
+                for argument, required in (
+                    ("input_path", True),
+                    ("output_dir", True),
+                    ("matrix_source", True),
+                    ("matrix_semantics", True),
+                    ("species", True),
+                    ("genome_assembly", True),
+                    ("coordinate_source", True),
+                    ("overwrite", False),
+                )
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "feature_space",
+                    "validated_feature_space.v1",
+                    (_semantic_member("artifact", "feature_space_path"),),
+                ),
+            ),
+        ),
     )
     pseudobulk_spec = ToolSpec(
         name="build_replicate_pseudobulk",
@@ -2162,6 +2963,35 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.OPERATION,
             "Build replicate-aware sparse SUM pseudobulks from a verified feature space.",
             "group_annotation_path is used only with group_source verified_annotation.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "feature_space",
+                    (_semantic_member("artifact", "feature_space_path"),),
+                    True,
+                    accepted_upstream_types=("validated_feature_space.v1",),
+                ),
+                *(
+                    _semantic_argument_port(argument, required=required)
+                    for argument, required in (
+                        ("replicate_key", True),
+                        ("group_key", True),
+                        ("condition_key", True),
+                        ("output_dir", True),
+                        ("group_source", True),
+                        ("covariate_keys", False),
+                        ("overwrite", False),
+                    )
+                ),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "pseudobulk",
+                    "replicate_pseudobulk.v1",
+                    (_semantic_member("artifact", "pseudobulk_path"),),
+                ),
+            ),
         ),
     )
     differential_accessibility_spec = ToolSpec(
@@ -2284,6 +3114,36 @@ def build_default_tool_registry() -> ToolRegistry:
             "A paired design requires compatible paired-replicate structure in the "
             "pseudobulk artifact.",
         ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                SemanticConsumerPortSpec(
+                    "pseudobulk",
+                    (_semantic_member("artifact", "pseudobulk_path"),),
+                    True,
+                    accepted_upstream_types=("replicate_pseudobulk.v1",),
+                ),
+                *(
+                    _semantic_argument_port(argument, required=required)
+                    for argument, required in (
+                        ("group_value", True),
+                        ("condition_key", True),
+                        ("numerator_condition", True),
+                        ("denominator_condition", True),
+                        ("design_type", True),
+                        ("output_dir", True),
+                        ("covariates", False),
+                        ("overwrite", False),
+                    )
+                ),
+            ),
+            producer_ports=(
+                SemanticProducerPortSpec(
+                    "differential_accessibility",
+                    "differential_accessibility.v1",
+                    (_semantic_member("artifact", "da_path"),),
+                ),
+            ),
+        ),
     )
     specs = (
         inspect_spec,
@@ -2307,6 +3167,13 @@ __all__ = [
     "ArgumentSpec",
     "ErrorClassification",
     "ResultContract",
+    "SemanticConsumerPortSpec",
+    "SemanticLineage",
+    "SemanticPortMember",
+    "SemanticProducerPortSpec",
+    "SemanticRequestMember",
+    "SemanticRequestSourceSpec",
+    "SemanticToolSpec",
     "ToolArgumentError",
     "ToolRegistry",
     "ToolResultContractError",

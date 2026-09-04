@@ -132,10 +132,11 @@ registry-driven semantic planning foundation across all currently
 planner-visible tools. Semantic tool-interface metadata generates deterministic
 compiler authority while keeping LLM reasoning and source selection separate
 from binding, dependency construction, and serialization. Current tools are not
-treated as a permanent closed set. An experimental, disconnected semantic wire
-schema v4 and strict parser now substantially reduce planner serialization
-burden. Production `LLMPlanner` continues to use planning wire schema v3; v4 is
-not production-enabled or integrated with providers.
+treated as a permanent closed set. The disconnected interface now includes a
+registry-driven semantic planning catalog/prompt, semantic wire-v4 schema and
+parser, and deterministic semantic compiler. Production `LLMPlanner` continues
+to use planning wire schema v3; v4 is not production-enabled or integrated with
+providers.
 
 Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
 tools. LLM providers generate plans only: they receive no Python tool callables

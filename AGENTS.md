@@ -1969,6 +1969,46 @@ Accepted validation:
 - orchestration, providers, and benchmarks: 871 passed
 - complete lightweight regression: 1287 passed, 54 skipped
 
+#### Post-M9.3.4 semantic planning catalog and prompt
+
+Post-M9.3.4 adds a disconnected, registry-driven semantic catalog and planning
+prompt. The catalog projects the same authoritative `ToolSpec.semantic_planning`
+metadata used by the semantic compiler; there is no second semantic mapping
+catalog. Request-specific structured input names and basic types may be exposed,
+but structured input values are never included.
+
+The prompt presents tool purpose, semantic consumer and producer ports,
+available request-source selectors, accepted upstream semantic types, lineage
+constraints, and relevant scientific choices, defaults, and constraints. It
+excludes raw Python argument inventories, result-field names, grouped execution
+members, binding objects, `StepOutputRef`, raw result keys, and
+reference-induced dependency serialization.
+
+Catalog and prompt generation are deterministic, request-specific,
+registry-driven, and extensible to future tools without tool-name-specific
+rendering branches or workflow templates. Structured-input privacy tests cover
+paths, labels, conditions, checkpoints, output directories, arrays, and nested
+values. The prompt-size reduction relative to v3 is intentionally modest
+because useful scientific context remains; the primary gain is improved
+signal-to-noise and removal of executor serialization burden.
+
+Production `LLMPlanner` still uses wire schema v3. The semantic prompt/catalog,
+wire-v4 parser, and semantic compiler remain disconnected from production
+provider and runtime paths.
+
+> If a required scientific/request parameter is not represented by reviewed
+> authoritative semantic metadata, production v4 must fail closed rather than
+> infer, ignore, or silently default it.
+
+Accepted validation:
+
+- semantic prompt focused suite: 19 passed
+- wire-v4 suite: 53 passed
+- semantic compiler/registry suites: 75 passed
+- existing planning wire schema v3 `LLMPlanner`: 77 passed
+- orchestration, providers, and benchmarks: 890 passed
+- complete lightweight regression: 1306 passed, 54 skipped
+
 ## Development environment
 
 - Linux server

@@ -92,6 +92,12 @@ from .semantic_compiler import (
     build_semantic_compiler_contract,
     compile_semantic_plan,
 )
+from .semantic_prompt import (
+    SEMANTIC_PLANNING_CATALOG_VERSION,
+    SEMANTIC_PLANNING_PROMPT_VERSION,
+    build_semantic_planning_catalog,
+    build_semantic_planning_prompt,
+)
 from .semantic_wire_v4 import (
     SEMANTIC_WIRE_MAX_CONTROL_DEPENDENCIES_PER_STEP,
     SEMANTIC_WIRE_MAX_SOURCES_PER_STEP,
@@ -184,6 +190,8 @@ __all__ = [
     "RunStoreError",
     "RunStoreIOError",
     "RunStatus",
+    "SEMANTIC_PLANNING_CATALOG_VERSION",
+    "SEMANTIC_PLANNING_PROMPT_VERSION",
     "SEMANTIC_WIRE_MAX_CONTROL_DEPENDENCIES_PER_STEP",
     "SEMANTIC_WIRE_MAX_SOURCES_PER_STEP",
     "SEMANTIC_WIRE_SCHEMA_VERSION",
@@ -217,6 +225,8 @@ __all__ = [
     "build_default_tool_registry",
     "build_m92_semantic_compiler_contract",
     "build_semantic_compiler_contract",
+    "build_semantic_planning_catalog",
+    "build_semantic_planning_prompt",
     "build_semantic_wire_v4_schema",
     "classify_provider_exception",
     "compile_semantic_plan",

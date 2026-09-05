@@ -1,579 +1,299 @@
 # Agent
 
-An autonomous AI agent for single-cell epigenomic analysis powered by epigenomic foundation models.
+Agent is an autonomous AI agent for single-cell epigenomic / scATAC-seq
+analysis. It turns natural-language requests and structured scientific inputs
+into validated workflows, reproducible artifacts, and verified reports.
+Existing foundation models such as EpiZoo and EpiAgent are scientific backends
+to reuse; the Agent does not reimplement them. EpiZoo is the currently validated
+embedding backend.
 
-Milestone 2 provides safe scATAC inspection, artifact-based EpiZoo cell embedding, and process-local model reuse.
+Milestones 1–9 and Post-M9 Planner Interface Hardening are complete, including
+the latest static target-port projection and Groq schema compatibility fix.
+Guarded real-data differential-accessibility acceptance remains outstanding.
+[AGENTS.md](AGENTS.md) contains the detailed engineering rules, scientific
+contracts, milestone history, acceptance results, and deferred work.
 
-## Current status
-
-Milestones 1–5, Milestones 6.1–6.4, Milestones 7.1–7.4, and Milestones 8.1–8.2
-are complete. Milestone 9 is complete through M9.5.
-
-- Milestone 1: validated EpiZoo scientific backend
-- Milestone 2: reusable scientific tool layer
-- Milestone 3: safe Agent orchestration core
-- Milestone 4: provider-neutral natural-language planning
-- Milestone 5.1: durable run state and planner-free resume
-- Milestone 5.2: cooperative cancellation and durable run lifecycle
-- Milestone 5.3: production error classification and deterministic recovery policy
-- Milestone 6.1: EpiZoo embedding analysis with neighbors, Leiden clustering,
-  and UMAP
-- Milestone 6.2: quantitative evaluation of fixed cell clustering with NMI,
-  ARI, AMI, and Homogeneity
-- Milestone 6.3: within-species reference-to-query biological cell annotation
-  through direct EpiZoo embedding-space label transfer
-- Milestone 6.4: supervised evaluation and confidence diagnostics for fixed
-  cell-annotation artifacts
-- Milestone 7.1: deterministic verified analysis evidence for successful runs
-- Milestone 7.2: deterministic verified scientific visualization from accepted
-  analysis evidence
-- Milestone 7.3: deterministic verified scientific reports from accepted
-  evidence and optional verified visualizations
-- Milestone 7.4: end-to-end research application with a Python service API,
-  managed workspaces, verified post-run composition, and a one-shot CLI
-- Milestone 8.1: explicit raw regulatory feature-space provenance and exact
-  sparse replicate-aware pseudobulk SUM aggregation
-- Milestone 8.2: independently verified replicate-aware differential
-  accessibility through a pinned edgeR v4 quasi-likelihood workflow
-- Milestone 9.1: deterministic Planner robustness benchmark with calibrated
-  hard-semantic scoring, now extended through recovery-aware report schema v4
-- Milestone 9.2: structured, sanitized planning diagnostics, now at schema v3
-- Milestone 9.2.5: provider/model abstraction through immutable
-  `PlanningModelProfile` and adapter-only `PlanningModelFactoryRegistry`
-- Milestone 9.3: planning wire schema v3, registry-derived tool-discriminated
-  schemas, and composable planning semantics
-- Milestone 9.4: bounded Planning Recovery with transport retry, complete Plan
-  repair, and one explicitly configured final profile failover
-- Milestone 9.4.5: LLM-first user-facing new-run policy with explicit
-  deterministic mode and provider-free resume/cancel
-- Milestone 9.5: final LLM Planner robustness acceptance and Milestone 9
-  closeout
-
-The current Agent can construct and execute validated scientific workflows
-through an explicit tool registry, with structured planning, verification,
-error handling, dependency resolution, and execution tracing.
-
-## LLM planning architecture
-
-The Agent supports provider-neutral LLM planning. The LLM is an interchangeable
-candidate-plan generator that owns natural-language intent understanding, tool
-selection, and workflow composition. `LLMPlanner` converts its structured
-decision into the existing `AgentPlan`, while deterministic code validates the
-schema, tool allowlist, bindings, references, provenance, and complete plan
-before execution.
-
-`PlanningModelProfile` and `PlanningModelFactoryRegistry` decouple deployment
-configuration and provider-adapter construction from planning behavior. OpenAI,
-Gemini, Groq, and custom `PlanningModel` injection remain supported; no
-production model is hard-coded as the Agent's intelligence. User-facing new
-runs are LLM-first when supplied an explicit primary profile; missing LLM
-configuration fails clearly instead of silently selecting deterministic
-planning. `DeterministicPlanner` remains available through explicit application
-selection and as the unchanged default of low-level `AgentRuntime`; it is not a
-semantic oracle for LLM plans.
-
-Planning wire schema v3 uses registry-derived, tool-discriminated structured
-output: the selected tool fixes its exact keyed argument contract, input and
-`StepOutputRef` bindings are distinct, request bindings are restricted to
-available input names, and executable literals remain prohibited. Sanitized
-registry metadata supplies artifact, data-flow, provenance, and scientific-
-parameter preservation guidance. Scientifically valid noncanonical DAGs remain
-allowed.
-
-The deterministic offline Planner benchmark separates hard semantic correctness
-from canonical workflow conformance and executes in PLAN_ONLY mode with zero
-scientific calls. Recovery-aware report schema v4 distinguishes first-attempt,
-transport-recovered, repair-recovered, and configured-failover outcomes.
-Diagnostic schema v3 records sanitized attempt ordering and provider/model
-provenance without raw request values, provider responses, or credentials.
-
-Planning recovery is bounded to one initial call, either one same-profile
-transport retry or one complete same-profile Plan repair, and—only when
-explicitly configured—one final secondary-profile failover. Retry and repair
-are mutually exclusive, failover is always the last call, and the hard ceiling
-is three logical provider calls. Built-in provider adapters disable SDK retries.
-Only the final preflight-passing Plan is persisted; interrupted planning is not
-automatically replayed on resume. Application-owned LLM construction uses this
-recovery path automatically, including an optional explicitly configured
-secondary profile. Deterministic fallback, automatic model routing/ranking,
-tool filtering, and keyword/regex routing remain unimplemented.
-
-Milestone 9 is complete. Its final accepted planning path is:
+## Architecture
 
 ```text
-User Request
-→ LLM-first Planner
-→ exact tool/schema/data-flow planning interface
-→ candidate AgentPlan
-→ deterministic validation
-→ bounded retry / repair / configured failover
-→ final AgentPlan
-→ authoritative preflight
-→ scientific execution
+Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```
 
-The Planner core remains provider/model independent, deterministic planning is
-explicit offline infrastructure, and no automatic deterministic fallback is
-implemented. Planning Recovery permits at most three logical provider calls.
-PLAN_ONLY executes zero scientific tools, while resume and cancel require no
-provider, model, SDK, or credential. Final acceptance retains benchmark report
-schema v4 and sanitized planning diagnostic schema v3.
+These five functional areas share persistence, recovery, cancellation,
+execution traces, provenance, verification, and auditability. Planning produces
+an `AgentPlan`; `AgentRuntime` and `PlanExecutor` preflight and sequentially
+execute only tools in the immutable `ToolRegistry`. Tools reuse scientific
+backends where needed and return lightweight results bound to artifacts.
+Providers generate plans only and receive no scientific Python callables,
+filesystem access, or run-store access. Arbitrary Python and shell execution
+are prohibited in Agent plans.
 
-Post-Milestone-9 provider compatibility hardening keeps planning wire schema v3
-strict and tool-discriminated while using reusable closed `$defs`/`$ref`
-binding schemas. Optional bindings use one flat input/ref/null union, and the
-prompt carries a compact semantic catalog while still exposing all eleven
-tools. Reliable HTTP 413 failures are reported terminally as sanitized
-`PROVIDER_REQUEST_TOO_LARGE`; they are not retried, repaired, or treated as 429
-rate limiting.
+After successful execution, the application composes fresh verified evidence,
+supported deterministic visualizations, and a deterministic scientific report.
+These are post-run services, outside `AgentPlan` and the scientific registry.
+The same runtime remains the only scientific execution engine.
 
-Post-M9 Planner Interface Hardening is complete. `LLMPlanner` has an explicit
-opt-in semantic wire-v4 path that separates LLM semantic reasoning from
-registry-authorized deterministic binding, dependency construction, and
-serialization into the existing strict `AgentPlan`. It materially reduces the
-model's mechanical serialization burden while preserving the existing tool
-allowlist, whole-plan preflight, execution, persistence/resume, cancellation,
-verification, recovery, diagnostics, provenance, and PLAN_ONLY guarantees.
+## Planning: choices, interfaces, and execution
 
-Wire v3 remains the production/application default. Wire v4 remains opt-in
-because live hosted-model responses still show semantic source/port variability
-in some complex workflows, despite eliminating the original mechanical binding
-failure class. Provider adapters remain generic and unchanged; no automatic
-v3/v4 switching or cross-version recovery fallback is implemented.
+**LLM owns choices; Agent owns facts and deterministic consequences of choices.**
+The LLM/user owns intent, tool selection, workflow/DAG composition, scientific
+choices, and genuinely ambiguous source, producer, source-port, or parameter-
+scope decisions. Agent code owns registered interface facts, legal semantic
+ports, authorized deterministic request binding, exact argument/result mappings,
+`StepOutputRef` construction, induced dependencies, defaults, canonicalization,
+validation, and whole-plan preflight.
 
-Real-provider PLAN_ONLY validation passed with Groq and guarded scientific
-tools. LLM providers generate plans only: they receive no Python tool callables
-and cannot directly execute scientific tools.
-
-## Durable execution
-
-Durability is opt-in through `AgentRuntime(..., run_store=...)`; without a run
-store, execution remains in memory. `FileRunStore` provides local, versioned
-persistence for the request, validated plan and lifecycle, step results,
-errors, verification, and execution trace/provenance. Verified successful
-steps are checkpointed before downstream execution.
-
-`AgentRuntime.resume(run_id)` reuses the persisted plan without replanning.
-Previously successful steps are revalidated through the existing argument
-resolver, `ToolRegistry`, and verifier, so `StepOutputRef` dependencies continue
-to work across process restart. PLAN_ONLY remains zero-execution on resume, and
-unknown in-flight scientific work left RUNNING by a genuine interruption is
-conservatively marked INTERRUPTED rather than rerun.
-
-Run-state updates use atomic replacement, revision checks, SHA-256 integrity,
-and stable lock files; a separate execution lease prevents concurrent runtimes
-from interfering with an active run. Scientific tools, providers, planners,
-registry, verifier, and retry semantics are unchanged. Providers receive no
-filesystem or `RunStore` access, and core durability tests remain deterministic
-and offline without network, GPU, model checkpoint, or provider configuration.
-
-## Cooperative cancellation
-
-`AgentRuntime.cancel(run_id)` requests cancellation of a durable run without
-acquiring or stealing its execution lease. Cancellation is cooperative:
-already-running scientific calls are not force-killed, and verified completed
-work is checkpointed and preserved. Once cancellation is observed at a safe
-checkpoint, no new attempt or downstream step starts; unstarted work is marked
-SKIPPED and the run becomes CANCELLED. PLAN_ONLY remains zero scientific-tool
-execution, and terminal CANCELLED resume invokes zero planners and zero tools.
-
-Cancellation intent is stored separately from revisioned run state, so a
-request can be recorded while another runtime owns execution without
-invalidating active checkpoints. Duplicate requests are idempotent, terminal
-runs remain immutable, and stale RUNNING work with an unknown outcome remains
-INTERRUPTED. Core cancellation behavior remains deterministic and offline and
-does not change scientific tools, planners, providers, registry, verifier, or
-retry policy.
-
-## Production error and recovery policy
-
-Milestone 5.3 keeps the existing bounded `PlanExecutor` retry loop authoritative
-and adds explicit recovery semantics rather than another retry engine.
-`RecoveryDisposition` distinguishes no automatic recovery, same-step retry
-eligibility, compatible-runtime resume, required user action, and manual
-reconciliation. `AgentError.recoverable` now means only static same-step retry
-eligibility, not general resumability or user fixability; unknown codes fail
-closed to safe nonautomatic recovery.
-
-Tool, provider, runtime, and verifier failure messages are sanitized before
-persistence, so arbitrary raw exception strings are not exposed as persisted
-`AgentError` messages. Reliable provider failures use provider-neutral codes,
-and resource failures such as CUDA out-of-memory are classified explicitly.
-Resource failures never silently change scientific settings such as batch size,
-device, dtype, truncation, model, or overwrite behavior. Verification failures
-remain conservative and do not blindly rerun scientific tools.
-
-Every retry receives a fresh canonical-equivalent copy of the validated
-arguments, so mutation in one attempt cannot affect the next. Exhaustion keeps
-the underlying error and records attempts, the configured bound, and policy
-provenance. New durable EXECUTE runs persist an immutable recovery-policy
-snapshot; resume rejects changes to maximum attempts, retryable codes, or tool
-recovery/classifier versions before scientific execution.
-
-Run-state schema v3 keeps valid terminal v1/v2 records readable and historical
-PLAN_ONLY runs zero-tool. Nonterminal legacy EXECUTE runs are rejected when
-their historical recovery policy cannot be proven, and stale RUNNING work
-continues to require manual reconciliation. Milestone 5.2 cancellation behavior
-is unchanged. Core Milestone 5.3 tests require no network, provider credentials,
-GPU, model checkpoint, or biological dataset.
-
-## Downstream embedding analysis
-
-Milestone 6.1 extends the validated scientific workflow from EpiZoo cell
-embeddings through neighbor-graph construction, Leiden clustering, and 2D UMAP.
-Each stage writes a compact, copy-on-write AnnData artifact containing ordered
-cell IDs, the 512-dimensional EpiZoo representation, sparse graph data, analysis
-outputs, and versioned provenance—never the original million-dimensional scATAC
-feature matrix.
-
-The real production path was validated end to end on 2,000 Fang2021 cells with
-an RTX 4090. All five registered scientific steps succeeded and verified, cell
-order was preserved, the input file remained unchanged, and durable terminal
-resume revalidated the artifacts without rerunning scientific tools.
-
-Milestone 6.2 adds artifact-based quantitative evaluation of fixed clustering.
-Reference annotations are used only after unsupervised clustering and never to
-tune neighbors, Leiden, UMAP, parameters, or cluster selection. Real Fang2021
-evaluation successfully validated NMI, ARI, AMI, and Homogeneity while
-preserving exact cell identity and order.
-
-Milestone 6.3 adds exact deterministic label transfer directly between
-reference and query EpiZoo embeddings. Persisted predictions contain a
-biological label when assigned, confidence, and a separate assigned/unassigned
-state. Real held-out Fang2021 validation succeeded without exposing query
-ground-truth labels to the request, planner, embedding tools, transfer tool, or
-production verifier.
-
-Milestone 6.4 evaluates those fixed annotations with assignment coverage,
-overall and assigned-only accuracy, macro-F1, deterministic per-class
-diagnostics, a rectangular confusion summary, and descriptive confidence
-medians. Ground truth remains evaluation-only and cannot tune or rerun label
-transfer. Real held-out Fang2021 evaluation reproduced the frozen Milestone 6.3
-metrics and confidence summaries.
-
-## Replicate-aware regulatory foundation
-
-Milestone 8.1 returns to the immutable raw scATAC H5AD for regulatory count
-analysis. It adds two registered scientific tools:
-
-```python
-validate_scATAC_feature_space(
-    input_path,
-    output_dir,
-    *,
-    matrix_source,
-    matrix_semantics,
-    species,
-    genome_assembly,
-    coordinate_source,
-    layer_key=None,
-    feature_chrom_key=None,
-    feature_start_key=None,
-    feature_end_key=None,
-    coordinate_system=None,
-    semantics_metadata_key=None,
-    overwrite=False,
-)
-
-build_replicate_pseudobulk(
-    feature_space_path,
-    replicate_key,
-    group_key,
-    condition_key,
-    output_dir,
-    *,
-    group_source,
-    group_annotation_path=None,
-    covariate_keys=(),
-    overwrite=False,
-)
-```
-
-The feature-space tool accepts only sparse `X` or an explicitly named sparse
-layer, preserves the declared fragment-count, insertion-count, or binary
-accessibility semantics, and rejects normalized/continuous input. Species and
-assembly are restricted to human/hg38 and mouse/mm10. Coordinates are optional
-and explicitly provenance-recorded; they are never inferred.
-
-The pseudobulk unit is exactly `(group, replicate, condition)`, ordered by first
-occurrence in source cell order. Replicate identity may span conditions.
-Replicate, condition, and covariates come from raw `.obs`; group comes either
-from raw `.obs` or the fixed `predicted_label` of an accepted Milestone 6.3
-annotation with exact cell identity/order and no unassigned cells. Aggregation
-is exact sparse SUM with no normalization, feature filtering, cell filtering,
-intersection, reordering, remapping, or coordinate inference.
-
-Feature validation writes a compact schema-v1 canonical JSON manifest.
-Pseudobulk writes one sparse CSR/int64 schema-v1 H5AD with original ordered
-features, pseudobulk metadata in `.obs`, optional exact coordinates in `.var`,
-and versioned provenance in `uns["agent_milestone8_pseudobulk"]`. Deterministic
-pseudobulk row IDs are domain-separated hashes scoped to the authoritative
-feature-space identity and the complete unit tuple.
-
-Independent verification never invokes either scientific callable. It
-reconstructs source and feature identity, metadata, unit order and IDs,
-covariates, coordinates, library sizes, and every integer SUM with a Python
-row-map algorithm distinct from production sparse matrix multiplication.
-Counts are compared exactly and complete matrices are never densified.
-
-Planning schema v2 and RunStore schema v3 remain unchanged. The production
-registry now contains exactly eleven tools. Both M8.1 recovery identities are
-versioned and have no automatically retryable scientific codes. Evidence and
-deterministic reports remain schema v1, and M8.1 visualization is intentionally
-figureless. edgeR, TMM, differential accessibility, genomic annotation, and
-motif analysis are not part of Milestone 8.1.
-
-## Replicate-aware differential accessibility
-
-Milestone 8.2 adds the eleventh registered scientific tool:
-
-```python
-run_replicate_differential_accessibility(
-    pseudobulk_path,
-    group_value,
-    condition_key,
-    numerator_condition,
-    denominator_condition,
-    design_type,
-    output_dir,
-    *,
-    covariates=(),
-    overwrite=False,
-)
-```
-
-The authoritative input is an accepted Milestone 8.1 SUM-count pseudobulk;
-individual cells are never treated as DA replicates. Independent designs
-require at least two disjoint biological replicates per condition, with an
-explicit low-replication warning at two. Paired designs require at least three
-complete biological pairs. The fixed two-condition contrast is numerator minus
-denominator, with optional ordered additive categorical or numeric covariates.
-
-The statistical path uses edgeR 4.10.4 on R 4.6.1 / Bioconductor 3.23 in the
-isolated `agent-edger` runtime: condition-based `filterByExpr`, library-size
-recalculation, TMM normalization, robust edgeR v4 quasi-likelihood fitting and
-testing, and Benjamini–Hochberg correction. Statistical parameters are
-repository-controlled and cannot be supplied by users or planners.
-
-Verification is a separate execution path. It independently revalidates and
-recomputes the M8.1 source, reconstructs selection/design/contrast/digests in
-Python without calling production preparation or DA code, and invokes the
-separately pinned `edger_ql_verify_v1.R` script. Source, artifact, preparation,
-filter, normalization, statistics, effect directions, provenance, scripts, and
-the exact R package stack are checked before success or durable reuse.
-
-Planning schema v2 and RunStore schema v3 are unchanged. The DA recovery
-identity is `run-replicate-differential-accessibility-edger-ql-v1`; the tool has
-one actual attempt and no automatically retryable scientific/backend code.
-AnalysisEvidence and deterministic reports remain schema v1 and compact, and
-the application produces a verified figureless DA report without feature-level
-statistics or biological interpretation.
-
-Guarded real-data acceptance remains outstanding: local Fang2021 and PBMC
-count data lack a genuine two-condition replicate design, the local BMMC
-candidate is normalized continuous mixed-modality data rather than eligible raw
-accessibility counts, and the replicated rice heat-shock dataset is outside the
-supported human/mouse contract. No metadata was fabricated and no external data
-was downloaded.
-
-Deferred scope includes binary-accessibility inference, alternative or mixed
-models, multi-condition/interacting/time-course designs, effect-size shrinkage,
-adaptive filtering, genomic or peak-to-gene annotation, motifs, pathways,
-regulatory interpretation, volcano/MA plots, perturbation analysis, and mutation
-analysis.
-
-## Verified analysis evidence
-
-Milestone 7.1 adds deterministic post-run evidence generation:
-
-successful `AgentRunResult`
-→ fresh existing `verify_run()` and `verify_step()` verification
-→ compact schema-v1 `AnalysisEvidence` projection
-→ atomic `analysis_evidence.json`
-
-The projection uses explicit whitelists for the eleven existing scientific tools
-and has an authoritative evidence-file SHA-256. It records whether source
-artifacts have authoritative cryptographic digests or are instead protected by
-existing structural, provenance, and content verification. Embeddings, cell
-vectors, UMAP coordinates, labels, confidence arrays, AnnData objects, and raw
-scATAC matrices are never copied into evidence.
-
-`AnalysisEvidence` is downstream of orchestration: it is neither a
-`ToolRegistry` scientific tool nor part of `AgentPlan`. The production registry
-contains exactly eleven tools, while planning schema v2 and the RunStore schema are
-unchanged, and evidence build and verification never invoke registered
-scientific callables. Terminal-resume results still undergo fresh artifact
-verification before evidence is accepted. Visualization and narrative report
-generation are separate downstream concerns.
-
-## Verified scientific visualization
-
-Milestone 7.2 adds a presentation-only flow downstream of orchestration:
-
-successful `AgentRunResult`
-→ verified `AnalysisEvidence`
-→ fresh Milestone 7.1 verification
-→ explicit presentation-only reads from verified artifacts
-→ deterministic plotting-data projection
-→ PNG figures and `visualization_manifest.json`
-
-Version 1 produces exactly a Leiden-colored UMAP, a fixed NMI/ARI/AMI/
-Homogeneity clustering-metric bar chart, and an annotation-evaluation raw
-confusion matrix. Transferred-label UMAP, per-class F1 and confidence plots,
-SVG, narrative reporting, and interactive UI remain deferred.
-
-Visualization is neither a `ToolRegistry` scientific tool nor part of
-`AgentPlan`; the production registry contains exactly eleven tools and planning
-schema v2 remains unchanged. It adds no RunStore schema or recovery-policy
-change. Build and verification invoke zero registered scientific callables,
-never rerun or tune scientific analysis, never access raw scATAC `.X`, and use
-only artifact paths explicitly bound by verified evidence rather than directory
-discovery. Terminal-resume sources undergo fresh evidence and source
-verification.
-
-## Verified deterministic scientific report
-
-Milestone 7.3 adds a fully deterministic, user-readable reporting flow:
-
-successful `AgentRunResult`
-→ verified `AnalysisEvidence`
-→ optional verified `AnalysisVisualizations`
-→ frozen report-fact projection
-→ deterministic Markdown and optional copied PNGs
-→ `report_manifest.json`
-
-Report sections appear only when supported by verified workflow evidence, so
-inspection-only reports are valid and absent analysis stages are never
-fabricated. Scientific values come from a frozen whitelisted projection with
-stable fact IDs for machine-readable attribution. Exact numeric values and
-nullable values are preserved; qualitative claims such as excellent
-performance, reliable annotation, or well-separated clusters are intentionally
-not generated.
-
-Visualization is optional. When supplied, every verified Milestone 7.2 PNG is
-copied in its original order with byte-for-byte and SHA-256 equality. Figures
-are neither redrawn nor visually interpreted. Markdown, fact attribution,
-section bindings, copied-figure bindings, and the canonical manifest are
-deterministic and exactly verifiable.
-
-Milestone 7.3 v1 contains no LLM-generated narrative. Future constrained LLM
-interpretation remains separate from this deterministic reporting boundary.
-
-## End-to-end research application
-
-Milestone 7.4 provides the first coherent user-facing flow:
+The opt-in semantic wire-v4 path is:
 
 ```text
-natural-language scientific request
-→ constrained planning
-→ verified durable execution
-→ verified evidence
-→ verified visualization when supported
-→ verified deterministic scientific report
-→ compact user-facing application result
+AgentRequest
+→ registry-driven semantic planning catalog/prompt
+→ provider-neutral PlanningModel
+→ semantic wire v4
+→ strict parser
+→ SemanticPlanCandidate
+→ registry-derived deterministic semantic compiler
+→ AgentPlan
+→ whole-plan preflight/runtime
 ```
 
-The public service boundary is:
+The compiler deterministically lowers semantic choices into executable plan
+contracts. It derives only unique mappings explicitly authorized by reviewed
+`ToolSpec.semantic_planning` metadata. Zero or multiple legitimate semantic
+choices fail closed when a choice is required. It never fills in a workflow
+using step names/order, first-match behavior, generic input fanout, hidden
+scientific inference, or automatic workflow completion. Scientifically valid
+noncanonical DAGs remain allowed. Executable values come from structured
+`AgentRequest.inputs` or verified upstream references; the LLM cannot invent
+paths, parameters, or executable literals. Structured input values are excluded
+from the planning catalog/prompt; input names and basic types may be exposed,
+and the natural-language request itself is sent to the model.
 
-```python
-ResearchAgentApplication(
-    workspace_root,
-    *,
-    planner=None,
-    primary_planning_profile=None,
-    recovery_planning_profile=None,
-    planning_model_factory_registry=None,
-    planning_recovery_policy=None,
-    planning_wire_mode=None,
-    registry=None,
-    executor=None,
-)
+Wire **v3 remains the default**. Its registry-derived, tool-discriminated schema
+requires exact keyed argument bindings, with reusable closed `$defs`/`$ref`
+schemas and flat optional input/ref/null unions. Semantic **v4 is explicit
+opt-in**, removing model-authored execution argument dictionaries, raw result
+keys, references, and redundant dependency serialization. There is no automatic
+schema switching, version detection, combined schema, or hidden v4-to-v3 fallback.
+
+The latest follow-up projects legal target ports directly from each tool's
+`ToolSpec.semantic_planning.consumer_ports` into the v4 provider schema:
+
+```json
+{
+  "target": "dataset",
+  "source": {"kind": "input", "input": "input_path"}
+}
 ```
 
-It exposes `run(request)`, `resume(run_id)`, and `cancel(run_id)`. The
-application owns its `FileRunStore`, while all scientific execution continues
-to occur exclusively through `AgentRuntime`. An explicitly injected Planner is
-authoritative. Otherwise a new run requires an explicit primary model profile,
-or explicit deterministic selection; optional secondary-profile failover uses
-the same factory registry and M9.4 recovery implementation. Resume and cancel
-require none of those planning settings. The application composes the existing
-evidence, visualization, and deterministic-report APIs rather than duplicating
-their logic.
+The closed outer object constrains the selected tool's target; inner source
+variants discriminate only on `kind` (`input`, `step`, or `step_port`). This
+resolves Groq's `discriminator_multiple_candidates` rejection of the earlier
+flat target/kind alternatives. The parser validates targets early and still
+accepts historical flat v4 sources through the same strict checks. The compiler
+retains authoritative `UNKNOWN_TARGET_PORT` defense. The registry remains the
+single semantic authority; this fix adds no workflow inference or planner layer.
 
-The CLI defaults new runs to LLM mode and requires explicit `--provider` and
-`--model` values. `--planner deterministic` selects offline deterministic
-planning; `--provider deterministic` remains a compatibility alias. LLM runs
-also accept `--wire-mode v3` or `--wire-mode v4`; omission remains v3, and v4
-is explicit opt-in.
+`PlanningModelProfile` and adapter-only `PlanningModelFactoryRegistry` separate
+configuration from planning. OpenAI, Gemini, Groq, and custom `PlanningModel`
+injection are supported; no production model is hard-coded. Application/CLI new
+runs require an explicit primary LLM profile unless deterministic planning or
+another Planner is explicitly selected. Missing configuration fails clearly.
+Low-level `AgentRuntime()` retains its deterministic offline default; that
+planner is not a semantic oracle for LLM output.
 
-After successful execution, evidence is built or verified and reused, supported
-visualization kinds are queried explicitly, applicable figures are built or
-reused, and the deterministic report undergoes final verification. An empty
-visualization capability is a normal figureless-report workflow; failure of an
-expected visualization remains fatal. PLAN_ONLY returns its validated plan and
-preflight result with zero scientific execution and creates no evidence,
-visualization, or report.
+## Scientific capabilities
 
-Resume remains planner-free. Valid post-run artifacts are verified and reused,
-missing stages may be built, and tampered, mismatched, partial, or conflicting
-outputs fail closed without silent repair or overwrite. Cancellation delegates
-to `AgentRuntime.cancel()`; it remains cooperative, and reporting-stage
-cancellation is deferred.
+The current inventory below comes from
+[`build_default_tool_registry()`](src/agent/orchestration/registry.py).
+Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 
-Managed output uses full SHA-256 run identities:
+| Workflow | Registered tools and accepted behavior |
+| --- | --- |
+| Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
+| Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
+| Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
+| Cell annotation | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
+| Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
+| Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
+| Differential accessibility | `run_replicate_differential_accessibility`: biological-replicate DA with pinned edgeR v4 quasi-likelihood fitting/testing and independent verification |
 
-```text
-<workspace>/
-├── run_state/
-└── runs/<full-sha256-of-run-id>/
-    ├── composition.lock
-    ├── scientific/
-    ├── evidence/
-    ├── visualizations/
-    └── report/
+Neighbors use all 512 EpiZoo dimensions, `n_neighbors=15`, Euclidean distance,
+and seed 0. Leiden defaults to weighted igraph flavor, resolution 1.0, seed 0;
+UMAP uses two dimensions, `min_dist=0.5`, `spread=1.0`, spectral initialization,
+and seed 0. Compact downstream artifacts never contain the original raw scATAC
+feature matrix, and source inputs are never modified.
+
+Transfer defaults to exact Euclidean kNN (`k=20`), uniform plurality voting,
+and confidence threshold 0.0. Distance ties use reference row order; tied top
+votes remain structurally unassigned with confidence retained. No approximate
+neighbors, automatic k reduction, batch correction, clustering, or UMAP enters
+transfer. Query ground truth is unavailable to the production transfer path.
+
+Evaluation ground truth is used only after clustering or annotation is fixed;
+it never tunes parameters, selects a workflow, or triggers upstream reruns.
+Exact cell identity and order are required without intersection/reordering.
+Annotation evaluation counts unassigned cells as incorrect for overall accuracy,
+uses ground-truth classes for macro-F1, and preserves undefined assigned accuracy
+or confidence summaries as `null`. It does not optimize confidence thresholds.
+
+Regulatory analysis returns to raw sparse `X` or an explicitly named sparse
+layer. Feature validation requires declared fragment/insertion counts or binary
+accessibility; normalized/continuous input is ineligible. Supported assemblies
+are human/hg38 and mouse/mm10. Coordinates are optional and never inferred.
+Pseudobulk preserves original features and exact integer SUMs without filtering
+or normalization; groups come from raw metadata or an exactly aligned fixed
+annotation with every cell assigned. Independent verification recomputes SUMs
+with a distinct Python row-map algorithm without whole-matrix densification.
+
+DA accepts verified SUM-count pseudobulk and never treats cells as replicates
+or silently uses binary accessibility in a count model. Independent designs
+need at least two disjoint biological replicates per condition (warning at two);
+paired designs need three complete pairs. The fixed numerator-minus-denominator
+contrast supports ordered additive categorical/numeric covariates. The isolated
+`agent-edger` runtime pins R 4.6.1 / Bioconductor 3.23 / edgeR 4.10.4 and performs
+condition-based `filterByExpr`, library-size recalculation, TMM, robust v4
+quasi-likelihood testing, and BH correction. Statistical settings and R scripts
+are repository-controlled. A separate pinned R verifier independently checks
+statistics, preparation, provenance, and package compatibility.
+
+## Reliability and verified output
+
+Whole-plan preflight occurs before scientific side effects. Each returned
+result passes verification before downstream use. PLAN_ONLY executes **zero
+scientific tools**, including across restart/resume/cancellation, and the
+application creates no evidence, figures, or report for it.
+
+`FileRunStore` persists versioned canonical JSON with SHA-256 integrity, plan
+fingerprints, optimistic revisions, atomic fsynced replacement, a short state
+lock, and a separate execution lease. Verified successes are checkpointed before
+downstream execution. Durability is opt-in for low-level `AgentRuntime` and
+owned by `ResearchAgentApplication`. Nonterminal resume is planner-free and
+revalidates completed work before restoring references. Terminal runtime resume
+returns the immutable stored result; evidence/application composition freshly
+verifies artifacts afterward. Unknown stale RUNNING work becomes INTERRUPTED
+without automatic rerun. Valid terminal legacy v1/v2 records remain readable;
+legacy nonterminal EXECUTE work without authoritative recovery provenance cannot
+start new science. Current run-state schema is v3.
+
+Cancellation intent uses a separate durable sidecar without taking the execution
+lease or changing the main revision. Running calls finish, verify, and checkpoint;
+once cancellation is observed no new attempt starts. Duplicate cancellation is
+idempotent, terminal states are immutable, and prior failure evidence is retained.
+
+Scientific same-step retry stays in `PlanExecutor`: each attempt gets a fresh
+canonical-equivalent argument copy, with no changed scientific settings.
+`AgentError.recoverable` means static retry eligibility only. Versioned immutable
+recovery-policy provenance blocks incompatible resume. Unknown error codes and
+verification failures fail closed; raw exception prose is sanitized. The
+downstream M6/M8 tools have no automatically retryable scientific codes.
+
+Planning recovery separately permits one initial provider call, either one
+same-profile transport retry or complete plan repair, and at most one explicitly
+configured final-profile failover: three logical calls maximum, with built-in
+SDK retries disabled. Interrupted planning is not replayed; only the final
+preflight-passing plan is durable. HTTP 413 is terminal
+`PROVIDER_REQUEST_TOO_LARGE`, distinct from retryable HTTP 429.
+Sanitized diagnostic schema v3 and offline benchmark report schema v4 expose
+attempt provenance and distinguish hard semantic correctness from canonical
+workflow conformance and first-attempt versus recovered success.
+
+Post-run schema-v1 evidence contains whitelisted verified facts and an
+authoritative evidence-file SHA, explicitly distinguishing source digest
+protection from structural/provenance/content verification. Supported PNGs are
+Leiden UMAP, the four clustering metrics, and raw annotation confusion counts.
+Deterministic Markdown reports use attributed frozen facts, preserve exact and
+nullable values, and optionally copy verified PNG bytes unchanged. No LLM
+narrative, invented analysis stage, visual interpretation, or qualitative
+biological claim is generated. Inspection, pseudobulk, and DA can produce valid
+figureless reports; failure of an expected visualization remains fatal.
+
+## Usage
+
+Run from the repository using the configured Python environment. Packaging and
+an installed console script remain deferred. API keys stay in the environment.
+For explicit offline inspection planning:
+
+```bash
+PYTHONPATH=src python -m agent run \
+  --request-id inspect-demo --request "Inspect this scATAC dataset" \
+  --workspace /path/to/workspace --input /path/to/cells.h5ad \
+  --planner deterministic --plan-only
 ```
 
-Raw request/run IDs are not path components. Output roots are application-owned,
-managed symlinks and wrong-type paths are rejected, and the application uses
-exact artifact paths rather than directory discovery. The workspace is assumed
-to be trusted and local; complete hostile-filesystem-race protection is not
-claimed. A nonblocking per-run composition lock serializes evidence through
-final report verification without changing runtime execution leases or adding
-another durable state machine.
+For LLM planning with explicit semantic v4 opt-in (the model shown is a prior
+Groq acceptance configuration, not an automatically selected default):
 
-The compact JSON-safe application result retains the authoritative
-`AgentRunResult` and uses `ArtifactReference` values containing only artifact
-type, path, and SHA-256. It never returns embeddings, matrices, coordinates, or
-AnnData objects. Application-local errors are sanitized and stage-aware, while
-runtime/planner/scientific `AgentError` values remain authoritative.
-
-The first CLI uses standard-library `argparse` and prints compact JSON:
-
-```text
-PYTHONPATH=src python -m agent run ...
-PYTHONPATH=src python -m agent resume ...
-PYTHONPATH=src python -m agent cancel ...
+```bash
+PYTHONPATH=src python -m agent run \
+  --request-id inspect-v4 --request "Inspect this scATAC dataset" \
+  --workspace /path/to/workspace --input /path/to/cells.h5ad \
+  --provider groq --model openai/gpt-oss-120b --wire-mode v4 --plan-only
 ```
 
-Deterministic offline planning is the default. Existing OpenAI, Gemini, and
-Groq planning adapters can be selected when configured; API keys remain in the
-environment. There is no installed console script yet because packaging
-metadata is deferred. Streamlit, Gradio, a persistent REPL, multi-turn state,
-LLM report narrative, and browser UI are also deferred.
+Omit `--wire-mode` or use `--wire-mode v3` for the default wire contract. Optional
+`--secondary-provider` and `--secondary-model` configure the single final
+failover. `--provider deterministic` remains a compatibility alias for explicit
+deterministic planning; deterministic mode rejects LLM wire/model settings.
+Use `--inputs-json /path/to/inputs.json` for additional structured scientific
+inputs; embedding also accepts `--species`, `--checkpoint`, and `--device`.
+Remove `--plan-only` to execute and compose supported verified outputs.
 
-The canonical first application demo is:
+Resume or cancel using the `run_id` returned in the compact CLI JSON:
 
-```text
-inspect_scATAC
-→ epizoo_embed_cells
-→ build_cell_neighbors
-→ cluster_cells
-→ compute_cell_umap
-→ verified evidence
-→ Leiden UMAP
-→ deterministic report
+```bash
+PYTHONPATH=src python -m agent resume --workspace /path/to/workspace --run-id RUN_ID
+PYTHONPATH=src python -m agent cancel --workspace /path/to/workspace --run-id RUN_ID
 ```
 
-The richer reference/query annotation workflow remains available through the
-scientific-tool layer but is not required for this primary demo. Milestone 7.4
-did not run the optional real-provider plus real-EpiZoo acceptance.
+Neither operation needs planning/provider configuration. The Python service,
+`ResearchAgentApplication(workspace_root, ...)`, exposes the same `run(request)`,
+`resume(run_id)`, and `cancel(run_id)` operations with typed configuration and
+compact `ArtifactReference` results. Full signatures and CLI exit codes are in
+[AGENTS.md](AGENTS.md).
+
+Managed workspaces contain `run_state/` and `runs/<full-sha256-of-run-id>/`, with
+`composition.lock`, `scientific/`, `evidence/`, `visualizations/`, and `report/`.
+Output roots are application-owned; raw IDs never form paths, managed symlinks
+are rejected, and a per-run composition lock protects postprocessing. Resume
+verifies/reuses valid outputs, builds missing stages, and rejects tampering or
+partial/conflicting outputs without silent overwrite or repair. The workspace
+is trusted and local; full hostile-filesystem-race protection is not claimed.
+
+The canonical application demo is inspection → EpiZoo → neighbors → Leiden →
+UMAP → verified evidence → Leiden UMAP figure → deterministic report. The richer
+reference/query annotation workflow is also available.
+
+## Validation and current boundaries
+
+Real Fang2021 acceptance established exact manual EpiZoo parity for 2,000 cells,
+`(2000, 512)` embeddings, fixed-seed reproducibility, batch size 4, and about
+10.9 GiB peak GPU allocation on an RTX 4090. Downstream analysis and held-out
+annotation/evaluation were validated with unchanged sources and isolated
+evaluation-only labels. Development assumes at most 24 GB GPU memory and never
+densifies a complete raw scATAC matrix.
+
+The latest pre-push Planner follow-up acceptance record reports 203 focused
+passes, 1006 orchestration/provider/benchmark passes, 1429 lightweight passes
+with 54 skips, and 7648 independent JSON Schema payload checks. These are
+historical acceptance totals, not tests rerun for this documentation pass.
+Separate live Groq checks accepted the strict schema, application v4 inspection,
+and the complete five-tool downstream PLAN_ONLY DAG with zero scientific
+execution and no target-port failure.
+
+The mechanical serialization burden, static target-port generation, and Groq
+discriminator issues have been addressed. Genuine hosted-model source/source-port
+variability, incomplete or explicit unsupported decisions, and provider
+availability/rate-limit/authentication issues remain possible. V4 stays opt-in;
+remaining variability must not be hidden by deterministic workflow guessing.
+
+Guarded real-data DA acceptance needs eligible human/mouse raw counts with true
+replicated conditions. Local Fang2021/PBMC lack the design, BMMC is normalized
+mixed-modality data, and replicated rice heat-shock data is outside scope; no
+metadata was fabricated or external data downloaded. Broader statistical models,
+regulatory interpretation, genomic/peak-to-gene annotation, motifs/pathways,
+volcano/MA plots, perturbation, and mutation analysis remain deferred. So do
+reporting-stage cancellation, transferred-label UMAP, richer figures/exports,
+LLM scientific interpretation, retrieval/RAG, multi-agent architecture, and
+browser or multi-turn UI. The detailed acceptance gates, environment warnings,
+and nonblocking engineering follow-ups are preserved in [AGENTS.md](AGENTS.md).

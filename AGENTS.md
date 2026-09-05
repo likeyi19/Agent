@@ -1,8 +1,415 @@
 # Agent
 
-Agent is an AI system for autonomous single-cell epigenomic analysis.
+Agent is an autonomous AI agent for single-cell epigenomic / scATAC-seq
+analysis. Existing EpiZoo and EpiAgent foundation models are scientific
+backends to reuse, not models to reimplement inside the Agent. EpiZoo is the
+currently validated embedding backend; mentioning EpiAgent does not imply a
+registered EpiAgent execution tool.
 
-## Completed milestones
+This is the detailed engineering contract and acceptance record. Start with
+[README.md](README.md) for the overview and CLI examples. Current contracts
+below take precedence over historical milestone scope and version statements.
+
+## Architecture and engineering rules
+
+```text
+Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
+```
+
+These are functional areas, not five separate execution engines. Planning
+produces an `AgentPlan`; orchestration owns validation and safe sequential
+execution; registered tools wrap scientific algorithms and foundation models
+where needed. Verification checks scientific results and artifacts. Persistence,
+recovery, cancellation, trace, provenance, and auditability span this path.
+Evidence, visualization, and deterministic reports compose verified results
+post-run, outside `AgentPlan` and the scientific tool registry.
+
+The development environment is a Linux server with an NVIDIA RTX 4090, 24 GB
+VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
+
+- Never densify a complete scATAC-seq matrix or assume more than 24 GB GPU memory.
+- Test on small datasets before full-scale execution.
+- Reuse validated scientific logic. Modify
+  `src/agent/tools/models/epizoo.py` only for a verified bug or a clearly defined
+  new capability.
+- Expose each scientific capability as a reusable tool with explicit inputs,
+  outputs, validation, lightweight results, and informative errors.
+- Keep analyses reproducible; record checkpoints, execution parameters, and
+  provenance. Never silently change batch size, device, dtype, truncation,
+  model, or overwrite settings for recovery.
+- Do not commit biological datasets or model checkpoints to Git.
+- Fail closed on invalid contracts, ambiguity, corrupt artifacts, or unsupported
+  provenance. Preserve exact cell/feature order where required; never silently
+  align, drop, or relabel scientific inputs.
+- The immutable `ToolRegistry` is the executable allowlist. Providers receive no
+  Python callables, filesystem access, or `RunStore` access. Arbitrary Python,
+  shell, and user/planner-supplied R execution are prohibited in Agent plans;
+  the registered DA tool uses repository-controlled pinned R scripts.
+- Do not add workflow heuristics, first-match behavior, step-name inference,
+  hidden step-order inference, generic input fanout, hidden scientific inference,
+  or automatic workflow completion to resolve LLM ambiguity.
+
+## Current scientific tool inventory
+
+The following inventory is derived from `build_default_tool_registry()` in
+`src/agent/orchestration/registry.py`. All eleven currently registered tools
+are planner-visible and have authoritative semantic metadata. This is a
+snapshot, not a permanent tool-count constraint: future coverage must be
+derived from the registry.
+
+| Registered tool | Scientific purpose / artifact |
+| --- | --- |
+| `inspect_scATAC` | Safe scATAC H5AD inspection and lightweight metadata |
+| `epizoo_embed_cells` | Sparse preprocessing, cached EpiZoo inference, `.npy` embeddings and ordered cell IDs |
+| `build_cell_neighbors` | Compact neighbor-graph H5AD in the 512-dimensional EpiZoo space |
+| `cluster_cells` | Fixed-seed weighted Leiden clustering in a new compact H5AD |
+| `compute_cell_umap` | Deterministic 2D UMAP in a new compact H5AD |
+| `evaluate_cell_clustering` | Fixed clustering versus evaluation-only labels; NMI, ARI, AMI, Homogeneity JSON |
+| `transfer_cell_labels` | Exact within-species reference-to-query kNN annotation H5AD |
+| `evaluate_cell_annotation` | Fixed annotation metrics, confusion counts, and confidence diagnostics JSON |
+| `validate_scATAC_feature_space` | Explicit raw sparse regulatory-count provenance manifest |
+| `build_replicate_pseudobulk` | Exact sparse SUM by `(group, replicate, condition)` |
+| `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
+
+Detailed scientific contracts, recovery identities, artifact formats, public
+APIs, and accepted scientific results remain in the M1–M8 reference below.
+Evidence/report projections explicitly support these tools and fail closed for
+unsupported future tools; arbitrary new result fields never become report facts.
+
+## Current Planner contract
+
+### Responsibility and registry authority
+
+**LLM owns choices; Agent owns facts and deterministic consequences of choices.**
+The LLM/user owns natural-language intent, tool selection, workflow/DAG
+composition, genuinely ambiguous producer/source or source-port selection,
+reference/query/ground-truth roles, scientific choices, and ambiguous optional
+parameter scope. Scientifically valid noncanonical DAGs remain admissible.
+
+Agent owns registered interface facts, allowlisting, legal semantic ports,
+reviewed unique request-source binding, grouped semantic-port/channel expansion,
+exact argument/result mappings, `StepOutputRef` construction, induced
+dependencies, defaults, canonicalization, strict `AgentPlan` construction,
+validation, diagnostics, and whole-plan preflight. Lowering constructs the
+existing `AgentPlan`, `PlanStep`, and `StepOutputRef` types and canonicalizes
+mechanically redundant graph representation. The semantic compiler
+**deterministically lowers semantic choices into executable plan contracts**.
+It is not merely a formatting layer.
+
+> Unique, explicitly authorized deterministic mappings may be derived by Agent
+> code; zero or multiple legitimate semantic choices must not be silently guessed.
+
+A missing optional choice may preserve a reviewed tool default. Explicit `False`
+and legal explicit `None` remain distinct from omission. Generic optional
+selectors with multiple destinations require explicit scope. An explicitly
+scoped structured selector may be compiler-bound without redundant LLM output
+only when it has one reviewed destination and no competing source. Reviewed
+embedding, transfer, and downstream parameters use this generic rule.
+
+`ToolSpec.planning` and argument/result planning guidance describe roles,
+artifact flow, source eligibility, provenance, parameter preservation, and
+bindability. They do not independently authorize compiler behavior or create a
+runtime semantic oracle. Reviewed `ToolSpec.semantic_planning` is authoritative:
+consumer/producer ports, logical members, grouped request sources, exact
+argument/result mappings, upstream permissions, and lineage constraints.
+Catalog, schema projection, and compiler derive from that single authority;
+there is no central tool-name-specific mapping catalog.
+
+A normal future tool should ordinarily require implementation, execution/result
+contracts, `ToolSpec` registration, reviewed semantic metadata, focused tests,
+and benchmarks—not provider-specific rendering, workflow templates, or changes
+to the generic compiler, executor, runtime, persistence, or recovery. Missing
+reviewed metadata for required scientific/request parameters fails closed;
+never infer, ignore, or silently default such parameters. Production must not
+import the benchmark-only semantic oracle or use `DeterministicPlanner` as an
+oracle for LLM output. Keyword/regex routing, workflow classifiers/tables,
+string-similarity guesses, and reference/query positional guesses are prohibited.
+
+### Planning modes, v3/v4, and compatibility
+
+Application/CLI new runs are LLM-first with an explicit primary
+`PlanningModelProfile`; missing configuration fails before durable state
+creation. An explicitly injected Planner is authoritative. Select
+`DeterministicPlanner` explicitly for application offline workflows; low-level
+`AgentRuntime()` retains its deterministic default for compatibility. Resume
+and cancel require no planner, provider, model, SDK, or credential configuration.
+
+Wire v3 remains the default in `LLMPlanner` and application-owned construction.
+Its closed, registry-derived, tool-discriminated schema fixes the exact keyed
+argument contract, with distinct request-input and upstream reference bindings.
+Input names are restricted to the request; executable LLM literals are forbidden.
+Reusable closed `$defs`/`$ref` schemas and a flat optional input/ref/null union
+reduce repetition; the compact prompt retains the complete semantic catalog.
+Schema-v2 output is not silently reinterpreted as v3.
+
+Wire v4 is explicit opt-in via `LLMPlanner(..., wire_mode=PlanningWireMode.V4)`,
+`ResearchAgentApplication(..., planning_wire_mode=PlanningWireMode.V4)`, or
+CLI `run --wire-mode v4` with LLM configuration. `--wire-mode v3` is also valid;
+omission means v3. Deterministic CLI mode rejects this LLM-specific option.
+There is no schema auto-detection, combined schema, automatic version switching,
+v4-to-v3 hidden fallback, or cross-version recovery fallback. Failover retains
+the selected wire mode. V3 prompt/parser/planner and plan identity behavior
+remain compatible with the accepted v3 path.
+
+```text
+AgentRequest
+→ registry-driven semantic planning catalog/prompt
+→ provider-neutral PlanningModel.complete()
+→ semantic wire v4
+→ strict parser
+→ SemanticPlanCandidate
+→ registry-derived deterministic semantic compiler
+→ existing strict AgentPlan
+→ whole-plan preflight / AgentRuntime / PlanExecutor / verifier
+```
+
+The semantic catalog/prompt presents tool purpose, consumer/producer ports,
+request-source selectors, accepted upstream semantic types, lineage, scientific
+choices/defaults/constraints, and request input names/basic types. Structured
+input values are excluded (including paths, labels, conditions, checkpoints,
+output roots, arrays, and nested values); the natural-language request itself
+is passed to the model. The interface omits raw Python argument inventories,
+execution member/result-field names, binding objects, `StepOutputRef`, and
+reference-induced dependency serialization. Useful scientific context is
+retained, so prompt-size reduction is intentionally modest.
+
+Wire v4 contains only a plan/unsupported decision, step identities, selected
+tools, semantic sources, and explicit control-only dependencies. The parser
+retains closed shapes, duplicate-key/nonfinite rejection, and response/tree/
+step/source safety limits. Names and interface projections are registry- and
+request-derived, with no permanent hard-coded tool set. Semantic candidates do
+not grant execution authority: compiler legality and whole-plan preflight are
+still required.
+
+### Static target-port projection and Groq compatibility
+
+For each selected tool, provider-facing v4 projects legal target enums directly
+from `ToolSpec.semantic_planning.consumer_ports`. The final source representation
+is a closed outer object with target legality separated from the shared inner
+source-kind discriminator:
+
+```json
+{
+  "target": "dataset",
+  "source": {"kind": "input", "input": "input_path"}
+}
+```
+
+Inner variants are `{"kind":"input","input":"<request selector>"}`,
+`{"kind":"step","step":"<producer step ID>"}`, or
+`{"kind":"step_port","step":"<producer step ID>","source_port":"<port>"}`.
+Input selectors are constrained to available request names, never values.
+The selected producer's source-port compatibility remains a compiler check;
+projecting target legality does not solve genuinely ambiguous source choices.
+Tools with zero consumer ports accept only empty source arrays.
+
+The first target-enum implementation put both `kind` and `target` into the
+flat source alternatives inside Groq `anyOf`. Groq rejected the schema with
+`discriminator_multiple_candidates`. Probes of outer-property factoring, enum
+wrappers, explicit discriminator hints, and exact-pattern alternatives also
+failed. The accepted nesting separates tool-specific target legality from the
+inner `kind` discriminator, with shared closed definitions, no regex constraints,
+and no provider-specific schema fork or semantic adapter behavior.
+
+Schema version remains 4. The parser accepts historical flat v4 source payloads
+as well as the nested provider shape, applying the same strict validation;
+mixed or malformed shapes are rejected. Unknown targets fail early in the
+parser, and the compiler retains authoritative `UNKNOWN_TARGET_PORT` defense
+for directly constructed candidates. No new planner layer, workflow heuristic,
+automatic workflow completion, or additional semantic inference was introduced.
+
+### Provider abstraction, recovery, diagnostics, and benchmark
+
+Immutable `PlanningModelProfile` describes deployment/model configuration;
+`PlanningModelFactoryRegistry` constructs adapters only. OpenAI, Gemini, Groq,
+and custom `PlanningModel` injection are supported. The factory does not inspect
+intent, route, retry, repair, rank models, or execute science. No production
+model is hard-coded, and credentials remain environment/provider concerns,
+never profile, request, diagnostic, or benchmark data.
+
+V3 and v4 use the existing `PlanningRecoveryCoordinator`: one initial call,
+either one same-profile transport retry for explicit transient provider failure
+or one complete same-profile Plan repair for an objectively invalid candidate,
+and at most one explicitly configured secondary-profile failover as the final
+call. Retry and repair are mutually exclusive; failover cannot recover again;
+the ceiling is three logical `PlanningModel.complete()` calls. Built-in SDK
+retries are disabled; custom models are responsible for hidden internal behavior.
+Application-owned LLM construction enables this bounded path automatically.
+Reliable HTTP 413 is terminal `PROVIDER_REQUEST_TOO_LARGE`, not retried or
+repaired or treated as retryable HTTP 429 rate limiting.
+
+Recovery is cancellation-aware and checkpoints sanitized diagnostics/decisions
+before further calls. Only the final authoritative-preflight-passing plan is
+durable. Failed candidates and raw responses are never the stored plan;
+interrupted planning is not automatically replayed, and resume after plan
+persistence is planner-free. This is separate from scientific same-step retry:
+`AgentError.recoverable` retains its M5.3 static eligibility meaning.
+
+Diagnostic schema v3 records sanitized attempt order, profile/provider and safe
+model provenance/digests. V4 parser/compiler diagnostics can identify safe step,
+producer step, target/source port, tool, and input names. Persisted diagnostics
+exclude raw prompts, structured input values/paths, provider responses,
+exception prose, HTTP bodies/headers, request IDs, credentials, and tokens.
+Run-state schema remains v3; v3 diagnostic and recovery behavior is unchanged.
+
+The deterministic offline `benchmarks/planner/` harness uses synthetic requests
+and PLAN_ONLY with zero scientific calls. Report schema v4 separates hard
+semantic correctness from canonical workflow conformance using structural,
+nonpositional matching, and distinguishes first-attempt, transport-recovered,
+repair-recovered, and configured-failover success. Unsafe provenance swaps,
+invented bindings, lost parameters, broken artifact flow, and unsupported
+substitutions fail even if preflight accepts their shape. Alternative valid
+DAGs remain accepted. Live-provider availability is optional evidence, not an
+offline acceptance dependency. Deterministic fallback, automatic model
+routing/ranking, prompt-based routing, and tool filtering are not implemented.
+
+## Current accepted validation and limitations
+
+The latest accepted implementation baseline is
+`c053c6543f839f72c11f36bcf2236a8fe822eb9a` (static target-port follow-up).
+The following pre-push validation totals come from the completed follow-up's
+acceptance record supplied for this documentation consolidation; they are not
+new test runs performed by this documentation-only change. The committed code
+and tests confirm the nested schema, early target validation, historical flat
+compatibility, provider transport, and unchanged v3/default behavior.
+
+| Automated acceptance | Result |
+| --- | --- |
+| Five focused suites | 203 passed |
+| Orchestration / providers / benchmarks | 1006 passed |
+| Full lightweight regression | 1429 passed, 54 skipped |
+| Independent JSON Schema payload checks | 7648 passed |
+| `git diff --check` | Passed |
+
+Separate live Groq smoke acceptance accepted a direct strict-schema probe,
+application-level v4 inspection (`PLANNED`, zero scientific execution), and a
+complete five-tool downstream PLAN_ONLY plan:
+`inspect_scATAC` → `epizoo_embed_cells` → `build_cell_neighbors` →
+`cluster_cells` → `compute_cell_umap`. No target-port failure occurred in that
+accepted live verification. Earlier closeout used Groq `openai/gpt-oss-120b`
+for inspection, complete downstream DAGs, canonical and optional-heavy transfer,
+paired DA with covariates, grouped channels, scoped parameters, preflight, and
+zero scientific execution. OpenAI/Gemini transported the same interface in
+mocked tests; live checks were not run without credentials/configuration.
+
+Resolved interface issues are v3's model-authored mechanical binding burden
+(addressed by v4), statically invalid target generation (constrained by schema
+projection and rejected by the parser/compiler), and Groq's discriminator
+incompatibility (resolved by nesting). Hosted models can still choose wrong
+sources/source ports or emit incomplete or unsupported candidates; successful
+smokes do not establish perfect repeated consistency. Explicit scoped inputs
+resolve deterministic optional-scope ambiguity without solving every semantic
+choice. V4 remains opt-in. These limitations are not executor/preflight,
+allowlist, persistence, or recovery defects and do not justify workflow guessing.
+Future hardening should follow new empirical failures or requirements, not a
+pursuit of perfect hosted-model consistency. Provider availability, rate limits,
+and authentication remain environment concerns.
+
+M8.2 guarded real-data acceptance remains outstanding for lack of eligible local
+human/mouse raw counts with genuine replicated conditions; the detailed audit
+and deferred statistical scope are preserved below. M8.1's original guarded
+real-data acceptance and M7.4's combined real-provider/EpiZoo demo were not run.
+Previously accepted Fang2021 scientific runs and later live PLAN_ONLY checks
+must not be conflated with those gates.
+
+Still deferred: reporting-stage cancellation, installable console-script
+packaging, stronger hostile-filesystem-race hardening, browser/web or multi-turn
+UI (including Streamlit, Gradio, and a persistent REPL), interactive demo, richer
+exports, transferred-label UMAP with explicit query provenance, per-class F1 or
+confidence figures, SVG, and a separately constrained `ReportModel`/LLM-generated
+scientific interpretation. Do not implement multi-agent architecture,
+literature/ENCODE retrieval, RAG, cCRE perturbation, or variant interpretation
+without a separately defined capability. Detailed nonblocking lifecycle
+follow-ups remain beside their M5 contracts; their historical acceptance does
+not imply those follow-ups were implemented.
+
+## Milestone and Post-M9 development history
+
+Milestones 1–9 and the Post-M9 interface-hardening cycle are complete, subject
+to the explicitly guarded scientific acceptance gates above. This history
+records capability introduction; the current contract supersedes interim
+scope exclusions, registry sizes, and planning-version defaults.
+
+| Milestone | Capability established |
+| --- | --- |
+| M1 | Validated EpiZoo backend with exact manual-pipeline parity |
+| M2 | Reusable inspection/embedding tool layer and process-local model caching |
+| M3 | Typed plans, immutable allowlist, safe sequential executor, references, verification, errors, bounded retries, traces, PLAN_ONLY |
+| M4 | Provider-neutral natural-language `LLMPlanner`; Groq wire-v2 PLAN_ONLY acceptance |
+| M5.1 | Opt-in durable state, execution lease, fingerprints, checkpointing, planner-free resume |
+| M5.2 | Cooperative cancellation and separately persisted intent; run-state v2 |
+| M5.3 | Error catalog, recovery dispositions, immutable policy provenance, run-state v3 |
+| M6.1 | Neighbors, Leiden, UMAP from compact EpiZoo artifacts |
+| M6.2 | Evaluation-only clustering metrics |
+| M6.3 | Within-species reference-to-query label transfer |
+| M6.4 | Fixed-annotation evaluation and confidence diagnostics |
+| M7.1 | Verified compact AnalysisEvidence |
+| M7.2 | Verified deterministic PNG visualization |
+| M7.3 | Verified deterministic Markdown reports and attributed frozen facts |
+| M7.4 | Python application, managed workspace, post-run composition, one-shot CLI; Phase II closeout |
+| M8.1 | Raw feature provenance and exact replicate-aware sparse pseudobulk |
+| M8.2 | Pinned edgeR DA, independent verification, compact figureless evidence/report |
+| M9.1 | Calibrated hard-semantic offline Planner robustness benchmark |
+| M9.2 | Structured sanitized planning diagnostics (now schema v3) |
+| M9.2.5 | Immutable model profiles and adapter-only factory registry |
+| M9.3 | Tool-discriminated planning wire v3 and composable semantic guidance |
+| M9.4 | Bounded transport retry / full-plan repair / configured final failover |
+| M9.4.5 | LLM-first new-run policy; explicit deterministic mode; provider-free resume/cancel |
+| M9.5 | Final LLM robustness acceptance and Milestone 9 closeout |
+| Post-M9 compatibility | Reusable closed v3 schemas, compact complete prompt, terminal HTTP 413 classification |
+| Post-M9.1/M9.2 | Initially disconnected semantic candidate/compiler for authorized binding and dependency lowering |
+| Post-M9.3 | Registry-attached authoritative metadata replaced central tool-specific compiler mappings |
+| Post-M9.3.3 | Initially disconnected semantic wire-v4 schema/parser foundation |
+| Post-M9.3.4 | Initially disconnected registry-derived semantic catalog/prompt and privacy tests |
+| Post-M9.4.1 | Explicit typed opt-in v4 integration in `LLMPlanner`, preserving failover wire mode |
+| Final interface closeout | Scoped optional binding, semantic recovery/diagnostics, generic provider transport, offline/live acceptance |
+| CLI wire selection | Application/CLI v4 opt-in exposed; omission stays v3; deterministic conflicts rejected |
+| Static target-port follow-up | Tool-specific target-enum projection and early parser defense |
+| Groq compatibility correction | Nested target/source shape resolves competing discriminators; historical flat-v4 parsing retained |
+
+M9 final offline acceptance covered inspection, embedding, downstream analysis,
+clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
+artifact and raw-to-pseudobulk DA. It checked request/ref provenance,
+dependencies, scientific parameter preservation, reference/query separation,
+evaluation-only truth, alternative valid DAGs, terminal rejection, and PLAN_ONLY
+zero execution. Benchmark report v4, diagnostic v3, and run-state v3 were kept.
+
+Post-M9 acceptance checkpoints below preserve earlier validation provenance;
+they are not competing current totals. V4 foundation measurements found
+representative schemas about 80% smaller than v3 and complex downstream,
+transfer, and DA responses about 61–73% smaller. V4 removed model-authored raw
+argument dictionaries, binding discriminators, result-field names,
+`StepOutputRef`, duplicated dependency/reference structures, and large nullable
+optional inventories. The original mechanical failure class did not recur in
+closeout live checks. Earlier omitted/incorrect sources were reduced by scoped-
+input hardening; observed unknown targets motivated the later schema projection.
+
+| Checkpoint | Accepted automated validation |
+| --- | --- |
+| Post-M9.1/M9.2 compiler | Focused 42; orchestration/providers/benchmarks 785; lightweight 1201 passed, 54 skipped; existing v3 planner 77 |
+| Post-M9.3 registry | Focused 75; orchestration/providers/benchmarks 818; v3 planner 77; lightweight 1234 passed, 54 skipped |
+| Post-M9.3.3 wire foundation | Wire 53; compiler/registry 75; v3 planner 77; orchestration/providers/benchmarks 871; lightweight 1287 passed, 54 skipped |
+| Post-M9.3.4 prompt | Prompt 19; wire 53; compiler/registry 75; v3 planner 77; orchestration/providers/benchmarks 890; lightweight 1306 passed, 54 skipped |
+| Post-M9.4.1 integration | V4 integration 26; v3 planner 77; semantic suites 147; orchestration/providers/benchmarks 916; lightweight 1332 passed, 54 skipped; production-runtime PLAN_ONLY zero scientific calls |
+| Final interface closeout | Registry 23; compiler 57; prompt 21; wire 54; v4 planner 26; v4 recovery 11; v4 transport 7; v4 benchmark acceptance 30; v3 planner 77; M9 recovery 117; all benchmarks 69; lightweight 1388 passed, 54 skipped |
+
+The early disconnected/compiler-only and no-live-acceptance descriptions applied
+only at those checkpoints. V4 integration, semantic repair/diagnostics, and live
+Groq acceptance are now complete; the static target-port/Groq correction is the
+latest accepted state recorded above. No scientific tool, strict internal plan,
+executor, runtime, persistence/resume, cancellation, verification, recovery
+budget, or provider-specific semantic engine was added by that correction.
+
+## Detailed accepted contracts and scientific acceptance
+
+The M1–M8 sections retain precise APIs, scientific rules, artifact trust
+boundaries, validation counts, environment observations, and deferred items.
+Unless stated otherwise, a milestone's test counts describe its acceptance
+checkpoint, not the latest regression total. Historical registry expansion was
+2 tools in M2–M5, 5/6/7/8 in M6.1/6.2/6.3/6.4, 8 through M7, 10 in M8.1, and
+11 in M8.2; the current inventory above is authoritative. Planning wire v2 was
+the M4–M8 contract and was superseded by the current v3/default and v4/opt-in
+interface without replacing `AgentPlan` or scientific execution contracts.
 
 ### Milestone 1 — EpiZoo cell embedding backend
 
@@ -14,6 +421,7 @@ raw scATAC-seq AnnData
 → reproducible cell embeddings
 
 Validated on Fang2021:
+
 - 2,000 mouse scATAC-seq cells
 - output shape: `(2000, 512)`
 - exact scientific parity with the manual EpiZoo pipeline
@@ -44,9 +452,9 @@ user/file input
 → validated backend
 → structured lightweight result
 
-Generalized LLM planning remains future work.
-
-Do not implement annotation, clustering, UMAP, RAG, literature retrieval, reports, or multi-agent orchestration in this milestone.
+M2 deliberately scoped implementation to inspection and embedding. Natural-language
+planning, annotation, clustering, UMAP, and reports were added in later milestones;
+retrieval, RAG, and multi-agent orchestration remain outside current scope.
 
 ### Milestone 3 — Agent orchestration core
 
@@ -56,10 +464,10 @@ explicit immutable tool registry, safe sequential execution, dependency/output
 references, orchestration verification, structured errors, bounded
 same-argument retry, execution traces, and PLAN_ONLY mode.
 
-The production tool vocabulary is limited to `inspect_scATAC` and
-`epizoo_embed_cells`; arbitrary Python and shell execution are prohibited. Real
-end-to-end acceptance uses `inspect_scATAC` through AgentRuntime. Generalized
-LLM planning remains future work.
+M3 acceptance used the original inspection/embedding vocabulary; real
+end-to-end acceptance exercised `inspect_scATAC` through `AgentRuntime`.
+M4 subsequently supplied natural-language planning. The prohibition on arbitrary
+Python and shell execution remains authoritative.
 
 ### Milestone 4 — Natural-language planning
 
@@ -104,6 +512,11 @@ execution. `AgentRuntime.resume(run_id)` is planner-free and reuses the persiste
 plan through the existing `PlanExecutor`, `ToolRegistry`, argument resolver, and
 verifier; there is no duplicate execution engine. Persisted successes are
 revalidated before reuse, including `StepOutputRef` restoration across restart.
+
+Terminal `AgentRuntime.resume()` returns the immutable stored terminal result;
+it does not itself rerun artifact verification. Nonterminal resume revalidates
+successes before reuse, and downstream evidence/application composition freshly
+verifies artifacts even after terminal resume.
 
 PLAN_ONLY remains zero-execution across restart, terminal resume is idempotent,
 and stale RUNNING scientific work is conservatively marked INTERRUPTED with no
@@ -163,10 +576,12 @@ resume invokes neither planner nor scientific tools.
 Cancellation never routes PLAN_ONLY through scientific execution. PLAN_ONLY
 remains zero-tool across run, cancel, restart, and resume.
 
-Persisted run-state schema version is now 2. Valid Milestone 5.1 version-1
+M5.2 introduced persisted run-state schema version 2 (superseded by M5.3 v3).
+Valid Milestone 5.1 version-1
 records remain readable and are checked against the committed Milestone 5.1
 lifecycle, error-category, and trace-event vocabularies. Loading v1 does not
-rewrite it; the next legitimate update persists v2. A v1 record cannot contain
+rewrite it; the next legitimate update wrote v2 at M5.2 and now writes v3.
+A v1 record cannot contain
 v2-only cancellation semantics.
 
 Accepted validation:
@@ -285,14 +700,7 @@ Deferred non-blocking follow-ups:
 
 ### Milestone 6.1 — Downstream EpiZoo embedding analysis
 
-Milestone 6.1 is complete and accepted. The production `ToolRegistry` now
-contains exactly five scientific tools:
-
-1. `inspect_scATAC`
-2. `epizoo_embed_cells`
-3. `build_cell_neighbors`
-4. `cluster_cells`
-5. `compute_cell_umap`
+Milestone 6.1 is complete and accepted.
 
 The accepted downstream artifact flow is:
 
@@ -320,8 +728,8 @@ Milestone 6.1 preserves the existing orchestration and lifecycle contracts.
 Only registered scientific tools execute; arbitrary Python and shell remain
 prohibited. Executable planner arguments still come only from
 `AgentRequest.inputs` or `StepOutputRef`, and the LLM planner cannot invent
-executable literals. Planning schema v2 and whole-plan preflight remain
-authoritative, PLAN_ONLY executes zero tools, and downstream tools are
+executable literals. Whole-plan preflight remains authoritative, PLAN_ONLY
+executes zero tools, and downstream tools are
 nonretryable by default. Durable resume revalidates artifacts before restoring
 downstream references, cancellation behavior is unchanged, and raw scATAC
 matrices are never densified.
@@ -346,7 +754,7 @@ for 2,000 cells on an RTX 4090. All steps succeeded and verified in about 64.4
 seconds with about 10.9 GiB peak allocated GPU memory. The final EpiZoo
 representation was `(2000, 512)`, the UMAP was `(2000, 2)`, Leiden produced 21
 clusters, cell order was exact, the input file was unchanged, and terminal
-resume revalidated every artifact without rerunning scientific tools.
+resume plus acceptance artifact revalidation reran no scientific tools.
 
 Non-blocking environment notes from acceptance: the installed Louvain package
 emits a `pkg_resources` deprecation warning, Scanpy notes that Louvain is
@@ -369,15 +777,6 @@ evaluate_cell_clustering(
     overwrite=False,
 )
 ```
-
-The production `ToolRegistry` now contains exactly six scientific tools:
-
-1. `inspect_scATAC`
-2. `epizoo_embed_cells`
-3. `build_cell_neighbors`
-4. `cluster_cells`
-5. `compute_cell_umap`
-6. `evaluate_cell_clustering`
 
 The accepted scientific direction is strictly:
 
@@ -428,8 +827,8 @@ inspect
 → evaluate
 
 UMAP is intentionally omitted because it is unnecessary for clustering
-metrics. Planning schema v2, whole-plan preflight, the registered-tool
-allowlist, arbitrary Python/shell prohibition, PLAN_ONLY zero-tool behavior,
+metrics. Whole-plan preflight, the registered-tool allowlist, arbitrary
+Python/shell prohibition, PLAN_ONLY zero-tool behavior,
 and cancellation semantics remain authoritative. Executable values still
 come only from `AgentRequest.inputs` or `StepOutputRef`; the LLM planner cannot
 invent literals. When omitted, `cluster_key="leiden"` comes from the Python API
@@ -497,16 +896,6 @@ transfer_cell_labels(
     overwrite=False,
 )
 ```
-
-The production `ToolRegistry` now contains exactly seven scientific tools:
-
-1. `inspect_scATAC`
-2. `epizoo_embed_cells`
-3. `build_cell_neighbors`
-4. `cluster_cells`
-5. `compute_cell_umap`
-6. `evaluate_cell_clustering`
-7. `transfer_cell_labels`
 
 The accepted label-transfer workflow is:
 
@@ -596,8 +985,8 @@ inspect_query     → embed_query     ┘
 Both embedding steps receive the same structured species and checkpoint
 configuration. Transfer receives actual upstream species, checkpoint path,
 embedding path, and ID-sidecar path through `StepOutputRef`. Optional scientific
-arguments are omitted unless present in structured request inputs. Planning
-schema v2, whole-plan preflight, the executable allowlist, and PLAN_ONLY
+arguments are omitted unless present in structured request inputs.
+Whole-plan preflight, the executable allowlist, and PLAN_ONLY
 zero-tool behavior remain authoritative. The LLM cannot invent executable
 paths, species, checkpoint, label key, k, metric, confidence threshold, or
 defaults.
@@ -668,17 +1057,6 @@ evaluate_cell_annotation(
     overwrite=False,
 )
 ```
-
-The production `ToolRegistry` now contains exactly eight scientific tools:
-
-1. `inspect_scATAC`
-2. `epizoo_embed_cells`
-3. `build_cell_neighbors`
-4. `cluster_cells`
-5. `compute_cell_umap`
-6. `evaluate_cell_clustering`
-7. `transfer_cell_labels`
-8. `evaluate_cell_annotation`
 
 Milestone 6.4 evaluates an already-fixed valid Milestone 6.3 annotation.
 Ground truth is evaluation-only: it never affects EpiZoo embedding, reference
@@ -752,8 +1130,8 @@ inspect_query     → embed_query     ┘
 
 The chained evaluation receives `transfer.annotation_path` through
 `StepOutputRef`. Ground-truth path and key occur only in the evaluation step and
-never reach inspection, embedding, or transfer. Planning schema v2 remains
-authoritative, PLAN_ONLY executes zero scientific tools, and the LLM receives
+never reach inspection, embedding, or transfer. PLAN_ONLY executes zero
+scientific tools, and the LLM receives
 only sanitized metadata and cannot invent executable metric settings.
 
 For a direct transfer dependency, the verifier requires both annotation path
@@ -832,8 +1210,9 @@ resolved-argument bindings are checked as part of that boundary. Scientific
 callables are never invoked by evidence construction or verification, and a
 terminal resume does not bypass fresh artifact verification.
 
-Schema v1 contains compact, explicit whitelisted projections for all eight
-current production tools. Unsupported future tools fail closed, and arbitrary
+Schema v1 began with compact, explicit whitelisted projections for the eight
+M7 tools; M8 added projections for feature validation, pseudobulk, and DA.
+Unsupported future tools fail closed, and arbitrary
 future result fields are not automatically exposed. The evidence layer does not
 scan arbitrary output directories and excludes embeddings, cell-ID and label
 vectors, UMAP coordinates, confidence arrays, AnnData objects, raw scATAC
@@ -858,12 +1237,13 @@ structural, provenance, and content verifier logic. Schema v1 records that
 distinction explicitly.
 
 Milestone 7.1 is downstream of orchestration and introduces no scientific-tool
-registration. The production `ToolRegistry` remains exactly eight tools. There
+registration. M7.1 retained the then-existing eight-tool registry. There
 is no new recovery identity, recovery-policy change, planning-schema change,
 RunStore-schema change, orchestration change, provider change, or EpiZoo change.
 It introduces no visualization, narrative generation, or LLM exposure of
 scientific payloads. Visualization is provided separately by Milestone 7.2,
-while narrative/report-model integration remains later work.
+while LLM narrative / `ReportModel` integration remains later work and
+deterministic reports are supplied by M7.3.
 
 Accepted validation:
 
@@ -935,7 +1315,8 @@ Milestone 7.2 v1 produces exactly:
 3. an annotation-evaluation raw confusion matrix.
 
 Transferred-label UMAP, per-class F1 figures, confidence figures, SVG,
-narrative reporting, and interactive UI are deferred. Transferred-label UMAP
+LLM narrative reporting, and interactive UI are deferred; deterministic
+reporting is supplied by M7.3. Transferred-label UMAP
 requires a future explicit provenance binding between the query UMAP and the
 exact query embedding/cell-ID source used by label transfer; matching cell IDs
 alone is intentionally insufficient.
@@ -1003,8 +1384,8 @@ not claimed to be universally atomic.
 Milestone 7.2 remains downstream of orchestration and introduces no
 `ToolRegistry` entry, recovery identity, planning-schema change, RunStore
 change, provider change, scientific-tool change, EpiZoo change, or dependency.
-The production registry remains exactly eight tools and planning schema v2 is
-unchanged. Milestone 7.1 evidence remains the authoritative trust boundary.
+M7.2 retained the then-existing registry and planning wire v2. Milestone 7.1
+evidence remains the authoritative trust boundary.
 
 Accepted validation:
 
@@ -1049,8 +1430,8 @@ verify_analysis_report(
 )
 ```
 
-`AgentRunResult` and `AnalysisEvidence` are required, visualization is
-optional, and `ToolRegistry` is explicitly caller supplied. Reporting remains
+`AgentRunResult` and `AnalysisEvidence` are required; `AnalysisVisualizations`
+is optional, and `ToolRegistry` is explicitly caller supplied. Reporting remains
 post-run and outside `AgentPlan`.
 
 The accepted trust boundary is:
@@ -1105,7 +1486,7 @@ for a future constrained `ReportModel`.
 
 #### Conditional sections and scientific wording
 
-The fixed conditional section order is:
+The current fixed conditional section order extends M7.3 with the M8 sections:
 
 1. Analysis Summary
 2. Dataset
@@ -1114,9 +1495,12 @@ The fixed conditional section order is:
 5. Clustering Evaluation
 6. Cell Annotation
 7. Annotation Evaluation
-8. Figures
-9. Methods / Analysis Parameters
-10. Provenance and Reproducibility
+8. Regulatory Feature Space (added by M8.1)
+9. Replicate-aware Pseudobulk (added by M8.1)
+10. Replicate-aware Differential Accessibility (added by M8.2)
+11. Figures
+12. Methods / Analysis Parameters
+13. Provenance and Reproducibility
 
 Sections appear only when their verified source exists. Inspection-only reports
 are valid; clustering without evaluation has no clustering-evaluation claims;
@@ -1159,14 +1543,14 @@ atomic replacement of a nonempty directory is not claimed.
 Milestone 7.3 introduces no `ToolRegistry` entry, `AgentPlan` integration,
 planning-schema change, RunStore change, recovery identity, provider change,
 scientific-tool change, Milestone 7.1/7.2 semantic change, EpiZoo change, or
-dependency. The production registry remains exactly eight tools, planning
-schema remains v2, and RunStore remains v3.
+dependency. At this milestone the registry had eight tools and planning wire
+was v2; RunStore remains v3.
 
 Milestone 7.3 v1 contains no LLM-generated narrative. Future scientific
 interpretation should use a separate constrained `ReportModel` that consumes
-only compact report facts with stable fact IDs. Other brief future directions
-are application/UI composition, an interactive Agent demo, and richer export
-formats if later justified.
+only compact report facts with stable fact IDs. Application composition was
+completed in M7.4; interactive UI/demo and richer
+export formats remain future directions if justified.
 
 Accepted validation:
 
@@ -1371,28 +1755,29 @@ PYTHONPATH=src python -m agent cancel ...
 It emits compact deterministic JSON. Exit code 0 means success or planned; 2
 means invalid CLI/application/provider configuration; 3 means runtime or
 durable-state failure; 4 means a cancelled application result; and 5 means
-postprocessing failure. Deterministic/offline planning is the default. The CLI
-may select the existing OpenAI, Gemini, or Groq adapters when configured, but
+postprocessing failure. Since M9.4.5, new runs default to LLM planning with
+explicit provider/model configuration; deterministic/offline planning requires
+explicit selection. OpenAI, Gemini, and Groq adapters are supported, but
 provider secrets remain environment-only and never become CLI arguments,
-request inputs, durable state, application results, or output. No provider
-factory was added to the application service, and provider adapters were not
-changed. Installable console-script packaging remains deferred.
+request inputs, durable state, application results, or output. M9 subsequently
+added profile/factory-based application construction while keeping provider
+adapters separate from semantic planning. Installable console-script packaging
+remains deferred.
 
 #### Safety invariants, demo, and acceptance
 
 Natural-language planning retains all accepted boundaries. Executable values
 come only from `AgentRequest.inputs` or `StepOutputRef`; providers receive
-sanitized tool/schema data and no Python callables; planning schema v2 and
-whole-plan preflight remain authoritative; and `ToolRegistry` remains the
+sanitized tool/schema data and no Python callables; whole-plan preflight
+remains authoritative; and `ToolRegistry` remains the
 executable allowlist. “Generate a report” names application postprocessing, not
 a scientific tool. Arbitrary Python and shell execution remain prohibited.
 
 Milestone 7.4 introduced no scientific tool, registry identity, planning-schema
 change, RunStore-schema change, recovery identity, executor/verifier semantic
 change, runtime semantic change, provider semantic change, EpiZoo change,
-dependency, ReportModel, or LLM-generated scientific narrative. The production
-registry remains exactly eight tools, planning schema remains v2, and RunStore
-remains v3.
+dependency, ReportModel, or LLM-generated scientific narrative. At M7.4 the
+registry had eight tools and planning wire was v2; RunStore remains v3.
 
 The canonical first demo is:
 
@@ -1472,19 +1857,6 @@ build_replicate_pseudobulk(
     overwrite=False,
 )
 ```
-
-The production `ToolRegistry` now contains exactly ten scientific tools:
-
-1. `inspect_scATAC`
-2. `epizoo_embed_cells`
-3. `build_cell_neighbors`
-4. `cluster_cells`
-5. `compute_cell_umap`
-6. `evaluate_cell_clustering`
-7. `transfer_cell_labels`
-8. `evaluate_cell_annotation`
-9. `validate_scATAC_feature_space`
-10. `build_replicate_pseudobulk`
 
 Feature validation accepts only sparse CSR/CSC `X` or an explicitly named
 sparse layer. The structured request must assert one of fragment counts,
@@ -1578,8 +1950,8 @@ validate_feature_space
 The second step receives `feature_space_path` through `StepOutputRef`. All
 other executable values come from structured `AgentRequest.inputs`; the LLM
 planner receives descriptions and schemas but no executable Python callable.
-Planning schema v2, whole-plan preflight, RunStore schema v3, durability,
-cancellation, and bounded recovery semantics remain unchanged. PLAN_ONLY
+Whole-plan preflight, RunStore schema v3, durability, cancellation, and bounded
+recovery semantics remain authoritative. PLAN_ONLY
 executes zero scientific tools.
 
 The recovery identities are `validate-scatac-feature-space-v1` and
@@ -1642,7 +2014,8 @@ The production `ToolRegistry` contains exactly eleven scientific tools. The new
 recovery identity is
 `run-replicate-differential-accessibility-edger-ql-v1`; execution has one actual
 attempt and no M8.2 scientific/backend error is automatically retryable.
-Planning schema v2 and RunStore schema v3 remain unchanged.
+M8.2 did not change planning wire v2; current planning versions are documented
+above. RunStore remains schema v3.
 
 The authoritative scientific input is a verified Milestone 8.1 sparse int64
 SUM-count pseudobulk. DA never uses individual cells as replicates. Independent
@@ -1652,6 +2025,9 @@ require at least three complete biological pairs. One-cell pseudobulk units are
 retained and emit `DA_ONE_CELL_PSEUDOBULK`. Selection, exclusion reasons,
 ordered categorical/numeric covariates, condition coding, numeric design,
 contrast, rank, estimability, and residual-DF checks are fixed by M8.2-A.
+
+The two-condition contrast is numerator minus denominator, with optional
+ordered additive categorical or numeric covariates.
 
 The fixed M8.2-B backend uses R 4.6.1, Bioconductor 3.23, edgeR 4.10.4,
 BiocManager 1.30.27, limma 3.68.5, locfit 1.5.9.12, statmod 1.5.2, and lattice
@@ -1674,8 +2050,9 @@ compatibility, and before/after source/artifact hashes are required.
 
 Deterministic planning supports both a fixed verified pseudobulk → DA plan and
 raw scATAC → feature validation → pseudobulk → DA. The chained DA path uses a
-`StepOutputRef`; mixed raw and fixed-pseudobulk sources are rejected. The LLM
-planner remains bounded by wire schema v2 and request/ref bindings. PLAN_ONLY
+`StepOutputRef`; mixed raw and fixed-pseudobulk sources are rejected. At M8.2
+the LLM planner used wire v2; current v3/v4 planning preserves the request/ref
+executable-value boundary. PLAN_ONLY
 starts neither Python science nor R.
 
 Verified DA success is durably checkpointed. Nonterminal resume independently
@@ -1715,521 +2092,3 @@ effect-size shrinkage, adaptive filtering, user-configurable edgeR parameters,
 peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
-
-### Milestone 9.1–9.5 — Robust LLM planning and recovery
-
-M9.1, M9.2, M9.2.5, M9.3, M9.4, M9.4.5, and M9.5 are complete. Milestone 9 is
-complete.
-
-#### LLM and Planner responsibility boundary
-
-The LLM owns natural-language intent understanding, tool selection, and
-workflow composition as an interchangeable candidate-plan generator.
-Deterministic code owns schema validation, executable-tool allowlisting,
-binding and reference validation, provenance checks, full-plan preflight, and
-execution safety. Keyword routing, regex intent matching, deterministic
-workflow classifiers, canonical workflow tables, and production semantic
-oracles are prohibited. `DeterministicPlanner` is not an oracle for LLM output,
-and scientifically valid noncanonical DAGs remain admissible.
-
-#### Model and provider abstraction
-
-`PlanningModel.complete()` remains provider-neutral. Immutable
-`PlanningModelProfile` values describe deployment/model configuration, while
-`PlanningModelFactoryRegistry` constructs provider adapters only. The factory
-registry does not inspect intent, route, retry, repair, fall back, or execute
-scientific tools. No production model is hard-coded. Credentials remain
-provider/environment concerns and must not enter profiles, persisted
-diagnostics, or benchmark cases.
-
-#### Planning wire and metadata contracts
-
-Planning wire schema v3 has a closed response root and registry-derived tool
-step alternatives. The selected tool structurally fixes its exact keyed
-argument set, preventing cross-tool argument pollution. Each executable value
-is bound either to a currently available `AgentRequest.inputs` name or to an
-upstream `StepOutputRef`; executable literals are forbidden. Input and
-reference binding shapes are precise, and schema-v2 responses are not silently
-reinterpreted as v3. Accepted responses convert into the existing `AgentPlan`,
-`PlanStep`, and `StepOutputRef` contracts.
-
-All planning-facing metadata is registry-derived and sanitized. Tool roles are
-descriptive; argument source eligibility, artifact kinds and producer/consumer
-compatibility, reference/query/ground-truth provenance, scientific-parameter
-preservation, and result-field downstream-bindability are generation guidance.
-They do not create a runtime workflow engine or semantic preflight oracle. The
-authoritative runtime validation, execution, scientific-tool, and verification
-path is unchanged.
-
-#### Diagnostics and benchmark contracts
-
-Planning diagnostics use provider-neutral, structured diagnostic schema v3.
-Profile/provider provenance is sanitized, and model identity is retained only
-through approved safe provenance/digest behavior. Persisted diagnostics exclude
-raw prompts, structured input values and paths, raw provider output, provider
-exception bodies, HTTP bodies and headers, request IDs, credentials, and
-tokens. Run-state schema remains v3, and `AgentError.recoverable` retains its
-scientific same-step recovery meaning.
-
-Planner benchmark report schema v4 is deterministic and offline. Its semantic
-oracle is benchmark-only: hard semantic correctness is distinct from canonical
-workflow conformance, matching is structural rather than positional, and
-alternative valid workflows are accepted. Unsafe provenance swaps, invented
-bindings, lost scientific parameters, broken artifact flow, and unsupported
-substitutions remain failures. Benchmark execution is PLAN_ONLY with zero
-scientific calls; optional live-provider availability is evidence, not a normal
-offline acceptance dependency.
-
-#### Planning Recovery
-
-M9.4 adds one bounded same-profile transport retry for explicit transient
-provider failures or one complete same-profile Plan repair for objectively
-invalid candidates; retry and repair are mutually exclusive. After exhausted
-primary recovery, one explicitly configured secondary profile may make the
-third and final call through `PlanningModelFactoryRegistry`. Built-in adapters
-disable SDK retries, and no recovery path may exceed three logical provider
-calls.
-
-Recovery remains cancellation-aware and checkpoints sanitized diagnostics and
-recovery decisions before later calls. Failed candidates and raw provider
-responses are never persisted as the run Plan. Only a final authoritative-
-preflight-passing Plan becomes durable; interrupted planning before that point
-is not automatically replayed, while resume after Plan persistence remains
-planner-free. Run-state schema remains v3.
-
-#### User-facing default policy
-
-Application-owned new runs are LLM-first and require an explicit primary
-`PlanningModelProfile`; missing configuration fails before durable run-state
-creation. An explicitly injected Planner remains authoritative, and
-deterministic application planning requires explicit selection. Configured LLM
-runs automatically use the existing M9.4 recovery layer, with at most one
-explicit optional secondary profile. No provider or model is inferred from
-credentials, prompts, or benchmark results.
-
-Low-level `AgentRuntime()` remains deterministic by default for compatibility
-and offline infrastructure. Resume and cancel remain planner-, provider-, SDK-,
-and credential-free. Deterministic fallback, automatic model routing/ranking,
-prompt-based routing, and tool filtering remain deferred. The CLI defaults to
-LLM mode with explicit provider/model configuration, exposes
-`--planner deterministic`, and temporarily retains `--provider deterministic`
-as a compatibility alias.
-
-#### Final Milestone 9 acceptance
-
-The accepted end-to-end planning path is:
-
-```text
-User Request
-→ LLM-first Planner
-→ exact tool/schema/data-flow planning interface
-→ candidate AgentPlan
-→ deterministic validation
-→ bounded retry / repair / configured failover
-→ final AgentPlan
-→ authoritative preflight
-→ scientific execution
-```
-
-Deterministic offline acceptance covers inspection, embedding, downstream
-analysis, clustering evaluation, label transfer and evaluation, pseudobulk,
-and both fixed-artifact and raw-to-pseudobulk differential accessibility. It
-checks input and `StepOutputRef` provenance, dependencies, scientific parameter
-preservation, reference/query separation, evaluation-only ground truth,
-alternative valid DAGs, terminal rejection, and zero scientific execution in
-PLAN_ONLY. The global recovery ceiling remains three logical provider calls:
-one initial call, one mutually exclusive same-profile retry or complete Plan
-repair, and one explicitly configured final failover call. Failover cannot
-nestedly recover, and no fourth call or automatic deterministic fallback is
-possible.
-
-The Planner core remains provider/model independent. Benchmark report schema
-v4 and diagnostic schema v3 remain authoritative; raw prompts, structured input
-values, provider responses, exception prose, request IDs, headers, credentials,
-and tokens remain excluded from durable diagnostics. Run-state schema remains
-v3, only a final preflight-passing Plan is durable, planning interruption is not
-automatically replayed, and resume/cancel remain provider-free.
-
-Post-closeout real-provider compatibility hardening preserves schema v3 strict
-Structured Outputs and all eleven tool branches while replacing repeated
-binding shapes with reusable closed `$defs`/`$ref` definitions. Optional
-arguments use a flat input/ref/null union, and the prompt omits schema-enforced
-syntax while retaining the complete registry-derived scientific semantic
-catalog. Structured HTTP 413 failures are terminally classified as sanitized
-`PROVIDER_REQUEST_TOO_LARGE`, distinct from retryable HTTP 429 rate limiting.
-The Planner architecture, recovery limits, catalog fingerprint semantics, and
-Milestone 9 completion status are unchanged.
-
-#### Post-M9.1/M9.2 planner-interface hardening checkpoint
-
-Post-M9.1/M9.2 establishes an experimental, provider-independent semantic
-compiler that is not connected to production `LLMPlanner` or `AgentRuntime`.
-Its planner-facing candidate contains step identity, selected tool, semantic
-source selections addressed to consumer-facing ports, and explicit control-only
-dependencies. The LLM or user retains every genuine semantic decision: tool
-selection, workflow/DAG composition, producer selection, reference/query/
-ground-truth branch assignment, direct request input versus upstream result,
-ambiguous source or channel choice, and ambiguous optional-parameter scope.
-
-Deterministic compilation is limited to explicitly authorized mechanical work:
-exact request-input binding, semantic-port/channel expansion into exact tool
-arguments and result fields, grouped `StepOutputRef` construction,
-reference-induced dependencies, optional/default handling, and strict
-construction of the existing `AgentPlan`. A unique, explicitly authorized
-mapping may be derived; zero or multiple valid mappings fail closed. The
-compiler never guesses from step order or names, string similarity, common
-workflow templates, reference/query position, or first-match behavior.
-
-Semantic-port/channel authority describes tool interfaces rather than
-hard-coded workflows. Existing descriptive planning metadata remains
-non-authoritative unless explicitly promoted through a reviewed compiler
-contract. The strict internal `AgentPlan`, preflight, executor, persistence and
-resume, cancellation, verification, scientific tools, provider adapters,
-recovery and diagnostics, and production planning wire schema v3 remain
-unchanged. No provider-facing planning wire schema v4 has been introduced.
-
-Accepted validation:
-
-- semantic compiler focused suite: 42 passed
-- orchestration, providers, and benchmarks: 785 passed
-- complete lightweight regression: 1201 passed, 54 skipped
-- existing planning wire schema v3 `LLMPlanner`: 77 passed
-
-#### Post-M9.3 registry-driven semantic metadata foundation
-
-Post-M9.3 moves authoritative semantic planning metadata alongside each
-`ToolSpec`, separate from the existing descriptive, non-authoritative planning
-guidance. This metadata describes tool interfaces rather than workflows:
-semantic consumer and producer ports, logical port members, grouped request
-sources, exact execution argument/result mappings, request and upstream source
-permissions, lineage constraints, and safe deterministic compiler authority.
-
-The experimental compiler derives its authority generically from registry
-metadata and no longer uses a central tool-name-specific mapping catalog.
-Grouped request-input sources are supported, while every executable value still
-originates from structured `AgentRequest.inputs`. The accepted Post-M9.2
-semantic candidate representation remains unchanged.
-
-Every currently planner-visible production tool has validated authoritative
-semantic metadata. Coverage is derived dynamically from the registry; the
-current eleven tools are not treated as a permanent closed set. A normal future
-tool should ordinarily become planner-visible through its implementation,
-execution contract, `ToolSpec` registration, semantic planning metadata, and
-focused tests and benchmarks, without changes to provider adapters, generic
-compiler logic, executor, runtime, persistence, or recovery.
-
-Production planning still uses wire schema v3. No provider-facing wire schema
-v4 or production LLM integration has been introduced. Existing `LLMPlanner`,
-providers, runtime, executor, persistence, cancellation, recovery, diagnostics,
-and scientific tools remain unchanged.
-
-Accepted validation:
-
-- semantic registry/compiler focused suite: 75 passed
-- orchestration, providers, and benchmarks: 818 passed
-- existing planning wire schema v3 `LLMPlanner`: 77 passed
-- complete lightweight regression: 1234 passed, 54 skipped
-
-#### Post-M9.3.3 semantic planning wire-v4 foundation
-
-Post-M9.3.3 adds a disconnected, provider-facing semantic wire schema v4 and
-strict parser. Production `LLMPlanner` continues to use wire schema v3; there
-is no v4 production configuration switch or provider integration. The current
-v4 path ends at:
-
-```text
-wire-v4 JSON
-→ strict v4 parser
-→ existing SemanticPlanCandidate
-```
-
-Wire v4 contains only the plan-versus-unsupported decision, step identity,
-selected tool, semantic source selections, and explicit control-only
-dependencies. It excludes executor-oriented argument dictionaries, binding
-objects, raw result-field names, `StepOutputRef`, reference-induced
-dependencies, and execution descriptions.
-
-Structural schema legality is separate from semantic compiler legality. Tool
-names are derived from the planner-visible registry, and request-input enums
-contain request-specific names but never values. Tool and port authority is not
-duplicated in JSON Schema. The closed structural variants are provider-neutral,
-retain the existing hardened JSON behavior and parsing safety limits, and do
-not hard-code the current tools as a permanent set.
-
-The semantic compiler, strict internal `AgentPlan`, executor, runtime,
-persistence, recovery, provider adapters, and scientific tools remain
-unchanged. Representative v4 schemas are about 80% smaller than v3; complex v4
-responses are about 61–73% smaller for the tested downstream, transfer, and
-differential-accessibility workflows.
-
-Accepted validation:
-
-- wire-v4 focused suite: 53 passed
-- semantic compiler/registry suites: 75 passed
-- existing planning wire schema v3 `LLMPlanner`: 77 passed
-- orchestration, providers, and benchmarks: 871 passed
-- complete lightweight regression: 1287 passed, 54 skipped
-
-#### Post-M9.3.4 semantic planning catalog and prompt
-
-Post-M9.3.4 adds a disconnected, registry-driven semantic catalog and planning
-prompt. The catalog projects the same authoritative `ToolSpec.semantic_planning`
-metadata used by the semantic compiler; there is no second semantic mapping
-catalog. Request-specific structured input names and basic types may be exposed,
-but structured input values are never included.
-
-The prompt presents tool purpose, semantic consumer and producer ports,
-available request-source selectors, accepted upstream semantic types, lineage
-constraints, and relevant scientific choices, defaults, and constraints. It
-excludes raw Python argument inventories, result-field names, grouped execution
-members, binding objects, `StepOutputRef`, raw result keys, and
-reference-induced dependency serialization.
-
-Catalog and prompt generation are deterministic, request-specific,
-registry-driven, and extensible to future tools without tool-name-specific
-rendering branches or workflow templates. Structured-input privacy tests cover
-paths, labels, conditions, checkpoints, output directories, arrays, and nested
-values. The prompt-size reduction relative to v3 is intentionally modest
-because useful scientific context remains; the primary gain is improved
-signal-to-noise and removal of executor serialization burden.
-
-Production `LLMPlanner` still uses wire schema v3. The semantic prompt/catalog,
-wire-v4 parser, and semantic compiler remain disconnected from production
-provider and runtime paths.
-
-> If a required scientific/request parameter is not represented by reviewed
-> authoritative semantic metadata, production v4 must fail closed rather than
-> infer, ignore, or silently default it.
-
-Accepted validation:
-
-- semantic prompt focused suite: 19 passed
-- wire-v4 suite: 53 passed
-- semantic compiler/registry suites: 75 passed
-- existing planning wire schema v3 `LLMPlanner`: 77 passed
-- orchestration, providers, and benchmarks: 890 passed
-- complete lightweight regression: 1306 passed, 54 skipped
-
-#### Post-M9.4.1 opt-in semantic `LLMPlanner` integration
-
-`LLMPlanner` now accepts an explicit typed planning-wire mode for v3 or v4.
-Construction without an explicit mode remains exactly wire v3; wire v4 is
-opt-in only and is not the application default. There is no schema-version
-auto-detection, combined v3/v4 schema, or cross-version syntax fallback.
-
-The opt-in v4 path composes the accepted Post-M9 components:
-
-```text
-semantic prompt/catalog
-→ existing provider-neutral PlanningModel.complete()
-→ semantic wire-v4 parser
-→ SemanticPlanCandidate
-→ registry-derived semantic compiler
-→ existing strict AgentPlan
-→ existing authoritative preflight/runtime path
-```
-
-Provider adapters remain unchanged and unaware of semantic-planning internals.
-V4 compilation does not bypass `ToolRegistry` allowlisting, strict plan
-validation, whole-plan preflight, provenance, or zero-side-effect guarantees.
-It fails closed when reviewed semantic metadata is incomplete or cannot
-authorize a required binding, with no fallback to argument-name guessing,
-descriptive planning guidance, literals, or v3 serialization.
-
-The v3 prompt, schema, parser, planner identity, plan identity, and behavior
-remain unchanged. Secondary/failover planner construction preserves the
-selected wire mode. Semantic repair and diagnostic integration is not yet
-implemented; v4 is not the default, and no live-provider acceptance has been
-performed.
-
-Accepted validation:
-
-- focused v4 `LLMPlanner` integration: 26 passed
-- existing v3 `LLMPlanner`: 77 passed
-- semantic prompt/wire/compiler/registry suites: 147 passed
-- orchestration, providers, and benchmarks: 916 passed
-- complete lightweight regression: 1332 passed, 54 skipped
-- production-runtime PLAN_ONLY proof: zero scientific tool calls
-
-#### Final Post-M9 Planner Interface Hardening closeout
-
-The Post-M9 Planner Interface Hardening cycle is complete. Production and
-application planning remain on wire v3 by default; semantic wire v4 is an
-explicit opt-in `LLMPlanner` mode. There is no schema auto-detection,
-automatic v3/v4 switching, combined schema, or cross-version recovery
-fallback. V4 is architecturally accepted and substantially reduces mechanical
-planner serialization burden, but it is not the default because live hosted
-planning still has non-negligible semantic source/port variability on a
-complex downstream workflow.
-
-The accepted opt-in semantic path is:
-
-```text
-AgentRequest
-→ registry-driven semantic planning catalog/prompt
-→ provider-neutral PlanningModel
-→ semantic wire v4
-→ strict v4 parser
-→ SemanticPlanCandidate
-→ registry-derived deterministic semantic compiler
-→ existing strict AgentPlan
-→ existing preflight/runtime
-```
-
-The LLM or user owns natural-language intent, tool selection, workflow/DAG
-composition, producer/source selection where semantically ambiguous,
-reference/query/ground-truth roles, scientific parameter selection, and every
-genuinely ambiguous scope or source decision. Deterministic Agent code owns
-reviewed unique request-source binding, semantic-port expansion, grouped
-result binding, exact `StepOutputRef` construction, induced dependencies,
-optional/default serialization, canonicalization of mechanically redundant
-graph representation, strict validation, recovery diagnostics, and whole-plan
-preflight.
-
-The governing rule remains: unique and explicitly authorized mappings may be
-derived deterministically; zero or multiple semantic choices fail closed.
-Workflow guessing, step-order or step-name inference, first-match behavior,
-generic-input fanout, and hidden scientific inference are prohibited.
-
-Generic optional selectors with multiple legitimate destinations remain
-ambiguous. An explicitly scoped structured selector represents request/user
-semantic intent and may be bound without redundant LLM serialization only when
-it has exactly one reviewed semantic destination and no competing source.
-Omission preserves the existing tool default, while explicit `False` and legal
-explicit `None` remain distinct from omission. This registry-driven rule
-covers reviewed embedding, transfer, and downstream parameters and is not
-workflow-specific logic.
-
-Wire v4 reuses the existing `PlanningRecoveryCoordinator`, retry, repair,
-failover ceilings, and unchanged maximum provider-call budget. Semantic parser
-and compiler failures produce sanitized semantic diagnostics that may identify
-the step, producer step, target port, source port, tool, and safe input name.
-Raw structured request values and raw provider response bodies are never
-persisted, and no v4-to-v3 recovery fallback exists. Wire-v3 diagnostics and
-recovery behavior remain unchanged.
-
-OpenAI, Groq, and Gemini adapters transported the same generic semantic-v4
-interface in mocked offline tests. No adapter implementation required v4-
-specific semantic behavior, and no provider-specific semantic schema was
-introduced. Live PLAN_ONLY acceptance used Groq `openai/gpt-oss-120b`;
-OpenAI and Gemini live tests were not run because credentials/configuration
-were unavailable, which is not a planner failure.
-
-Successful Groq wire-v4 PLAN_ONLY runs demonstrated inspection, complete
-downstream DAGs, canonical and optional parameter-heavy label transfer, paired
-differential accessibility with covariates, grouped semantic channels,
-deterministically scoped parameters, whole-plan preflight, and zero scientific
-tool execution. The v3 mechanical binding/serialization failure class did not
-recur. V4 removes model-authored raw argument dictionaries, binding
-discriminators, raw result-field names, `StepOutputRef`, duplicated
-dependency/reference structures, and large nullable optional-argument
-inventories. Representative request/schema and response burden is materially
-smaller than v3.
-
-The primary remaining limitation is hosted-model semantic source/port
-variability. Groq can produce the correct complete five-step downstream plan,
-but repeated hosted responses were not consistently correct. Observed errors
-included invalid or unknown semantic target ports, earlier omitted or incorrect
-semantic sources before scoped-input hardening, and occasional incomplete or
-unsupported candidates. Explicit scoped inputs resolved deterministic optional-
-scope ambiguity, but not all hosted source/port reasoning variability. This is
-not a mechanical serialization failure, executor/preflight defect,
-`ToolRegistry` allowlist defect, or persistence/recovery defect, and it does not
-justify workflow heuristics or hidden semantic inference. It is the reason v4
-remains opt-in.
-
-Accepted final validation:
-
-- semantic registry metadata: 23 passed
-- semantic compiler: 57 passed
-- semantic prompt: 21 passed
-- semantic wire v4: 54 passed
-- focused v4 `LLMPlanner`: 26 passed
-- v4 recovery: 11 passed
-- semantic-v4 provider transport: 7 passed
-- semantic-v4 benchmark acceptance: 30 passed
-- existing wire-v3 `LLMPlanner`: 77 passed
-- Milestone 9 recovery: 117 passed
-- all planner benchmarks: 69 passed
-- complete lightweight regression: 1388 passed, 54 skipped
-
-The current Post-M9 Planner Interface Hardening cycle is closed. Further
-planner hardening should be driven by new empirical failures or project
-requirements, not by pursuit of perfect hosted-model consistency.
-
-The static target-port follow-up projects each selected tool's registered
-`ToolSpec.semantic_planning.consumer_ports` into wire-v4 target enums and
-rejects unknown targets at the parser boundary. The registry remains the
-authoritative source of semantic interface legality; this deterministic
-projection is not an independent semantic authority. The semantic compiler
-retains authoritative fail-closed validation, including `UNKNOWN_TARGET_PORT`.
-This adds no workflow heuristics or semantic inference.
-
-Groq rejected flat source variants with both `kind` and `target` enums as
-competing discriminators. Live probes also rejected outer-property factoring,
-enum wrappers, explicit discriminator hints, and the attempted exact-pattern
-alternatives. The provider-facing source shape is therefore now
-`{"target": "dataset", "source": {"kind": "input", "input": "input_path"}}`.
-The closed outer object carries the selected tool's exact target enum; the
-shared closed source-value variants discriminate only on `kind`. Schema version
-remains 4. The parser continues accepting historical flat v4 sources through
-the same validation and rejects mixed or malformed shapes. Semantic candidates,
-compiler authority, and execution behavior remain unchanged. The final schema
-uses no regex constraints or provider-specific fork.
-
-The application CLI exposes the accepted wire selection as
-`--wire-mode {v3,v4}` for LLM-planned `run` commands. Omission remains wire v3;
-wire v4 is explicit opt-in, and deterministic planning rejects this
-LLM-specific setting rather than silently ignoring it.
-
-## Development environment
-
-- Linux server
-- NVIDIA RTX 4090
-- 24 GB VRAM
-- VS Code Remote SSH
-- Python
-- PyTorch
-- Scanpy / AnnData
-
-## Scientific backends
-
-EpiAgent and EpiZoo are existing scientific foundation models.
-
-They should be treated as scientific backends and reusable tools,
-rather than being reimplemented as part of the agent.
-
-Existing validated scientific logic should be reused whenever possible.
-
-## Engineering rules
-
-- Never densify a complete scATAC-seq matrix.
-- Never assume more than 24 GB GPU memory.
-- Always test on small datasets before full-scale execution.
-- Do not modify validated EpiZoo scientific logic unless necessary.
-- Every scientific capability should be exposed through a clean reusable tool.
-- Every tool should have explicit inputs and outputs.
-- Every tool should validate its inputs and provide informative errors.
-- Keep analyses reproducible.
-- Record model checkpoints and execution parameters.
-- Do not commit biological datasets or model checkpoints to Git.
-
-## Completed development task
-
-The first standard Agent tool layer exposes validated scientific backends.
-
-Validated capabilities:
-- inspect a scATAC-seq `.h5ad` file safely
-- expose EpiZoo embedding through a file/path-based tool interface
-- return structured results suitable for later LLM tool calling
-
-## Do not implement yet
-
-- multi-agent architecture
-- literature retrieval
-- ENCODE retrieval
-- RAG
-- cCRE perturbation
-- variant interpretation
-- web UI
-- LLM-generated scientific interpretation

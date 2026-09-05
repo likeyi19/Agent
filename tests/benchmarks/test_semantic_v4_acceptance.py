@@ -16,12 +16,10 @@ from agent.orchestration import (
     build_default_tool_registry,
     build_semantic_compiler_contract,
     build_semantic_planning_prompt,
-    build_semantic_wire_v4_schema,
 )
 from agent.orchestration.llm_planner import (
     _MAX_RESPONSE_BYTES,
     _build_prompt,
-    _response_schema,
 )
 from benchmarks.planner.benchmark import (
     BenchmarkCase,
@@ -567,7 +565,7 @@ def test_unknown_explicit_source_port_fails_closed(
         "differential_accessibility_paired_covariates",
     ),
 )
-def test_provider_bound_v4_payload_has_material_size_headroom(
+def test_v4_prompt_and_response_retain_size_headroom(
     cases: tuple[BenchmarkCase, ...], case_id: str
 ) -> None:
     case = next(case for case in cases if case.case_id == case_id)
@@ -585,17 +583,11 @@ def test_provider_bound_v4_payload_has_material_size_headroom(
     v4_prompt_bytes = len(
         build_semantic_planning_prompt(request, registry).encode("utf-8")
     )
-    v3_schema_bytes = len(encode(_response_schema(registry, request)))
-    v4_schema_bytes = len(
-        encode(build_semantic_wire_v4_schema(registry, request))
-    )
     v3_response_bytes = len(encode(json.loads(oracle_response(case))))
     v4_response_bytes = len(encode(json.loads(_semantic_response(case))))
 
     assert v4_prompt_bytes <= v3_prompt_bytes
-    assert v4_schema_bytes <= v3_schema_bytes * 0.25
-    assert v4_prompt_bytes + v4_schema_bytes <= (
-        v3_prompt_bytes + v3_schema_bytes
-    ) * 0.7
+    # Tool-correlated schema constraints intentionally increase schema size;
+    # the old structural-only schema reduction is no longer a contract.
     assert v4_response_bytes < v3_response_bytes
     assert v4_response_bytes < _MAX_RESPONSE_BYTES

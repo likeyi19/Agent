@@ -22,7 +22,7 @@ from agent.orchestration import (
     build_semantic_wire_v4_schema,
     parse_semantic_wire_v4,
 )
-from agent.orchestration.llm_planner import _response_schema
+from agent.orchestration.planning_diagnostics import PlanningDiagnosticStage
 from benchmarks.planner.benchmark import load_cases, oracle_response
 
 
@@ -209,16 +209,17 @@ def test_schema_is_closed_generic_and_registry_request_driven(
     assert schema["required"] == ("schema_version", "decision")
     assert schema["additionalProperties"] is False
     assert schema["properties"]["schema_version"]["enum"] == (4,)
-    assert schema["$defs"]["step"]["properties"]["tool"]["enum"] == tuple(
+    assert tuple(
+        step["properties"]["tool"]["enum"][0]
+        for step in schema["$defs"]["step"]["anyOf"]
+    ) == tuple(
         sorted(
             name
             for name in registry.names()
             if registry.get(name).planning is not None
         )
     )
-    assert schema["$defs"]["input_source"]["properties"]["input"][
-        "enum"
-    ] == ("a_input", "z_input")
+    assert schema["$defs"]["input_name"]["enum"] == ("a_input", "z_input")
     serialized = _encoded(schema)
     assert "secret-z" not in serialized
     assert "/private/secret-a" not in serialized
@@ -288,11 +289,12 @@ def test_schema_without_request_inputs_omits_input_source_variant(
         registry, AgentRequest("no-inputs", "Use upstream sources.", {})
     )
 
-    assert "input_source" not in schema["$defs"]
-    assert schema["$defs"]["source"]["anyOf"] == (
-        {"$ref": "#/$defs/step_source"},
-        {"$ref": "#/$defs/step_port_source"},
-    )
+    assert "input_name" not in schema["$defs"]
+    variants = schema["$defs"]["source_value"]["anyOf"]
+    assert tuple(
+        schema["$defs"][source["$ref"].removeprefix("#/$defs/")]["properties"]["kind"]["enum"]
+        for source in variants
+    ) == (("step",), ("step_port",))
 
 
 def test_schema_fails_if_planner_visible_tool_lacks_semantic_metadata(
@@ -781,19 +783,19 @@ def test_oversized_identifier_and_reason_are_rejected(
         parse_semantic_wire_v4(_encoded(oversized_reason), request, registry)
 
 
-def test_graph_cycle_and_semantic_target_legality_are_deferred(
+def test_graph_cycle_and_source_compatibility_remain_deferred(
     registry: ToolRegistry,
 ) -> None:
     payload = _payload(
         _wire_step(
             "first",
             "inspect_scATAC",
-            sources=[_step_source("not_a_real_port", "second")],
+            sources=[_step_source("dataset", "second")],
         ),
         _wire_step(
             "second",
             "inspect_scATAC",
-            sources=[_step_source("also_not_real", "first")],
+            sources=[_step_source("dataset", "first")],
         ),
     )
 
@@ -820,7 +822,7 @@ def test_unsupported_decision_raises_bounded_user_error(
     assert caught.value.code == "UNSUPPORTED_REQUEST"
 
 
-def test_v4_schema_and_representative_responses_are_materially_smaller(
+def test_v4_representative_responses_remain_materially_smaller(
     registry: ToolRegistry,
 ) -> None:
     v4_payloads = {
@@ -838,11 +840,6 @@ def test_v4_schema_and_representative_responses_are_materially_smaller(
     }
 
     for case_id, v4_payload in v4_payloads.items():
-        request = _request(case_id)
-        v3_schema_bytes = len(_encoded(_response_schema(registry, request)).encode())
-        v4_schema_bytes = len(
-            _encoded(build_semantic_wire_v4_schema(registry, request)).encode()
-        )
         v3_payload = json.loads(oracle_response(_case(case_id)))
         v3_response_bytes = len(_encoded(v3_payload).encode())
         v4_response_bytes = len(_encoded(v4_payload).encode())
@@ -854,6 +851,198 @@ def test_v4_schema_and_representative_responses_are_materially_smaller(
             for step in v4_payload["decision"]["steps"]
         )
 
-        assert v4_schema_bytes <= v3_schema_bytes * 0.4
         assert v4_response_bytes < v3_response_bytes
         assert v4_sources < v3_argument_slots
+
+
+def _target_schemas(schema):
+    return {
+        step["properties"]["tool"]["enum"][0]:
+        step["properties"]["sources"]["items"]["properties"]["target"]
+        for step in schema["$defs"]["step"]["anyOf"]
+    }
+
+
+def _accepts_target(schema, value):
+    return value in schema["enum"]
+
+
+def test_schema_correlates_every_source_kind_with_selected_tool_ports(registry) -> None:
+    schema = build_semantic_wire_v4_schema(registry, _request("inspect_canonical"))
+    targets = _target_schemas(schema)
+    expected = {
+        name: {port.name for port in registry.get(name).semantic_planning.consumer_ports}
+        for name in registry.names()
+        if registry.get(name).planning is not None
+    }
+    assert set(targets) == set(expected)
+    candidates = set.union(*expected.values()) | {"invented", "dataset\n", "embedding\n"}
+    for name, target in targets.items():
+        for candidate in candidates:
+            assert _accepts_target(target, candidate) is (candidate in expected[name])
+
+
+@pytest.mark.parametrize("tool_name", ("inspect_scATAC", "future_inspection"))
+def test_schema_and_parser_follow_replaced_registry_ports(registry, tool_name) -> None:
+    original = registry.get("inspect_scATAC")
+    semantic = original.semantic_planning
+    custom = replace(
+        original,
+        name=tool_name,
+        semantic_planning=replace(
+            semantic,
+            consumer_ports=tuple(replace(port, name="sample") for port in semantic.consumer_ports),
+            producer_ports=(),
+        ),
+    )
+    custom_registry = ToolRegistry((custom,))
+    request = _request("inspect_canonical")
+    schema = build_semantic_wire_v4_schema(custom_registry, request)
+    targets = _target_schemas(schema)
+    assert tuple(targets) == (tool_name,)
+    assert _accepts_target(targets[tool_name], "sample")
+    assert not _accepts_target(targets[tool_name], "dataset")
+    candidate = parse_semantic_wire_v4(
+        _encoded(_payload(_wire_step("inspect", tool_name, sources=[_input("sample", "input_path")]))),
+        request, custom_registry,
+    )
+    assert candidate.steps[0].sources[0].target_port == "sample"
+    with pytest.raises(PlannerError) as caught:
+        parse_semantic_wire_v4(
+            _encoded(_payload(_wire_step("inspect", tool_name, sources=[_input("dataset", "input_path")]))),
+            request, custom_registry,
+        )
+    assert caught.value.code == "UNKNOWN_TARGET_PORT"
+
+
+@pytest.mark.parametrize("target", ("invented_port", "embedding", "/private/SECRET.h5ad"))
+@pytest.mark.parametrize("kind", ("input", "step", "step_port"))
+def test_invalid_target_is_rejected_before_candidate_construction(registry, target, kind, monkeypatch) -> None:
+    def forbidden_candidate(*args, **kwargs):
+        pytest.fail("Invalid target reached SemanticPlanCandidate construction")
+
+    monkeypatch.setattr("agent.orchestration.semantic_wire_v4.SemanticPlanCandidate", forbidden_candidate)
+    source = {
+        "input": _input(target, "input_path"),
+        "step": _step_source(target, "producer"),
+        "step_port": _step_port_source(target, "producer", "dataset"),
+    }[kind]
+    with pytest.raises(PlannerError) as caught:
+        parse_semantic_wire_v4(
+            _encoded(_payload(_wire_step("inspect", "inspect_scATAC", sources=[source]))),
+            _request("inspect_canonical"), registry,
+        )
+    error = caught.value
+    assert error.code == "UNKNOWN_TARGET_PORT"
+    assert error.diagnostic_stage is PlanningDiagnosticStage.ARGUMENT_BINDING
+    assert error.diagnostic_reason_code == "unknown_target_port"
+    assert error.diagnostic_fields["tool_name"] == "inspect_scATAC"
+    assert target not in str(error)
+
+
+def test_zero_consumer_ports_allow_only_empty_sources(registry) -> None:
+    original = registry.get("inspect_scATAC")
+    custom_registry = ToolRegistry((replace(
+        original,
+        semantic_planning=replace(original.semantic_planning, consumer_ports=(), producer_ports=()),
+    ),))
+    request = _request("inspect_canonical")
+    schema = build_semantic_wire_v4_schema(custom_registry, request)
+    sources = schema["$defs"]["step"]["anyOf"][0]["properties"]["sources"]
+    assert sources["maxItems"] == 0
+    assert parse_semantic_wire_v4(
+        _encoded(_payload(_wire_step("inspect", "inspect_scATAC"))), request, custom_registry,
+    ).steps[0].sources == ()
+    with pytest.raises(PlannerError) as caught:
+        parse_semantic_wire_v4(
+            _encoded(_payload(_wire_step("inspect", "inspect_scATAC", sources=[_input("dataset", "input_path")]))),
+            request, custom_registry,
+        )
+    assert caught.value.code == "UNKNOWN_TARGET_PORT"
+
+
+def test_schema_excludes_all_structured_input_values(registry) -> None:
+    values = {
+        "input_path": "/PRIVATE/input.h5ad", "label_key": "PRIVATE_LABEL",
+        "checkpoint_path": "/PRIVATE/checkpoint.pth", "output_dir": "/PRIVATE/output",
+        "conditions": ["PRIVATE_CONDITION"], "nested": {"key": "PRIVATE_NESTED"},
+    }
+    schema = build_semantic_wire_v4_schema(registry, AgentRequest("privacy", "Plan.", values))
+    other = build_semantic_wire_v4_schema(registry, AgentRequest("privacy", "Plan.", dict.fromkeys(values)))
+    assert schema == other
+    assert "PRIVATE" not in _encoded(schema)
+
+
+@pytest.mark.parametrize("inputs", ({}, {"input_path": "/private/data.h5ad"}))
+def test_source_variants_have_only_kind_as_enum_discriminator(registry, inputs) -> None:
+    schema = build_semantic_wire_v4_schema(registry, AgentRequest("schema", "Plan.", inputs))
+    variants = [
+        schema["$defs"][ref["$ref"].removeprefix("#/$defs/")]
+        for ref in schema["$defs"]["source_value"]["anyOf"]
+    ]
+    assert all("target" not in variant["properties"] for variant in variants)
+    common = set.intersection(*(set(variant["properties"]) for variant in variants))
+    assert {
+        name for name in common
+        if all("enum" in variant["properties"][name] for variant in variants)
+    } == {"kind"}
+    for step in schema["$defs"]["step"]["anyOf"]:
+        source = step["properties"]["sources"]["items"]
+        assert source["additionalProperties"] is False
+        assert source["required"] == ("target", "source")
+        assert source["properties"]["source"] == {"$ref": "#/$defs/source_value"}
+
+
+def _nested_payload(steps):
+    payload = _payload(*steps)
+    for step in payload["decision"]["steps"]:
+        step["sources"] = [
+            {"target": source["target"], "source": {key: value for key, value in source.items() if key != "target"}}
+            for source in step["sources"]
+        ]
+    return payload
+
+
+@pytest.mark.parametrize("case_id", ("inspect_canonical", "downstream_canonical", "label_transfer_optional", "differential_accessibility_paired_covariates"))
+def test_nested_and_historical_flat_payloads_produce_identical_candidates(registry, case_id):
+    factories = {
+        "inspect_canonical": lambda: (_wire_step("inspect", "inspect_scATAC", sources=[_input("dataset", "input_path")]),),
+        "downstream_canonical": _downstream_steps,
+        "label_transfer_optional": lambda: _transfer_steps(optional=True),
+        "differential_accessibility_paired_covariates": _paired_da_steps,
+    }
+    request = _request(case_id)
+    flat = parse_semantic_wire_v4(_encoded(_payload(*factories[case_id]())), request, registry)
+    nested = parse_semantic_wire_v4(_encoded(_nested_payload(factories[case_id]())), request, registry)
+    assert nested == flat
+
+
+@pytest.mark.parametrize("source", (
+    {"target": "dataset", "source": {"kind": "input", "input": "input_path"}, "kind": "input"},
+    {"target": "dataset", "source": {"kind": "input", "input": "input_path", "target": "dataset"}},
+    {"target": "dataset", "source": "input_path"},
+    {"target": "dataset", "source": {"kind": "input", "input": "input_path", "extra": True}},
+))
+def test_nested_source_rejects_mixed_or_malformed_shapes(registry, source):
+    with pytest.raises(PlannerError):
+        parse_semantic_wire_v4(
+            _encoded(_payload(_wire_step("inspect", "inspect_scATAC", sources=[source]))),
+            _request("inspect_canonical"), registry,
+        )
+
+
+@pytest.mark.parametrize("kind", ("input", "step", "step_port"))
+def test_nested_source_rejects_unknown_target_early(registry, kind):
+    source = {"kind": kind}
+    if kind == "input":
+        source["input"] = "input_path"
+    else:
+        source["step"] = "producer"
+    if kind == "step_port":
+        source["source_port"] = "dataset"
+    with pytest.raises(PlannerError) as caught:
+        parse_semantic_wire_v4(
+            _encoded(_payload(_wire_step("inspect", "inspect_scATAC", sources=[{"target": "embedding", "source": source}]))),
+            _request("inspect_canonical"), registry,
+        )
+    assert caught.value.code == "UNKNOWN_TARGET_PORT"

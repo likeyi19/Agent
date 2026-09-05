@@ -279,12 +279,11 @@ def test_v4_sends_only_semantic_prompt_and_schema(
     assert schema != _response_schema(registry, request)
     assert secret_path not in prompt
     assert secret_path not in json.dumps(schema)
-    assert schema["$defs"]["input_source"]["properties"]["input"][
-        "enum"
-    ] == ("input_path",)
-    assert schema["$defs"]["step"]["properties"]["tool"]["enum"] == (
-        tuple(sorted(registry.names()))
-    )
+    assert schema["$defs"]["input_name"]["enum"] == ("input_path",)
+    assert tuple(
+        step["properties"]["tool"]["enum"][0]
+        for step in schema["$defs"]["step"]["anyOf"]
+    ) == tuple(sorted(registry.names()))
     assert not _contains_callable(json.loads(prompt))
     assert not _contains_callable(schema)
     assert attempt.context.planning_wire_schema_version == 4
@@ -408,7 +407,7 @@ def test_v4_wire_failures_stop_at_planner_boundary(
         ),
     ),
 )
-def test_v4_semantic_compiler_failures_are_stable_planner_errors(
+def test_v4_semantic_boundary_failures_are_stable_planner_errors(
     registry: ToolRegistry,
     steps: tuple[dict[str, object], ...],
     inputs: dict[str, object],
@@ -424,6 +423,33 @@ def test_v4_semantic_compiler_failures_are_stable_planner_errors(
     assert caught.value.diagnostics[-1].stage is (
         PlanningDiagnosticStage.ARGUMENT_BINDING
     )
+
+
+@pytest.mark.parametrize("target", ("embedding", "/private/SECRET.h5ad"))
+def test_v4_invalid_target_never_reaches_compiler(
+    registry: ToolRegistry, target: str, monkeypatch,
+) -> None:
+    compiler = Mock(side_effect=AssertionError("Invalid target reached compiler"))
+    monkeypatch.setattr(
+        "agent.orchestration.semantic_compiler.compile_semantic_plan", compiler
+    )
+    model = CapturingPlanningModel(_payload(_step(
+        "inspect", "inspect_scATAC", sources=[_input(target, "input_path")],
+    )))
+
+    with pytest.raises(PlannerError) as caught:
+        LLMPlanner(model, wire_mode=PlanningWireMode.V4).plan(
+            _request("inspect_canonical"), registry
+        )
+
+    compiler.assert_not_called()
+    assert len(model.calls) == 1
+    assert caught.value.code == "UNKNOWN_TARGET_PORT"
+    diagnostic = caught.value.diagnostics[-1]
+    assert diagnostic.reason_code == "unknown_target_port"
+    assert diagnostic.tool_name == "inspect_scATAC"
+    assert "SECRET" not in str(caught.value)
+    assert "SECRET" not in repr(diagnostic)
 
 
 def test_v4_ambiguous_producer_port_fails_closed(
@@ -581,4 +607,28 @@ def test_v4_plan_only_uses_runtime_preflight_and_executes_zero_tools(
     assert result.plan is not None
     assert result.plan.planner_name.endswith(":wire-v4")
     assert result.verification is not None and result.verification.passed
+    guard.assert_not_called()
+
+
+@pytest.mark.parametrize("case_id", tuple(V4_CASES))
+def test_nested_v4_sources_preserve_executable_semantics_and_plan_only(registry, case_id):
+    flat_response = _payload(*V4_CASES[case_id]())
+    nested = json.loads(flat_response)
+    for step in nested["decision"]["steps"]:
+        step["sources"] = [
+            {"target": source["target"], "source": {key: value for key, value in source.items() if key != "target"}}
+            for source in step["sources"]
+        ]
+    request = _request(case_id, mode=RunMode.PLAN_ONLY)
+    flat_plan = LLMPlanner(CapturingPlanningModel(flat_response), wire_mode=PlanningWireMode.V4).plan(request, registry)
+    guard = Mock(side_effect=AssertionError("PLAN_ONLY executed a scientific tool"))
+    guarded = ToolRegistry(tuple(replace(registry.get(name), function=guard) for name in registry.names()))
+    result = AgentRuntime(
+        planner=LLMPlanner(CapturingPlanningModel(json.dumps(nested)), wire_mode=PlanningWireMode.V4),
+        registry=guarded,
+    ).run(request)
+    assert result.status is RunStatus.PLANNED
+    assert result.verification is not None and result.verification.passed
+    assert _execution_signature(result.plan) == _execution_signature(flat_plan)
+    assert result.steps == ()
     guard.assert_not_called()

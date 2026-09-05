@@ -525,10 +525,11 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     assert payload["wire_v4"] == {
         "decisions": ["plan", "unsupported"],
         "schema_version": 4,
+        "source_fields": ["target", "source"],
         "source_kinds": {
-            "input": ["target", "input"],
-            "step": ["target", "step"],
-            "step_port": ["target", "step", "source_port"],
+            "input": ["kind", "input"],
+            "step": ["kind", "step"],
+            "step_port": ["kind", "step", "source_port"],
         },
         "step_fields": [
             "step_id",

@@ -331,10 +331,11 @@ def build_semantic_planning_prompt(
                 "sources",
                 "control_dependencies",
             ),
+            "source_fields": ("target", "source"),
             "source_kinds": {
-                "input": ("target", "input"),
-                "step": ("target", "step"),
-                "step_port": ("target", "step", "source_port"),
+                "input": ("kind", "input"),
+                "step": ("kind", "step"),
+                "step_port": ("kind", "step", "source_port"),
             },
         },
     }

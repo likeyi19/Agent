@@ -203,12 +203,12 @@ def test_semantic_v4_round_trip_uses_generic_responses_transport() -> None:
     serialized = json.dumps(transmitted, sort_keys=True)
     assert secret not in serialized
     assert "tools" not in transmitted
-    assert transmitted["text"]["format"]["schema"]["$defs"]["step"][
-        "properties"
-    ]["tool"]["enum"] == sorted(registry.names())
-    assert transmitted["text"]["format"]["schema"]["$defs"][
-        "input_source"
-    ]["properties"]["input"]["enum"] == ["input_path"]
+    schema = transmitted["text"]["format"]["schema"]
+    assert [
+        step["properties"]["tool"]["enum"][0]
+        for step in schema["$defs"]["step"]["anyOf"]
+    ] == sorted(registry.names())
+    assert schema["$defs"]["input_name"]["enum"] == ["input_path"]
     assert plan.steps[0].arguments == {"path": secret}
 
 

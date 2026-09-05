@@ -2157,6 +2157,26 @@ The current Post-M9 Planner Interface Hardening cycle is closed. Further
 planner hardening should be driven by new empirical failures or project
 requirements, not by pursuit of perfect hosted-model consistency.
 
+The static target-port follow-up projects each selected tool's registered
+`ToolSpec.semantic_planning.consumer_ports` into wire-v4 target enums and
+rejects unknown targets at the parser boundary. The registry remains the
+authoritative source of semantic interface legality; this deterministic
+projection is not an independent semantic authority. The semantic compiler
+retains authoritative fail-closed validation, including `UNKNOWN_TARGET_PORT`.
+This adds no workflow heuristics or semantic inference.
+
+Groq rejected flat source variants with both `kind` and `target` enums as
+competing discriminators. Live probes also rejected outer-property factoring,
+enum wrappers, explicit discriminator hints, and the attempted exact-pattern
+alternatives. The provider-facing source shape is therefore now
+`{"target": "dataset", "source": {"kind": "input", "input": "input_path"}}`.
+The closed outer object carries the selected tool's exact target enum; the
+shared closed source-value variants discriminate only on `kind`. Schema version
+remains 4. The parser continues accepting historical flat v4 sources through
+the same validation and rejects mixed or malformed shapes. Semantic candidates,
+compiler authority, and execution behavior remain unchanged. The final schema
+uses no regex constraints or provider-specific fork.
+
 The application CLI exposes the accepted wire selection as
 `--wire-mode {v3,v4}` for LLM-planned `run` commands. Omission remains wire v3;
 wire v4 is explicit opt-in, and deterministic planning rejects this

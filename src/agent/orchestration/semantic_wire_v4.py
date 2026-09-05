@@ -1,8 +1,7 @@
 """Experimental strict wire-v4 schema and parser for semantic plan candidates.
 
-This module is deliberately disconnected from production ``LLMPlanner`` and
-``AgentRuntime``. It validates only the provider-facing wire structure; the
-registry-driven semantic compiler remains authoritative for source legality.
+The opt-in wire-v4 boundary projects registered static target-port constraints.
+The registry-driven semantic compiler remains authoritative for source legality.
 """
 
 from __future__ import annotations
@@ -91,14 +90,12 @@ def build_semantic_wire_v4_schema(
         "step_source": _closed_object_schema(
             {
                 "kind": {"type": "string", "enum": ("step",)},
-                "target": {"type": "string"},
                 "step": {"type": "string"},
             }
         ),
         "step_port_source": _closed_object_schema(
             {
                 "kind": {"type": "string", "enum": ("step_port",)},
-                "target": {"type": "string"},
                 "step": {"type": "string"},
                 "source_port": {"type": "string"},
             }
@@ -106,11 +103,11 @@ def build_semantic_wire_v4_schema(
     }
     source_variants: list[JsonValue] = []
     if input_names:
+        definitions["input_name"] = {"type": "string", "enum": input_names}
         definitions["input_source"] = _closed_object_schema(
             {
                 "kind": {"type": "string", "enum": ("input",)},
-                "target": {"type": "string"},
-                "input": {"type": "string", "enum": input_names},
+                "input": {"$ref": "#/$defs/input_name"},
             }
         )
         source_variants.append({"$ref": "#/$defs/input_source"})
@@ -120,21 +117,39 @@ def build_semantic_wire_v4_schema(
             {"$ref": "#/$defs/step_port_source"},
         )
     )
-    definitions["source"] = {"anyOf": tuple(source_variants)}
-    definitions["step"] = _closed_object_schema(
-        {
-            "step_id": {"type": "string"},
-            "tool": {"type": "string", "enum": tool_names},
-            "sources": {
-                "type": "array",
-                "items": {"$ref": "#/$defs/source"},
-            },
-            "control_dependencies": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-        }
-    )
+    definitions["source_value"] = {"anyOf": tuple(source_variants)}
+    step_variants: list[JsonValue] = []
+    for tool_name in tool_names:
+        semantic = registry.get(tool_name).semantic_planning
+        assert semantic is not None  # Validated by _planner_visible_tool_names.
+        target_names = tuple(sorted(port.name for port in semantic.consumer_ports))
+        sources_schema: dict[str, JsonValue] = {"type": "array"}
+        if target_names:
+            # Keep target legality outside the kind-discriminated source value.
+            sources_schema["items"] = _closed_object_schema(
+                {
+                    "target": {"type": "string", "enum": target_names},
+                    "source": {"$ref": "#/$defs/source_value"},
+                }
+            )
+        else:
+            # A registered tool with no consumer ports accepts no sources.
+            sources_schema["items"] = _closed_object_schema({})
+            sources_schema["maxItems"] = 0
+        step_variants.append(
+            _closed_object_schema(
+                {
+                    "step_id": {"type": "string"},
+                    "tool": {"type": "string", "enum": (tool_name,)},
+                    "sources": sources_schema,
+                    "control_dependencies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                }
+            )
+        )
+    definitions["step"] = {"anyOf": tuple(step_variants)}
     definitions["plan_decision"] = _closed_object_schema(
         {
             "kind": {"type": "string", "enum": ("plan",)},
@@ -180,6 +195,18 @@ def _parse_source(
 ) -> SemanticRequestInputSource | SemanticStepOutputSource:
     if not isinstance(raw_source, dict):
         raise _invalid_output(f"{context} must be an object.")
+    if "source" in raw_source:
+        _require_fields(
+            raw_source,
+            required=frozenset({"target", "source"}),
+            context=context,
+        )
+        source_value = raw_source["source"]
+        if not isinstance(source_value, dict) or "target" in source_value:
+            raise _invalid_output(f"{context}.source must be a source-value object.")
+        # Preserve the existing internal source contract and accept historical
+        # flat v4 payloads. Both representations pass the same strict validation.
+        raw_source = {"target": raw_source["target"], **source_value}
     kind = raw_source.get("kind")
     if kind == "input":
         _require_fields(
@@ -312,6 +339,24 @@ def _parse_steps(
             )
             for source_index, source in enumerate(raw_sources)
         )
+
+        semantic = registry.get(tool_name).semantic_planning
+        assert semantic is not None  # Validated by _planner_visible_tool_names.
+        target_names = frozenset(port.name for port in semantic.consumer_ports)
+        for source in sources:
+            if source.target_port not in target_names:
+                raise _invalid_output(
+                    f"{context}.sources names an unregistered target port.",
+                    code="UNKNOWN_TARGET_PORT",
+                    stage=PlanningDiagnosticStage.ARGUMENT_BINDING,
+                    reason_code="unknown_target_port",
+                    diagnostic_fields={
+                        "step_index": step_index,
+                        "step_id": step_id,
+                        "tool_name": tool_name,
+                        "target_port": source.target_port,
+                    },
+                )
 
         raw_control = raw_step["control_dependencies"]
         if not isinstance(raw_control, list):

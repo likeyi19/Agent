@@ -8,7 +8,8 @@ to reuse; the Agent does not reimplement them. EpiZoo is the currently validated
 embedding backend.
 
 Milestones 1–9 and Post-M9 Planner Interface Hardening are complete, including
-the latest static target-port projection and Groq schema compatibility fix.
+static target-port/Groq compatibility, feature-space semantic-v4 parity, and
+the migration to v4 as the default LLM planning wire.
 Guarded real-data differential-accessibility acceptance remains outstanding.
 [AGENTS.md](AGENTS.md) contains the detailed engineering rules, scientific
 contracts, milestone history, acceptance results, and deferred work.
@@ -76,7 +77,7 @@ serialization. Wire **v3 remains an explicit compatibility mode** through
 retains exact keyed argument bindings. There is no automatic schema switching,
 version detection, combined schema, or hidden v4-to-v3 fallback.
 
-The latest follow-up projects legal target ports directly from each tool's
+The static target-port follow-up projects each tool's legal target ports from
 `ToolSpec.semantic_planning.consumer_ports` into the v4 provider schema:
 
 ```json
@@ -119,6 +120,19 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
 | Differential accessibility | `run_replicate_differential_accessibility`: biological-replicate DA with pinned edgeR v4 quasi-likelihood fitting/testing and independent verification |
 
+EpiZoo embedding requires its species-specific raw feature layout: 1,355,445
+features for human or 1,341,077 for mouse, with retained cCRE names/order matching
+the local EpiZoo frequency/filter resources. Input must contain compatible
+sparse, finite, nonnegative count-like values. Arbitrary peak matrices are not
+automatically projected or converted. The checkpoint and local resources must
+be available; detailed prerequisites are in [AGENTS.md](AGENTS.md).
+
+The registered embedding tool defaults to `device="cuda:0"` and permits explicit
+checkpoint/device selection. It fixes batch size 4, maximum sequence length
+8192, truncation seed 0, random sampling, and requested AMP; these settings are
+not planner-configurable. The validated GPU path is the RTX 4090 acceptance
+described below; unavailable CUDA does not trigger a CPU fallback.
+
 Neighbors use all 512 EpiZoo dimensions, `n_neighbors=15`, Euclidean distance,
 and seed 0. Leiden defaults to weighted igraph flavor, resolution 1.0, seed 0;
 UMAP uses two dimensions, `min_dist=0.5`, `spread=1.0`, spectral initialization,
@@ -158,12 +172,23 @@ quasi-likelihood testing, and BH correction. Statistical settings and R scripts
 are repository-controlled. A separate pinned R verifier independently checks
 statistics, preparation, provenance, and package compatibility.
 
+DA execution requires `AGENT_EDGER_RSCRIPT` set to an absolute path resolving
+to the executable `Rscript` in the intended pinned `agent-edger` environment.
+This is runtime configuration, not an `AgentRequest` scientific parameter;
+there is no automatic environment discovery.
+
 ## Reliability and verified output
 
 Whole-plan preflight occurs before scientific side effects. Each returned
 result passes verification before downstream use. PLAN_ONLY executes **zero
 scientific tools**, including across restart/resume/cancellation, and the
 application creates no evidence, figures, or report for it.
+
+Verification coverage is specific to each tool/artifact. Standalone embedding
+verification checks result metadata and artifact existence/non-emptiness; it
+does not reload or hash the embedding and ordered-ID contents. Later tools add
+their defined content checks. Fresh verification does not establish universal
+content integrity; [AGENTS.md](AGENTS.md) records the exact boundaries.
 
 `FileRunStore` persists versioned canonical JSON with SHA-256 integrity, plan
 fingerprints, optimistic revisions, atomic fsynced replacement, a short state
@@ -278,13 +303,25 @@ annotation/evaluation were validated with unchanged sources and isolated
 evaluation-only labels. Development assumes at most 24 GB GPU memory and never
 densifies a complete raw scATAC matrix.
 
-The latest pre-push Planner follow-up acceptance record reports 203 focused
-passes, 1006 orchestration/provider/benchmark passes, 1429 lightweight passes
-with 54 skips, and 7648 independent JSON Schema payload checks. These are
-historical acceptance totals for that follow-up.
-Separate live Groq checks accepted the strict schema, application v4 inspection,
-and the complete five-tool downstream PLAN_ONLY DAG with zero scientific
-execution and no target-port failure.
+Feature-space semantic-v4 parity completed six optional mappings: `layer_key`,
+`feature_chrom_key`, `feature_start_key`, `feature_end_key`, `coordinate_system`,
+and `semantics_metadata_key`. Its acceptance recorded 378 focused and 1119
+broader passes, plus gated DA PLAN_ONLY acceptance. Live Groq explicit-v4
+checks passed inspection, the five-tool downstream workflow, and the
+parameter-heavy feature-space case.
+
+The subsequent v4-default migration recorded 821 focused and 1162 broad passes
+with 3 skips, plus a separate gated DA PLAN_ONLY pass. Groq
+`openai/gpt-oss-120b` passed the same three PLAN_ONLY cases while omitting
+`--wire-mode`; diagnostics confirmed v4. All these live PLAN_ONLY attempts
+executed zero scientific tools. Explicit v3 reached Groq with an unchanged
+request contract but received HTTP 413 / `PROVIDER_REQUEST_TOO_LARGE`: an
+observed provider limitation, not a default-switch regression. V3 remains
+explicit compatibility mode with offline acceptance.
+
+These are recorded acceptance results, not a single current full-suite total.
+Earlier static target-port/Groq acceptance counts and live checks remain in
+[AGENTS.md](AGENTS.md) as historical records.
 
 The mechanical serialization burden, static target-port generation, and Groq
 discriminator issues have been addressed. Genuine hosted-model source/source-port

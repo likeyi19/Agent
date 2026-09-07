@@ -76,6 +76,95 @@ APIs, and accepted scientific results remain in the M1–M8 reference below.
 Evidence/report projections explicitly support these tools and fail closed for
 unsupported future tools; arbitrary new result fields never become report facts.
 
+## Current scientific runtime and verification contracts
+
+### EpiZoo input, inference, and artifacts
+
+The registered `epizoo_embed_cells` tool supports human and mouse only. Its
+input H5AD must have the EpiZoo raw feature dimension: 1,355,445 for human or
+1,341,077 for mouse. At the configured filter indices, `.var_names` must
+exactly match the ordered retained cCRE names in the species resource
+(700,460 human or 814,020 mouse retained features). The tool does not project,
+convert, align, or reorder arbitrary peak matrices into this feature space.
+
+The tool loads sparse `X` into memory without densification; the backend does
+not accept backed AnnData directly. Values must be real, finite, nonnegative,
+and integer-like within absolute tolerance `1e-6`. Cells must have unique,
+nonempty IDs and positive counts, with retained cCREs remaining after filtering.
+The text sidecar cannot represent IDs containing newlines or carriage returns.
+
+The installed EpiZoo backend and local species resources are required:
+`cCRE_frequencies_<species>.npy` and `cCRE_filter_idx_<species>.csv`, currently
+under `/home/likeyi/program/EpiZoo/data`. Resource dimensions, indices, and
+retained names are validated. The lower-level backend accepts `resources_dir`;
+the registered tool does not expose that parameter. Its checkpoint default is
+`/home/likeyi/program/model_checkpoints/EpiZoo/pretrained_EpiZoo.pth`, with an
+explicit `checkpoint_path` override supported. Loading requires an existing
+checkpoint compatible with the fixed model architecture and strict state-dict
+validation; only the defined deterministic loss buffers may be synthesized.
+The loader computes the checkpoint SHA-256, and backend metadata includes
+checkpoint and resource hashes.
+
+The registered tool defaults to `device="cuda:0"`, loads float32 model weights,
+and fixes `batch_size=4`, `max_length=8192`, `random_sample=True`,
+`random_seed=0`, `use_amp=True`, `num_workers=0`, and `show_progress=False`.
+AMP is enabled for CUDA. Species, checkpoint, device, and overwrite are tool
+inputs; batch size, dtype, truncation, seed, and resource directory are not
+registered planning parameters. Unavailable requested CUDA fails without an
+automatic CPU fallback. Historical RTX 4090 acceptance is not a guarantee of
+full inference support or identical resource use on every selectable device.
+
+The process-local model cache is keyed by resolved checkpoint path, normalized
+device, and dtype. A lock serializes cache misses; only successful loads are
+cached. Cache identity does not include checkpoint contents or modification
+time, so replacing a file at the same path does not invalidate an existing
+entry. Cache clearing drops cached references without forcing CUDA allocator
+cleanup.
+
+Outputs are `<input-stem>.epizoo_embeddings.npy` with finite float32 shape
+`(n_cells, 512)` and `<input-stem>.epizoo_obs_names.txt` in exact input cell
+order. The tool checks these values before writing and defaults to
+`overwrite=False`. Its lightweight result, persisted for durable runs, records
+source/artifact paths, dimensions/dtype, finite/order flags, backend, species,
+checkpoint path, and device. It does not persist the backend's full metadata,
+including checkpoint/resource hashes and the fixed inference settings, or
+content hashes of the two output files. Those fixed settings remain defined
+by the implementation; provenance must not be described as richer than the
+actual persisted result.
+
+### Verification coverage by tool and artifact
+
+Fresh verification applies each tool's defined checks; it is not universal
+content-integrity checking. Standalone EpiZoo orchestration verification checks
+result metadata, applicable inspection-dependency consistency, and artifact
+existence/non-emptiness. It does not reload or hash `.npy` or ordered-ID
+contents. The tool's checks before writing do not imply later content checking
+on resume or evidence construction; evidence explicitly records the
+`existence_and_nonempty` protection mode for these artifacts.
+
+Transfer adds embedding/ID/reference-label content digests and annotation-file
+integrity checks, but does not rerun kNN or fully hash checkpoint contents.
+Clustering evaluation and annotation evaluation recompute their defined metrics.
+Pseudobulk verification independently recomputes exact SUMs. DA independently
+reconstructs preparation and reruns the frozen statistical contract through its
+separate SHA-pinned R verifier. Reporting calls no registered scientific tool,
+but fresh evidence verification can still perform these computations. Detailed
+artifact-specific guarantees remain in the M6–M8 contracts below.
+
+### Differential-accessibility runtime configuration
+
+DA execution and independent DA verification require `AGENT_EDGER_RSCRIPT` in
+the process environment. Its value must be an absolute path resolving to an
+existing executable file named `Rscript`. The intended runtime is the isolated
+`agent-edger` environment with the exact R/Bioconductor/edgeR and supporting
+package versions listed in M8.2; an executable path alone does not satisfy the
+package-compatibility checks. Missing or invalid executable-path configuration
+fails with `RSCRIPT_UNAVAILABLE`. There is no automatic Conda-environment or
+PATH discovery.
+This is runtime/environment configuration, never an `AgentRequest` scientific
+parameter or a planner-selected executable. Repository-controlled production
+and verification scripts retain their existing execution boundaries.
+
 ## Current Planner contract
 
 ### Responsibility and registry authority
@@ -123,7 +212,12 @@ reviewed metadata for required scientific/request parameters fails closed;
 never infer, ignore, or silently default such parameters. Production must not
 import the benchmark-only semantic oracle or use `DeterministicPlanner` as an
 oracle for LLM output. Keyword/regex routing, workflow classifiers/tables,
-string-similarity guesses, and reference/query positional guesses are prohibited.
+string-similarity guesses, and reference/query positional guesses are prohibited
+in LLM planning, semantic lowering/compiler behavior, planning recovery/fallback,
+and automatic workflow inference. The existing regex/intent routing in the
+offline `DeterministicPlanner` remains supported when that planner is selected,
+including the low-level `AgentRuntime()` compatibility default; it must not
+become an automatic fallback or semantic oracle for LLM output.
 
 ### Planning modes, v3/v4, and compatibility
 
@@ -410,6 +504,8 @@ scope exclusions, registry sizes, and planning-version defaults.
 | CLI wire selection | Application/CLI v4 opt-in exposed; omission stays v3; deterministic conflicts rejected |
 | Static target-port follow-up | Tool-specific target-enum projection and early parser defense |
 | Groq compatibility correction | Nested target/source shape resolves competing discriminators; historical flat-v4 parsing retained |
+| Feature-space semantic-v4 parity | Six optional feature-space mappings completed through reviewed registry metadata; offline and explicit-v4 Groq PLAN_ONLY acceptance |
+| Semantic-v4 default migration | Shared v4 default for LLM/application/CLI planning; explicit v3 compatibility and v3 benchmark retained; omitted-wire Groq PLAN_ONLY acceptance |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -439,10 +535,11 @@ input hardening; observed unknown targets motivated the later schema projection.
 
 The early disconnected/compiler-only and no-live-acceptance descriptions applied
 only at those checkpoints. V4 integration, semantic repair/diagnostics, and live
-Groq acceptance are now complete; the static target-port/Groq correction is the
-latest accepted state recorded above. No scientific tool, strict internal plan,
-executor, runtime, persistence/resume, cancellation, verification, recovery
-budget, or provider-specific semantic engine was added by that correction.
+Groq acceptance are now complete; the static target-port/Groq correction was
+followed by feature-space parity and the v4-default migration recorded above.
+No scientific tool, strict internal plan, executor, runtime, persistence/resume,
+cancellation, verification, recovery budget, or provider-specific semantic
+engine was added by that correction.
 
 ## Detailed accepted contracts and scientific acceptance
 

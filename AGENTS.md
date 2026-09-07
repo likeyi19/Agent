@@ -506,6 +506,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | Groq compatibility correction | Nested target/source shape resolves competing discriminators; historical flat-v4 parsing retained |
 | Feature-space semantic-v4 parity | Six optional feature-space mappings completed through reviewed registry metadata; offline and explicit-v4 Groq PLAN_ONLY acceptance |
 | Semantic-v4 default migration | Shared v4 default for LLM/application/CLI planning; explicit v3 compatibility and v3 benchmark retained; omitted-wire Groq PLAN_ONLY acceptance |
+| M10.1 | Phase II raw scATAC preprocessing foundation: versioned intake domain contract and manifest infrastructure |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -543,7 +544,7 @@ engine was added by that correction.
 
 ## Detailed accepted contracts and scientific acceptance
 
-The M1–M8 sections retain precise APIs, scientific rules, artifact trust
+The sections below retain precise APIs, scientific rules, artifact trust
 boundaries, validation counts, environment observations, and deferred items.
 Unless stated otherwise, a milestone's test counts describe its acceptance
 checkpoint, not the latest regression total. Historical registry expansion was
@@ -2233,3 +2234,76 @@ effect-size shrinkage, adaptive filtering, user-configurable edgeR parameters,
 peak-to-gene or genomic annotation, motifs, pathways, regulatory networks,
 volcano/MA plots, biological interpretation, perturbation analysis, and
 mutation analysis.
+
+### Milestone 10.1 — Raw scATAC intake contract and common infrastructure
+
+M10.1 is complete and accepted. Phase II has started toward raw scATAC
+preprocessing capabilities with a standalone intake domain contract and manifest
+infrastructure in `src/agent/tools/data/raw_scatac_manifest.py`.
+
+| Versioned identity | Accepted value |
+| --- | --- |
+| Manifest artifact | `agent.raw-scatac-intake`, schema version `1` |
+| Intake contract | `raw-scatac-intake.v1` |
+| Future FASTQ route | `fastq-to-cell-by-ccre.v1` |
+| Future BAM route | `bam-to-cell-by-ccre.v1` |
+
+These route identities describe future execution contracts; they do not imply
+implemented processing. Readiness is a scientific intake state, separate from
+run/step success. A future inspection may succeed while truthfully reporting
+an input as unready or invalid. Group and aggregate readiness are derived
+deterministically from validated findings, with precedence:
+
+`INVALID` > `UNSUPPORTED` > `NEEDS_USER_INPUT` > `READY_WITH_REPAIRS` > `READY`.
+
+The manifest preserves findings even when a higher-priority state wins.
+Structured issue severity and readiness effect are separate fields; severity
+alone does not determine readiness. Required information, preparation
+requirements, and normal downstream prerequisites are separate concepts.
+Unresolved required information blocks readiness. Supported preparation
+requirements can yield `READY_WITH_REPAIRS`; ordinary downstream work such as
+alignment and target-reference provision does not itself downgrade `READY`.
+
+Source genome assembly and target genome assembly are separate scientific
+concepts. Supported model-oriented targets are `hg38` for human and `mm10` for
+mouse. A source BAM assembly must not be inferred from species, filename, or
+chromosome naming alone. FASTQ has no source genomic coordinate assembly by
+default and may target hg38/mm10 directly through future alignment. An assembly
+mismatch establishes a harmonization requirement, not proof that a supported
+harmonization route exists. Mismatch alone does not imply `READY_WITH_REPAIRS`:
+unresolved route admissibility requires user input, supported admissibility
+requires explicit route-matched evidence, and an evidenced unsupported route
+yields `UNSUPPORTED`, subject to readiness precedence. M10.1 validates supplied
+contract evidence; it does not establish route feasibility by processing files.
+
+Barcode provenance, barcode identity scope, and optional namespace metadata are
+separate. Deterministic group-local barcode identity scope is allowed; absent
+namespace metadata alone does not prevent readiness. Identical barcode strings
+across independent groups do not imply identical cells. Unresolved identity
+scope remains a required-information condition; namespace labels do not silently
+merge groups or resolve ambiguous scope.
+
+Inspection coverage explicitly records bounded/sample scope, limits, and stop
+conditions. Sample observations and observed-region digests must not be described
+as whole-file verification. The infrastructure validates supplied records and
+coverage claims without parsing or verifying the raw inputs themselves.
+
+Canonical manifest serialization is deterministic and strict: stable ordering
+and content-derived identities, closed field/type/enum contracts, and rejection
+of duplicate JSON keys, nonfinite values, inconsistent derived values, and invalid
+references. Manifest loading validates the contract. Publication uses canonical
+bytes, atomic replacement, and a manifest SHA-256; this small-artifact digest
+does not establish raw-input content integrity.
+
+M10.1 added no FASTQ/BAM parser, `pysam`/`samtools` dependency, public
+raw-inspection tool, planner/compiler/registry/verifier/report integration,
+alignment, liftOver, or cell-by-cCRE execution. Existing scientific execution
+and planning contracts remain unchanged.
+
+Accepted validation, including the contract-hardening pass:
+
+| Acceptance suite | Result |
+| --- | --- |
+| M10.1 focused | 194 passed |
+| Relevant regression | 75 passed |
+| Full lightweight regression | 1702 passed, 54 skipped, 7 warnings |

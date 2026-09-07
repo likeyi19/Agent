@@ -14,6 +14,19 @@ Guarded real-data differential-accessibility acceptance remains outstanding.
 [AGENTS.md](AGENTS.md) contains the detailed engineering rules, scientific
 contracts, milestone history, acceptance results, and deferred work.
 
+Phase II has started toward raw scATAC preprocessing capabilities. Milestone
+10.1 is complete, establishing the versioned raw-scATAC intake domain contract
+and manifest infrastructure. Raw-input readiness is distinct from execution
+success: the contract separates required information, preparation/repair
+requirements, and normal downstream prerequisites.
+
+Human model-oriented preprocessing targets `hg38`; mouse targets `mm10`.
+Source and target genome assemblies are distinct, and species does not establish
+the source assembly of an aligned input. FASTQ can legitimately have no source
+coordinate assembly; future supported FASTQ processing will align directly to
+the appropriate target reference. No FASTQ/BAM parser, alignment, liftOver,
+cell-by-cCRE construction, or public raw-inspection tool is implemented yet.
+
 ## Architecture
 
 ```text

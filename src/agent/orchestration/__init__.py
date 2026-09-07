@@ -34,7 +34,7 @@ from .executor import (
     PlanExecutor,
     RecoveryPolicy,
 )
-from .llm_planner import LLMPlanner, PlanningWireMode
+from .llm_planner import DEFAULT_PLANNING_WIRE_MODE, LLMPlanner, PlanningWireMode
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .planning_model import (
     PlanningModel,
@@ -150,6 +150,7 @@ __all__ = [
     "ExecutionCheckpoint",
     "ExecutionProgress",
     "ExecutionTraceEvent",
+    "DEFAULT_PLANNING_WIRE_MODE",
     "LLMPlanner",
     "FileRunStore",
     "Planner",

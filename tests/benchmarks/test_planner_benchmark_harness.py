@@ -483,7 +483,12 @@ def test_supplied_model_track_repeats_plan_only_without_scientific_calls(
     cases: tuple[BenchmarkCase, ...],
 ) -> None:
     case = _case(cases, "inspect_canonical")
-    model = ScriptedPlanningModel(oracle_response(case))
+    class V3OnlyModel(ScriptedPlanningModel):
+        def complete(self, *, prompt, response_schema):
+            assert response_schema["properties"]["schema_version"]["enum"] == (3,)
+            return super().complete(prompt=prompt, response_schema=response_schema)
+
+    model = V3OnlyModel(oracle_response(case))
     profile = PlanningModelProfile(
         profile_id="benchmark-test-model",
         provider_id="custom",

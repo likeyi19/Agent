@@ -126,7 +126,7 @@ def test_cli_default_mode_is_llm_and_requires_explicit_primary_profile(
 def test_cli_default_llm_mode_uses_explicit_provider_model_without_hidden_default(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
-    model = _FixedPlanningModel()
+    model = _FixedPlanningModel(_semantic_planning_response())
     factories = PlanningModelFactoryRegistry({"openai": lambda _: model})
     monkeypatch.setattr(
         cli_module,
@@ -145,7 +145,7 @@ def test_cli_default_llm_mode_uses_explicit_provider_model_without_hidden_defaul
     assert model.calls == 1
     assert model.response_schemas[0]["properties"]["schema_version"][
         "enum"
-    ] == (3,)
+    ] == (4,)
 
 
 def test_cli_explicit_wire_v3_preserves_v3_planning(
@@ -348,7 +348,7 @@ def test_cli_optional_secondary_profile_uses_existing_final_failover(
             )
 
     primary = TimeoutPlanningModel()
-    secondary = _FixedPlanningModel()
+    secondary = _FixedPlanningModel(_semantic_planning_response())
     factories = PlanningModelFactoryRegistry(
         {"openai": lambda _: primary, "groq": lambda _: secondary}
     )

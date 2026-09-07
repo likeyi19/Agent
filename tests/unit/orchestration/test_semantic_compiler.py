@@ -1,4 +1,4 @@
-"""Contracts for the opt-in Post-M9 semantic source compiler."""
+"""Contracts for the registry-derived semantic source compiler."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from agent.orchestration import (
     ErrorCategory,
     ErrorClassification,
     LLMPlanner,
+    PlanningWireMode,
     PlanExecutor,
     PlanningCompilerContract,
     RequestInputBindingRule,
@@ -86,7 +87,7 @@ def _execution_fields(plan) -> tuple[object, ...]:
 
 def _v3_plan(case_id: str, request: AgentRequest, registry: ToolRegistry):
     case = _case(case_id)
-    return LLMPlanner(ScriptedPlanningModel(oracle_response(case))).plan(
+    return LLMPlanner(ScriptedPlanningModel(oracle_response(case)), wire_mode=PlanningWireMode.V3).plan(
         request, registry
     )
 

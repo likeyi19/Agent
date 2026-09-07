@@ -15,7 +15,6 @@ from agent.orchestration import (
     LLMPlanner,
     PlanningModelError,
     PlanningModelProfile,
-    PlanningWireMode,
     RunMode,
     RunStatus,
     SemanticProducerPortSpec,
@@ -223,7 +222,6 @@ def _run(
     guarded, guard = _guarded_registry(registry)
     planner = LLMPlanner(
         model,
-        wire_mode=PlanningWireMode.V4,
         profile=_profile(),
         retry_sleeper=lambda _: None,
         recovery_profiles=recovery_profiles,

@@ -9,6 +9,7 @@ import sys
 from typing import Sequence
 
 from agent.orchestration import (
+    DEFAULT_PLANNING_WIRE_MODE,
     DeterministicPlanner,
     PlanningWireMode,
     RunStoreError,
@@ -67,7 +68,11 @@ def _parser() -> argparse.ArgumentParser:
         type=PlanningWireMode,
         choices=tuple(PlanningWireMode),
         metavar="{v3,v4}",
-        help="LLM planning wire contract (default: v3).",
+        help=(
+            "LLM planning wire contract "
+            f"(default: {DEFAULT_PLANNING_WIRE_MODE.value}; "
+            "v3 remains available for compatibility)."
+        ),
     )
     run.add_argument(
         "--secondary-provider", choices=BUILTIN_PLANNING_PROVIDER_IDS
@@ -175,7 +180,7 @@ def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
         "primary_planning_profile": primary_profile,
         "recovery_planning_profile": recovery_profile,
         "planning_wire_mode": (
-            PlanningWireMode.V3 if wire_mode is None else wire_mode
+            DEFAULT_PLANNING_WIRE_MODE if wire_mode is None else wire_mode
         ),
         "planning_model_factory_registry": (
             build_default_planning_model_factory_registry()

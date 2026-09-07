@@ -1,8 +1,8 @@
 """Pure compilation from semantic source selections into an AgentPlan.
 
-This experimental Post-M9 contract is intentionally not wired to LLMPlanner or
-AgentRuntime. Its authoritative port metadata is separate from the registry's
-descriptive planning metadata and describes tool interfaces, never workflows.
+LLMPlanner uses this compiler for semantic wire v4 before runtime preflight.
+Authoritative registry port metadata is separate from descriptive planning
+metadata and describes tool interfaces, never workflows.
 """
 
 from __future__ import annotations

@@ -248,7 +248,7 @@ def test_v4_compiles_to_accepted_v3_execution_semantics(
     v4_plan = LLMPlanner(
         v4_model, wire_mode=PlanningWireMode.V4
     ).plan(request, registry)
-    v3_plan = LLMPlanner(v3_model).plan(request, registry)
+    v3_plan = LLMPlanner(v3_model, wire_mode=PlanningWireMode.V3).plan(request, registry)
 
     assert _execution_signature(v4_plan) == _execution_signature(v3_plan)
     assert v4_plan.planner_name == (
@@ -289,26 +289,26 @@ def test_v4_sends_only_semantic_prompt_and_schema(
     assert attempt.context.planning_wire_schema_version == 4
 
 
-def test_default_and_explicit_v3_are_byte_compatible(
+def test_default_and_explicit_v4_are_byte_compatible(
     registry: ToolRegistry,
 ) -> None:
     request = _request("inspect_canonical")
-    response = oracle_response(_case("inspect_canonical"))
+    response = _payload(*_inspection_steps())
     default_model = CapturingPlanningModel(response)
     explicit_model = CapturingPlanningModel(response)
 
     default_plan = LLMPlanner(default_model).plan(request, registry)
     explicit_plan = LLMPlanner(
-        explicit_model, wire_mode=PlanningWireMode.V3
+        explicit_model, wire_mode=PlanningWireMode.V4
     ).plan(request, registry)
 
     assert default_model.calls == explicit_model.calls
     assert default_model.calls[0] == (
-        _build_prompt(request, registry),
-        _response_schema(registry, request),
+        build_semantic_planning_prompt(request, registry),
+        build_semantic_wire_v4_schema(registry, request),
     )
     assert default_plan == explicit_plan
-    assert default_plan.planner_name == "llm:semantic-integration-model"
+    assert default_plan.planner_name == "llm:semantic-integration-model:wire-v4"
 
 
 @pytest.mark.parametrize("wire_mode", ("v2", "v3", "v4", 3, 4, None))

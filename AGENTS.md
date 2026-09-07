@@ -134,7 +134,8 @@ creation. An explicitly injected Planner is authoritative. Select
 `AgentRuntime()` retains its deterministic default for compatibility. Resume
 and cancel require no planner, provider, model, SDK, or credential configuration.
 
-Wire v3 remains the default in `LLMPlanner` and application-owned construction.
+Wire v4 is the default in `LLMPlanner` and application-owned LLM construction.
+Wire v3 remains available as an explicit compatibility mode.
 Its closed, registry-derived, tool-discriminated schema fixes the exact keyed
 argument contract, with distinct request-input and upstream reference bindings.
 Input names are restricted to the request; executable LLM literals are forbidden.
@@ -142,14 +143,18 @@ Reusable closed `$defs`/`$ref` schemas and a flat optional input/ref/null union
 reduce repetition; the compact prompt retains the complete semantic catalog.
 Schema-v2 output is not silently reinterpreted as v3.
 
-Wire v4 is explicit opt-in via `LLMPlanner(..., wire_mode=PlanningWireMode.V4)`,
-`ResearchAgentApplication(..., planning_wire_mode=PlanningWireMode.V4)`, or
-CLI `run --wire-mode v4` with LLM configuration. `--wire-mode v3` is also valid;
-omission means v3. Deterministic CLI mode rejects this LLM-specific option.
+Omitting `wire_mode` in `LLMPlanner(model)`, `planning_wire_mode` in
+`ResearchAgentApplication`, or `--wire-mode` in LLM CLI runs selects v4 through
+one shared default. Explicit `PlanningWireMode.V3` / `--wire-mode v3` selects
+compatibility mode; explicit v4 remains supported. The application's `None`
+sentinel distinguishes omission from conflicting explicit configuration.
+Deterministic CLI mode rejects this LLM-specific option. Low-level
+`AgentRuntime()` still defaults to `DeterministicPlanner`; this separate offline
+construction behavior does not change normal application LLM planning.
 There is no schema auto-detection, combined schema, automatic version switching,
 v4-to-v3 hidden fallback, or cross-version recovery fallback. Failover retains
-the selected wire mode. V3 prompt/parser/planner and plan identity behavior
-remain compatible with the accepted v3 path.
+the selected wire mode. Explicit v3 prompt/parser/planner and plan identity
+behavior remain compatible with the accepted v3 path.
 
 ```text
 AgentRequest
@@ -173,7 +178,7 @@ execution member/result-field names, binding objects, `StepOutputRef`, and
 reference-induced dependency serialization. The full scientific context is
 retained, including feature-space layer, coordinate, and semantics-metadata
 parameters. This can make the v4 prompt alone larger than v3; focused acceptance
-compares combined prompt/schema size instead. V4 remains opt-in.
+compares combined prompt/schema size instead. V4 is the default LLM wire.
 
 Wire v4 contains only a plan/unsupported decision, step identities, selected
 tools, semantic sources, and explicit control-only dependencies. The parser
@@ -247,14 +252,18 @@ interrupted planning is not automatically replayed, and resume after plan
 persistence is planner-free. This is separate from scientific same-step retry:
 `AgentError.recoverable` retains its M5.3 static eligibility meaning.
 
-Diagnostic schema v3 records sanitized attempt order, profile/provider and safe
+Planning diagnostics use schema v3 for wire v3 and schema v4 for wire v4.
+Both record sanitized attempt order, profile/provider and safe
 model provenance/digests. V4 parser/compiler diagnostics can identify safe step,
 producer step, target/source port, tool, and input names. Persisted diagnostics
 exclude raw prompts, structured input values/paths, provider responses,
 exception prose, HTTP bodies/headers, request IDs, credentials, and tokens.
 Run-state schema remains v3; v3 diagnostic and recovery behavior is unchanged.
 
-The deterministic offline `benchmarks/planner/` harness uses synthetic requests
+The existing `benchmarks/planner/` harness is explicitly pinned to wire v3,
+including replay, binding scoring, and diagnostics; it is not a v4 benchmark.
+V4 correctness is covered separately by semantic-v4 acceptance tests.
+The deterministic offline harness uses synthetic requests
 and PLAN_ONLY with zero scientific calls. Report schema v4 separates hard
 semantic correctness from canonical workflow conformance using structural,
 nonpositional matching, and distinguishes first-attempt, transport-recovered,
@@ -267,13 +276,26 @@ routing/ranking, prompt-based routing, and tool filtering are not implemented.
 
 ## Current accepted validation and limitations
 
+The v4 default-switch acceptance passed 821 focused tests, 1162 broad tests
+with 3 skipped, and the separately gated DA PLAN_ONLY test. Live Groq
+`openai/gpt-oss-120b` passed inspection, the canonical five-tool downstream
+workflow, and feature-space planning with all six optional parameters while
+omitting `--wire-mode`; diagnostics confirmed wire v4. All live attempts
+executed zero scientific tools. Explicit `--wire-mode v3` reached Groq but
+returned HTTP 413 / `PROVIDER_REQUEST_TOO_LARGE`. Its prompt/schema matched
+the starting HEAD `9ac802593f2abd837cabf3f3efc1bc33fa3b4738` exactly, and offline
+v3 compatibility passed. Live v3 success was unavailable under the current
+provider request-size limit; this is a non-blocking provider limitation, not
+a regression introduced by the default switch. Closeout conclusion:
+`READY_TO_COMMIT_V4_DEFAULT_SWITCH`.
+
 The accepted static target-port implementation baseline is
 `c053c6543f839f72c11f36bcf2236a8fe822eb9a` (static target-port follow-up).
 The following pre-push validation totals come from the completed follow-up's
-acceptance record supplied for this documentation consolidation; they are not
-new test runs performed by this documentation-only change. The committed code
+acceptance record supplied at the documentation-consolidation checkpoint;
+they are historical results for that follow-up. The committed code
 and tests confirm the nested schema, early target validation, historical flat
-compatibility, provider transport, and unchanged v3/default behavior.
+compatibility, provider transport, and the then-default v3 behavior.
 
 | Automated acceptance | Result |
 | --- | --- |
@@ -311,7 +333,8 @@ synthetic fixture with all six newly mapped parameters. The feature-space case
 returned `status=PLANNED`, `run_status=PLANNED`, `error=null`, and only
 `validate_scATAC_feature_space` in `tool_names`. All three checks were PLAN_ONLY
 with zero scientific execution. This records live provider planning acceptance,
-not biological-data or DA statistical acceptance. V3 remains the default.
+not biological-data or DA statistical acceptance. V3 was still the default at
+that parity-patch checkpoint; the current default is v4.
 
 Resolved interface issues are v3's model-authored mechanical binding burden
 (addressed by v4), statically invalid target generation (constrained by schema
@@ -320,7 +343,7 @@ incompatibility (resolved by nesting). Hosted models can still choose wrong
 sources/source ports or emit incomplete or unsupported candidates; successful
 smokes do not establish perfect repeated consistency. Explicit scoped inputs
 resolve deterministic optional-scope ambiguity without solving every semantic
-choice. V4 remains opt-in. These limitations are not executor/preflight,
+choice. V4 is the default LLM wire. These limitations are not executor/preflight,
 allowlist, persistence, or recovery defects and do not justify workflow guessing.
 Future hardening should follow new empirical failures or requirements, not a
 pursuit of perfect hosted-model consistency. Provider availability, rate limits,
@@ -371,7 +394,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | M8.1 | Raw feature provenance and exact replicate-aware sparse pseudobulk |
 | M8.2 | Pinned edgeR DA, independent verification, compact figureless evidence/report |
 | M9.1 | Calibrated hard-semantic offline Planner robustness benchmark |
-| M9.2 | Structured sanitized planning diagnostics (now schema v3) |
+| M9.2 | Structured sanitized planning diagnostics (v3 for wire v3; v4 for wire v4) |
 | M9.2.5 | Immutable model profiles and adapter-only factory registry |
 | M9.3 | Tool-discriminated planning wire v3 and composable semantic guidance |
 | M9.4 | Bounded transport retry / full-plan repair / configured final failover |
@@ -429,7 +452,7 @@ Unless stated otherwise, a milestone's test counts describe its acceptance
 checkpoint, not the latest regression total. Historical registry expansion was
 2 tools in M2–M5, 5/6/7/8 in M6.1/6.2/6.3/6.4, 8 through M7, 10 in M8.1, and
 11 in M8.2; the current inventory above is authoritative. Planning wire v2 was
-the M4–M8 contract and was superseded by the current v3/default and v4/opt-in
+the M4–M8 contract and was superseded by the current v4/default and v3/compatibility
 interface without replacing `AgentPlan` or scientific execution contracts.
 
 ### Milestone 1 — EpiZoo cell embedding backend

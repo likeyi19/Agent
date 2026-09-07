@@ -13,6 +13,7 @@ from agent.orchestration import (
     AgentRuntime,
     FileRunStore,
     LLMPlanner,
+    PlanningWireMode,
     PlannerError,
     PlanningModelError,
     PlanningModelProfile,
@@ -149,7 +150,7 @@ def _run(
 ):
     registry, guard = _guarded_registry()
     result = AgentRuntime(
-        planner=LLMPlanner(model, profile=profile),
+        planner=LLMPlanner(model, wire_mode=PlanningWireMode.V3, profile=profile),
         registry=registry,
         run_store=run_store,
     ).run(request or _request())
@@ -478,7 +479,7 @@ def test_explicit_unsupported_response_has_no_refusal_prose() -> None:
 
     registry, _ = _guarded_registry()
     with pytest.raises(PlannerError) as raised:
-        LLMPlanner(DiagnosticPlanningModel(response)).plan(_request(), registry)
+        LLMPlanner(DiagnosticPlanningModel(response), wire_mode=PlanningWireMode.V3).plan(_request(), registry)
     assert refusal not in str(raised.value)
 
 

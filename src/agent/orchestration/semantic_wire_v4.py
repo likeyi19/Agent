@@ -1,6 +1,6 @@
-"""Experimental strict wire-v4 schema and parser for semantic plan candidates.
+"""Strict wire-v4 schema and parser for semantic plan candidates.
 
-The opt-in wire-v4 boundary projects registered static target-port constraints.
+The default LLM wire-v4 boundary projects registered static target-port constraints.
 The registry-driven semantic compiler remains authoritative for source legality.
 """
 

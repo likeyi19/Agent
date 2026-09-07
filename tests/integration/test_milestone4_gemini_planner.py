@@ -13,6 +13,7 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     LLMPlanner,
+    PlanningWireMode,
     RunMode,
     RunStatus,
     ToolRegistry,
@@ -55,7 +56,10 @@ def test_real_gemini_planner_plan_only() -> None:
         mode=RunMode.PLAN_ONLY,
     )
     runtime = AgentRuntime(
-        planner=LLMPlanner(GeminiPlanningModel(model=model, timeout=60.0)),
+        planner=LLMPlanner(
+            GeminiPlanningModel(model=model, timeout=60.0),
+            wire_mode=PlanningWireMode.V3,
+        ),
         registry=guarded_registry,
     )
 

@@ -14,6 +14,7 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     LLMPlanner,
+    PlanningWireMode,
     RunMode,
     RunStatus,
     StepStatus,
@@ -117,7 +118,11 @@ def test_llm_planner_executes_real_inspection_through_agent_runtime(tmp_path) ->
         {"input_path": str(input_path)},
     )
 
-    result = AgentRuntime(planner=LLMPlanner(model)).run(request)
+    result = AgentRuntime(planner=LLMPlanner(
+        model,
+        wire_mode=PlanningWireMode.V3,
+        )).run(request,
+    )
 
     assert model.calls == 1
     assert result.status is RunStatus.SUCCEEDED
@@ -163,7 +168,7 @@ def test_llm_embedding_plan_only_runs_full_preflight_with_zero_tool_calls(
     )
 
     result = AgentRuntime(
-        planner=LLMPlanner(model), registry=guarded_registry
+        planner=LLMPlanner(model, wire_mode=PlanningWireMode.V3), registry=guarded_registry
     ).run(request)
 
     assert model.calls == 1
@@ -202,7 +207,7 @@ def test_invalid_later_llm_step_preflight_prevents_earlier_real_tool(
     )
 
     result = AgentRuntime(
-        planner=LLMPlanner(model), registry=guarded_registry
+        planner=LLMPlanner(model, wire_mode=PlanningWireMode.V3), registry=guarded_registry
     ).run(request)
 
     assert result.status is RunStatus.FAILED

@@ -88,6 +88,9 @@ class PlanningWireMode(str, Enum):
         return 3 if self is PlanningWireMode.V3 else 4
 
 
+DEFAULT_PLANNING_WIRE_MODE = PlanningWireMode.V4
+
+
 _SEMANTIC_COMPILER_STAGES = {
     "UNKNOWN_TOOL": PlanningDiagnosticStage.TOOL_SELECTION,
     "MISSING_REQUEST_SOURCE_MEMBER": PlanningDiagnosticStage.ARGUMENT_BINDING,
@@ -1168,7 +1171,7 @@ class LLMPlanner:
         self,
         model: PlanningModel,
         *,
-        wire_mode: PlanningWireMode = PlanningWireMode.V3,
+        wire_mode: PlanningWireMode = DEFAULT_PLANNING_WIRE_MODE,
         profile: PlanningModelProfile | None = None,
         recovery_policy: PlanningRecoveryPolicy | None = None,
         retry_sleeper: PlanningSleeper | None = None,
@@ -1831,4 +1834,4 @@ def _append_successful_response_diagnostics(
     )
 
 
-__all__ = ["LLMPlanner", "PlanningWireMode"]
+__all__ = ["DEFAULT_PLANNING_WIRE_MODE", "LLMPlanner", "PlanningWireMode"]

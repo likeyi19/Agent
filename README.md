@@ -43,7 +43,7 @@ ports, authorized deterministic request binding, exact argument/result mappings,
 `StepOutputRef` construction, induced dependencies, defaults, canonicalization,
 validation, and whole-plan preflight.
 
-The opt-in semantic wire-v4 path is:
+The default LLM semantic wire-v4 path is:
 
 ```text
 AgentRequest
@@ -69,12 +69,12 @@ paths, parameters, or executable literals. Structured input values are excluded
 from the planning catalog/prompt; input names and basic types may be exposed,
 and the natural-language request itself is sent to the model.
 
-Wire **v3 remains the default**. Its registry-derived, tool-discriminated schema
-requires exact keyed argument bindings, with reusable closed `$defs`/`$ref`
-schemas and flat optional input/ref/null unions. Semantic **v4 is explicit
-opt-in**, removing model-authored execution argument dictionaries, raw result
-keys, references, and redundant dependency serialization. There is no automatic
-schema switching, version detection, combined schema, or hidden v4-to-v3 fallback.
+Semantic **v4 is the default for LLM planning**, removing model-authored execution
+argument dictionaries, raw result keys, references, and redundant dependency
+serialization. Wire **v3 remains an explicit compatibility mode** through
+`--wire-mode v3` or `PlanningWireMode.V3` in Python. Its registry-derived schema
+retains exact keyed argument bindings. There is no automatic schema switching,
+version detection, combined schema, or hidden v4-to-v3 fallback.
 
 The latest follow-up projects legal target ports directly from each tool's
 `ToolSpec.semantic_planning.consumer_ports` into the v4 provider schema:
@@ -100,7 +100,8 @@ injection are supported; no production model is hard-coded. Application/CLI new
 runs require an explicit primary LLM profile unless deterministic planning or
 another Planner is explicitly selected. Missing configuration fails clearly.
 Low-level `AgentRuntime()` retains its deterministic offline default; that
-planner is not a semantic oracle for LLM output.
+runtime construction is separate from normal application LLM planning. The
+deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
@@ -194,7 +195,9 @@ configured final-profile failover: three logical calls maximum, with built-in
 SDK retries disabled. Interrupted planning is not replayed; only the final
 preflight-passing plan is durable. HTTP 413 is terminal
 `PROVIDER_REQUEST_TOO_LARGE`, distinct from retryable HTTP 429.
-Sanitized diagnostic schema v3 and offline benchmark report schema v4 expose
+Sanitized planning diagnostics use schema v3 for wire v3 and schema v4 for wire
+v4. The existing planner benchmark remains explicitly pinned to wire v3; its
+report schema v4 preserves historical scoring. These diagnostics and reports expose
 attempt provenance and distinguish hard semantic correctness from canonical
 workflow conformance and first-attempt versus recovered success.
 
@@ -221,17 +224,19 @@ PYTHONPATH=src python -m agent run \
   --planner deterministic --plan-only
 ```
 
-For LLM planning with explicit semantic v4 opt-in (the model shown is a prior
+For default semantic v4 LLM planning (the model shown is a prior
 Groq acceptance configuration, not an automatically selected default):
 
 ```bash
 PYTHONPATH=src python -m agent run \
   --request-id inspect-v4 --request "Inspect this scATAC dataset" \
   --workspace /path/to/workspace --input /path/to/cells.h5ad \
-  --provider groq --model openai/gpt-oss-120b --wire-mode v4 --plan-only
+  --provider groq --model openai/gpt-oss-120b --plan-only
 ```
 
-Omit `--wire-mode` or use `--wire-mode v3` for the default wire contract. Optional
+Omit `--wire-mode` for v4, or select `--wire-mode v3` for compatibility. Explicit
+`--wire-mode v4` is also supported. `LLMPlanner(model)` defaults to v4, as does
+application-owned LLM planning when `planning_wire_mode` is omitted. Optional
 `--secondary-provider` and `--secondary-model` configure the single final
 failover. `--provider deterministic` remains a compatibility alias for explicit
 deterministic planning; deterministic mode rejects LLM wire/model settings.
@@ -276,7 +281,7 @@ densifies a complete raw scATAC matrix.
 The latest pre-push Planner follow-up acceptance record reports 203 focused
 passes, 1006 orchestration/provider/benchmark passes, 1429 lightweight passes
 with 54 skips, and 7648 independent JSON Schema payload checks. These are
-historical acceptance totals, not tests rerun for this documentation pass.
+historical acceptance totals for that follow-up.
 Separate live Groq checks accepted the strict schema, application v4 inspection,
 and the complete five-tool downstream PLAN_ONLY DAG with zero scientific
 execution and no target-port failure.
@@ -284,7 +289,7 @@ execution and no target-port failure.
 The mechanical serialization burden, static target-port generation, and Groq
 discriminator issues have been addressed. Genuine hosted-model source/source-port
 variability, incomplete or explicit unsupported decisions, and provider
-availability/rate-limit/authentication issues remain possible. V4 stays opt-in;
+availability/rate-limit/authentication issues remain possible;
 remaining variability must not be hidden by deterministic workflow guessing.
 
 Guarded real-data DA acceptance needs eligible human/mouse raw counts with true

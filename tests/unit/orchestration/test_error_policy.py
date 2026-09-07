@@ -16,6 +16,7 @@ from agent.orchestration import (
     FileRunStore,
     RecoveryDisposition,
     LLMPlanner,
+    PlanningWireMode,
     PlannerError,
     PlanningModelError,
     RunMode,
@@ -186,7 +187,7 @@ def test_provider_neutral_failure_reaches_runtime_with_safe_stable_code() -> Non
             ) from RuntimeError("Bearer provider-secret")
 
     result = AgentRuntime(
-        planner=LLMPlanner(Model()),
+        planner=LLMPlanner(Model(), wire_mode=PlanningWireMode.V3),
         registry=build_default_tool_registry(),
     ).run(
         AgentRequest(

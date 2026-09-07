@@ -11,6 +11,7 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     LLMPlanner,
+    PlanningWireMode,
     RunMode,
     RunStatus,
 )
@@ -35,7 +36,10 @@ def test_real_openai_planner_plan_only() -> None:
         mode=RunMode.PLAN_ONLY,
     )
     runtime = AgentRuntime(
-        planner=LLMPlanner(OpenAIPlanningModel(model=model, timeout=60.0))
+        planner=LLMPlanner(
+            OpenAIPlanningModel(model=model, timeout=60.0),
+            wire_mode=PlanningWireMode.V3,
+        )
     )
 
     result = runtime.run(request)

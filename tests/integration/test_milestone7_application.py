@@ -12,7 +12,7 @@ import pandas as pd
 from scipy import sparse
 
 from agent.application import ApplicationStatus, ResearchAgentApplication
-from agent.orchestration import LLMPlanner, ToolRegistry, build_default_tool_registry
+from agent.orchestration import LLMPlanner, ToolRegistry, build_default_tool_registry, PlanningWireMode
 from agent.report import verify_analysis_report
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, StepOutputRef
 
@@ -243,7 +243,7 @@ def test_llm_planner_report_language_stays_outside_tool_plan(tmp_path: Path) -> 
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     model = _FixedPlanningModel()
     application = ResearchAgentApplication(
-        tmp_path / "workspace", planner=LLMPlanner(model)
+        tmp_path / "workspace", planner=LLMPlanner(model, wire_mode=PlanningWireMode.V3)
     )
     request = AgentRequest(
         "milestone7-natural-language",

@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from agent.orchestration import (
+    DEFAULT_PLANNING_WIRE_MODE,
     AgentRuntime,
     FileRunStore,
     LLMPlanner,
@@ -299,7 +300,7 @@ class ResearchAgentApplication:
             planner = _application_llm_planner(
                 primary_planning_profile,
                 wire_mode=(
-                    PlanningWireMode.V3
+                    DEFAULT_PLANNING_WIRE_MODE
                     if planning_wire_mode is None
                     else planning_wire_mode
                 ),

@@ -155,7 +155,7 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     scientific_calls: list[str] = []
-    model = _ScriptedPlanningModel("not-json", _planning_response())
+    model = _ScriptedPlanningModel("not-json", _semantic_planning_response())
     factories = PlanningModelFactoryRegistry({"custom": lambda _: model})
     application = ResearchAgentApplication(
         tmp_path / "workspace",
@@ -169,7 +169,7 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
     )
 
     assert isinstance(application.runtime.planner, LLMPlanner)
-    assert application.runtime.planner.wire_mode is PlanningWireMode.V3
+    assert application.runtime.planner.wire_mode is PlanningWireMode.V4
     assert application.runtime.planner.recovery_policy.policy_version == (
         "planning-recovery-v3"
     )
@@ -183,11 +183,16 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
     )
 
 
-def test_application_explicit_wire_v4_reaches_owned_llm_planner(
+@pytest.mark.parametrize("wire_mode", tuple(PlanningWireMode))
+def test_application_explicit_wire_mode_reaches_owned_llm_planner(
     tmp_path: Path,
+    wire_mode: PlanningWireMode,
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    model = _ScriptedPlanningModel(_semantic_planning_response())
+    model = _ScriptedPlanningModel(
+        _planning_response() if wire_mode is PlanningWireMode.V3
+        else _semantic_planning_response()
+    )
     created: list[PlanningModelProfile] = []
 
     def create(profile: PlanningModelProfile) -> _ScriptedPlanningModel:
@@ -201,7 +206,7 @@ def test_application_explicit_wire_v4_reaches_owned_llm_planner(
         planning_model_factory_registry=PlanningModelFactoryRegistry(
             {"groq": create}
         ),
-        planning_wire_mode=PlanningWireMode.V4,
+        planning_wire_mode=wire_mode,
     )
 
     result = application.run(
@@ -209,7 +214,7 @@ def test_application_explicit_wire_v4_reaches_owned_llm_planner(
     )
 
     assert isinstance(application.runtime.planner, LLMPlanner)
-    assert application.runtime.planner.wire_mode is PlanningWireMode.V4
+    assert application.runtime.planner.wire_mode is wire_mode
     assert application.runtime.planner.profile is profile
     assert created == [profile]
     assert result.status is ApplicationStatus.PLANNED
@@ -227,7 +232,7 @@ def test_application_optional_secondary_profile_uses_existing_failover(
         model_id="primary:model",
     )
     secondary = _ScriptedPlanningModel(
-        _planning_response(), model_id="secondary:model"
+        _semantic_planning_response(), model_id="secondary:model"
     )
     created: list[str] = []
 
@@ -702,8 +707,10 @@ def test_cooperative_runtime_cancellation_produces_no_reporting(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize("wire_mode", (None, *PlanningWireMode))
 def test_interrupted_durable_run_resumes_without_replanning_completed_step(
     tmp_path: Path,
+    wire_mode: PlanningWireMode | None,
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
@@ -727,6 +734,20 @@ def test_interrupted_durable_run_resumes_without_replanning_completed_step(
             )
 
     planner = TwoStepPlanner()
+    model = None
+    if wire_mode is not None:
+        payload = json.loads(
+            _planning_response() if wire_mode is PlanningWireMode.V3
+            else _semantic_planning_response()
+        )
+        steps = (
+            payload["steps"] if wire_mode is PlanningWireMode.V3
+            else payload["decision"]["steps"]
+        )
+        first = steps[0]
+        steps[:] = [dict(first, step_id="inspect-1"), dict(first, step_id="inspect-2")]
+        model = _ScriptedPlanningModel(json.dumps(payload))
+        planner = LLMPlanner(model, wire_mode=wire_mode)
     application = ResearchAgentApplication(
         tmp_path / "workspace", planner=planner, registry=registry
     )
@@ -744,12 +765,55 @@ def test_interrupted_durable_run_resumes_without_replanning_completed_step(
     application.run_store.update = interrupt  # type: ignore[method-assign]
     with pytest.raises(KeyboardInterrupt):
         application.run(
-            AgentRequest(request_id, "Inspect twice for resume testing.", {})
+            AgentRequest(
+                request_id, "Inspect twice for resume testing.",
+                {"input_path": str(source)},
+            )
         )
     application.run_store.update = original_update  # type: ignore[method-assign]
 
-    resumed = application.resume(f"{request_id}:run")
+    before = application.run_store.load(f"{request_id}:run")
+    lifecycle = ResearchAgentApplication(tmp_path / "workspace", registry=registry)
+    resumed = lifecycle.resume(f"{request_id}:run")
+    after = lifecycle.run_store.load(f"{request_id}:run")
+    assert after.plan == before.plan
+    assert after.plan_fingerprint == before.plan_fingerprint
+    assert after.steps[0] == before.steps[0]
 
     assert resumed.status is ApplicationStatus.SUCCEEDED
     assert calls == ["inspect_scATAC", "inspect_scATAC"]
-    assert planner.calls == 1
+    assert (planner.calls if model is None else model.calls) == 1
+
+
+@pytest.mark.parametrize("wire_mode", tuple(PlanningWireMode))
+def test_llm_plan_only_resume_preserves_plan_without_provider(
+    tmp_path: Path,
+    wire_mode: PlanningWireMode,
+) -> None:
+    source = _tiny_h5ad(tmp_path / "tiny.h5ad")
+    calls: list[str] = []
+    registry = _counting_registry(calls)
+    model = _ScriptedPlanningModel(
+        _planning_response() if wire_mode is PlanningWireMode.V3
+        else _semantic_planning_response()
+    )
+    workspace = tmp_path / "workspace"
+    app = ResearchAgentApplication(
+        workspace,
+        primary_planning_profile=_profile(),
+        planning_model_factory_registry=PlanningModelFactoryRegistry(
+            {"custom": lambda _: model}
+        ),
+        planning_wire_mode=wire_mode,
+        registry=registry,
+    )
+    first = app.run(replace(_request(source), mode=RunMode.PLAN_ONLY))
+    assert first.status is ApplicationStatus.PLANNED
+    before = app.run_store.load(first.run_id)
+    lifecycle = ResearchAgentApplication(workspace, registry=registry)
+    resumed = lifecycle.resume(first.run_id)
+    assert resumed.status is ApplicationStatus.PLANNED
+    assert resumed.run_result == first.run_result
+    assert lifecycle.run_store.load(first.run_id) == before
+    assert model.calls == 1
+    assert calls == []

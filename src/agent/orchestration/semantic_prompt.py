@@ -1,4 +1,4 @@
-"""Experimental registry-driven semantic planning catalog and prompt."""
+"""Registry-driven semantic planning catalog and prompt."""
 
 from __future__ import annotations
 

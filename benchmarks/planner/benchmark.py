@@ -1,4 +1,4 @@
-"""Deterministic benchmark harness for the production LLM planner.
+"""Deterministic benchmark harness explicitly pinned to the v3 LLM planning contract.
 
 The semantic oracle in this module is benchmark-only.  Production planning and
 execution code must not import this package.
@@ -16,6 +16,7 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     LLMPlanner,
+    PlanningWireMode,
     PlanningModel,
     PlanningModelProfile,
     RunMode,
@@ -1652,6 +1653,7 @@ def run_benchmark(
             result = AgentRuntime(
                 planner=LLMPlanner(
                     observed,
+                    wire_mode=PlanningWireMode.V3,
                     profile=model_profile,
                     recovery_profiles=recovery_profiles,
                     model_factory_registry=observed_factories,

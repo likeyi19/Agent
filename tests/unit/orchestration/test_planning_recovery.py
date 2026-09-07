@@ -13,6 +13,7 @@ from agent.orchestration import (
     AgentRuntime,
     FileRunStore,
     LLMPlanner,
+    PlanningWireMode,
     PlanningModelError,
     PlanningModelProfile,
     PlanningRecoveryPolicy,
@@ -169,7 +170,7 @@ def _run(
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            model,
+            model, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=sleeper,
             recovery_profiles=recovery_profiles,
@@ -485,7 +486,7 @@ def test_cancellation_during_delay_suppresses_retry_and_execution(tmp_path) -> N
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            model, profile=_profile(), retry_sleeper=cancel_during_delay
+            model, wire_mode=PlanningWireMode.V3, profile=_profile(), retry_sleeper=cancel_during_delay
         ),
         registry=registry,
         run_store=store,
@@ -510,7 +511,11 @@ def test_cancellation_after_transient_failure_suppresses_retry(tmp_path) -> None
     model = ScriptedModel([cancel_and_fail, _valid_response()])
     registry, guard = _registry()
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         run_store=store,
     )
@@ -656,7 +661,11 @@ def test_crash_before_plan_persistence_is_not_automatically_replanned(tmp_path) 
     registry, guard = _registry()
     model = CrashingModel()
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         run_store=store,
     )
@@ -741,7 +750,11 @@ def test_cancellation_after_accepted_preflight_prevents_execution(tmp_path) -> N
     executor = CancellingPreflightExecutor(registry)
     model = ScriptedModel([_valid_response()])
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         executor=executor,
         run_store=store,
@@ -971,7 +984,11 @@ def test_unexpected_preflight_exception_is_not_repaired() -> None:
 
     model = ScriptedModel([_valid_response(), _valid_response()])
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         executor=FailingPreflightExecutor(registry),
     )
@@ -1000,7 +1017,11 @@ def test_local_catalog_invariant_failure_is_not_repaired() -> None:
     registry = ToolRegistry((replace(invalid, function=guard),))
     model = ScriptedModel([_valid_response(), _valid_response()])
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
     )
 
@@ -1047,7 +1068,11 @@ def test_cancellation_after_candidate_failure_suppresses_repair(tmp_path) -> Non
     model = ScriptedModel([cancel_then_return_invalid, _valid_response()])
     registry, guard = _registry()
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         run_store=store,
     )
@@ -1073,7 +1098,11 @@ def test_cancellation_after_repaired_plan_acceptance_prevents_execution(tmp_path
 
     model = ScriptedModel([_invalid_candidate("malformed"), _valid_response()])
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         executor=CancellingRepairPreflightExecutor(registry),
         run_store=store,
@@ -1158,7 +1187,11 @@ def test_interrupted_repair_is_not_replayed_on_resume(tmp_path) -> None:
     )
     registry, guard = _registry()
     runtime = AgentRuntime(
-        planner=LLMPlanner(model, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            model,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         run_store=store,
     )
@@ -1349,7 +1382,7 @@ def test_disabled_or_incapable_secondary_configuration_is_rejected(
 
     with pytest.raises(ValueError):
         LLMPlanner(
-            ScriptedModel([]),
+            ScriptedModel([]), wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             recovery_profiles=(profile,),
             model_factory_registry=registry,
@@ -1371,14 +1404,14 @@ def test_invalid_duplicate_or_excess_secondary_configuration_is_rejected() -> No
     for profiles in ((duplicate_id,), (duplicate_model,), (secondary, secondary)):
         with pytest.raises(ValueError):
             LLMPlanner(
-                ScriptedModel([]),
+                ScriptedModel([]), wire_mode=PlanningWireMode.V3,
                 profile=primary,
                 recovery_profiles=profiles,
                 model_factory_registry=registry,
             )
     with pytest.raises(TypeError):
         LLMPlanner(
-            ScriptedModel([]),
+            ScriptedModel([]), wire_mode=PlanningWireMode.V3,
             profile=primary,
             recovery_profiles=[secondary],  # type: ignore[arg-type]
             model_factory_registry=registry,
@@ -1409,7 +1442,7 @@ def test_unknown_secondary_provider_configuration_is_rejected() -> None:
 
     with pytest.raises(ValueError):
         LLMPlanner(
-            ScriptedModel([]),
+            ScriptedModel([]), wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             recovery_profiles=(secondary,),
             model_factory_registry=registry,
@@ -1707,7 +1740,7 @@ def test_cancellation_after_call_two_suppresses_failover_construction(tmp_path) 
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            primary,
+            primary, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=lambda _: None,
             recovery_profiles=(secondary_profile,),
@@ -1749,7 +1782,7 @@ def test_cancellation_after_failover_plan_prevents_execution(tmp_path) -> None:
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            primary,
+            primary, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=lambda _: None,
             recovery_profiles=(secondary_profile,),
@@ -1863,7 +1896,7 @@ def test_interrupted_failover_is_not_replayed_on_resume(tmp_path) -> None:
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            primary,
+            primary, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=lambda _: None,
             recovery_profiles=(secondary_profile,),
@@ -2044,7 +2077,7 @@ def test_secondary_construction_interruption_is_not_replayed(tmp_path) -> None:
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            primary,
+            primary, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=lambda _: None,
             recovery_profiles=(secondary_profile,),
@@ -2089,7 +2122,7 @@ def test_interrupted_transport_recovery_is_not_replayed(
     registry, guard = _registry()
     runtime = AgentRuntime(
         planner=LLMPlanner(
-            primary,
+            primary, wire_mode=PlanningWireMode.V3,
             profile=_profile(),
             retry_sleeper=(crash_delay if phase == "retry_delay" else lambda _: None),
         ),
@@ -2116,7 +2149,11 @@ def test_accepted_candidate_interruption_before_plan_persistence_is_not_replayed
     primary = ScriptedModel([_valid_response()])
     registry, guard = _registry()
     runtime = AgentRuntime(
-        planner=LLMPlanner(primary, profile=_profile(), retry_sleeper=lambda _: None),
+        planner=LLMPlanner(
+            primary,
+            wire_mode=PlanningWireMode.V3,
+            profile=_profile(), retry_sleeper=lambda _: None,
+        ),
         registry=registry,
         run_store=store,
     )

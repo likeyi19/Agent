@@ -4,6 +4,11 @@ This benchmark began as the Milestone 9.1 baseline for production
 `LLMPlanner`. Its semantic workflow oracle exists only in
 `benchmarks.planner.benchmark`; production orchestration never imports it.
 
+The harness explicitly selects `PlanningWireMode.V3`, including for hosted-model
+runs and recovery. Replay, binding scoring, and diagnostic interpretation retain
+their historical v3 semantics despite the production LLM default becoming v4.
+Semantic-v4 correctness remains covered by the separate v4 acceptance tests.
+
 The corpus contains synthetic prompts, paths, and metadata only. Expectations
 describe outcomes, tool roles, binding origins, dependency edges, and
 `StepOutputRef` relationships. Provider descriptions, rejection wording, and

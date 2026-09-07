@@ -14,6 +14,7 @@ from agent.orchestration import (
     DeterministicPlanner,
     ErrorCategory,
     LLMPlanner,
+    PlanningWireMode,
     Planner,
     PlannerError,
     PlanningModel,
@@ -268,7 +269,7 @@ def _plan_response(*steps: dict[str, object], **extra) -> str:
 
 def _planner(response: object, **kwargs) -> tuple[LLMPlanner, FakePlanningModel]:
     model = FakePlanningModel(response, **kwargs)
-    return LLMPlanner(model), model
+    return LLMPlanner(model, wire_mode=PlanningWireMode.V3), model
 
 
 def test_llm_planner_and_fake_model_satisfy_protocols() -> None:

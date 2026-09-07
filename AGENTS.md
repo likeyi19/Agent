@@ -507,6 +507,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | Feature-space semantic-v4 parity | Six optional feature-space mappings completed through reviewed registry metadata; offline and explicit-v4 Groq PLAN_ONLY acceptance |
 | Semantic-v4 default migration | Shared v4 default for LLM/application/CLI planning; explicit v3 compatibility and v3 benchmark retained; omitted-wire Groq PLAN_ONLY acceptance |
 | M10.1 | Phase II raw scATAC preprocessing foundation: versioned intake domain contract and manifest infrastructure |
+| M10.2 | Read-only bounded FASTQ intake, declared 10x ATAC layouts, source reinspection, and M10.1 manifest population |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2307,3 +2308,152 @@ Accepted validation, including the contract-hardening pass:
 | M10.1 focused | 194 passed |
 | Relevant regression | 75 passed |
 | Full lightweight regression | 1702 passed, 54 skipped, 7 warnings |
+
+### Milestone 10.2 — FASTQ data-layer vertical slice
+
+M10.2 is complete and accepted, including the suffix/content and missing-role
+hardening pass. `src/agent/tools/data/_raw_fastq.py` provides deterministic,
+read-only FASTQ discovery and inspection through `inspect_fastq_inputs()`.
+It produces the accepted M10.1 `RawIntakeManifest`: artifact
+`agent.raw-scatac-intake`, schema version `1`, intake contract
+`raw-scatac-intake.v1`, and route `fastq-to-cell-by-ccre.v1` remain unchanged.
+FASTQ-specific facts use bounded canonical evidence under `raw-fastq.v1`.
+This is a data-layer API, not a ToolRegistry/public Agent capability.
+
+Agent inspection accepts `.fastq`, `.fastq.gz`, `.fq`, and `.fq.gz`; this does
+not establish the naming conventions accepted by external Cell Ranger tools.
+Selection supports explicit local regular files and non-recursive local
+directories, with deterministic lexical discovery and bounded candidate/entry
+counts. Remote URLs and recursive discovery are unsupported. Explicit file
+symlinks resolve to canonical paths and duplicate canonical aliases collapse;
+conflicting hard-link aliases and directory-discovered candidate symlinks are
+rejected. Source directories are not mutated.
+
+| Repository-owned inspection bound | Limit |
+| --- | --- |
+| Candidate files / selections | 128 each |
+| Directory entries per directory | 16,384 |
+| Records inspected per file | 256 |
+| Decoded bytes per file | 2 MiB |
+| Line size, including terminator | 16 KiB |
+| Encoded gzip input | 4 MiB |
+
+The reviewed filename grammar is
+`[sample]_S[number][_L[lane]]_[role]_[chunk]` followed by an accepted suffix.
+Roles are `R1`, `R2`, `R3`, `I1`, and `I2`; lanes and chunks have three digits.
+Parsing proceeds from the right so sample tokens may contain underscores.
+Missing lane remains missing. Grouping uses the canonical leaf location, sample
+token, sample number, lane state/value, and chunk. Matching sample names across
+independent roots are never merged. Filename grouping is syntactic evidence
+only: it establishes neither biological sample/replicate/condition nor shared
+barcode identity. Unrecognized names remain independent unresolved groups.
+
+The first supported assay family is **10x / Cell Ranger ATAC-compatible**,
+requiring explicit `FastqAssay.TENX_ATAC` authority before filename roles receive
+a supported ATAC interpretation. Neither filenames nor read lengths establish
+assay identity; generic R1/R2 paired-end input is not automatically 10x ATAC.
+
+| Layout | Identity | Genomic read 1 | Raw cell-barcode / i5 read | Genomic read 2 | Optional sample index |
+| --- | --- | --- | --- | --- | --- |
+| A | `tenx-atac-r1-r2-r3.v1` | R1 | R2 | R3 | I1 |
+| B | `tenx-atac-r1-i2-r2.v1` | R1 | I2 | R2 | I1 |
+
+Supported assay/layout evidence permits `FASTQ_READ` barcode provenance with
+locator `R2` for A or `I2` for B. I1 is never the cell-barcode source. No
+corrected/canonical barcode identity is claimed, and barcode values are never
+persisted. Group-local barcode identity scope remains M10.1-derived; identical
+strings in independent groups do not establish the same cell.
+
+A declared or uniquely determined candidate layout missing a required role
+produces `FASTQ_REQUIRED_ROLE_MISSING`, with exact absent roles in canonical
+evidence. Missing required input yields `NEEDS_USER_INPUT`, subject to other
+findings and M10.1 precedence: an additional required artifact must be supplied,
+without automatically declaring the experiment `INVALID`. Missing optional I1
+is acceptable. Duplicate-role, incompatible-role, unresolved-layout, and
+unresolved-assay findings remain distinct. No file is invented or repaired.
+
+Caller guidance reserves optional `declared_layout` for incomplete, explicitly
+declared 10x assay inputs that cannot otherwise distinguish A from B. It accepts
+only the supported A/B identities, applies to all selected groups, and never
+replaces deterministic filename/content inspection or assay authority. Without
+such a declaration, R1/R2 preserves both conditional alternatives (A missing R3,
+B missing I2), rather than guessing one. Evidence distinguishes declared-layout,
+unique-candidate, and alternative-candidate bases. An unresolved assay or
+unresolved grouping does not support a precise missing-role assertion.
+
+The bounded parser checks four LF/CRLF-terminated FASTQ lines, an `@` header,
+a `+` separator, equal sequence/quality lengths, and bounded printable ASCII
+sequence/quality content without restricting sequence to A/C/G/T. Optional
+identifier text on the separator must exactly repeat the header text after `@`.
+Line/component and decoded-byte limits bound record allocation; limit stops
+are distinguished from malformed/truncated records. This is a narrow parser
+contract, not unrestricted support for every FASTQ representation.
+
+Actual compression is determined from content/magic bytes, independently of the
+filename suffix hint. Valid plain and gzip FASTQ are supported. A misleading
+suffix produces advisory `FASTQ_COMPRESSION_SUFFIX_MISMATCH`; mismatch alone
+does not downgrade readiness. Inputs are never renamed or recompressed. Gzip
+corruption encountered during inspection is invalid, including trailer/CRC
+errors encountered while reaching EOF. Malformed decoded FASTQ remains invalid.
+Uninspected gzip tails are not certified; naming preparation for a future
+external executable is not missing scientific information in M10.2.
+
+Multi-read synchronization compares sampled first whitespace-delimited header
+tokens after removing `@` and normalizing only terminal `/1` or `/2`. There is
+no fuzzy matching, reordering, or resynchronization. Observed read-ID mismatch
+is blocking/invalid. When all compared files reach EOF, unequal complete record
+counts are blocking; an observed early EOF against another file's longer checked
+prefix is also blocking. Budget termination is not reported as premature EOF,
+and sampled agreement is not a claim of complete read-count equality.
+
+Coverage explicitly distinguishes bounded samples from complete coverage;
+complete requires sequential EOF observation under the parser contract. It
+records inspected records/decoded bytes, declared limits, EOF, and stop reason.
+The observed-region SHA-256 covers only inspected decoded content, including
+observed partial components; it is not a whole-file hash. No read IDs, sequences,
+qualities, or barcode vectors are persisted.
+
+`observe_fastq_sources()` is the reusable low-level source-reinspection primitive.
+It reopens recorded FASTQ inputs and reproduces bounded structural observations,
+observed-region digests, and synchronization summaries without trusting
+serialized readiness. Recorded size/mtime and before/after snapshot checks guard
+against materially changing sources; inspection preserves source bytes/mtimes.
+The primitive supports later independent orchestration verification and is not
+yet connected to `verify_step()`. Operational selection/read/snapshot failures
+use sanitized `RAW_FASTQ_*` errors; safely observed scientific defects remain
+manifest findings, preserving other groups where inspection remains trustworthy.
+
+Species is never inferred from FASTQ filenames or contents. Explicit human maps
+to target `hg38`; explicit mouse maps to `mm10`, through M10.1. FASTQ source
+coordinate assembly is not applicable. Alignment to the target reference is a
+normal downstream prerequisite and does not itself downgrade readiness. No
+liftOver or reference conversion occurs.
+
+Accepted representative behavior below assumes other common M10.1 gates are
+satisfied; human is declared where hg38 is shown, and species is deliberately
+absent in the final row:
+
+| FASTQ input | Readiness | Target | Barcode locator |
+| --- | --- | --- | --- |
+| Declared human Layout A | `READY` | hg38 | R2 |
+| Declared mouse Layout B | `READY` | mm10 | I2 |
+| Matching names without assay declaration | `NEEDS_USER_INPUT` | hg38 | Unknown |
+| Generic R1/R2 | `NEEDS_USER_INPUT` | hg38 | Unknown |
+| Declared supported layout missing required role | `NEEDS_USER_INPUT` | hg38 | Unknown |
+| Malformed FASTQ | `INVALID` | hg38 | Unknown |
+| Sampled read-ID mismatch | `INVALID` | hg38 | Unknown |
+| Supported Layout A with unknown species | `NEEDS_USER_INPUT` | Unresolved | R2 |
+
+M10.2 introduced no BAM support, `pysam`, `samtools`, alignment, realignment,
+liftOver, barcode correction, fragments, cell calling, cell-by-cCRE construction,
+ToolRegistry capability, `ArtifactSemanticKind` change, planner/compiler change,
+orchestration verifier dispatch, or reporting integration.
+
+Accepted validation, including contract hardening:
+
+| Acceptance suite | Result |
+| --- | --- |
+| M10.2 focused | 177 passed |
+| M10.1 regression | 194 passed |
+| Relevant data/artifact regression | 75 passed |
+| Full lightweight regression | 1879 passed, 54 skipped, 7 warnings |

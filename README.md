@@ -20,12 +20,34 @@ and manifest infrastructure. Raw-input readiness is distinct from execution
 success: the contract separates required information, preparation/repair
 requirements, and normal downstream prerequisites.
 
-Human model-oriented preprocessing targets `hg38`; mouse targets `mm10`.
-Source and target genome assemblies are distinct, and species does not establish
-the source assembly of an aligned input. FASTQ can legitimately have no source
-coordinate assembly; future supported FASTQ processing will align directly to
-the appropriate target reference. No FASTQ/BAM parser, alignment, liftOver,
-cell-by-cCRE construction, or public raw-inspection tool is implemented yet.
+Milestone 10.2 is complete: a deterministic, read-only FASTQ intake vertical
+slice built on M10.1. It inspects local plain/gzip FASTQ with bounded parsing,
+accepting `.fastq`, `.fastq.gz`, `.fq`, and `.fq.gz` for Agent inspection.
+Discovery supports explicit files and non-recursive directories. Reviewed
+Illumina/10x-style names support deterministic sample-token/lane/chunk/read-role
+grouping without establishing biological sample identity.
+
+The first supported declared assay family is 10x / Cell Ranger ATAC-compatible
+FASTQ, with two layouts:
+
+| Layout | Genomic reads | Raw cell-barcode read | Optional sample index |
+| --- | --- | --- | --- |
+| A | R1, R3 | R2 | I1 |
+| B | R1, R2 | I2 | I1 |
+
+Assay identity is not inferred from filenames or read lengths alone. Barcode
+provenance requires supported assay/layout evidence; generic or ambiguous FASTQ
+remains inspectable without inferred barcode semantics.
+
+Human FASTQ targets `hg38`; mouse FASTQ targets `mm10`. Source and target
+assemblies are distinct: species does not establish an aligned input's source
+assembly, and FASTQ has no source coordinate assembly. Future preprocessing
+will align directly to the required target reference. Inspection is bounded
+and sample-scoped unless sequential EOF observation permits complete coverage;
+it does not certify uninspected content. Inputs are never rewritten or repaired.
+Alignment, BAM processing, liftOver, fragments, cell-by-cCRE construction,
+ToolRegistry/public raw-inspection capability, planner integration, and reporting
+integration are not implemented in M10.2.
 
 ## Architecture
 

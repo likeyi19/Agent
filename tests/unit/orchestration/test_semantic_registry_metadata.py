@@ -480,6 +480,24 @@ def test_every_planner_visible_tool_has_authoritative_semantic_metadata() -> Non
     build_semantic_compiler_contract(registry)
 
 
+def test_feature_space_semantic_authority_covers_the_full_execution_interface() -> None:
+    registry = build_default_tool_registry()
+    tool = registry.get("validate_scATAC_feature_space")
+    contract = build_semantic_compiler_contract(registry)
+    rules = tuple(rule for rule in contract.request_bindings if rule.tool_name == tool.name)
+    assert {rule.argument_name for rule in rules} == (
+        set(tool.required_arguments) | set(tool.optional_arguments)
+    )
+    for rule in rules:
+        assert rule.target_port == rule.argument_name == rule.input_name == rule.selector
+    assert not any(channel.consumer_tool_name == tool.name
+                   for channel in contract.step_output_channels)
+    assert tool.semantic_planning is not None
+    for port in tool.semantic_planning.consumer_ports:
+        assert port.required is (port.name in tool.required_arguments)
+        assert not port.accepted_upstream_types
+
+
 def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> None:
     registry = build_default_tool_registry()
     contract = build_semantic_compiler_contract(registry)

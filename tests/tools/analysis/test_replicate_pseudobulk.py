@@ -22,7 +22,12 @@ from agent.tools.analysis.replicate_pseudobulk import (
 )
 from agent.tools.analysis.label_transfer import transfer_cell_labels
 from agent.orchestration import (
+    AgentRequest,
+    LLMPlanner,
+    PlanExecutor,
     PlanStep,
+    PlanningWireMode,
+    RunMode,
     StepOutputRef,
     ToolRegistry,
     build_default_tool_registry,
@@ -134,6 +139,103 @@ def test_feature_space_supports_explicit_sparse_layer(tmp_path: Path) -> None:
     assert result["matrix_source"] == "layer"
     assert result["layer_key"] == "counts"
     assert result["nnz"] == 10
+
+
+def _v4_feature_arguments(source: Path, output: Path, extra: dict[str, object]):
+    inputs = {
+        "input_path": str(source), "output_dir": str(output),
+        "matrix_source": "X", "matrix_semantics": "fragment_counts",
+        "species": "human", "genome_assembly": "hg38", "coordinate_source": "none",
+        **extra,
+    }
+    model = Mock(model_id="feature-v4-scientific-contract")
+    model.complete.return_value = json.dumps({
+        "schema_version": 4,
+        "decision": {"kind": "plan", "steps": [{
+            "step_id": "feature", "tool": "validate_scATAC_feature_space",
+            "sources": [], "control_dependencies": [],
+        }]},
+    })
+    registry = build_default_tool_registry()
+    plan = LLMPlanner(model, wire_mode=PlanningWireMode.V4).plan(
+        AgentRequest("feature-contract", "Validate the supplied feature space.", inputs,
+                     mode=RunMode.PLAN_ONLY), registry,
+    )
+    assert PlanExecutor(registry).preflight(plan).passed
+    assert dict(plan.steps[0].arguments) == inputs
+    return dict(plan.steps[0].arguments)
+
+
+@pytest.mark.parametrize("coordinate_system", ("zero_based_half_open", "one_based_closed"))
+def test_v4_combined_feature_arguments_use_existing_scientific_validator(
+    tmp_path: Path, coordinate_system: str,
+) -> None:
+    source = _source(tmp_path / "source.h5ad", coordinates=True, layer=True)
+    if coordinate_system == "one_based_closed":
+        adata = ad.read_h5ad(source)
+        adata.var["start"] += 1
+        adata.write_h5ad(source)
+    before = _sha(source)
+    arguments = _v4_feature_arguments(source, tmp_path / "feature", {
+        "matrix_source": "layer", "layer_key": "counts",
+        "coordinate_source": "var_columns", "feature_chrom_key": "chromosome",
+        "feature_start_key": "start", "feature_end_key": "end",
+        "coordinate_system": coordinate_system,
+        "semantics_metadata_key": "matrix_semantics", "overwrite": False,
+    })
+    # Direct small scientific contract test; the planning path executes no tools.
+    result = validate_scATAC_feature_space(**arguments)
+    assert result["nnz"] == 10
+    assert result["matrix_source"] == "layer"
+    assert result["layer_key"] == "counts"
+    assert result["coordinate_system"] == coordinate_system
+    assert result["coordinates_sha256"] is not None
+    assert result["semantics_assertion_source"] == "structured_request_and_raw_uns"
+    assert _sha(source) == before
+
+
+_V4_COORDINATES = {
+    "coordinate_source": "var_columns", "feature_chrom_key": "chromosome",
+    "feature_start_key": "start", "feature_end_key": "end",
+    "coordinate_system": "zero_based_half_open",
+}
+
+
+@pytest.mark.parametrize(("extra", "code"), (
+    pytest.param({"layer_key": "counts"}, "MATRIX_SOURCE_INVALID", id="X-with-layer"),
+    pytest.param({"matrix_source": "layer"}, "MATRIX_SOURCE_INVALID", id="layer-missing-key"),
+    pytest.param({"matrix_source": "layer", "layer_key": None},
+                 "MATRIX_SOURCE_INVALID", id="layer-null-key"),
+    pytest.param({"matrix_source": "layer", "layer_key": "absent"},
+                 "MATRIX_SOURCE_INVALID", id="unknown-layer"),
+    *(pytest.param({key: _V4_COORDINATES[key]}, "FEATURE_COORDINATES_INVALID",
+                   id=f"no-coordinates-with-{key}")
+      for key in ("feature_chrom_key", "feature_start_key", "feature_end_key", "coordinate_system")),
+    *(pytest.param({key: value for key, value in _V4_COORDINATES.items() if key != missing},
+                   "FEATURE_COORDINATES_INVALID", id=f"coordinates-missing-{missing}")
+      for missing in ("feature_chrom_key", "feature_start_key", "feature_end_key", "coordinate_system")),
+    pytest.param({**_V4_COORDINATES, "coordinate_system": None},
+                 "FEATURE_COORDINATES_INVALID", id="coordinates-null-system"),
+    pytest.param({**_V4_COORDINATES, "feature_start_key": "absent"},
+                 "FEATURE_COORDINATES_INVALID", id="unknown-coordinate-column"),
+    pytest.param({"semantics_metadata_key": "absent"},
+                 "MATRIX_SEMANTICS_UNSUPPORTED", id="missing-semantics-metadata"),
+    pytest.param({"semantics_metadata_key": "matrix_semantics", "matrix_semantics": "insertion_counts"},
+                 "MATRIX_SEMANTICS_UNSUPPORTED", id="conflicting-semantics-metadata"),
+))
+def test_v4_binding_preserves_scientific_rejection_of_invalid_combinations(
+    tmp_path: Path, extra: dict[str, object], code: str,
+) -> None:
+    source = _source(tmp_path / "source.h5ad", coordinates=True, layer=True)
+    before = _sha(source)
+    output = tmp_path / "feature"
+    arguments = _v4_feature_arguments(source, output, extra)
+    # Preflight validates interfaces, not H5AD-dependent scientific conditions.
+    with pytest.raises(M81ScientificError) as caught:
+        validate_scATAC_feature_space(**arguments)
+    assert caught.value.code == code
+    assert _sha(source) == before
+    assert not output.exists()
 
 
 def test_pseudobulk_exact_sum_and_first_occurrence_order(tmp_path: Path) -> None:

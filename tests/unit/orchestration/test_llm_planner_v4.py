@@ -522,6 +522,23 @@ def test_v4_reference_query_lineage_swap_fails_closed(
 def test_v4_unrepresented_scientific_parameter_fails_closed(
     registry: ToolRegistry,
 ) -> None:
+    # Missing authority must still fail closed in a custom/incomplete registry.
+    feature = registry.get("validate_scATAC_feature_space")
+    semantic = feature.semantic_planning
+    assert semantic is not None
+    incomplete = replace(
+        feature,
+        semantic_planning=replace(
+            semantic,
+            consumer_ports=tuple(
+                port for port in semantic.consumer_ports if port.name != "layer_key"
+            ),
+        ),
+    )
+    registry = ToolRegistry(tuple(
+        incomplete if name == feature.name else registry.get(name)
+        for name in registry.names()
+    ))
     case = _case("differential_accessibility_paired_covariates")
     inputs = {**case.inputs, "layer_key": "counts"}
 

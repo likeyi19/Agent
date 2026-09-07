@@ -2889,6 +2889,12 @@ def build_default_tool_registry() -> ToolRegistry:
                     ("species", True),
                     ("genome_assembly", True),
                     ("coordinate_source", True),
+                    ("layer_key", False),
+                    ("feature_chrom_key", False),
+                    ("feature_start_key", False),
+                    ("feature_end_key", False),
+                    ("coordinate_system", False),
+                    ("semantics_metadata_key", False),
                     ("overwrite", False),
                 )
             ),

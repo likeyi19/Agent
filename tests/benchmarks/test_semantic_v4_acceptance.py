@@ -16,10 +16,12 @@ from agent.orchestration import (
     build_default_tool_registry,
     build_semantic_compiler_contract,
     build_semantic_planning_prompt,
+    build_semantic_wire_v4_schema,
 )
 from agent.orchestration.llm_planner import (
     _MAX_RESPONSE_BYTES,
     _build_prompt,
+    _response_schema,
 )
 from benchmarks.planner.benchmark import (
     BenchmarkCase,
@@ -586,7 +588,11 @@ def test_v4_prompt_and_response_retain_size_headroom(
     v3_response_bytes = len(encode(json.loads(oracle_response(case))))
     v4_response_bytes = len(encode(json.loads(_semantic_response(case))))
 
-    assert v4_prompt_bytes <= v3_prompt_bytes
+    # Full feature-space guidance increases the prompt; the combined request
+    # still benefits from v4's smaller schema. Do not omit guidance to save bytes.
+    assert v4_prompt_bytes + len(encode(build_semantic_wire_v4_schema(registry, request))) < (
+        v3_prompt_bytes + len(encode(_response_schema(registry, request)))
+    )
     # Tool-correlated schema constraints intentionally increase schema size;
     # the old structural-only schema reduction is no longer a contract.
     assert v4_response_bytes < v3_response_bytes

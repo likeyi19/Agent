@@ -170,8 +170,10 @@ input values are excluded (including paths, labels, conditions, checkpoints,
 output roots, arrays, and nested values); the natural-language request itself
 is passed to the model. The interface omits raw Python argument inventories,
 execution member/result-field names, binding objects, `StepOutputRef`, and
-reference-induced dependency serialization. Useful scientific context is
-retained, so prompt-size reduction is intentionally modest.
+reference-induced dependency serialization. The full scientific context is
+retained, including feature-space layer, coordinate, and semantics-metadata
+parameters. This can make the v4 prompt alone larger than v3; focused acceptance
+compares combined prompt/schema size instead. V4 remains opt-in.
 
 Wire v4 contains only a plan/unsupported decision, step identities, selected
 tools, semantic sources, and explicit control-only dependencies. The parser
@@ -265,7 +267,7 @@ routing/ranking, prompt-based routing, and tool filtering are not implemented.
 
 ## Current accepted validation and limitations
 
-The latest accepted implementation baseline is
+The accepted static target-port implementation baseline is
 `c053c6543f839f72c11f36bcf2236a8fe822eb9a` (static target-port follow-up).
 The following pre-push validation totals come from the completed follow-up's
 acceptance record supplied for this documentation consolidation; they are not
@@ -291,6 +293,25 @@ for inspection, complete downstream DAGs, canonical and optional-heavy transfer,
 paired DA with covariates, grouped channels, scoped parameters, preflight, and
 zero scientific execution. OpenAI/Gemini transported the same interface in
 mocked tests; live checks were not run without credentials/configuration.
+
+The subsequent feature-space semantic parity follow-up adds optional,
+request-only mappings for `layer_key`, `feature_chrom_key`, `feature_start_key`,
+`feature_end_key`, `coordinate_system`, and `semantics_metadata_key`. The existing
+scientific validator retains conditional layer, coordinate, and metadata checks;
+no compiler, scientific backend, or default wire-mode change was needed.
+Offline acceptance passed 378 focused tests, 1119 broader orchestration/provider/
+benchmark/application tests, and the separately enabled gated DA PLAN_ONLY test.
+The final unchanged-tree acceptance pass also passed 283 focused checks.
+
+Final live acceptance for this parity patch was completed manually in the server
+terminal and reported by the user at closeout. Groq `openai/gpt-oss-120b`, with
+explicit `--wire-mode v4`, passed inspection, the complete five-tool downstream
+workflow above, and parameter-heavy feature-space validation using an existing
+synthetic fixture with all six newly mapped parameters. The feature-space case
+returned `status=PLANNED`, `run_status=PLANNED`, `error=null`, and only
+`validate_scATAC_feature_space` in `tool_names`. All three checks were PLAN_ONLY
+with zero scientific execution. This records live provider planning acceptance,
+not biological-data or DA statistical acceptance. V3 remains the default.
 
 Resolved interface issues are v3's model-authored mechanical binding burden
 (addressed by v4), statically invalid target generation (constrained by schema

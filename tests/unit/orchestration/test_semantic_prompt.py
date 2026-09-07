@@ -15,8 +15,9 @@ from agent.orchestration import (
     build_default_tool_registry,
     build_semantic_planning_catalog,
     build_semantic_planning_prompt,
+    build_semantic_wire_v4_schema,
 )
-from agent.orchestration.llm_planner import _build_prompt
+from agent.orchestration.llm_planner import _build_prompt, _response_schema
 from benchmarks.planner.benchmark import load_cases
 
 
@@ -488,20 +489,50 @@ def test_evaluation_catalog_keeps_ground_truth_evaluation_only(
     )
 
 
-def test_catalog_does_not_promote_unmapped_execution_parameter(
+def test_catalog_exposes_feature_space_parameters_and_conditional_guidance(
     registry: ToolRegistry,
 ) -> None:
     request = AgentRequest(
         "conditional",
         "Validate coordinates.",
-        {"input_path": "/private/data.h5ad"},
+        {
+            "input_path": "/private/data.h5ad",
+            "layer_key": "PRIVATE_LAYER",
+            "feature_chrom_key": "PRIVATE_CHROM",
+            "feature_start_key": "PRIVATE_START",
+            "feature_end_key": "PRIVATE_END",
+            "coordinate_system": "one_based_closed",
+            "semantics_metadata_key": "PRIVATE_SEMANTICS",
+        },
     )
     catalog = build_semantic_planning_catalog(request, registry)
     validate_inputs = _tool(catalog, "validate_scATAC_feature_space")[
         TOOL_INPUTS
     ]
 
-    assert "layer_key" not in validate_inputs
+    spec = registry.get("validate_scATAC_feature_space")
+    for name in (
+        "layer_key", "feature_chrom_key", "feature_start_key", "feature_end_key",
+        "coordinate_system", "semantics_metadata_key",
+    ):
+        port = validate_inputs[name]
+        argument = spec.optional_arguments[name]
+        assert port[PORT_REQUIRED] is False
+        assert port[PORT_REQUEST_SOURCES] == ((name, None),)
+        assert port[PORT_UPSTREAM_TYPES] == ()
+        assert port[PORT_GUIDANCE][GUIDANCE_SCIENTIFIC] is True
+        assert port[PORT_GUIDANCE][GUIDANCE_CHOICES] == argument.choices
+        assert port[PORT_GUIDANCE][GUIDANCE_CONSTRAINT] == argument.planning.conditional_note
+    assert "Required when matrix_source is layer" in validate_inputs["layer_key"][
+        PORT_GUIDANCE
+    ][GUIDANCE_CONSTRAINT]
+    assert "var_columns" in validate_inputs["coordinate_system"][PORT_GUIDANCE][
+        GUIDANCE_CONSTRAINT
+    ]
+    prompt = build_semantic_planning_prompt(request, registry)
+    for value in request.inputs.values():
+        if value != "one_based_closed":  # A registered choice, independent of input values.
+            assert value not in prompt
     assert validate_inputs["matrix_source"][PORT_GUIDANCE][
         GUIDANCE_CHOICES
     ] == ("X", "layer")
@@ -600,20 +631,19 @@ def test_structured_input_values_never_enter_catalog_or_prompt(
         "differential_accessibility_paired_covariates",
     ),
 )
-def test_semantic_context_is_not_larger_than_v3_prompt(
+def test_semantic_prompt_and_schema_retain_combined_size_headroom(
     registry: ToolRegistry,
     case_id: str,
 ) -> None:
     request = _request(case_id)
-    catalog = json.dumps(
-        build_semantic_planning_catalog(request, registry),
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
     semantic_prompt = build_semantic_planning_prompt(request, registry)
     v3_prompt = _build_prompt(request, registry)
 
-    assert len(catalog.encode("utf-8")) < len(v3_prompt.encode("utf-8"))
-    assert len(semantic_prompt.encode("utf-8")) <= len(v3_prompt.encode("utf-8"))
+    # Complete conditional feature guidance can make the prompt alone larger.
+    # Compare both pieces actually sent to the provider, retaining all metadata.
+    def schema_bytes(schema):
+        return len(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+    assert len(semantic_prompt.encode("utf-8")) + schema_bytes(
+        build_semantic_wire_v4_schema(registry, request)
+    ) < len(v3_prompt.encode("utf-8")) + schema_bytes(_response_schema(registry, request))

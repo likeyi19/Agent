@@ -78,9 +78,28 @@ verification independently reloads the manifest and reobserves current sources.
 
 PLAN_ONLY performs zero raw inspection and writes no manifest; BAM planning
 does not load pysam. Verified Runtime EXECUTE and durable resume are supported.
-Full Application EXECUTE evidence/report composition for raw intake remains
-M10.5 work. Sort/index observations do not authorize transformations. Alignment,
-realignment, liftOver, BAM transformations, barcode correction, fragments,
+
+Milestone 10.5 is complete: FASTQ and BAM intake now support the full Application
+path from natural-language planning → `inspect_raw_scATAC` → source-aware
+verification → evidence → deterministic verified Markdown report. Raw-intake
+reports are figureless by design; no scientific visualization is generated.
+Reports distinguish successful Agent execution, successful source verification,
+and preprocessing readiness. A truthful non-ready or `INVALID` finding can still
+be a successful Application execution.
+
+Reports summarize input kind, readiness, file/group counts, species, separate
+source/target assemblies and compatibility, harmonization requirements, barcode
+provenance/scope, structured issue codes, required information, preparations,
+normal downstream prerequisites, and inspection coverage. Bounded/sample-scoped
+inspection is distinguished from complete sequential inspection and is not
+whole-file certification. Evidence freshly verifies sources before projection;
+verified manifest provenance and SHA-256 identify the authoritative intake artifact.
+Evidence/reports contain no whole raw manifest, reads, read names, barcode values,
+qualities, complete BAM reference dictionaries, or raw sequencing payloads.
+
+M10 provides intake/preflight, not raw-data preprocessing. Sort/index observations
+do not authorize transformations. Alignment, realignment, liftOver, BAM
+transformations, barcode correction, fragments,
 cell-by-cCRE construction, model inference from raw sequencing, and M11
 preprocessing remain unimplemented.
 
@@ -182,7 +201,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
-| Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, independent source verification; raw-intake reporting deferred |
+| Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |

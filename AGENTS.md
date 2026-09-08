@@ -74,8 +74,8 @@ derived from the registry.
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
-Evidence/report projections support the existing processed-H5AD workflows;
-raw-intake projection remains deferred to M10.5. Unsupported projections fail
+Evidence/report projections support the existing processed-H5AD workflows.
+Raw intake now has verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 ## Current scientific runtime and verification contracts
@@ -512,6 +512,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | M10.2 | Read-only bounded FASTQ intake, declared 10x ATAC layouts, source reinspection, and M10.1 manifest population |
 | M10.3 | Read-only bounded BAM intake through optional pysam/htslib, conservative assembly/barcode evidence, and source reinspection |
 | M10.4 | Public raw-intake registry/semantic planning integration, deterministic publication, independent verification, and durable Runtime execution |
+| M10.5 | Raw-intake evidence, deterministic figureless reports, and full Application execution/resume composition |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2781,14 +2782,15 @@ FASTQ, M10.3 BAM, Runtime, Executor, RunStore, Application service, semantic
 compiler, semantic prompt, semantic wire-v4, LLMPlanner, or evidence/report code.
 Existing export/inventory test snapshots were updated for the added capability.
 The accepted path is AgentRequest → planning → Runtime execution → independent
-step verification → persistence. Full `ResearchAgentApplication.run(EXECUTE)`
-raw-intake evidence/report composition remains M10.5 work.
+step verification → persistence. At the M10.4 checkpoint, full
+`ResearchAgentApplication.run(EXECUTE)` raw-intake evidence/report composition
+remained deferred to M10.5.
 
 M10.4 introduced no alignment, sorting/index creation, realignment, FASTQ
 recovery, liftOver, barcode correction, whitelist processing, fragment generation,
 cell calling, TSS/FRiP/QC metrics, cell-by-cCRE, EpiZoo inference, evidence/report
-integration, CLI convenience flags, or M11 preprocessing. M10.5 and M11 remain
-unimplemented.
+integration, CLI convenience flags, or M11 preprocessing. At that checkpoint,
+M10.5 and M11 remained unimplemented.
 
 Accepted validation:
 
@@ -2803,3 +2805,188 @@ Accepted validation:
 | M10.3 | 121 passed |
 | Relevant orchestration regression | 1124 passed, 3 warnings |
 | Full lightweight regression | 2115 passed, 54 skipped, 7 warnings |
+
+### Milestone 10.5 — Raw intake evidence, report, and full Application integration
+
+M10.5 is complete and accepted. The user-visible path is AgentRequest →
+natural-language planning → `inspect_raw_scATAC` → source-aware verification →
+AnalysisEvidence → no visualization → deterministic verified Markdown report →
+successful `ResearchAgentApplication.run(EXECUTE)`. M10.5 adds no scientific or
+planning capability beyond M10.4. M10 supplies intake/preflight; raw-data
+preprocessing remains future work.
+
+The existing `_ToolProjection` architecture explicitly supports
+`inspect_raw_scATAC`, with exact recovery identity `inspect-raw-scatac-v1`.
+Projection fails closed when the registry's required result-field set or recovery
+identity differs from the accepted M10.4 contract. Lightweight result facts are:
+
+```text
+input_kind, readiness, n_files, n_groups, n_issues,
+n_required_information, n_repairs, n_prerequisites, artifact_type,
+artifact_schema_version, intake_contract_version
+```
+
+`status`, `manifest_path`, and `manifest_sha256` remain the other three registry
+result fields. Execution status is not scientific readiness. The manifest path
+is primarily an evidence artifact, not a scientific summary fact, and the full
+manifest is never embedded in AnalysisEvidence.
+
+The artifact projection uses result field `manifest_path`, kind
+`raw_scatac_intake_manifest_json`, and authoritative digest field
+`manifest_sha256`. Its verification basis records fresh raw-intake step
+verification, strict manifest loading, authoritative manifest SHA-256, and
+canonical source reconstruction with bounded reinspection. The digest protects
+the small authoritative manifest artifact; it is not a whole-file FASTQ/BAM hash.
+
+Before projecting each raw-intake step, evidence retains the existing fresh
+`verify_step(...)` boundary, invoking the accepted M10.4 source-aware verifier.
+After that passes, it strictly loads the manifest using the expected SHA-256
+for derived facts. Stored verification, readiness, counts, or digests alone do
+not authorize projection. Raw-source changes, applicable BAM index-observation
+changes, declaration drift, manifest byte/digest drift, and forged result
+summaries fail closed. Evidence never calls the public production
+`inspect_raw_scATAC` tool and never publishes a second raw manifest; fresh private
+source reconstruction is verification, not repeated production.
+
+Derived summaries have deterministic ordering and aggregate repeated groups or
+files rather than copying their records. Cardinality follows the bounded public
+selection and accepted intake vocabularies:
+
+| Evidence summary | Accepted content |
+| --- | --- |
+| Overall | Input kind, readiness, file/group counts, and issue/information/preparation/prerequisite counts |
+| `group_readiness_counts` | All five states, including zero counts: READY, READY_WITH_REPAIRS, NEEDS_USER_INPUT, UNSUPPORTED, INVALID |
+| `species_summary` | Resolution state, normalized resolved value where applicable, and count |
+| `source_assembly_summary` | Resolved values, unknown, conflict, or not-applicable states and counts |
+| `target_assembly_summary` | Target state/value counts; human → hg38 and mouse → mm10 when resolved |
+| `assembly_compatibility_counts` | match, mismatch, source_unknown, source_conflict, target_unresolved, unsupported, not_applicable |
+| `n_harmonization_required` | Number of groups requiring assembly harmonization; mismatch does not establish a supported repair route |
+| `structure_counts` | M10.1 supported, unresolved, unsupported, and invalid structure counts |
+| `barcode_source_counts` | Barcode provenance/source counts, without barcode values |
+| `barcode_identity_scope_counts` | Group-local or unresolved identity-scope counts |
+| `issue_codes` | Sorted unique structured issue codes; no repeated issue messages |
+| `required_information_codes` | Sorted unique required-information codes |
+| `preparation_summary` | Preparation code, admissibility state, and count |
+| `prerequisite_codes` | Sorted unique normal downstream prerequisite codes |
+| `coverage_summary` | Coverage-record scope/method counts, any-sample flag, sampled group/file counts, groups/files without inspection, and groups with insufficient usable coverage |
+
+Species does not establish source assembly, and target assembly never substitutes
+for source coordinates. FASTQ source coordinate assembly may be not applicable.
+Required information, preparation/repair admissibility, and normal prerequisites
+remain distinct. A normal prerequisite such as alignment is neither an error nor
+evidence that processing has occurred. Barcode source alone does not establish
+corrected/canonical identity; identical strings in independent groups do not
+establish identical cells.
+
+Coverage distinguishes complete sequential inspection reaching EOF from bounded,
+sample-scoped inspection and absent/insufficient coverage where represented.
+Sampled coverage never certifies uninspected tails or whole raw files. Even
+complete sequential record coverage is not a cryptographic hash of raw-file bytes.
+
+AnalysisEvidence remains `agent.analysis-evidence`, schema version `1`: M10.5
+adds an explicit tool projection without changing the artifact shape. Canonical
+publication, actual-byte verification, source-run identity binding, fresh step
+verification, artifact digest checks, and unsupported-tool rejection remain in
+the existing evidence architecture.
+
+AnalysisReport now supports `inspect_raw_scATAC` through section
+`raw_scatac_intake`, titled `Raw scATAC Intake`. Report schema and specification
+remain version `1`. A local renderer in the existing report module consumes only
+verified frozen evidence facts; scientific report claims use deterministic
+wording, not LLM-generated prose. Every successful raw-intake report states that
+inspection completed successfully and was independently verified, then states
+preprocessing readiness separately:
+
+| Readiness | User-facing interpretation |
+| --- | --- |
+| READY | Input satisfies the current preprocessing intake contract and may enter its intended route; preprocessing has not been performed |
+| READY_WITH_REPAIRS | Supported preparation actions remain before preprocessing |
+| NEEDS_USER_INPUT | Additional required information or input artifacts are needed |
+| UNSUPPORTED | Observed input is outside the currently supported intake contract |
+| INVALID | Inspection observed invalid or internally inconsistent raw input |
+
+The report presents an intake overview, separate source/target/reference
+compatibility, barcode identity/provenance, issue codes, missing information,
+preparation requirements, normal prerequisites, inspection coverage, and manifest
+artifact provenance. It labels groups as raw input groups, not biological groups.
+Human hg19 BAM versus target hg38 is reported as a mismatch requiring
+harmonization with unresolved admissibility, never as definitely safely
+repairable or realignable. Manifest path and SHA-256 appear in the existing
+provenance section rather than being repeated throughout the scientific summary.
+Methods retain only input kind and intake contract identity.
+
+Evidence/report output excludes sequencing reads, read names, barcode values,
+quality strings, the full raw manifest, complete BAM reference dictionaries,
+complete source command lines, and raw sequencing payloads. The manifest remains
+the detailed authoritative intake artifact.
+
+Raw-intake-only workflows expose no supported visualization kind. The
+visualization artifact is absent and its workspace remains empty under existing
+Application invariants; the figureless Markdown report is generated and verified
+normally. No decorative or synthetic QC plots are produced.
+
+Truthfully verified READY, NEEDS_USER_INPUT, UNSUPPORTED, and INVALID findings
+all support Application status `SUCCEEDED`, with independent scientific
+readiness. Operational/tool/verification/evidence/report failures still use the
+normal Application error path. Representative synthetic acceptance used full
+Application execution, with evidence present, no visualization, and a verified
+report for every case below:
+
+| Input | Accepted finding |
+| --- | --- |
+| Human FASTQ | READY; target hg38; source coordinates not applicable |
+| Mouse FASTQ | READY; target mm10; source coordinates not applicable |
+| FASTQ with species omitted | NEEDS_USER_INPUT; target unresolved; missing species listed |
+| FASTQ with required role missing | NEEDS_USER_INPUT; stable `FASTQ_REQUIRED_ROLE_MISSING` finding preserved |
+| Malformed FASTQ | INVALID; Application successfully reports the invalid-input finding |
+| Human hg38 BAM | READY; source/target MATCH |
+| Human hg19 BAM | NEEDS_USER_INPUT; target hg38, MISMATCH, harmonization required, admissibility unresolved |
+| Human BAM with unknown source | NEEDS_USER_INPUT; source unresolved while target remains hg38 |
+| Unsupported declared species | UNSUPPORTED; still truthfully reportable |
+
+A synthetic route-assessed preparation fixture also demonstrated successful
+Application composition with READY_WITH_REPAIRS. This is contract/presentation
+acceptance, not introduction or validation of a production repair route.
+
+Application resume preserves deterministic evidence/report artifacts, does not
+rerun the planner or completed production raw inspection, and creates no duplicate
+raw manifest. Fresh composition still revalidates sources; source drift can fail
+evidence composition even when terminal Runtime resume returns its immutable
+successful result. Full FASTQ Application composition passed with pysam imports
+blocked. BAM acceptance used the optional `pysam==0.24.1` environment.
+
+Tamper tests reject source drift, applicable BAM index-observation drift,
+declaration drift, manifest modification/digest changes, forged raw summaries,
+forged evidence aggregates, and changes between step verification and manifest
+projection. Report verification reconstructs expected content from freshly
+verified evidence and rejects modified readiness, assembly facts, requirement
+codes, provenance paths/digests, and unexpected figure references, including
+modified Markdown that has been externally rehashed. Evidence and report bytes
+are deterministic for the same verified run under existing artifact conventions.
+
+M10.5 production changes are limited to `src/agent/report/evidence.py` and
+`src/agent/report/analysis_report.py`. No production change was needed to M10.1
+manifest, M10.2 FASTQ, M10.3 BAM, M10.4 public raw tool, registry,
+planner/compiler, verifier, Runtime, Executor, RunStore, Application service, or
+visualization implementation. Existing processed-H5AD reporting remains unchanged.
+
+M10.5 introduced no alignment, BAM sorting/index creation, realignment, FASTQ
+recovery, liftOver, barcode correction, whitelist processing, fragments, cell
+calling, TSS/FRiP/QC filtering, cell-by-cCRE, model inference, new planning
+capability, visualization, CLI/UI, or M11 preprocessing. M11 remains unimplemented.
+
+Accepted validation:
+
+| Acceptance suite | Result |
+| --- | --- |
+| Raw evidence | 24 passed |
+| Raw report | 18 passed |
+| Raw Application | 14 passed |
+| Final combined raw report/Application | 32 passed |
+| Existing evidence/report/application regression | 154 passed, 3 warnings |
+| M10.1 | 194 passed |
+| M10.2 | 177 passed |
+| M10.3 | 121 passed |
+| M10.4 raw-intake non-reporting | 115 passed |
+| Relevant broader regression | 1208 passed, 3 warnings |
+| Full lightweight regression | 2171 passed, 54 skipped, 7 warnings |

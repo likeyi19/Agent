@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 import hashlib
 import json
 import os
@@ -12,6 +13,8 @@ from typing import Literal, Mapping, TypedDict
 
 import anndata as ad
 import numpy as np
+
+from agent.tools.data import raw_scatac_manifest as raw_manifest
 
 from agent.orchestration.differential_accessibility_verifier import (
     VERIFICATION_R_SCRIPT,
@@ -363,7 +366,35 @@ _DIFFERENTIAL_ACCESSIBILITY_FIELDS = frozenset(
 )
 
 
+_RAW_INTAKE_FACT_FIELDS = (
+    "input_kind", "readiness", "n_files", "n_groups", "n_issues",
+    "n_required_information", "n_repairs", "n_prerequisites", "artifact_type",
+    "artifact_schema_version", "intake_contract_version",
+)
+_RAW_INTAKE_FIELDS = frozenset(
+    ("status", "manifest_path", "manifest_sha256", *_RAW_INTAKE_FACT_FIELDS)
+)
+
+
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "inspect_raw_scATAC": _ToolProjection(
+        _RAW_INTAKE_FIELDS,
+        _RAW_INTAKE_FACT_FIELDS,
+        "inspect-raw-scatac-v1",
+        (
+            _ArtifactProjection(
+                "manifest_path",
+                "raw_scatac_intake_manifest_json",
+                (
+                    "fresh_raw_intake_step_verification",
+                    "strict_manifest_loading",
+                    "authoritative_manifest_sha256",
+                    "canonical_source_reconstruction_with_bounded_reinspection",
+                ),
+                digest_field="manifest_sha256",
+            ),
+        ),
+    ),
     "inspect_scATAC": _ToolProjection(
         _INSPECTION_FIELDS,
         tuple(sorted(_INSPECTION_FIELDS)),
@@ -919,6 +950,77 @@ def _differential_accessibility_derived_facts(
             artifact.file.close()
 
 
+def _raw_intake_derived_facts(result: Mapping[str, object]) -> dict[str, JsonValue]:
+    """Aggregate a freshly verified manifest, never its reads or file inventory.
+
+    Cardinality follows the bounded public selection and closed intake vocabularies;
+    repeated groups/files add counts, not repeated provenance or assertion text.
+    """
+    try:
+        _, manifest, _ = raw_manifest.load_raw_intake_manifest(
+            result["manifest_path"], expected_sha256=result["manifest_sha256"]
+        )
+
+        def counts(vocabulary, values):
+            observed = Counter(values)
+            return {state.value: observed[state] for state in vocabulary}
+
+        def resolutions(values):
+            observed = Counter((value.state.value, value.value) for value in values)
+            return [
+                {"state": state, "value": value, "count": count}
+                for (state, value), count in sorted(
+                    observed.items(), key=lambda item: (item[0][0], item[0][1] or "")
+                )
+            ]
+
+        groups = manifest.groups
+        sample = [c for c in manifest.coverage if c.scope is raw_manifest.CoverageScope.SAMPLE]
+        inspected = [c for c in manifest.coverage if c.scope is not raw_manifest.CoverageScope.NONE]
+        inspected_groups = {c.group_id for c in inspected}
+        inspected_files = {file_id for c in inspected for file_id in c.file_ids}
+        preparations = Counter((r.code.value, r.admissibility.value) for r in manifest.repairs)
+        return {
+            "group_readiness_counts": counts(raw_manifest.Readiness,
+                (g.readiness for g in manifest.group_readiness)),
+            "species_summary": resolutions(g.species for g in groups),
+            "source_assembly_summary": resolutions(g.source_genome_assembly for g in groups),
+            "target_assembly_summary": resolutions(g.target_genome_assembly for g in groups),
+            "assembly_compatibility_counts": counts(raw_manifest.AssemblyCompatibility,
+                (g.assembly_compatibility for g in groups)),
+            "n_harmonization_required": sum(g.harmonization_required for g in groups),
+            "structure_counts": counts(raw_manifest.StructureState, (g.structure for g in groups)),
+            "barcode_source_counts": counts(raw_manifest.BarcodeSource, (g.barcode.source for g in groups)),
+            "barcode_identity_scope_counts": counts(raw_manifest.BarcodeIdentityScope,
+                (g.barcode.identity_scope for g in groups)),
+            "issue_codes": sorted({i.code for i in manifest.issues}),
+            "required_information_codes": sorted({r.code.value for r in manifest.required_information}),
+            "preparation_summary": [
+                {"code": code, "admissibility": admissibility, "count": count}
+                for (code, admissibility), count in sorted(preparations.items())
+            ],
+            "prerequisite_codes": sorted({p.code.value for p in manifest.prerequisites}),
+            "coverage_summary": {
+                "scope_counts": counts(raw_manifest.CoverageScope, (c.scope for c in manifest.coverage)),
+                "method_counts": counts(raw_manifest.CoverageMethod, (c.method for c in manifest.coverage)),
+                "any_sample_scoped": bool(sample),
+                "n_sample_scoped_groups": len({c.group_id for c in sample}),
+                "n_sample_scoped_files": len({f for c in sample for f in c.file_ids}),
+                "n_groups_without_inspection": len({g.id for g in groups} - inspected_groups),
+                "n_files_without_inspection": len({f.id for f in manifest.files} - inspected_files),
+                "n_groups_with_insufficient_coverage": len({
+                    r.group_id for r in manifest.required_information
+                    if r.code is raw_manifest.InformationCode.INSPECTION_COVERAGE
+                }),
+            },
+        }
+    except Exception as exc:
+        raise AnalysisEvidenceError(
+            "EVIDENCE_SOURCE_RESULT_INVALID",
+            "Freshly verified raw-intake manifest could not be projected.",
+        ) from exc
+
+
 def _prepare_evidence(
     run_result: AgentRunResult,
     registry: ToolRegistry,
@@ -1095,6 +1197,8 @@ def _prepare_evidence(
                     step_result.resolved_arguments, step_result.result
                 )
             )
+        if step.tool_name == "inspect_raw_scATAC":
+            facts.update(_raw_intake_derived_facts(step_result.result))
         evidence_steps.append(
             {
                 "step_id": step.step_id,

@@ -22,11 +22,16 @@ from agent.tools import (
     evaluate_cell_annotation,
     evaluate_cell_clustering,
     inspect_scATAC,
+    inspect_raw_scATAC,
     run_replicate_differential_accessibility,
     transfer_cell_labels,
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
+from agent.tools.data.raw_scatac import RawScATACError, RawScATACInspection
+from agent.tools.data._raw_fastq import FastqInspectionError
+from agent.tools.data._raw_bam import BamInspectionError
+from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.differential_accessibility import M82ScientificError
 from agent.tools.analysis.differential_accessibility_backend import (
     DA_ARTIFACT_SCHEMA_VERSION,
@@ -89,6 +94,8 @@ class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
     RAW_SCATAC = "raw_scatac"
+    RAW_SCATAC_SEQUENCING = "raw_scatac_sequencing"
+    RAW_SCATAC_INTAKE_MANIFEST = "raw_scatac_intake_manifest"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
     EPIZOO_EMBEDDING = "epizoo_embedding"
     ORDERED_CELL_IDS = "ordered_cell_ids"
@@ -903,6 +910,45 @@ def _classify_tool_exception(exception: Exception) -> ErrorClassification:
             ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_RUNTIME_ERROR"
         )
     return ErrorClassification(ErrorCategory.TOOL_EXECUTION_ERROR, "TOOL_EXCEPTION")
+
+
+def _classify_raw_intake_exception(exception: Exception) -> ErrorClassification:
+    if isinstance(exception, (RawScATACError, FastqInspectionError, BamInspectionError,
+                              raw_manifest.RawIntakeManifestError)):
+        code = exception.code
+        category = (
+            ErrorCategory.ENVIRONMENT_ERROR if code in {
+                "RAW_BAM_DEPENDENCY_UNAVAILABLE", "RAW_BAM_BACKEND_VERSION_UNSUPPORTED"}
+            else ErrorCategory.VERIFICATION_ERROR if code in {
+                "RAW_INPUT_SOURCE_CHANGED", "RAW_FASTQ_SOURCE_CHANGED", "RAW_BAM_SOURCE_CHANGED",
+                "RAW_INTAKE_DIGEST_MISMATCH", "RAW_INTAKE_CONTRACT_INVALID", "RAW_INTAKE_JSON_INVALID"}
+            else ErrorCategory.RESOURCE_ERROR if code in {
+                "RAW_INTAKE_OUTPUT_CONFLICT", "RAW_INTAKE_WRITE_FAILED", "RAW_INPUT_ACCESS_FAILED", "RAW_FASTQ_READ_FAILED",
+                "RAW_BAM_READ_FAILED", "RAW_FASTQ_SOURCE_UNAVAILABLE", "RAW_BAM_SOURCE_UNAVAILABLE",
+                "RAW_FASTQ_DISCOVERY_UNAVAILABLE", "RAW_BAM_DISCOVERY_UNAVAILABLE", "RAW_BAM_INDEX_OBSERVATION_FAILED"}
+            else ErrorCategory.USER_INPUT_ERROR
+        )
+        return ErrorClassification(category, code)
+    return _classify_analysis_exception(exception)
+
+
+def _validate_raw_intake_result(result: Mapping[str, object]) -> None:
+    if set(result) != set(RawScATACInspection.__annotations__):
+        raise ToolResultContractError("Raw intake result fields must match the compact contract exactly.")
+    if (result['status'] != 'success' or result['artifact_type'] != raw_manifest.RAW_INTAKE_ARTIFACT_TYPE
+            or result['artifact_schema_version'] != raw_manifest.RAW_INTAKE_SCHEMA_VERSION
+            or result['intake_contract_version'] != raw_manifest.RAW_INTAKE_CONTRACT_VERSION
+            or result['input_kind'] not in ('fastq', 'bam')
+            or result['readiness'] not in tuple(r.value for r in raw_manifest.Readiness)
+            or not _valid_sha256(result['manifest_sha256'])):
+        raise ToolResultContractError("Raw intake result identities or state are invalid.")
+    if not result['manifest_path'] or not Path(result['manifest_path']).is_absolute():
+        raise ToolResultContractError("Raw intake manifest path must be absolute.")
+    for name in ('n_files', 'n_groups', 'n_issues', 'n_required_information', 'n_repairs', 'n_prerequisites'):
+        if not 0 <= result[name] <= raw_manifest.MAX_COLLECTION_ITEMS:
+            raise ToolResultContractError("Raw intake summary count is out of bounds.")
+    if not 1 <= result['n_groups'] <= result['n_files'] <= 128:
+        raise ToolResultContractError("Raw intake inventory counts are inconsistent.")
 
 
 def _classify_embedding_exception(exception: Exception) -> ErrorClassification:
@@ -3214,6 +3260,61 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
         ),
     )
+    raw_intake_spec = ToolSpec(
+        name="inspect_raw_scATAC",
+        function=inspect_raw_scATAC,
+        required_arguments={
+            "raw_input_paths": _planning_argument(
+                (str, Path, list, tuple),
+                "Local raw sequencing files or non-recursive directories; Agent determines format.",
+                artifacts=(ArtifactSemanticKind.RAW_SCATAC_SEQUENCING,),
+            ),
+            "output_dir": _planning_argument(
+                path_types, "Agent-managed output directory for the authoritative intake manifest."
+            ),
+        },
+        optional_arguments={
+            name: _planning_argument(
+                (str, type(None)), description, choices=choices, scientific_parameter=True,
+            )
+            for name, description, choices in (
+                ("species", "Explicit normalized species; human targets hg38 and mouse targets mm10. Other declarations may be unsupported; species never establishes source assembly.", ()),
+                ("raw_assay", "Explicit assay authority. TENX_ATAC applies to FASTQ or BAM; SCATAC applies only to BAM. Omission preserves unresolved assay unless reviewed producer metadata establishes it.", ("TENX_ATAC", "SCATAC", None)),
+                ("source_genome_assembly", "Explicit source coordinate assembly, valid only for BAM. Mismatch does not establish a supported harmonization route.", ()),
+                ("fastq_layout", "Optional supported FASTQ layout declaration, requiring TENX_ATAC authority; never applicable to BAM.", ("tenx-atac-r1-r2-r3.v1", "tenx-atac-r1-i2-r2.v1", None)),
+            )
+        },
+        result_contract=ResultContract(
+            "RawScATACInspection",
+            {name: (int,) if name.startswith('n_') or name == 'artifact_schema_version' else (str,)
+             for name in RawScATACInspection.__annotations__},
+            validator=_validate_raw_intake_result,
+            planning_fields={name: _planning_result(
+                "Authoritative raw intake manifest reference; does not supply a processed H5AD dataset.",
+                bindable=True, artifact=ArtifactSemanticKind.RAW_SCATAC_INTAKE_MANIFEST,
+            ) for name in ('manifest_path', 'manifest_sha256')},
+        ),
+        exception_classifier=_classify_raw_intake_exception,
+        recovery_policy_version="inspect-raw-scatac-v1",
+        planning=_tool_planning(
+            PlanningToolRole.INSPECTION,
+            "Inspect raw scATAC sequencing inputs for preprocessing readiness through bounded read-only observation; publish an authoritative intake manifest.",
+            "Agent owns format dispatch, barcode interpretation, targets and readiness. Successful inspection may report scientifically non-ready or invalid inputs. No preprocessing is performed.",
+            "The manifest cannot be consumed as a processed H5AD or EpiZoo input. Reporting integration is deferred.",
+        ),
+        semantic_planning=SemanticToolSpec(
+            consumer_ports=(
+                _semantic_argument_port('raw_input_paths', required=True, port_name='raw_input'),
+                _semantic_argument_port('output_dir', required=True),
+                *(_semantic_argument_port(name, required=False) for name in
+                  ('species', 'raw_assay', 'source_genome_assembly', 'fastq_layout')),
+            ),
+            producer_ports=(SemanticProducerPortSpec(
+                'intake_manifest', 'raw_scatac_intake_manifest.v1',
+                (_semantic_member('manifest_path'), _semantic_member('manifest_sha256')),
+            ),),
+        ),
+    )
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3226,6 +3327,7 @@ def build_default_tool_registry() -> ToolRegistry:
         feature_space_spec,
         pseudobulk_spec,
         differential_accessibility_spec,
+        raw_intake_spec,
     )
     for spec in specs:
         _assert_signature_matches(spec)

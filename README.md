@@ -62,11 +62,27 @@ future alignment will target the appropriate reference directly. Inspection is
 sample-scoped unless sequential EOF observation permits complete coverage and
 does not certify uninspected content.
 
-Raw intake remains a data-layer capability, outside the public ToolRegistry and
-Planner. Sort/index observations neither perform nor authorize transformations.
-Inputs are never rewritten or repaired: BAM sorting, index creation, alignment,
-realignment, liftOver, barcode correction, fragment construction, and cell-by-cCRE
-construction remain unimplemented, as does raw-intake reporting integration.
+Milestone 10.4 is complete: M10.1–M10.3 intake is now exposed through one public
+capability, `inspect_raw_scATAC`. Natural-language LLM planning selects this tool;
+the compiler binds structured request values without putting their filesystem
+paths in the model prompt. Private FASTQ/BAM helpers are not Planner tools.
+Agent code owns format dispatch, FASTQ layout and BAM tag/header interpretation,
+source/target assembly semantics, manifest publication, readiness, and verification.
+
+Raw sequencing has planning semantics distinct from processed-H5AD `RAW_SCATAC`.
+The result is a versioned authoritative manifest reference and compact summary.
+It cannot feed EpiZoo directly: preprocessing must first construct the required
+cell-by-cCRE/H5AD input. Execution success is separate from readiness (`READY`,
+`READY_WITH_REPAIRS`, `NEEDS_USER_INPUT`, `UNSUPPORTED`, or `INVALID`). Dedicated
+verification independently reloads the manifest and reobserves current sources.
+
+PLAN_ONLY performs zero raw inspection and writes no manifest; BAM planning
+does not load pysam. Verified Runtime EXECUTE and durable resume are supported.
+Full Application EXECUTE evidence/report composition for raw intake remains
+M10.5 work. Sort/index observations do not authorize transformations. Alignment,
+realignment, liftOver, BAM transformations, barcode correction, fragments,
+cell-by-cCRE construction, model inference from raw sequencing, and M11
+preprocessing remain unimplemented.
 
 ## Architecture
 
@@ -83,7 +99,7 @@ Providers generate plans only and receive no scientific Python callables,
 filesystem access, or run-store access. Arbitrary Python and shell execution
 are prohibited in Agent plans.
 
-After successful execution, the application composes fresh verified evidence,
+For supported reporting workflows, the application composes fresh verified evidence,
 supported deterministic visualizations, and a deterministic scientific report.
 These are post-run services, outside `AgentPlan` and the scientific registry.
 The same runtime remains the only scientific execution engine.
@@ -166,6 +182,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
+| Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, independent source verification; raw-intake reporting deferred |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |

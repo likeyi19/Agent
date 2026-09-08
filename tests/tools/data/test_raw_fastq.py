@@ -611,7 +611,7 @@ def test_canonical_evidence_vocabulary_and_shapes_frozen(tmp_path):
 
 def test_no_existing_integration_exports_added():
     import agent.tools.data as data
-    assert data.__all__ == ['ScATACInspection', 'inspect_scATAC']
+    assert data.__all__ == ['ScATACInspection', 'inspect_scATAC', 'RawScATACInspection', 'inspect_raw_scATAC']
 
 
 @pytest.mark.parametrize('roles,meanings', [

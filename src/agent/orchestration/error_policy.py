@@ -335,6 +335,35 @@ for _code in _BUILTIN_NO_AUTOMATIC_CODES:
         ErrorPolicyEntry("The operation failed validation or execution.", _NO),
     )
 
+# M10.4 adds only new codes; existing plan recovery identities are unchanged.
+for _code in (
+    'RAW_INPUT_SELECTION_INVALID', 'RAW_INPUT_NO_CANDIDATES', 'RAW_INPUT_KIND_MIXED', 'RAW_INPUT_ACCESS_FAILED',
+    'RAW_INPUT_DISCOVERY_LIMIT', 'RAW_INPUT_DECLARATION_INVALID',
+    'RAW_INPUT_DECLARATION_INCOMPATIBLE', 'RAW_INPUT_OUTPUT_INVALID',
+    'RAW_INTAKE_OUTPUT_CONFLICT', 'RAW_INTAKE_WRITE_FAILED',
+    'RAW_BAM_DEPENDENCY_UNAVAILABLE', 'RAW_BAM_BACKEND_VERSION_UNSUPPORTED',
+):
+    _ERROR_POLICY_CATALOG[_code] = ErrorPolicyEntry(
+        'Raw intake requires compatible inputs, dependencies, or writable output storage.', _USER)
+for _prefix in ('RAW_FASTQ_', 'RAW_BAM_'):
+    for _suffix in (
+        'SELECTION_INVALID', 'NO_CANDIDATES', 'DISCOVERY_LIMIT', 'DISCOVERY_SYMLINK',
+        'DISCOVERY_UNAVAILABLE', 'SUFFIX_UNSUPPORTED', 'ALIAS_CONFLICT',
+        'NOT_REGULAR_FILE', 'SOURCE_UNAVAILABLE', 'SOURCE_METADATA_INVALID',
+        'DECLARATION_INVALID', 'READ_FAILED',
+    ):
+        _ERROR_POLICY_CATALOG[_prefix + _suffix] = ErrorPolicyEntry(
+            'Raw sequencing input could not be inspected under the accepted contract.', _USER)
+for _code in (
+    'RAW_INPUT_SOURCE_CHANGED', 'RAW_FASTQ_SOURCE_CHANGED', 'RAW_BAM_SOURCE_CHANGED',
+    'RAW_INTAKE_DIGEST_MISMATCH', 'RAW_INTAKE_CONTRACT_INVALID', 'RAW_INTAKE_JSON_INVALID',
+    'RAW_INTAKE_OUTPUT_BINDING_MISMATCH', 'RAW_INTAKE_SOURCE_MISMATCH',
+    'RAW_INTAKE_SUMMARY_MISMATCH', 'RAW_INTAKE_VERIFICATION_FAILED',
+    'RAW_BAM_INDEX_OBSERVATION_FAILED', 'RAW_BAM_MANIFEST_LIMIT',
+):
+    _ERROR_POLICY_CATALOG[_code] = ErrorPolicyEntry(
+        'Raw intake source or manifest validation failed.', _NO)
+
 ERROR_POLICY_CATALOG: Mapping[str, ErrorPolicyEntry] = MappingProxyType(
     _ERROR_POLICY_CATALOG
 )

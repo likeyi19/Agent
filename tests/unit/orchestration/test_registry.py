@@ -37,6 +37,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "validate_scATAC_feature_space",
         "build_replicate_pseudobulk",
         "run_replicate_differential_accessibility",
+        "inspect_raw_scATAC",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -244,6 +245,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         name: registry.get(name).recovery_policy_version for name in registry.names()
     } == {
         "inspect_scATAC": "inspect-scatac-v2",
+        "inspect_raw_scATAC": "inspect-raw-scatac-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
         "build_cell_neighbors": "build-cell-neighbors-v1",
         "cluster_cells": "cluster-cells-v1",

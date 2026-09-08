@@ -78,6 +78,7 @@ from agent.schemas import (
 
 from .registry import ToolRegistry, UnknownToolError
 from .error_policy import classified_agent_error
+from .raw_scatac_verifier import verify_raw_scatac_intake
 from .differential_accessibility_verifier import (
     verify_replicate_differential_accessibility,
 )
@@ -1918,7 +1919,28 @@ def verify_step(
     checks = _VerificationChecks()
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "inspect_scATAC":
+        if step.tool_name == "inspect_raw_scATAC":
+            try:
+                verify_raw_scatac_intake(resolved_arguments, plain_result, registry)
+            except Exception as exc:
+                code = getattr(exc, 'code', 'RAW_INTAKE_VERIFICATION_FAILED')
+                checks.add(
+                    'raw_intake_source_reconstruction', False,
+                    'Raw intake manifest matches fresh source reconstruction.',
+                    'Raw intake manifest failed source, output, or summary verification.',
+                    code,
+                    ErrorCategory.ENVIRONMENT_ERROR if code in (
+                        'RAW_BAM_DEPENDENCY_UNAVAILABLE', 'RAW_BAM_BACKEND_VERSION_UNSUPPORTED')
+                    else ErrorCategory.VERIFICATION_ERROR,
+                )
+            else:
+                checks.add(
+                    'raw_intake_source_reconstruction', True,
+                    'Raw intake manifest matches fresh source reconstruction.',
+                    'Raw intake manifest failed source reconstruction.',
+                    'RAW_INTAKE_VERIFICATION_FAILED',
+                )
+        elif step.tool_name == "inspect_scATAC":
             _verify_inspection(resolved_arguments, plain_result, checks)
         elif step.tool_name == "epizoo_embed_cells":
             _verify_embedding(

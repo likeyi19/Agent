@@ -22,7 +22,7 @@ from .analysis import (
     run_replicate_differential_accessibility,
     validate_scATAC_feature_space,
 )
-from .data import ScATACInspection, inspect_scATAC
+from .data import RawScATACInspection, ScATACInspection, inspect_raw_scATAC, inspect_scATAC
 
 __all__ = [
     "CellAnnotationEvaluationToolResult",
@@ -36,6 +36,8 @@ __all__ = [
     "ReplicateDifferentialAccessibilityToolResult",
     "ScATACFeatureSpaceToolResult",
     "ScATACInspection",
+    "RawScATACInspection",
+    "inspect_raw_scATAC",
     "build_cell_neighbors",
     "cluster_cells",
     "compute_cell_umap",

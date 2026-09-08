@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All eleven currently registered tools
+`src/agent/orchestration/registry.py`. All twelve currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -70,11 +70,13 @@ derived from the registry.
 | `validate_scATAC_feature_space` | Explicit raw sparse regulatory-count provenance manifest |
 | `build_replicate_pseudobulk` | Exact sparse SUM by `(group, replicate, condition)` |
 | `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
+| `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
-APIs, and accepted scientific results remain in the M1–M8 reference below.
-Evidence/report projections explicitly support these tools and fail closed for
-unsupported future tools; arbitrary new result fields never become report facts.
+APIs, and accepted scientific results remain in the milestone references below.
+Evidence/report projections support the existing processed-H5AD workflows;
+raw-intake projection remains deferred to M10.5. Unsupported projections fail
+closed; arbitrary new result fields never become report facts.
 
 ## Current scientific runtime and verification contracts
 
@@ -509,6 +511,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | M10.1 | Phase II raw scATAC preprocessing foundation: versioned intake domain contract and manifest infrastructure |
 | M10.2 | Read-only bounded FASTQ intake, declared 10x ATAC layouts, source reinspection, and M10.1 manifest population |
 | M10.3 | Read-only bounded BAM intake through optional pysam/htslib, conservative assembly/barcode evidence, and source reinspection |
+| M10.4 | Public raw-intake registry/semantic planning integration, deterministic publication, independent verification, and durable Runtime execution |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2612,8 +2615,8 @@ M10.3 introduced no production BAM sorting, index creation, alignment,
 realignment, FASTQ recovery, liftOver, barcode correction, whitelist processing,
 fragment construction, cell calling, cell-by-cCRE, ToolRegistry/public
 raw-inspection capability, `ArtifactSemanticKind` change, planner/compiler change,
-orchestration verifier dispatch, or reporting integration. M10.4 and M11 remain
-future work.
+orchestration verifier dispatch, or reporting integration. At the M10.3 checkpoint,
+M10.4 and M11 remained future work.
 
 Accepted validation used synthetic temporary BAM/index fixtures with pysam enabled:
 
@@ -2624,3 +2627,179 @@ Accepted validation used synthetic temporary BAM/index fixtures with pysam enabl
 | M10.2 FASTQ | 177 passed |
 | Relevant regression | 75 passed |
 | Full lightweight regression | 2000 passed, 54 skipped, 7 warnings |
+
+### Milestone 10.4 — Raw intake registry, Planner, and verification integration
+
+M10.4 is complete and accepted. `inspect_raw_scATAC` is the only registered
+high-level raw-sequencing intake capability, with planning role `INSPECTION` and
+recovery identity `inspect-raw-scatac-v1`. Private FASTQ/BAM inspectors remain
+internal helpers, not Planner tools. The public API in
+`src/agent/tools/data/raw_scatac.py` is:
+
+```python
+inspect_raw_scATAC(
+    raw_input_paths: Sequence[str | Path] | str | Path,
+    output_dir: str | Path,
+    *,
+    species: str | None = None,
+    raw_assay: str | None = None,
+    source_genome_assembly: str | None = None,
+    fastq_layout: str | None = None,
+) -> RawScATACInspection
+```
+
+Inputs may be one local path or a JSON-frozen tuple/list of local paths,
+including non-recursive directories. Bounded deterministic discovery dispatches
+FASTQ-only selections to M10.2 and BAM-only selections to M10.3. Mixed selections
+fail closed with `RAW_INPUT_KIND_MIXED`; empty/invalid selections produce stable
+sanitized input errors. Dispatch does not run both parsers to guess a format.
+FASTQ execution and verification do not import pysam; BAM retains its accepted
+optional lazy dependency. There are no public arguments for input kind, barcode
+read/tag, inspection budgets, target assembly, output filename, or overwrite.
+Those details remain deterministic Agent concerns under the accepted contracts.
+
+Declarations come from structured request inputs, not model-invented facts:
+
+| Declaration | Accepted meaning |
+| --- | --- |
+| `species` | Explicit normalized lowercase declaration; other declared species can truthfully yield `UNSUPPORTED` |
+| `raw_assay` | `TENX_ATAC` for FASTQ/BAM; `SCATAC` for BAM only |
+| `source_genome_assembly` | Explicit source coordinates for BAM only; never inferred from species |
+| `fastq_layout` | `tenx-atac-r1-r2-r3.v1` or `tenx-atac-r1-i2-r2.v1`, requiring FASTQ/TENX_ATAC context |
+
+Incompatible declarations fail closed rather than supplying guessed assay or
+coordinate authority. Human target remains hg38; mouse remains mm10. M10.1 owns
+source/target compatibility, preparation admissibility, and readiness derivation.
+
+Publication uses canonical M10.1 bytes and the deterministic filename
+`raw-scatac-intake-<full-sha256>.json` inside managed `output_dir`, through the
+accepted atomic publication helper. Strict reload confirms actual bytes/digest.
+An identical existing artifact is reused idempotently; conflicting content is
+preserved and rejected. No overwrite parameter, random ID, or publication-time
+timestamp enters artifact identity. Recorded source mtimes remain source evidence.
+
+The exact lightweight `RawScATACInspection` result fields are:
+
+```text
+status, manifest_path, manifest_sha256, artifact_type,
+artifact_schema_version, intake_contract_version, input_kind, readiness,
+n_files, n_groups, n_issues, n_required_information, n_repairs, n_prerequisites
+```
+
+`status="success"` means inspection execution succeeded, not that data are
+scientifically `READY`. `input_kind` is `fastq` or `bam`. The authoritative
+artifact remains `agent.raw-scatac-intake`, schema `1`, contract
+`raw-scatac-intake.v1`. The full manifest is never embedded in the tool result.
+The strict registry result contract checks exact fields, identities, digest shape,
+readiness vocabulary, and bounded/coherent counts without reinspecting sources.
+
+Planning adds `RAW_SCATAC_SEQUENCING = "raw_scatac_sequencing"` and
+`RAW_SCATAC_INTAKE_MANIFEST = "raw_scatac_intake_manifest"`. Existing
+`RAW_SCATAC` and `raw_scatac_dataset.v1` retain processed-H5AD/matrix semantics.
+Authoritative consumer ports authorize these request sources:
+
+| Consumer port | Request source |
+| --- | --- |
+| `raw_input` | `raw_input_paths` |
+| `output_dir` | `output_dir` |
+| `species` | `species` |
+| `raw_assay` | `raw_assay` |
+| `source_genome_assembly` | `source_genome_assembly` |
+| `fastq_layout` | `fastq_layout` |
+
+Existing H5AD `input_path` is not authorized for `raw_input`. Application-managed
+`output_dir` is compiler-bound, never model-authored. The sole producer port is
+`intake_manifest`, semantic type `raw_scatac_intake_manifest.v1`, with members
+`manifest_path` and `manifest_sha256` only. Readiness, target assembly, barcode
+source, input kind, and inferred species are not planner-composable output
+members. No authorized semantic channel connects this manifest directly to
+EpiZoo/H5AD consumers; future preprocessing must construct the required processed
+cell-by-cCRE/H5AD input first.
+
+Scripted wire-v4 acceptance used the request: "Inspect these raw mouse scATAC
+FASTQs and tell me whether they are ready for preprocessing." The model selected
+`inspect_raw_scATAC` and the semantic source `raw_input_paths`; the compiler bound
+actual raw paths, managed output directory, explicit species/assay, and applicable
+declarations from the request. Structured path values are absent from model
+context. The natural-language prompt itself retains the existing pass-through
+contract. The model does not author FASTQ/BAM kind, read roles, BAM tags, target
+assembly, inspection budgets, or output paths. Unique authorized bindings need
+no redundant model selections. Explicit wire-v3 compatibility remains accepted;
+the historical M9 benchmark retains its processed-H5AD corpus.
+
+`verify_step()` explicitly dispatches to
+`src/agent/orchestration/raw_scatac_verifier.py`. Verification:
+
+1. Validates resolved arguments and the normal registry result contract.
+2. Requires the manifest to belong to resolved managed `output_dir`, with the
+   expected content-addressed filename.
+3. Strictly loads actual bytes and checks SHA-256, artifact/schema/contract identity.
+4. Reconstructs current raw-source inspection through the accepted private
+   M10.2/M10.3 implementations with the same resolved explicit declarations.
+5. Compares canonical reconstructed/stored manifests and the actual byte digest.
+6. Derives the lightweight summary from the verified manifest and requires exact
+   agreement with the returned result.
+
+This independently checks source inventory and observations; it never calls
+public `inspect_raw_scATAC` or publishes another manifest. Tests detect source,
+BAM-index observation, declaration, digest, content, and summary drift, including
+self-consistent forged manifests and noncanonical bytes. Source checking retains
+M10.2/M10.3 bounded coverage: it does not certify uninspected tails or turn BAM
+summary digests into whole-file hashes.
+
+A truthful `NEEDS_USER_INPUT`, `UNSUPPORTED`, or `INVALID` manifest can execute
+successfully and pass verification. Verification establishes the authenticity
+and source binding of the finding, not scientific readiness. In particular,
+truthful `INVALID` means successful inspection with verified invalid-input
+findings, not an automatic runtime exception.
+
+PLAN_ONLY performs zero public raw-tool execution, zero private FASTQ/BAM
+inspection, zero publication, and zero source reinspection. It requires no
+pysam import and returns `PLANNED` with no step results. Subprocess acceptance
+blocks pysam imports for Runtime/Application PLAN_ONLY and for FASTQ execution
+plus verification. Application-managed output binding uses the existing workspace.
+
+Verified FASTQ and BAM Runtime EXECUTE and durable completed-step persistence
+are accepted. Terminal resume preserves immutable-return behavior, with no
+planner rerun or fresh source check. Nonterminal resume revalidates completed
+raw work and reuses its production result; pending work may execute normally.
+Source drift at that fresh verification boundary blocks further production.
+The two-step acceptance recorded one production call before interruption and
+one additional call for the pending step after successful resume; the completed
+step was not rerun. Content-addressed reuse produces no duplicate artifact.
+Existing cooperative cancellation behavior remains unchanged.
+
+Errors distinguish user/input failures, environment/dependency failures,
+verification/source-integrity failures, and output/resource failures from
+scientific readiness. Stable raw-intake/FASTQ/BAM codes and sanitized policy
+messages are preserved. No automatic retries were introduced for deterministic
+input/scientific failures. Adding the registry capability does not change
+unrelated historical plan recovery identities.
+
+M10.4 required no production changes to M10.1 manifest implementation, M10.2
+FASTQ, M10.3 BAM, Runtime, Executor, RunStore, Application service, semantic
+compiler, semantic prompt, semantic wire-v4, LLMPlanner, or evidence/report code.
+Existing export/inventory test snapshots were updated for the added capability.
+The accepted path is AgentRequest → planning → Runtime execution → independent
+step verification → persistence. Full `ResearchAgentApplication.run(EXECUTE)`
+raw-intake evidence/report composition remains M10.5 work.
+
+M10.4 introduced no alignment, sorting/index creation, realignment, FASTQ
+recovery, liftOver, barcode correction, whitelist processing, fragment generation,
+cell calling, TSS/FRiP/QC metrics, cell-by-cCRE, EpiZoo inference, evidence/report
+integration, CLI convenience flags, or M11 preprocessing. M10.5 and M11 remain
+unimplemented.
+
+Accepted validation:
+
+| Acceptance suite | Result |
+| --- | --- |
+| Public tool | 64 passed |
+| Verifier | 27 passed |
+| Semantic/v3/v4 | 12 passed |
+| Lifecycle/no-pysam | 12 passed |
+| M10.1 | 194 passed |
+| M10.2 | 177 passed |
+| M10.3 | 121 passed |
+| Relevant orchestration regression | 1124 passed, 3 warnings |
+| Full lightweight regression | 2115 passed, 54 skipped, 7 warnings |

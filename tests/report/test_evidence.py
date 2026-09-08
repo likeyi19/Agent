@@ -979,7 +979,7 @@ def test_evaluation_report_tampering_fails_through_existing_verifier(
     assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
 
 
-def test_production_registry_membership_is_exactly_eleven_after_milestone8_2() -> None:
+def test_production_registry_membership_includes_raw_intake_after_milestone10_4() -> None:
     assert build_default_tool_registry().names() == (
         "inspect_scATAC",
         "epizoo_embed_cells",
@@ -992,4 +992,5 @@ def test_production_registry_membership_is_exactly_eleven_after_milestone8_2() -
         "validate_scATAC_feature_space",
         "build_replicate_pseudobulk",
         "run_replicate_differential_accessibility",
+        "inspect_raw_scATAC",
     )

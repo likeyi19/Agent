@@ -39,15 +39,34 @@ Assay identity is not inferred from filenames or read lengths alone. Barcode
 provenance requires supported assay/layout evidence; generic or ambiguous FASTQ
 remains inspectable without inferred barcode semantics.
 
-Human FASTQ targets `hg38`; mouse FASTQ targets `mm10`. Source and target
-assemblies are distinct: species does not establish an aligned input's source
-assembly, and FASTQ has no source coordinate assembly. Future preprocessing
-will align directly to the required target reference. Inspection is bounded
-and sample-scoped unless sequential EOF observation permits complete coverage;
-it does not certify uninspected content. Inputs are never rewritten or repaired.
-Alignment, BAM processing, liftOver, fragments, cell-by-cCRE construction,
-ToolRegistry/public raw-inspection capability, planner integration, and reporting
-integration are not implemented in M10.2.
+Milestone 10.3 is complete: deterministic, read-only BAM intake supports explicit
+local `.bam` files and non-recursive directories. It uses mature `pysam`/htslib
+parsing, with no custom BAM decoder. The tested optional dependency is
+`pysam==0.24.1`, declared in [requirements-bam.txt](requirements-bam.txt) and
+lazy-loaded for BAM inspection; existing FASTQ/H5AD workflows do not require it.
+Bounded sequential reading works without an index and collects compact
+header/reference, species/source-assembly, sort/index, mapping/pairing, and
+barcode-tag evidence. Missing indexes alone do not make inputs invalid.
+
+Usable sampled `CB` may establish a BAM cell identifier; `CR` supplies raw
+cellular-barcode evidence and `CY` its quality evidence. Generic CB is not
+assumed corrected. `BC`/`QT` describe sample/library barcodes and qualities,
+never cell identity. Barcode values, read sequences, qualities, and per-read
+coordinates are not persisted.
+
+Human model-oriented preprocessing targets `hg38`; mouse targets `mm10`.
+Source BAM assembly remains distinct from target assembly and is never inferred
+merely from species or chromosome naming. A mismatch does not establish a
+supported conversion/realignment route. FASTQ has no source coordinate assembly;
+future alignment will target the appropriate reference directly. Inspection is
+sample-scoped unless sequential EOF observation permits complete coverage and
+does not certify uninspected content.
+
+Raw intake remains a data-layer capability, outside the public ToolRegistry and
+Planner. Sort/index observations neither perform nor authorize transformations.
+Inputs are never rewritten or repaired: BAM sorting, index creation, alignment,
+realignment, liftOver, barcode correction, fragment construction, and cell-by-cCRE
+construction remain unimplemented, as does raw-intake reporting integration.
 
 ## Architecture
 

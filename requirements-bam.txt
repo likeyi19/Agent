@@ -1,0 +1,3 @@
+# Optional M10.3 BAM intake backend; not required for Agent/FASTQ/H5AD imports.
+# Install into the agent environment: python -m pip install -r requirements-bam.txt
+pysam==0.24.1

@@ -508,6 +508,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | Semantic-v4 default migration | Shared v4 default for LLM/application/CLI planning; explicit v3 compatibility and v3 benchmark retained; omitted-wire Groq PLAN_ONLY acceptance |
 | M10.1 | Phase II raw scATAC preprocessing foundation: versioned intake domain contract and manifest infrastructure |
 | M10.2 | Read-only bounded FASTQ intake, declared 10x ATAC layouts, source reinspection, and M10.1 manifest population |
+| M10.3 | Read-only bounded BAM intake through optional pysam/htslib, conservative assembly/barcode evidence, and source reinspection |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2457,3 +2458,169 @@ Accepted validation, including contract hardening:
 | M10.1 regression | 194 passed |
 | Relevant data/artifact regression | 75 passed |
 | Full lightweight regression | 1879 passed, 54 skipped, 7 warnings |
+
+### Milestone 10.3 — BAM data-layer vertical slice
+
+M10.3 is complete and accepted. `src/agent/tools/data/_raw_bam.py` provides
+deterministic, strictly read-only BAM intake through `inspect_bam_inputs()`.
+It populates the existing M10.1 `RawIntakeManifest`: artifact
+`agent.raw-scatac-intake`, schema version `1`, intake contract
+`raw-scatac-intake.v1`, and route `bam-to-cell-by-ccre.v1` remain unchanged.
+BAM-specific compact observations use `raw-bam.v1` evidence. M10.2 FASTQ
+implementation and behavior remain unchanged. This is a data-layer API, not a
+public ToolRegistry/Planner capability; readiness remains separate from execution
+success and follows M10.1 deterministic derivation and precedence.
+
+The tested optional backend is `pysam==0.24.1` (accepted environment: htslib
+`1.24`), declared in `requirements-bam.txt`. It is lazy-loaded only on BAM
+execution paths. Agent import, M10.1, M10.2 FASTQ inspection, and existing H5AD
+workflows remain functional without pysam. A BAM attempt without it raises
+sanitized `RAW_BAM_DEPENDENCY_UNAVAILABLE`; untested pysam versions are rejected
+with `RAW_BAM_BACKEND_VERSION_UNSUPPORTED`. No external `samtools` executable
+is required. Agent owns scientific interpretation; pysam/htslib owns BAM format
+access, with no custom BAM binary decoder.
+
+Selection accepts explicit local `.bam` files and non-recursive local
+directories, ordered lexically and deterministically. One BAM forms one
+independent raw-input group; filename similarity never merges BAMs. `.bai` and
+`.csi` are sidecar observations only. Canonical duplicate aliases collapse;
+conflicting hardlink aliases and directory-discovered candidate symlinks are
+rejected. SAM, CRAM, remote URLs, and recursive discovery remain unsupported.
+Production inspection never modifies source BAMs or source directories.
+
+| Repository-owned inspection bound | Limit |
+| --- | --- |
+| Selections / candidate files | 128 each |
+| Directory entries per directory | 16,384 |
+| Sequential alignment records per BAM | 256 |
+| Header projection | 1 MiB |
+| Reference dictionary records | 4,096 |
+| Read groups | 256 |
+| Programs | 128 |
+| Distinct normalized metadata values | 4 |
+
+Lazy `pysam.AlignmentFile` opens BAM in binary read mode; deterministic prefix
+inspection uses `fetch(until_eof=True)` without an index. A separate explicit
+index probe avoids letting corrupt sidecars determine sequential readability.
+Reaching EOF before the record bound may establish complete sequential coverage;
+stopping at the bound remains sample-scoped, without certifying uninspected
+tails. `decoded_bytes_inspected` and `decoded_byte_limit` are `None`. Header
+limits apply after backend decoding. Neither the record bound nor the header
+projection limits claim hard decoded-byte/pre-allocation memory bounds within
+pysam/htslib. Normalized observation/source digests are compact summary identities,
+not whole-file BAM hashes or hashes of read/barcode vectors.
+
+Header evidence is restricted to reviewed compact facts. `@HD` presence,
+version, and `SO` declaration are observed; absence of optional `@HD` alone is
+not invalid. Ordered `@SQ` names/lengths and present `M5` reference-sequence
+digests are compactly fingerprinted. Reviewed `AS` and `SP` fields contribute
+metadata assertions. `@RG` supplies compact read-group/library/sample counts;
+exactly one authoritative, consistent library identity may populate M10.1
+library provenance. Multiple libraries are not collapsed; RG/SM never establish
+experimental condition or replicate. `@PG` supplies narrow identity/version
+provenance. Arbitrary reference `UR` fields and complete `@PG CL` command lines
+are not persisted.
+
+Species requires explicit declaration or complete reviewed authoritative SQ
+evidence. Reviewed header aliases include Homo sapiens/human → `human` and
+Mus musculus/mouse → `mouse`; no species inference uses BAM filenames, read
+sequences, or chromosome naming. Assembly normalization supports GRCh38/hg38 →
+`hg38` and GRCm38/mm10 → `mm10`; other accepted normalized source identifiers
+remain distinct. Incomplete reviewed SQ assertions remain observations rather
+than complete header authority, and contradictory assertions remain conflicts.
+Neither species nor chromosome names establish exact source assembly.
+
+Human target assembly remains `hg38`; mouse remains `mm10`. Source and target
+are independent, with MATCH/MISMATCH/UNKNOWN/CONFLICT semantics owned by M10.1.
+Human source hg38 and mouse source mm10 match their respective targets. Human
+source hg19 mismatches target hg38 and requires harmonization, but route
+admissibility remains unresolved; this is not automatically `READY_WITH_REPAIRS`.
+Human with unknown source retains target hg38 and requires user input.
+M10.3 detects mismatch without establishing that reads/cell identity can safely
+be recovered, that a supported realignment route exists, or that preparation
+is admissible. It implements no BAM coordinate liftOver. Transformation-route
+decisions belong to future M11 work, not this accepted inspection slice.
+
+Sort declaration and observed ordering remain separate. `@HD SO` is declared
+metadata; sampled primary mapped records permit local coordinate comparisons.
+Sampled consistency does not prove whole-file sorting. An observed inversion
+preserves a local finding, including contradiction of a coordinate declaration.
+Sort findings are currently advisory and do not automatically create preparation
+requirements; sorting is deferred to later preprocessing routes.
+
+Index observations distinguish absent, openable, unusable, and competing local
+BAI/CSI candidates. No competing candidate is silently preferred. Sequential
+inspection needs no index and creates none. An openable index does not prove
+universal index correctness. Missing index alone is neither `INVALID` nor
+automatically `READY_WITH_REPAIRS`; unusable/competing index findings are advisory.
+
+Sampled record counts include primary, secondary, supplementary, mapped/unmapped,
+paired/unpaired, read1/read2, proper-pair, duplicate, and QC-fail flags. No
+biological QC thresholds are applied. Individual read names, sequences,
+qualities, CIGAR vectors, and coordinates are not persisted.
+
+| Standard tag | Accepted interpretation |
+| --- | --- |
+| `CB` | Usable sampled cell identifier → `BAM_CELL_IDENTIFIER`; generic CB is not universally corrected |
+| `CR` | Raw cellular barcode sequence → `BAM_RAW_SEQUENCE` when usable CB is unavailable; future barcode processing remains a normal downstream prerequisite |
+| `CY` | Raw cellular barcode-quality evidence associated with CR |
+| `BC` / `QT` | Sample/library barcode and quality evidence, never cell identity |
+| `RG` | Read-group provenance, never cell identity |
+
+Usable CB takes precedence over CR while preserving CR/CY observations. Reviewed
+tag types, nonempty values, and duplicate tags are checked without coercion.
+Prevalence records explicit all-sampled, primary, and mapped-primary denominators
+and present/usable/invalid counts. Zero observations mean not observed in the
+inspected sample, not absent from the complete BAM. Barcode values are never
+persisted, suffixes are not stripped, and no minimum-prevalence threshold is
+invented. Generic tags retain general SAM semantics. Exact reviewed Cell Ranger
+ATAC program provenance may establish ATAC assay and its specific corrected/
+known-good CB, raw CR, and quality CY interpretation; these semantics are never
+universalized to arbitrary CB. Generic aligner provenance alone does not establish
+ATAC assay; otherwise an explicit supported assay declaration is required.
+
+Group-local identity is normally sufficient for sampled CB. Independent BAM
+groups never merge identical barcode values automatically. CR with demonstrably
+multiple independent libraries leaves identity scope unresolved. An explicit
+decorative namespace is not required when group-local scope is already safe.
+
+`observe_bam_source()` independently reconstructs source observations, compact
+header/reference identity, bounded record counts, tag prevalence, sort/index
+observations, and the normalized observation digest without trusting serialized
+readiness. Recorded size/mtime and before/after source/sidecar snapshot checks
+reject material changes; source bytes/mtimes are preserved. This primitive is
+intended for later independent orchestration verification and is not wired into
+`verify_step()`. Operational dependency/access/stability failures raise sanitized
+errors. Observed malformed/truncated content produces scientific `INVALID`
+findings, preserving other valid groups where trustworthy inspection is possible.
+
+Accepted representative outcomes assume other common gates are satisfied:
+
+| BAM input | Readiness / scientific consequence |
+| --- | --- |
+| Human hg38 + CB | `READY`; target hg38, MATCH |
+| Mouse mm10 + CB | `READY`; target mm10, MATCH |
+| Human hg19 | `NEEDS_USER_INPUT`; target hg38, MISMATCH, harmonization admissibility unresolved |
+| Human + unknown source | `NEEDS_USER_INPUT`; target hg38, source remains unknown |
+| CB absent, CR present, safe group-local scope | `READY` with future barcode-processing prerequisite |
+| BC/QT only | `NEEDS_USER_INPUT`; cell barcode source unknown |
+| Missing index | Sequential inspection succeeds and may remain `READY` |
+| Observed malformed/truncated BAM | `INVALID` |
+| Multi-library CR ambiguity | `NEEDS_USER_INPUT`; identity scope unresolved |
+
+M10.3 introduced no production BAM sorting, index creation, alignment,
+realignment, FASTQ recovery, liftOver, barcode correction, whitelist processing,
+fragment construction, cell calling, cell-by-cCRE, ToolRegistry/public
+raw-inspection capability, `ArtifactSemanticKind` change, planner/compiler change,
+orchestration verifier dispatch, or reporting integration. M10.4 and M11 remain
+future work.
+
+Accepted validation used synthetic temporary BAM/index fixtures with pysam enabled:
+
+| Acceptance suite | Result |
+| --- | --- |
+| M10.3 BAM focused | 121 passed |
+| M10.1 manifest | 194 passed |
+| M10.2 FASTQ | 177 passed |
+| Relevant regression | 75 passed |
+| Full lightweight regression | 2000 passed, 54 skipped, 7 warnings |

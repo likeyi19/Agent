@@ -3300,7 +3300,7 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.INSPECTION,
             "Inspect raw scATAC sequencing inputs for preprocessing readiness through bounded read-only observation; publish an authoritative intake manifest.",
             "Agent owns format dispatch, barcode interpretation, targets and readiness. Successful inspection may report scientifically non-ready or invalid inputs. No preprocessing is performed.",
-            "The manifest cannot be consumed as a processed H5AD or EpiZoo input. Reporting integration is deferred.",
+            "The manifest cannot be consumed as a processed H5AD or EpiZoo input. Application composes verified evidence and a figureless report after execution.",
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(

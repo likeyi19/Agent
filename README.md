@@ -14,8 +14,15 @@ Guarded real-data differential-accessibility acceptance remains outstanding.
 [AGENTS.md](AGENTS.md) contains the detailed engineering rules, scientific
 contracts, milestone history, acceptance results, and deferred work.
 
-Phase II has started toward raw scATAC preprocessing capabilities. Milestone
-10.1 is complete, establishing the versioned raw-scATAC intake domain contract
+**Milestone 10 — Raw scATAC Data Intake & Preflight is complete.**
+Natural-language requests now support raw FASTQ/BAM intake → deterministic
+preflight → verified manifest/evidence → figureless deterministic report.
+M10 identifies the supplied input, whether its structure/provenance is
+interpretable, and whether it satisfies the intake contract for its intended
+preprocessing route.
+
+Phase II began with raw scATAC intake capabilities. Milestone 10.1 established
+the versioned raw-scATAC intake domain contract
 and manifest infrastructure. Raw-input readiness is distinct from execution
 success: the contract separates required information, preparation/repair
 requirements, and normal downstream prerequisites.
@@ -99,9 +106,9 @@ qualities, complete BAM reference dictionaries, or raw sequencing payloads.
 
 M10 provides intake/preflight, not raw-data preprocessing. Sort/index observations
 do not authorize transformations. Alignment, realignment, liftOver, BAM
-transformations, barcode correction, fragments,
-cell-by-cCRE construction, model inference from raw sequencing, and M11
-preprocessing remain unimplemented.
+transformations, barcode correction, fragments, cell calling, cell-by-cCRE
+construction, and model inference from raw sequencing remain unimplemented.
+Preprocessing capabilities begin in Milestone 11.
 
 ## Architecture
 

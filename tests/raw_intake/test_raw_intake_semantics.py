@@ -92,6 +92,16 @@ def test_wire_v4_selections_compile_structured_values_without_model_literals():
     assert 'output_dir' not in str(model.payload)  # Unique managed source bound mechanically.
 
 
+def test_raw_planning_guidance_reflects_accepted_application_reporting():
+    req, registry = request(), build_default_tool_registry()
+    model = Model(wire())
+    LLMPlanner(model).plan(req, registry)
+    for context in (model.prompt, str(build_semantic_planning_catalog(req, registry))):
+        assert 'Reporting integration is deferred' not in context
+        assert 'Application composes verified evidence and a figureless report after execution' in context
+        assert 'The manifest cannot be consumed as a processed H5AD or EpiZoo input' in context
+
+
 def test_single_tool_unique_request_bindings_need_no_redundant_sources():
     req = request()
     plan = LLMPlanner(Model(wire())).plan(req, build_default_tool_registry())

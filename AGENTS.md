@@ -513,6 +513,7 @@ scope exclusions, registry sizes, and planning-version defaults.
 | M10.3 | Read-only bounded BAM intake through optional pysam/htslib, conservative assembly/barcode evidence, and source reinspection |
 | M10.4 | Public raw-intake registry/semantic planning integration, deterministic publication, independent verification, and durable Runtime execution |
 | M10.5 | Raw-intake evidence, deterministic figureless reports, and full Application execution/resume composition |
+| M10.6 | Final raw FASTQ/BAM intake/preflight acceptance and Milestone 10 closeout; preprocessing remains M11 scope |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2990,3 +2991,102 @@ Accepted validation:
 | M10.4 raw-intake non-reporting | 115 passed |
 | Relevant broader regression | 1208 passed, 3 warnings |
 | Full lightweight regression | 2171 passed, 54 skipped, 7 warnings |
+
+### M10.6 — Raw scATAC Intake & Preflight final acceptance and closeout
+
+**Milestone 10 status: COMPLETE.** M10.6 accepts the full natural-language
+request → semantic-v4 planning/compiler → raw intake → Runtime verification →
+evidence → deterministic figureless report path. The starting accepted M10.5
+checkpoint was `77177a4f25fe37e05ea91755cf89708b5cd4a16a`
+(`Implement Milestone 10.5 raw intake reporting`): clean `main`, matching local
+`origin/main`. Acceptance used the `agent` environment with Python `3.11.16`
+and optional BAM backend `pysam==0.24.1`.
+
+The code-level audit passed M10.1 contract/readiness, M10.2 bounded FASTQ,
+M10.3 lazy pysam BAM, M10.4 planning/Runtime/verification, M10.5 evidence/report/
+Application, and absence of M11 preprocessing. The authoritative artifact remains
+`agent.raw-scatac-intake`, schema `1`, contract `raw-scatac-intake.v1`.
+Source/target assemblies, barcode provenance/identity scope, required information,
+preparation admissibility, normal prerequisites, and bounded coverage retain their
+accepted distinctions. Execution success remains independent of readiness.
+
+Canonical synthetic acceptance reused existing repository fixture helpers and
+the scripted PlanningModel through the real semantic-v4/Application path, with
+no handcrafted executable plan or live provider/network requirement:
+
+| Full Application case | Accepted result |
+| --- | --- |
+| Human TENX_ATAC FASTQ, Layout A, synchronized R1/R2/R3 | SUCCEEDED; READY; source coordinates not applicable; target hg38; R2 raw barcode provenance; 256 of 300 records per file inspected with explicit sample coverage; alignment only a normal downstream prerequisite |
+| Mouse SCATAC BAM, eight mapped primary records with usable CB | SUCCEEDED; READY; source mm10 / target mm10, MATCH; BAM cell identifier through CB; sequential EOF observed; no index required or created |
+| Human SCATAC BAM, hg19 source, usable CB | SUCCEEDED; NEEDS_USER_INPUT; target hg38, MISMATCH; harmonization required with unresolved admissibility; report requires route/admissibility information and does not assert supported realignment, liftOver, or repair |
+
+All three runs passed strict manifest loading and actual-byte SHA-256 checks,
+fresh source-aware `verify_step()`, evidence verification, and report verification.
+Evidence carries the authoritative manifest path/digest without copying the
+manifest; the report references verified evidence and manifest provenance.
+Visualization is absent, its workspace is empty, and no fabricated figure
+references appear. Reports distinguish execution/verification from readiness and
+do not describe sampled inspection as whole-file certification. Durable resume
+returned identical results with one planning call and one production inspection
+in total per run, without duplicate manifests.
+
+Synthetic source bytes, SHA-256, sizes, modification times, and directory contents
+were unchanged across execution, fresh verification, and resume. No BAM index or
+other source-side artifact was created; all Agent outputs stayed in the managed
+workspace. Full source hashes were acceptance-only immutability checks: production
+observed-region digests do not certify whole raw-file contents. Narrow code audit
+and durable-artifact scans confirmed exclusion of read names, sequences, qualities,
+cellular barcode values, per-read BAM coordinates, full CIGAR vectors, arbitrary
+`@PG CL`, and arbitrary reference UR paths. Synthetic inputs and demo artifacts
+remained outside the repository.
+
+Separate fresh-process FASTQ and BAM PLAN_ONLY acceptance blocked pysam imports
+and guarded production calls, raw access, reinspection, and manifest publication.
+Both returned PLANNED with only `inspect_raw_scATAC`, zero executed steps/results,
+zero raw-access attempts, and no manifest, evidence, report, or visualization.
+Durable planning state remains permitted; planning required no pysam import.
+
+The observable model selection was only `inspect_raw_scATAC` and the `raw_input`
+semantic source selecting `raw_input_paths`. Compiler binding supplied actual
+paths, managed output directory, species, assay, and applicable source-assembly
+declarations. Agent code retained format dispatch, layout/tag interpretation,
+target assembly, inspection budgets, and manifest filename derivation. Literal
+structured raw paths and private inspector names were absent from the planning
+prompt/catalog/schema. Natural-language request text remains model-visible under
+the existing contract; this acceptance did not use a live LLM.
+
+One stale accepted-contract statement was corrected: the raw tool's registry
+planning guidance still said reporting integration was deferred after M10.5.
+Its replacement describes Application composition of verified evidence and a
+figureless report while preserving the prohibition on direct manifest-to-EpiZoo
+binding. This is the sole production correction, limited to guidance text; no
+interface, compiler, Runtime, scientific algorithm, artifact schema, or dependency
+changed. A regression in `tests/raw_intake/test_raw_intake_semantics.py` failed
+before the correction and passed afterward for both actual prompt and catalog.
+No new milestone integration file was necessary: existing raw reporting
+Application tests cover FASTQ/BAM, truthful non-ready results, artifact composition,
+and resume; existing lifecycle/subprocess tests cover PLAN_ONLY and blocked pysam.
+
+Final acceptance used `PYTHONDONTWRITEBYTECODE=1`,
+`NUMBA_CACHE_DIR=/tmp/agent-numba-cache`,
+`MPLCONFIGDIR=/tmp/agent-matplotlib-cache`, and `PYTHONPATH=src` with
+`conda run -n agent python -m pytest -q`:
+
+| Acceptance suite | Result |
+| --- | --- |
+| M10.1 manifest | 194 passed |
+| M10.2 FASTQ | 177 passed |
+| M10.3 BAM | 121 passed |
+| M10.4 raw-intake integration, excluding reporting | 116 passed |
+| M10.5 raw-intake reporting/Application | 56 passed |
+| Orchestration, providers, benchmarks, report, application, integration | 1246 passed, 3 skipped, 3 warnings |
+| Full lightweight regression | 2172 passed, 54 skipped, 7 warnings |
+
+M10 ends at intake/preflight. M11 preprocessing remains unimplemented: alignment,
+realignment, BAM sorting/index creation or FASTQ recovery, liftOver, barcode/
+whitelist correction, fragment generation, duplicate removal, cell calling,
+TSS/FRiP/QC filtering, peak/cCRE overlap, cell-by-cCRE construction, raw-derived
+H5AD, and model inference from FASTQ/BAM. Observing flags, mapping counts, tags,
+or index presence does not perform those transformations. No GPU, checkpoint,
+external samtools, internet, or external biological raw dataset was needed for
+this acceptance.

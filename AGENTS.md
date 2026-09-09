@@ -83,8 +83,12 @@ M11.1 is complete at the data-domain/artifact layer: immutable reference identit
 and library/barcode processing contracts are available through their modules.
 They add no registered scientific tools. Reference selection and library/barcode
 decisions remain independent. Completed M11.2 FASTQ preprocessing consumes both
-alongside a freshly verified M10 intake manifest. BAM preprocessing remains
-M11.3 scope. Detailed M11.1 and M11.2 contracts and acceptance records are below.
+alongside a freshly verified M10 intake manifest. M11.3a adds only producer-neutral
+fragments v2 and a common verified v1/v2 streaming interface; FASTQ production
+remains v1 and all thirteen tools retain their existing contracts. External-fragment
+adoption (M11.3b), qualified BAM production (M11.3c), and M11.4 cell selection/QC
+remain unimplemented. Generic v2 content/resource verification does not qualify
+producer profiles or verify historical processing. Detailed contracts follow.
 
 ## Current scientific runtime and verification contracts
 
@@ -3731,3 +3735,73 @@ adds 22 M11.2e lightweight cases. `git diff --check` and untracked-file whitespa
 checks passed. All 46 accepted b/c/d files matched the starting SHA-256 inventory;
 54 combined source/test/doc/patch files were reviewed for the commit. No full
 reference index, biological data, executable, model or runtime output is included.
+
+## Milestone 11.3a — Producer-neutral fragment boundary
+
+**M11.3a status: COMPLETE.** Based on
+`c8cde7edde1ece931b91a37c08162cf30193d44d`, this additive data-layer milestone
+introduces strict `agent.scatac-fragments`, schema 2, `scatac-fragments.v2`, and
+a common freshly verified streaming interface over v1/v2. It changes no existing
+scientific tool, compiler, execution/recovery identity or report projection.
+The registry remains at thirteen tools. M11.2 FASTQ execution continues to publish
+its unchanged Chromap-specific v1 contract; no persisted artifacts are migrated.
+
+V2 preserves exact reference/ordered-contig identity, explicit library namespaces,
+opaque bounded ASCII identifiers including suffixes, positive uint64 support and
+checked uint128 aggregates. Five-column libraries have absent strand; six-column
+libraries preserve `+`, `-` or `.` with a declared definition. Canonical keys/order
+include strand state; duplicate complete keys fail. Coordinates are 0-based
+half-open within exact FAI bounds. Physical artifacts are headerless canonical
+BGZF with terminal EOF and functional BED/TBI indexes, with complete byte and
+record-stream identities. No correction, clipping, aliasing or scientific
+transformation is performed by the common interface.
+
+Closed provenance records distinguish prospective external adoption, BAM and FASTQ
+production, bind named profile/source/producer-record resource identities,
+and preserve explicit support definitions and declared/unspecified processing
+claims. Generic v2 verification establishes artifact contents, reference/resource
+identities and functional tabix queries. It does not qualify any v2 producer or
+independently reconstruct alignment, Tn5 adjustment, deduplication, MAPQ filtering
+or barcode correction. Future producer-specific verification must establish
+scientific eligibility. A profile hash or the generic verified view alone cannot
+authorize that missing producer qualification.
+
+The final acceptance audit corrected a structural limitation: the initial closed
+provenance kinds excluded FASTQ. The reserved `fastq_fragment_production` kind
+now requires explicit FASTQ/intake/context resource bindings and a producer-record
+identity capable of retaining rich closed FASTQ/Chromap metadata. No execution or
+migration is implemented. A synthetic test preserves every field and original
+byte of a v1 record through that resource binding, including backend qualification,
+index/whitelist lineage, decoded FASTQ identities and exact support meaning.
+Producer-specific schema validation and recursive lineage checks remain future
+integration; generic resource hashing does not establish them.
+The audit also reproduced and corrected premature rejection of legacy v1 JSON
+encodings in the common reader: accepted UTF-16 and BOM-prefixed v1 manifests
+retain their exact bytes. V2's selected verifier keeps its strict UTF-8 contract.
+
+After external-fragment and BAM validation, M11.3d/joint closeout is the default
+candidate for new FASTQ publication to converge on v2. This will require rich
+provenance construction, encoded source hashing, verification integration and
+backward-compatible ToolSpec/result/recovery/evidence/report evolution. Ordinary
+downstream iteration needs no producer-kind branch or core fragment-contract
+redesign. Historical v1 and persisted-run compatibility remain permanent.
+
+The reader invokes the unchanged verifier for v1 and retains original-version
+metadata and exact loaded manifest bytes. Its v1 coverage remains the existing
+defined checks, not an upgrade to full raw FASTQ hashing. Iteration is bounded
+streaming with artifact consistency checks; observed identifiers are not called
+cells. Full contract, API, publication conventions and non-guarantees are in
+[docs/m11.3a-fragment-boundary.md](docs/m11.3a-fragment-boundary.md).
+
+Final acceptance: **114 focused tests passed**; direct M11.1/M11.2/new-fragment
+regression **626 passed, 26 guarded skips**; complete lightweight regression
+**2798 passed, 80 skipped, 7 warnings**, with no exclusions. Two focused tests
+used real qualified local tabix on tiny generated BGZF/TBI artifacts. No BAM
+backend, biological input, full-genome index, GPU/model, installation or network
+was required. Tracked and untracked whitespace checks passed. All pre-existing
+source, test and dependency files are unchanged; no commit or push was performed.
+
+M11.3b external-fragment adoption, M11.3c qualified BAM production and their
+producer-specific verification remain future work. CRAM/SAM and M11.4 cell
+selection/QC remain unsupported/unimplemented, as do this path's TSS/FRiP,
+cCRE overlap, matrix/H5AD construction and EpiZoo inference.

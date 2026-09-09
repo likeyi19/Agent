@@ -141,8 +141,21 @@ matching index catalog (`AGENT_CHROMAP_INDEX_ROOT`); production full-genome inde
 provisioning and biological FASTQ acceptance remain deferred. No automatic index
 build or backend fallback occurs.
 
-BAM→fragments is M11.3 scope. Cell calling/QC, cCRE matrix construction, and
-raw-derived EpiZoo inference remain later work. See the detailed
+**M11.3a is complete: producer-neutral fragment boundary.** Strict fragments v2
+and a common freshly verified v1/v2 streaming interface preserve exact support,
+namespace/identifier identity, optional strand and producer-specific provenance.
+Generic verification checks artifact contents and bound resource identities;
+producer-history verification and v2 producer qualification remain future work.
+M11.2 FASTQ production continues publishing v1 unchanged. The registry remains
+at 13 scientific tools.
+New FASTQ runs are intended to converge on v2 after validation across real
+producer types, provisionally at M11.3d/joint closeout; historical v1 compatibility
+will remain. The reserved v2 FASTQ provenance kind adds no execution route.
+
+M11.3b external-fragment adoption and M11.3c qualified BAM→fragments remain
+unimplemented. CRAM/SAM support, M11.4 cell selection/QC, cCRE matrix construction,
+and raw-derived EpiZoo inference remain later work. See the
+[M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 
 ## Architecture

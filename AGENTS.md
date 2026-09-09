@@ -78,6 +78,13 @@ Evidence/report projections support the existing processed-H5AD workflows.
 Raw intake now has verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
+M11.1 is complete at the data-domain/artifact layer: immutable reference identity
+and library/barcode processing contracts are available through their modules.
+They add no registered scientific tools. Reference selection and library/barcode
+decisions remain independent; future preprocessing will consume both alongside
+a freshly verified M10 intake manifest. Raw preprocessing execution remains
+M11.2+ scope. The detailed M11.1 contract and acceptance record is below.
+
 ## Current scientific runtime and verification contracts
 
 ### EpiZoo input, inference, and artifacts
@@ -514,6 +521,9 @@ scope exclusions, registry sizes, and planning-version defaults.
 | M10.4 | Public raw-intake registry/semantic planning integration, deterministic publication, independent verification, and durable Runtime execution |
 | M10.5 | Raw-intake evidence, deterministic figureless reports, and full Application execution/resume composition |
 | M10.6 | Final raw FASTQ/BAM intake/preflight acceptance and Milestone 10 closeout; preprocessing remains M11 scope |
+| M11.1a | Immutable species/reference bundle, exact genome/FAI/BED identities, and ordered full cCRE identity |
+| M11.1b | Exact M10-bound library context, explicit barcode namespaces/interpretation, and whitelist resource identity |
+| M11.1c | Joint contract/export review, documentation, and combined M11.1 closeout; execution remains M11.2+ scope |
 
 M9 final offline acceptance covered inspection, embedding, downstream analysis,
 clustering evaluation, label transfer/evaluation, pseudobulk, and both fixed-
@@ -2974,7 +2984,8 @@ visualization implementation. Existing processed-H5AD reporting remains unchange
 M10.5 introduced no alignment, BAM sorting/index creation, realignment, FASTQ
 recovery, liftOver, barcode correction, whitelist processing, fragments, cell
 calling, TSS/FRiP/QC filtering, cell-by-cCRE, model inference, new planning
-capability, visualization, CLI/UI, or M11 preprocessing. M11 remains unimplemented.
+capability, visualization, CLI/UI, or M11 preprocessing. At that checkpoint,
+M11 remained unimplemented.
 
 Accepted validation:
 
@@ -3082,11 +3093,351 @@ Final acceptance used `PYTHONDONTWRITEBYTECODE=1`,
 | Orchestration, providers, benchmarks, report, application, integration | 1246 passed, 3 skipped, 3 warnings |
 | Full lightweight regression | 2172 passed, 54 skipped, 7 warnings |
 
-M10 ends at intake/preflight. M11 preprocessing remains unimplemented: alignment,
-realignment, BAM sorting/index creation or FASTQ recovery, liftOver, barcode/
+M10 ends at intake/preflight. Raw preprocessing execution remains unimplemented:
+alignment, realignment, BAM sorting/index creation or FASTQ recovery, liftOver, barcode/
 whitelist correction, fragment generation, duplicate removal, cell calling,
 TSS/FRiP/QC filtering, peak/cCRE overlap, cell-by-cCRE construction, raw-derived
 H5AD, and model inference from FASTQ/BAM. Observing flags, mapping counts, tags,
 or index presence does not perform those transformations. No GPU, checkpoint,
 external samtools, internet, or external biological raw dataset was needed for
 this acceptance.
+
+### Milestone 11.1 — Preprocessing contracts and joint closeout
+
+**M11.1 status: COMPLETE.** M11.1 establishes immutable contracts and identities
+before raw preprocessing execution. M11.1a and M11.1b were jointly reviewed in
+M11.1c from base `a440250055a41a5c76694ce6f1bb5c44560ef90c`
+(`Complete Milestone 10 raw intake acceptance`). Joint review found no concrete
+correctness defect; the accepted implementations and focused tests were retained.
+
+The intended future execution boundary is:
+
+```text
+freshly verified RawIntakeManifest
+    + ScATACReferenceBundle
+    + LibraryProcessingContext
+    → future prepare_scATAC_fragments
+```
+
+This is an architectural boundary, not an implemented preprocessing tool.
+M10 owns bounded file/group, input-kind, structure/layout, species/source-assembly,
+barcode source/locator, grouping/library-evidence, and intake-readiness facts.
+M11.1b projects these facts through exact M10 binding checks and adds explicit
+processing decisions; it does not introduce another FASTQ layout table or BAM
+producer interpretation rule. M10 readiness does not establish complete
+preprocessing policy or execution success.
+
+#### M11.1a — ScATACReferenceBundle.v1
+
+`src/agent/tools/data/scatac_reference.py` defines the frozen reference records:
+
+```text
+artifact_type    = agent.scatac-reference-bundle
+schema_version   = 1
+contract_version = scatac-reference-bundle.v1
+```
+
+V1 accepts only explicitly declared `human/hg38` and `mouse/mm10` pairs.
+The bundle contains FASTA and FAI paths/content SHA-256s, contig count and ordered
+contig identity, full cCRE BED path/content SHA-256, feature count and ordered
+feature identity, coordinate/name conventions, optional annotation identity,
+historical provenance, and `reference_identity_sha256`. It contains no M10 input
+binding, chemistry, whitelist, barcode namespace, aligner index, or EpiZoo
+filter/frequency resources. Optional annotation bytes are hashed; the declared
+`unknown`, `gtf`, `gff3`, or `bed3` format is not biologically interpreted.
+
+Construction hashes the complete plain FASTA, parses its supplied five-column
+FAI, and streams the supplied BED3+ in original row order. FAI names must be
+unique, lengths and line sizes positive, line width at least line bases, and
+sequence offsets positive and within the FASTA file. FAI dictionary order is
+its row order, even when different from sequence-offset order. No sequence scan
+is performed to derive lengths when the FAI supplies the dictionary.
+
+BED coordinates use `zero-based-half-open`; feature names use
+`chrom:start-end.v1`. Every interval must satisfy
+`0 <= start < end <= exact_FAI_contig_length`, and the chromosome must exist in
+that dictionary. Coordinates/FAI integers are canonical unsigned decimal within
+signed-int64 bounds: no signs, leading zeros except zero itself, or whitespace.
+Chromosome text is preserved; empty names, colon/whitespace/control characters,
+unknown contigs, duplicate canonical features, headers, and blank records fail.
+Files are plain UTF-8 with tab-separated fields; CR/NUL and records exceeding
+64 KiB fail. Extra BED columns are ignored for feature identity but remain
+covered by the exact BED byte hash. There is no sorting, deduplication, alias
+normalization, clipping, interval merging, or malformed-input repair.
+
+`src/agent/tools/data/_ordered_identity.py` defines `sha256-utf8-lf.v1`:
+SHA-256 over each exact UTF-8 record followed by LF, including the final record,
+without a domain prefix, sorting, stripping, or Unicode normalization. A cCRE
+record is `chrom:start-end`; a contig record is `name<TAB>length`. Empty collections,
+empty records, duplicates, CR/LF in records, and invalid Unicode fail. The
+enclosing schema/field supplies the semantic domain. BED/FAI row order is explicit;
+a changed biological order changes its ordered digest. Duplicate detection uses
+memory proportional to the number of unique records; no matrix is densified.
+
+The module-level APIs are `build_scatac_reference_bundle`,
+`validate_scatac_reference_bundle`, `canonical_reference_bundle_bytes`,
+`load_scatac_reference_bundle`, `publish_scatac_reference_bundle`, and
+`reinspect_scatac_reference_bundle_sources`. Build/reinspection read scientific
+resources, with before/after file snapshots and exact byte/order identities.
+Validate/load are lightweight and do not stat/open declared resource paths.
+The manifest is bounded to 64 KiB. Errors use `ScATACReferenceError` and stable
+`REFERENCE_*` codes. The builder supports expected feature count and ordered
+digest checks; tiny fixtures are legal, so schema validity alone does not certify
+an arbitrary BED as the project's canonical full vocabulary.
+
+#### Accepted full reference instances
+
+The read-only M11.1a acceptance probes reproduced the M11.0 BED and ordered-feature
+identities below. Both species passed mandatory BED/FAI coordinate compatibility.
+These are acceptance identities, not hard-coded production constants or path
+defaults. Source files were not copied, reordered, regenerated, or modified.
+
+| Instance | Full cCREs | FAI contigs | Existing downstream EpiZoo retained cCREs |
+| --- | ---: | ---: | ---: |
+| human / hg38 | 1,355,445 | 455 | 700,460 |
+| mouse / mm10 | 1,341,077 | 66 | 814,020 |
+
+```text
+Human BED SHA-256:
+bacbe420a7ceba9e9a529d72788ac6fa0a195e8bc86804d8fed51963369ee782
+Human ordered feature SHA-256:
+3d04a9b92096d3ee8fc2bd533d56744647c096a35211a53c662955704c737a60
+Human FASTA SHA-256:
+5be01555d98347fdb3714dc84c6f77c9d8bc774adcf32c6f7a8fa06f5baf5e51
+Human FAI SHA-256:
+3b425de206296a5c8053023fa5ca61da43cfe78c1737c12e58c83367c7e83c21
+Human ordered contig SHA-256:
+d06fcd768c9451398eb8e37d486c94e464efc5aca4991af4b05a423dcce3cd6f
+Human reference_identity_sha256:
+763015ed6557b6f7a82202b047190f750fe224a66b1ebc27626e3916d6ac1085
+
+Mouse BED SHA-256:
+6094091b2767c6e0fc57ca1af19a96dc4ddb30ace8ed6291dcc5b0496a0875a5
+Mouse ordered feature SHA-256:
+e2585fa28673779877fb3540d23ab6f36d929a11c901545e2459226dfa6b9fac
+Mouse FASTA SHA-256:
+db16cb4633191754f1d9cc70e73d2a1f60d03fdf62bcf4902a31a4717a3d2de7
+Mouse FAI SHA-256:
+c08b7b0365da58adcd63373d67de08ac34707eaabad322951bf78ab8b8895927
+Mouse ordered contig SHA-256:
+dc112a6f0b63e7fddb4b864cbf456aa98276c98df3341a29982b9cd8b200798d
+Mouse reference_identity_sha256:
+bf698c7842fd86043840e80e0744345bcb11b6a979d917d33c73305e9d23f179
+```
+
+The recovered mouse vocabulary has established local identity/compatibility;
+its original historical source/accession remains unknown. Research-directory
+and filename tokens do not establish biological provenance or production paths.
+
+#### M11.1b — LibraryProcessingContext.v1
+
+`src/agent/tools/data/scatac_library_context.py` defines:
+
+```text
+artifact_type    = agent.scatac-library-processing-context
+schema_version   = 1
+contract_version = scatac-library-processing-context.v1
+```
+
+The frozen context binds one exact M10 artifact path, manifest SHA-256, and
+artifact/schema/contract versions to processing-library records. Each contains
+an explicit namespace, selected group/source/locator bindings, input kind,
+optional authoritative M10 source library ID, membership basis, explicit barcode
+interpretation/correction policy, optional whitelist identity, and optional
+caller-declared barcode length. Namespace and interpretation bases are
+`caller_declaration`. There are no FASTA, FAI, assembly, cCRE, reference-bundle,
+or model-resource fields. Reusing the generic `ResourceIdentity` and
+`SourceProvenance` records from the reference module adds no reference binding.
+
+`single_group` membership requires exactly one group. Multiple groups require
+either `intake_library_id` (all carry the same authoritative M10 library ID) or
+`caller_shared_library` (an explicit caller mapping). Conflicting authoritative
+library IDs always fail. One library cannot mix FASTQ/BAM kinds. Source/locator
+and source-library-ID projections must agree exactly with M10; unresolved
+read-set structure/grouping, barcode source, or within-group barcode identity
+scope fails. M10's other readiness dimensions remain future execution gates.
+
+Each selected group belongs to exactly one processing library. Duplicate,
+nonexistent, foreign-manifest, or multiply assigned groups fail. Selected groups
+from a known shared M10 library cannot span independent namespaces.
+`all_groups` requires complete selection; `explicit_subset` requires a proper
+subset and permits explicitly omitted lanes. Membership is an unordered set:
+group bindings sort by group ID and libraries sort by namespace. Namespace labels
+must be unique and match `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`. No namespace is inferred
+from filename syntax, group hashes, or sampled barcode values. Cell identity is
+the semantic pair `(namespace, barcode_identifier)`; final reversible string
+encoding is deferred. Group identity, processing-library membership, namespace,
+cell identity, reference identity, and manifest byte identity are distinct.
+
+FASTQ source/locator authority remains the M10 declared TENX_ATAC layout contract.
+M11.1b copies the established bindings, with optional explicit caller assertions
+checked for exact agreement. BAM `CB`/`CR` presence or generic producer evidence
+does not automatically establish correctedness. Both raw and corrected BAM
+interpretations require an explicit caller decision; no chemistry is inferred
+from species, filenames, sampled read length, or reference selection.
+
+The complete legal correction-policy table is:
+
+| Input kind | Interpretation | Correction policy | Whitelist |
+| --- | --- | --- | --- |
+| FASTQ | `raw_sequence` | `whitelist_required` | Required |
+| BAM | `corrected_identifier` | `already_corrected` | Absent |
+| BAM | `raw_sequence` | `unqualified_raw_bam` | Optional |
+
+There is no `AUTO` or missing-whitelist fallback to no correction. Raw BAM is
+representable but has no qualified executable correction route. No valid context
+asserts backend readiness. An authoritative declared barcode length must match
+the whitelist's exact length when both are present. Bounded M10 length samples
+do not silently become a chemistry specification.
+
+#### Barcode whitelist identity and resource boundary
+
+`BarcodeWhitelistIdentity` records an external resource path, exact file SHA-256,
+historical provenance, entry count, uniform barcode length, candidate-set digest,
+`syntax=uppercase-acgt-uniform.v1`, and
+`set_identity_algorithm=sha256-ascii-sorted-lf.v1`. V1 accepts plain ASCII uppercase
+`A/C/G/T`, one token of 1–256 bases per line, using LF separators and an optional
+final LF. Empty files/records, duplicates, inconsistent lengths, spaces, CR,
+suffixes, non-ASCII bytes, and other alphabets fail. There is no trimming,
+uppercasing, suffix removal, reverse complement, or correction execution.
+
+Exact file SHA-256 covers every byte. Candidate-set SHA-256 covers the tokens
+sorted lexically as ASCII bytes, each followed by LF, with no domain prefix.
+Only this candidate-set computation sorts whitelist tokens. Its schema field,
+syntax and algorithm discriminator establish the domain; joint review found no
+identity-domain ambiguity requiring a change. Reordering changes the file hash
+and context identity even when the candidate-set digest stays equal. This does
+not claim that a future backend is insensitive to physical file order.
+
+The module-level APIs are `inspect_barcode_whitelist`,
+`build_scatac_library_processing_context`,
+`validate_scatac_library_processing_context`,
+`validate_library_context_intake_binding`,
+`canonical_library_processing_context_bytes`,
+`load_scatac_library_processing_context`,
+`publish_scatac_library_processing_context`, and `reinspect_barcode_resources`.
+Build requires an expected intake SHA-256, reads M10 JSON, verifies all selected
+projections, and freshly reinspects supplied whitelist identities. Explicit M10
+binding validation reads only M10 JSON; explicit barcode-resource reinspection
+recomputes whitelist byte/set identities. Context validation/load reads no M10
+artifact or scientific source. Context JSON is bounded to 4 MiB, with at most
+4,096 selected groups. Errors use `LibraryContextError` and stable `LIBRARY_*`
+codes. These boundaries do not freshly verify FASTQ/BAM; future execution must
+use M10's source-aware verification separately.
+
+#### Shared serialization, provenance, publication, and package boundaries
+
+Both artifacts use strict closed shapes, required fields, validated versions,
+lowercase SHA-256 values, and rejection of duplicate JSON keys and nonfinite
+numbers. Canonical bytes are UTF-8 JSON with sorted object keys, compact
+separators, `ensure_ascii=False`, `allow_nan=False`, and no final newline.
+Loaders can accept noncanonical formatting, but an expected manifest SHA-256
+always protects the exact loaded bytes. A self-consistent manifest is not proof
+of source authenticity; source verification is a separate operation.
+
+Portable reference identity hashes the canonical bundle after excluding its
+own digest and every resource path/provenance, prefixed by ASCII
+`agent.scatac-reference-identity.v1` and one NUL. Portable context identity uses
+ASCII `agent.scatac-library-processing-context.v1` and one NUL, excluding its own
+digest, intake manifest path, and whitelist resource paths/provenance. It retains
+the exact intake manifest SHA-256, membership/namespace/interpretation decisions,
+and exact whitelist identities. Neither artifact incorporates the other's
+identity. Manifest byte hashes additionally protect locations and historical
+claims; relocating the same intake JSON is distinct from changing its contents.
+
+`SourceProvenance` defaults to `basis=unknown` and null source/accession/citation.
+Historical claims require `basis=caller_supplied` and at least one explicit
+claim. Unknown history remains valid; path/filename tokens never create claims.
+Hashes do not authenticate historical provenance, FASTA biological assembly,
+FASTA/FAI sequence-level correspondence, whitelist chemistry suitability,
+barcode biological correctness, cell-calling quality, or preprocessing success.
+Assembly binding is explicitly caller-declared and the supplied FAI is the
+dictionary authority, with no claim of independent sequence authentication.
+
+Publication uses sibling temporary files in an existing caller-owned directory,
+write/flush/fsync, strict staging validation, atomic no-clobber linking for
+`overwrite=False` or replacement for explicit overwrite, directory fsync, and
+final artifact validation. Concurrent publication conflicts, including identical
+bytes, fail with an output-conflict error. Declared resource paths and existing
+hardlink aliases are protected. Library-context publication additionally reads
+and verifies the bound M10 JSON to protect its raw input paths; it does not read
+raw contents or whitelist contents. Reference publication does not reinspect
+sources. Both assume trusted local filesystems, not hostile path races; a
+directory-fsync failure after publication may leave a complete artifact.
+
+Package review retained `src/agent/tools/data/__init__.py` unchanged. Its exports
+and neighboring tool packages expose execution tools/results; M10 manifest-domain
+APIs already use direct module imports. M11.1 follows that convention, keeping
+`_ordered_identity` internal and adding no Planner-visible ToolSpecs, registry,
+compiler, Runtime, Application, evidence, or reporting integration.
+
+#### Authoritative future human/mouse matrix semantics
+
+Human and mouse use one species-independent fragment-overlap counting algorithm,
+parameterized by the species-specific full reference bundle. For selected cell
+`c` and canonical cCRE `j`:
+
+```text
+X[c,j] = sum of fragment contributions from cell c overlapping cCRE j
+```
+
+Each fragment contributes to every cCRE it overlaps. Its read-support/count field
+is the contribution when present; otherwise each overlap contributes 1. Repeated
+`(cell, cCRE)` contributions sum. The raw matrix is not binarized; complete
+canonical feature order and all-zero cCRE columns remain present. Species changes
+the reference instance, not the counting rule. Mouse counting semantics are
+resolved; incomplete historical resource provenance is not a counting blocker.
+Existing EpiZoo predefined filtering, frequencies, TF-IDF/tokenization, and model
+inference remain downstream model preprocessing. None is implemented by M11.1.
+
+#### Joint closeout acceptance and deferred execution
+
+M11.1c self-review answers: (1) reference identity can change independently of
+library-context identity; (2) library/whitelist/namespace decisions can change
+independently of reference identity; (3) the future executor can consume both and
+check lineage/reference compatibility, with that execution/preflight still to be
+implemented; (4) filenames cannot authorize library merging; (5) group hashes do
+not automatically become namespaces; (6) the FASTQ correction contract cannot
+omit an explicit whitelist identity; (7) generic BAM CB cannot establish
+correctedness automatically; (8) ordinary manifest loading reads no scientific
+sources; (9) no alignment/fragments/QC/matrix execution was introduced; and
+(10) human/mouse are two reference instances of one future counting architecture.
+
+Committed tests use tiny temporary synthetic resources. M11.1a's read-only full
+reference probes above are previously accepted resource evidence; M11.1b/c do
+not require biological FASTQ/BAM or real-chemistry acceptance. Closeout validation
+uses the `agent` environment, `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=src`,
+`NUMBA_CACHE_DIR=/tmp/agent-numba-cache`, and
+`MPLCONFIGDIR=/tmp/agent-matplotlib-cache`, with expensive model gates disabled.
+Fresh M11.1c validation reproduced the accepted baselines:
+
+| Acceptance suite | Result |
+| --- | --- |
+| M11.1a reference/ordered identity focused | 136 passed |
+| M11.1b library/barcode context focused | 142 passed |
+| Existing M10/data and M8 pseudobulk artifacts, excluding the two M11 focused files | 709 passed |
+| Full lightweight regression | 2450 passed, 54 skipped, 7 warnings |
+| `git diff --check` | Passed |
+
+Focused suites are `tests/tools/data/test_scatac_reference.py` and
+`tests/tools/data/test_scatac_library_context.py`. Relevant regression runs
+`tests/tools/data`, `tests/raw_intake`, and
+`tests/tools/analysis/test_replicate_pseudobulk.py`, excluding those two focused
+files. Full regression uses `python -m pytest -q` under the environment above.
+No dedicated README/AGENTS contract-test suite exists. The reviewed closeout
+diff contains the five accepted implementation/test additions and README/AGENTS
+documentation only: no biological datasets, checkpoints, generated artifacts,
+production research-path defaults, dependency changes, or M11.2 execution.
+
+M11.2+ remains unimplemented: FASTQ backend qualification and alignment, actual
+barcode extraction/orientation/correction behavior, chemistry-specific whitelist
+suitability, aligner-index identity, canonical fragments and final reversible
+cell-ID rendering, Tn5/dedup semantics, BAM backend/correction qualification,
+cell calling, TSS/FRiP/QC, sparse cCRE matrix construction, raw-derived H5AD, and
+new Planner-visible preprocessing tools. Backend availability alone is not a
+contract defect. M11.1 adds no dependencies or executable wrappers and does not
+claim Chromap, Samtools, Sinto, or SnapATAC2 preprocessing support. PLAN_ONLY
+continues to execute zero scientific tools, inspect no biological inputs, and
+produce no scientific preprocessing artifacts; existing managed-workspace and
+durable planning-state persistence remain permitted. M11.2 requires a separate
+scope and qualification before execution work begins.

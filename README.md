@@ -108,7 +108,27 @@ M10 provides intake/preflight, not raw-data preprocessing. Sort/index observatio
 do not authorize transformations. Alignment, realignment, liftOver, BAM
 transformations, barcode correction, fragments, cell calling, cell-by-cCRE
 construction, and model inference from raw sequencing remain unimplemented.
-Preprocessing capabilities begin in Milestone 11.
+
+## Milestone 11 status
+
+**M11.1 is complete: reference identity and library/barcode processing contracts.**
+`ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:
+1,355,445 features for human/hg38 and 1,341,077 for mouse/mm10.
+`LibraryProcessingContext` binds selected M10 intake groups to explicit processing
+libraries, barcode namespaces, interpretation/correction policies, and whitelist
+identities. These artifacts are intentionally separate: library/barcode decisions
+do not select a genome reference.
+
+Human and mouse share the same future fragment-overlap matrix semantics: each
+fragment contributes its read-support/count (or 1 when absent) to every cCRE it
+overlaps; repeated contributions sum without binarization. Full reference order
+and all-zero columns remain present. Existing EpiZoo filtering stays downstream
+model preprocessing, retaining 700,460 human or 814,020 mouse features.
+
+**M11.2+ remains pending: actual raw preprocessing execution.** M11.1 establishes
+contracts and identities, not FASTQ/BAM transformation or backend support.
+See [the M11.1 contract and acceptance record](AGENTS.md#milestone-111--preprocessing-contracts-and-joint-closeout)
+for validation boundaries, scientific limitations, and deferred execution work.
 
 ## Architecture
 

@@ -96,6 +96,9 @@ class ArtifactSemanticKind(str, Enum):
     RAW_SCATAC = "raw_scatac"
     RAW_SCATAC_SEQUENCING = "raw_scatac_sequencing"
     RAW_SCATAC_INTAKE_MANIFEST = "raw_scatac_intake_manifest"
+    SCATAC_FRAGMENTS = "scatac_fragments"
+    SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
+    SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
     EPIZOO_EMBEDDING = "epizoo_embedding"
     ORDERED_CELL_IDS = "ordered_cell_ids"
@@ -497,6 +500,21 @@ class ResultContract:
 
 
 @dataclass(frozen=True)
+class DurableToolHooks:
+    """Repository-owned execution/receipt recovery; never planning parameters.
+
+    Recovery must verify an exact previously published outcome, never execute or
+    retry scientific work. Both callbacks accept (resolved_arguments, identity).
+    """
+    execute: Callable
+    recover: Callable
+
+    def __post_init__(self):
+        if not callable(self.execute) or not callable(self.recover):
+            raise TypeError('Durable tool hooks must be callable.')
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """Immutable executable-tool specification owned by the registry."""
 
@@ -510,12 +528,15 @@ class ToolSpec:
     recovery_policy_version: str = "1"
     planning: ToolPlanningSemantics | None = None
     semantic_planning: SemanticToolSpec | None = None
+    durable_hooks: DurableToolHooks | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("ToolSpec `name` must be a non-empty string.")
         if not callable(self.function):
             raise TypeError("ToolSpec `function` must be callable.")
+        if self.durable_hooks is not None and not isinstance(self.durable_hooks, DurableToolHooks):
+            raise TypeError('Invalid durable tool hooks.')
         required = dict(self.required_arguments)
         optional = dict(self.optional_arguments)
         overlap = set(required).intersection(optional)
@@ -3315,6 +3336,7 @@ def build_default_tool_registry() -> ToolRegistry:
             ),),
         ),
     )
+    from .fragments_registry import fragments_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3328,6 +3350,7 @@ def build_default_tool_registry() -> ToolRegistry:
         pseudobulk_spec,
         differential_accessibility_spec,
         raw_intake_spec,
+        fragments_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

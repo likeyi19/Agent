@@ -1,0 +1,112 @@
+--- a/src/bed_mapping.h
++++ b/src/bed_mapping.h
+@@ -123 +123 @@
+-  uint8_t num_dups_;
++  uint64_t num_dups_;
+@@ -132 +132 @@
+-                              uint8_t num_dups,
++                              uint64_t num_dups,
+--- /dev/null
++++ b/src/duplicate_support.h
+@@ -0,0 +1,37 @@
++#ifndef CHROMAP_DUPLICATE_SUPPORT_H_
++#define CHROMAP_DUPLICATE_SUPPORT_H_
++
++#include <algorithm>
++#include <cstdint>
++#include <limits>
++#include "bed_mapping.h"
++#include "utils.h"
++
++namespace chromap {
++inline void IncrementDuplicateSupport(uint64_t &count) {
++  if (count == std::numeric_limits<uint64_t>::max()) {
++    ExitWithMessage("AGENT_DUPLICATE_SUPPORT_OVERFLOW");
++  }
++  ++count;
++}
++
++// Preserve upstream saturation for output types outside the qualified route.
++template <typename MappingRecord>
++inline void SetDuplicateSupport(MappingRecord &mapping, uint64_t count) {
++  mapping.num_dups_ = std::min(uint64_t(255), count);
++}
++inline void SetDuplicateSupport(PairedEndMappingWithBarcode &mapping,
++                                uint64_t count) {
++  mapping.num_dups_ = count;
++}
++
++// Upstream optional summary fields are signed int, not fragment support.
++// Refuse narrowing rather than publishing a wrapped summary.
++inline int DuplicateSupportSummaryCount(uint64_t count) {
++  if (count > uint64_t(std::numeric_limits<int>::max())) {
++    ExitWithMessage("AGENT_DUPLICATE_SUMMARY_OVERFLOW");
++  }
++  return static_cast<int>(count);
++}
++}  // namespace chromap
++#endif
+--- a/src/mapping_processor.h
++++ b/src/mapping_processor.h
+@@ -13,0 +14 @@
++#include "duplicate_support.h"
+@@ -179 +180 @@
+-      uint32_t last_dup_count = 1;
++      uint64_t last_dup_count = 1;
+@@ -184,2 +185 @@
+-          deduped_mappings[ri].back().num_dups_ = std::min(
+-              (uint32_t)std::numeric_limits<uint8_t>::max(), last_dup_count);
++          SetDuplicateSupport(deduped_mappings[ri].back(), last_dup_count);
+@@ -188 +188 @@
+-          ++last_dup_count;
++          IncrementDuplicateSupport(last_dup_count);
+@@ -194,2 +194 @@
+-      deduped_mappings[ri].back().num_dups_ = std::min(
+-          (uint32_t)std::numeric_limits<uint8_t>::max(), last_dup_count);
++      SetDuplicateSupport(deduped_mappings[ri].back(), last_dup_count);
+--- a/src/mapping_writer.h
++++ b/src/mapping_writer.h
+@@ -15,0 +16 @@
++#include "duplicate_support.h"
+@@ -197 +198 @@
+-  uint32_t num_last_mapping_dups = 0;
++  uint64_t num_last_mapping_dups = 0;
+@@ -256 +257 @@
+-      ++num_last_mapping_dups;
++      IncrementDuplicateSupport(num_last_mapping_dups);
+@@ -282,3 +283 @@
+-          last_mapping.num_dups_ =
+-              std::min((uint32_t)std::numeric_limits<uint8_t>::max(),
+-                       num_last_mapping_dups);
++          SetDuplicateSupport(last_mapping, num_last_mapping_dups);
+@@ -293 +292 @@
+-              num_last_mapping_dups - 1);
++              DuplicateSupportSummaryCount(num_last_mapping_dups - 1));
+@@ -297 +296 @@
+-                      num_last_mapping_dups);
++                      DuplicateSupportSummaryCount(num_last_mapping_dups));
+@@ -301 +300 @@
+-                num_last_mapping_dups);
++                DuplicateSupportSummaryCount(num_last_mapping_dups));
+@@ -332,2 +331 @@
+-    last_mapping.num_dups_ = std::min(
+-        (uint32_t)std::numeric_limits<uint8_t>::max(), num_last_mapping_dups);
++    SetDuplicateSupport(last_mapping, num_last_mapping_dups);
+@@ -342 +340 @@
+-          num_last_mapping_dups - 1);
++          DuplicateSupportSummaryCount(num_last_mapping_dups - 1));
+@@ -346 +344 @@
+-          num_last_mapping_dups);
++          DuplicateSupportSummaryCount(num_last_mapping_dups));
+@@ -350 +348 @@
+-          num_last_mapping_dups);
++          DuplicateSupportSummaryCount(num_last_mapping_dups));
+@@ -424 +422 @@
+-              it->num_dups_ - 1);
++              DuplicateSupportSummaryCount(it->num_dups_ - 1));
+@@ -428 +426 @@
+-              it->num_dups_);
++              DuplicateSupportSummaryCount(it->num_dups_));
+@@ -432 +430 @@
+-            it->num_dups_);
++            DuplicateSupportSummaryCount(it->num_dups_));

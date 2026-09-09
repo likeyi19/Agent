@@ -65,7 +65,7 @@ Human model-oriented preprocessing targets `hg38`; mouse targets `mm10`.
 Source BAM assembly remains distinct from target assembly and is never inferred
 merely from species or chromosome naming. A mismatch does not establish a
 supported conversion/realignment route. FASTQ has no source coordinate assembly;
-future alignment will target the appropriate reference directly. Inspection is
+FASTQ alignment targets the appropriate reference directly. Inspection is
 sample-scoped unless sequential EOF observation permits complete coverage and
 does not certify uninspected content.
 
@@ -104,10 +104,10 @@ verified manifest provenance and SHA-256 identify the authoritative intake artif
 Evidence/reports contain no whole raw manifest, reads, read names, barcode values,
 qualities, complete BAM reference dictionaries, or raw sequencing payloads.
 
-M10 provides intake/preflight, not raw-data preprocessing. Sort/index observations
-do not authorize transformations. Alignment, realignment, liftOver, BAM
-transformations, barcode correction, fragments, cell calling, cell-by-cCRE
-construction, and model inference from raw sequencing remain unimplemented.
+M10 provides intake/preflight; M11.2 adds FASTQ preprocessing below. Sort/index
+observations alone do not authorize transformations. BAM transformations,
+realignment/liftOver, cell calling/QC, cell-by-cCRE construction, and model
+inference from raw sequencing remain deferred.
 
 ## Milestone 11 status
 
@@ -125,10 +125,25 @@ overlaps; repeated contributions sum without binarization. Full reference order
 and all-zero columns remain present. Existing EpiZoo filtering stays downstream
 model preprocessing, retaining 700,460 human or 814,020 mouse features.
 
-**M11.2+ remains pending: actual raw preprocessing execution.** M11.1 establishes
-contracts and identities, not FASTQ/BAM transformation or backend support.
-See [the M11.1 contract and acceptance record](AGENTS.md#milestone-111--preprocessing-contracts-and-joint-closeout)
-for validation boundaries, scientific limitations, and deferred execution work.
+**M11.2 is complete: FASTQ → verified canonical fragments.**
+`prepare_scATAC_fragments` consumes a validated intake, library-processing context,
+and reference bundle. Human FASTQ targets hg38; mouse FASTQ targets mm10. The
+patched/pinned Chromap backend preserves exact duplicate-group support. Output is
+canonical per-library BGZF fragments with tabix indexes and an independently
+verified manifest. Identity remains `(namespace, barcode)`; observed fragment
+barcodes are not called cells.
+
+Natural-language Application execution produces freshly verified evidence and a
+deterministic figureless report. PLAN_ONLY needs no preprocessing executables;
+resume and exact publication recovery avoid another alignment. New execution
+requires an explicitly configured qualified backend (`AGENT_CHROMAP_BIN`) and
+matching index catalog (`AGENT_CHROMAP_INDEX_ROOT`); production full-genome index
+provisioning and biological FASTQ acceptance remain deferred. No automatic index
+build or backend fallback occurs.
+
+BAM→fragments is M11.3 scope. Cell calling/QC, cCRE matrix construction, and
+raw-derived EpiZoo inference remain later work. See the detailed
+[M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 
 ## Architecture
 
@@ -229,6 +244,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
+| FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |

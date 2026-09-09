@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
+from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 
 from agent.orchestration.differential_accessibility_verifier import (
     VERIFICATION_R_SCRIPT,
@@ -377,6 +378,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "prepare_scATAC_fragments": _ToolProjection(
+        _FRAGMENTS_FIELDS, _FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-fastq-v1",
+        (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
+            ("fresh_independent_fragments_verification", "strict_manifest_loading",
+             "authoritative_manifest_sha256", "exact_public_lineage_and_execution_receipt"),
+            digest_field="manifest_sha256"),),
+    ),
     "inspect_raw_scATAC": _ToolProjection(
         _RAW_INTAKE_FIELDS,
         _RAW_INTAKE_FACT_FIELDS,
@@ -1199,6 +1207,15 @@ def _prepare_evidence(
             )
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
+        fragments_artifacts = []
+        if step.tool_name == "prepare_scATAC_fragments":
+            try:
+                derived, fragments_artifacts = project_fragments(
+                    step_result.resolved_arguments, step_result.result, step.step_id)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Freshly verified fragments could not be projected.") from exc
         evidence_steps.append(
             {
                 "step_id": step.step_id,
@@ -1227,6 +1244,7 @@ def _prepare_evidence(
                 "recovery_identity": projection.recovery_identity,
             }
         )
+        evidence_artifacts.extend(fragments_artifacts)
         verified_results[step.step_id] = step_result.result
 
     plan_payload = plan.to_dict()

@@ -1,0 +1,37 @@
+{
+  "bgzip": {
+    "libraries": {
+      "/lib/x86_64-linux-gnu/libbz2.so.1.0": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9",
+      "/lib/x86_64-linux-gnu/libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+      "/lib/x86_64-linux-gnu/libdeflate.so.0": "dce39e00c986632f7d83199f2e5f2b89d7e11c8f311c6e9f204595f899785fa6",
+      "/lib/x86_64-linux-gnu/libhtscodecs.so.2": "9cf5572dca3c3be6a0c52a51c168a4dd0d6c4744d74f7484b0230626d03d2377",
+      "/lib/x86_64-linux-gnu/libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+      "/lib/x86_64-linux-gnu/libz.so.1": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "/lib64/ld-linux-x86-64.so.2": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01"
+    },
+    "sha256": "41bb989daf631c58f2a576fb1ccdf0e478e309dbb3c4428fdde6e66a718ab2a4",
+    "version": "bgzip (htslib) 1.13+ds"
+  },
+  "sort": {
+    "libraries": {
+      "/lib/x86_64-linux-gnu/libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+      "/lib64/ld-linux-x86-64.so.2": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01"
+    },
+    "sha256": "20def485217b069331752f5309cf5b00d9a9f9edcc6a35d4c5177eb4ce563ac5",
+    "version": "sort (GNU coreutils) 8.32"
+  },
+  "tabix": {
+    "libraries": {
+      "/lib/x86_64-linux-gnu/libbz2.so.1.0": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9",
+      "/lib/x86_64-linux-gnu/libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+      "/lib/x86_64-linux-gnu/libdeflate.so.0": "dce39e00c986632f7d83199f2e5f2b89d7e11c8f311c6e9f204595f899785fa6",
+      "/lib/x86_64-linux-gnu/libhtscodecs.so.2": "9cf5572dca3c3be6a0c52a51c168a4dd0d6c4744d74f7484b0230626d03d2377",
+      "/lib/x86_64-linux-gnu/liblzma.so.5": "7fa51c1500cb9fcc4c7d69b7fe0a6d7203cfe6af64373f6c411c5445ef1b402c",
+      "/lib/x86_64-linux-gnu/libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+      "/lib/x86_64-linux-gnu/libz.so.1": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "/lib64/ld-linux-x86-64.so.2": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01"
+    },
+    "sha256": "82b2381647a8491a1531cb1a84600eb59fd102de84f6175b5d144962f2dfd6d2",
+    "version": "tabix (htslib) 1.13+ds"
+  }
+}

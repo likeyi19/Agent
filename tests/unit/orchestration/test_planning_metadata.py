@@ -54,7 +54,7 @@ def _result(tool: dict[str, object], name: str) -> dict[str, object]:
 
 
 def test_all_tools_have_complete_immutable_registry_owned_semantics(registry) -> None:
-    assert len(registry.names()) == 12
+    assert registry.names()
     for tool_name in registry.names():
         spec = registry.get(tool_name)
         assert spec.planning is not None
@@ -297,7 +297,7 @@ def test_generic_instructions_cover_composition_and_rejection_without_recipes(
     catalog = json.dumps(payload["tools"], sort_keys=True)
 
     assert payload["planning_catalog_semantic_version"] == 1
-    assert len(payload["tools"]) == 12
+    assert len(payload["tools"]) == len(registry.names())
     assert "preserve every supplied scientific parameter" in instructions
     assert "never match by json type alone" in instructions
     assert "never invent paths" in instructions

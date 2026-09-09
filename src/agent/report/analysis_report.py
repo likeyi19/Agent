@@ -553,6 +553,11 @@ def _verified_visualization_snapshot(
 
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "prepare_scATAC_fragments": (
+        "input_kind", "species", "assembly", "n_libraries", "n_fragment_records",
+        "total_support", "backend_policy", "upstream_version", "upstream_commit",
+        "contract_version", "support_definition", "library_summary", "n_libraries_omitted_from_summary",
+    ),
     "inspect_raw_scATAC": (
         "input_kind", "readiness", "n_files", "n_groups", "n_issues",
         "n_required_information", "n_repairs", "n_prerequisites",
@@ -748,6 +753,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "prepare_scATAC_fragments": "Canonical FASTQ fragments",
     "inspect_raw_scATAC": "Raw scATAC Intake",
     "inspect_scATAC": "Dataset inspection",
     "epizoo_embed_cells": "EpiZoo representation",
@@ -765,6 +771,17 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "assembly": "Target assembly",
+    "n_libraries": "Processing libraries",
+    "n_fragment_records": "Canonical fragment records",
+    "total_support": "Total exact support",
+    "backend_policy": "Backend policy",
+    "upstream_version": "Chromap upstream version",
+    "upstream_commit": "Chromap upstream commit",
+    "contract_version": "Fragment contract",
+    "support_definition": "Support definition",
+    "library_summary": "Library summary",
+    "n_libraries_omitted_from_summary": "Libraries omitted from summary",
     "input_kind": "Raw input kind",
     "readiness": "Preprocessing readiness",
     "n_files": "Files",
@@ -917,6 +934,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
     ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
     ("dataset", "Dataset", frozenset({"inspect_scATAC"})),
     (
@@ -962,6 +980,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "prepare_scATAC_fragments": ("input_kind", "backend_policy", "upstream_version", "upstream_commit", "contract_version"),
     "inspect_raw_scATAC": ("input_kind", "intake_contract_version"),
     "inspect_scATAC": ("x_storage_type", "x_is_sparse", "x_dtype"),
     "epizoo_embed_cells": ("species", "backend", "checkpoint_path", "device"),
@@ -1078,7 +1097,7 @@ def _project_artifact_integrity(payload: Mapping[str, object]) -> tuple[_Artifac
                 verification_basis=tuple(basis),
                 raw_manifest_path=(
                     str(raw["artifact_path"])
-                    if raw["tool_name"] == "inspect_raw_scATAC" else None
+                    if raw["artifact_kind"] in ("raw_scatac_intake_manifest_json", "scatac_fragments_manifest_json") else None
                 ),
             )
         )
@@ -1266,6 +1285,8 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "prepare_scATAC_fragments":
+        return _render_fragments(step, occurrence)
     if step.tool_name == "inspect_raw_scATAC":
         return _render_raw_intake(step, occurrence)
     lines = [f"### {_TOOL_TITLES[step.tool_name]} {occurrence}", ""]
@@ -1280,6 +1301,35 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
     return lines
 
 
+def _render_fragments(step: _StepFacts, occurrence: int) -> list[str]:
+    values = {fact.field: fact.value for fact in step.facts}
+    lines = [f"### Canonical FASTQ fragments {occurrence}", "",
+        "Preprocessing succeeded. Canonical fragments were produced and independent verification passed.", "",
+        f"- Source step: {_inline_code(step.step_id)}"]
+    for field in ('input_kind', 'species', 'assembly', 'n_libraries', 'n_fragment_records', 'total_support'):
+        lines.append(f"- {_FIELD_LABELS[field]}: {_inline_code(values[field])}")
+    lines.extend(("", "#### Library summary", ""))
+    for entry in values['library_summary']:
+        lines.append(f"- Namespace {_inline_code(entry['namespace'])}: "
+            f"canonical fragment records {_inline_code(entry['n_fragment_records'])}; "
+            f"total exact support {_inline_code(entry['total_support'])}; "
+            f"distinct barcodes represented in canonical fragments {_inline_code(entry['n_distinct_fragment_barcodes'])}; "
+            f"maximum support {_inline_code(entry['max_support'])}.")
+    if values['n_libraries_omitted_from_summary']:
+        lines.append(f"- Additional libraries omitted from this summary: {_inline_code(values['n_libraries_omitted_from_summary'])}. "
+            "All library identities and artifacts remain in the verified manifest and evidence.")
+    lines.extend(("", "#### Processing provenance and interpretation", "",
+        f"Backend policy: {_inline_code(values['backend_policy'])}.", "",
+        values['support_definition'], "",
+        "Support is not a molecule count, an individually MAPQ-passing read count, or a count of canonical fragment records.", "",
+        "Observed accepted fragment barcodes are not called cells or QC-passed cells. "
+        "Identity remains (namespace, barcode); the same barcode in independent libraries stays separate.", "",
+        "No cell calling, QC, or cCRE matrix construction was performed. "
+        "Cell calling/QC and cCRE matrix construction are later stages; this result does not establish biological library quality.", "",
+        _fact_ids_line(step.facts), ""))
+    return lines
+
+
 _RAW_READINESS_TEXT = {
     "READY": "The input satisfies the current preprocessing intake contract. Preprocessing has not been performed.",
     "READY_WITH_REPAIRS": "Supported preparation actions remain before preprocessing can proceed.",
@@ -1289,19 +1339,22 @@ _RAW_READINESS_TEXT = {
 }
 
 
-def _raw_readiness_sentence(step: _StepFacts) -> str:
+def _raw_readiness_sentence(step: _StepFacts, *, preprocessing_completed: bool = False) -> str:
     readiness = next(f.value for f in step.facts if f.field == "readiness")
+    text = _RAW_READINESS_TEXT[readiness]
+    if preprocessing_completed:
+        text = "This records readiness at the intake step; completed preprocessing is reported separately."
     return (
         "Raw scATAC intake inspection completed successfully and was independently verified. "
-        f"Preprocessing readiness is {_inline_code(readiness)}. {_RAW_READINESS_TEXT[readiness]}"
+        f"Preprocessing readiness is {_inline_code(readiness)}. {text}"
     )
 
 
-def _render_raw_intake(step: _StepFacts, occurrence: int) -> list[str]:
+def _render_raw_intake(step: _StepFacts, occurrence: int, *, preprocessing_completed: bool = False) -> list[str]:
     """Local presentation of frozen aggregates; no source access or inference."""
     values = {f.field: f.value for f in step.facts}
     lines = [f"### Raw scATAC Intake {occurrence}", "",
-             f"- Source step: {_inline_code(step.step_id)}", "", _raw_readiness_sentence(step), ""]
+             f"- Source step: {_inline_code(step.step_id)}", "", _raw_readiness_sentence(step, preprocessing_completed=preprocessing_completed), ""]
 
     def render(value):
         if isinstance(value, dict):
@@ -1380,6 +1433,7 @@ def _render_summary(
 ) -> list[str]:
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
+        "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",
         "epizoo_embed_cells": "EpiZoo representation produced",
         "build_cell_neighbors": "Cell-neighbor graph produced",
@@ -1400,7 +1454,7 @@ def _render_summary(
             if tool_name == "inspect_raw_scATAC":
                 for step in projection.steps:
                     if step.tool_name == tool_name:
-                        lines.append(f"- Source step {_inline_code(step.step_id)}: {_raw_readiness_sentence(step)}")
+                        lines.append(f"- Source step {_inline_code(step.step_id)}: {_raw_readiness_sentence(step, preprocessing_completed='prepare_scATAC_fragments' in present_tools)}")
                 continue
             lines.append(f"- {labels[tool_name]}.")
     if visualization is not None:
@@ -1423,7 +1477,11 @@ def _render_main_section(
     occurrences: dict[str, int] = {}
     for step in _steps_for_section(projection, section):
         occurrences[step.tool_name] = occurrences.get(step.tool_name, 0) + 1
-        lines.extend(_render_step_block(step, occurrences[step.tool_name]))
+        if step.tool_name == "inspect_raw_scATAC":
+            lines.extend(_render_raw_intake(step, occurrences[step.tool_name],
+                preprocessing_completed=any(s.tool_name == 'prepare_scATAC_fragments' for s in projection.steps)))
+        else:
+            lines.extend(_render_step_block(step, occurrences[step.tool_name]))
     return lines
 
 

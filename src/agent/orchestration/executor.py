@@ -476,6 +476,7 @@ class PlanExecutor:
         completed_steps: Sequence[StepExecutionResult] = (),
         checkpoint: ExecutionCheckpoint | None = None,
         should_cancel: CancellationCheck | None = None,
+        durable_run_id: str | None = None,
     ) -> ExecutionOutcome:
         """Preflight and execute a plan, optionally restoring verified steps."""
 
@@ -489,6 +490,8 @@ class PlanExecutor:
             )
         if checkpoint is not None and not callable(checkpoint):
             raise TypeError("`checkpoint` must be callable or None.")
+        if durable_run_id is not None and (not isinstance(durable_run_id, str) or not durable_run_id or checkpoint is None):
+            raise ValueError('Durable execution identity requires a run ID and checkpoint.')
         if should_cancel is not None and not callable(should_cancel):
             raise TypeError("`should_cancel` must be callable or None.")
 
@@ -924,7 +927,12 @@ class PlanExecutor:
                 )
                 notify("STEP_RUNNING")
                 try:
-                    returned_result = spec.function(**attempt_arguments)
+                    if durable_run_id is not None and spec.durable_hooks is not None:
+                        from .durable_tool_recovery import execution_identity
+                        returned_result = spec.durable_hooks.execute(attempt_arguments,
+                            execution_identity(durable_run_id, plan, step, spec))
+                    else:
+                        returned_result = spec.function(**attempt_arguments)
                 except Exception as exc:
                     tool_error = self._registry.classify_exception(
                         step.tool_name,

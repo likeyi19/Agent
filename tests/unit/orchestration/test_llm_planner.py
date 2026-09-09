@@ -798,7 +798,9 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    assert len(serialized_schema.encode("utf-8")) <= 13_000
+    # The reviewed fragments tool adds seven keyed arguments; the complete v3
+    # schema is 13,023 bytes. Retain the combined prompt/schema ceiling below.
+    assert len(serialized_schema.encode("utf-8")) <= 13_500
     assert len(prompt.encode("utf-8")) <= 18_000
     assert len(serialized_schema.encode("utf-8")) + len(
         prompt.encode("utf-8")

@@ -1,0 +1,39 @@
+{
+  "upstream_commit": "5bd17e1f1c50805e76904efd021603cb6a1b6e23",
+  "git_archive_tar_sha256": "0234cc870ef10367cde5b1510555ba4c06498461b69a3960b9697507ab4aa0b7",
+  "patch_sha256": "8d862e77d59213aa19b3fbc5f6014585a4b5f414f3e29143b68513ffd961df33",
+  "compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "make": "GNU Make 4.3",
+  "flags": "-std=c++11 -Wall -O3 -fopenmp -msse4.1",
+  "link_flags": "-lm -lz",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "stock": {
+    "sha256": "623a8cbc08ff541d102cb5fc314546e4971ee1225f5c157749dd0cc7649d9b31",
+    "version": "0.3.2-r518",
+    "linked_library_sha256": {
+      "libz.so.1": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "libstdc++.so.6": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128",
+      "libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+      "libgomp.so.1": "d46f9225c1883039e8a6853e6d96ca1af11d034ce186a090952e4a7c8a7c2fdc",
+      "libgcc_s.so.1": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a",
+      "libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793"
+    }
+  },
+  "candidate": {
+    "sha256": "7ba402d0d69d08fedd525a4de83a4dd749670e88d4de507c236b07f03a285649",
+    "version": "0.3.2-r518",
+    "linked_library_sha256": {
+      "libz.so.1": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "libstdc++.so.6": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128",
+      "libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+      "libgomp.so.1": "d46f9225c1883039e8a6853e6d96ca1af11d034ce186a090952e4a7c8a7c2fdc",
+      "libgcc_s.so.1": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a",
+      "libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793"
+    }
+  },
+  "zlib_version": "1.2.11",
+  "source_archive_format": "git archive --format=tar <upstream_commit>",
+  "upstream_repository": "https://github.com/haowenz/chromap",
+  "upstream_tag": "v0.3.2",
+  "backend_policy": "chromap-atac-agent-support-v1"
+}

@@ -750,7 +750,30 @@ class AgentRuntime:
         }:
             return state.to_run_result()
         if any(result.status is StepStatus.RUNNING for result in state.steps):
-            return self._fail_stale_running_step(state)
+            running = next(result for result in state.steps if result.status is StepStatus.RUNNING)
+            if not self._registry.contains(running.tool_name):
+                return self._fail_stale_running_step(state)
+            spec = self._registry.get(running.tool_name)
+            if spec.durable_hooks is None:
+                return self._fail_stale_running_step(state)
+            # Recovery is opt-in, policy-compatible, exact receipt verification.
+            # No missing receipt permits a scientific rerun.
+            current = build_recovery_policy_snapshot(state.plan, self._registry,
+                max_attempts_per_step=self._executor.recovery_policy.max_attempts_per_step)
+            if state.recovery_policy_snapshot is None or current.fingerprint != state.recovery_policy_snapshot.fingerprint:
+                raise RecoveryPolicyIncompatibleError('Published-outcome recovery requires the original policy.')
+            try:
+                state = self._recover_published_step(state)
+            except CancellationRequestedError as exc:
+                return self._persist_cancelled(state, exc.request, boundary='published_outcome_recovery')
+            except RunStoreError:
+                raise
+            except Exception as exc:
+                error = self._registry.classify_exception(running.tool_name, exc,
+                    step_id=running.step_id, attempt=running.attempt_count)
+                return self._fail_stale_running_step(state, recovery_error=error)
+            if state.lifecycle_status is RunLifecycleStatus.CANCELLED:
+                return state.to_run_result()
 
         cancellation = self._load_cancellation(run_id)
         if cancellation is not None:
@@ -860,8 +883,57 @@ class AgentRuntime:
         )
         return state.to_run_result()
 
+    def _recover_published_step(self, state: PersistedRunState) -> PersistedRunState:
+        from .durable_tool_recovery import execution_identity
+        from .verifier import verify_step
+        from .executor import _copy_json_mapping
+        trace = _TraceRecorder(); trace.extend(state.trace)
+        if not self._executor.preflight(state.plan).passed:
+            raise ValueError('Persisted plan failed preflight.')
+        stored = {s.step_id: s for s in state.steps}
+        verified = {}; recovered = None
+        for step in state.plan.stable_topological_steps():
+            old = stored[step.step_id]
+            if old.status not in (StepStatus.SUCCEEDED, StepStatus.RUNNING):
+                continue
+            args = self._executor._resolve_arguments(step, verified, trace)
+            if _copy_json_mapping(args, 'recovery.arguments') != dict(old.resolved_arguments):
+                raise ValueError('Persisted arguments differ from the authoritative plan.')
+            spec = self._registry.get(step.tool_name)
+            self._registry.validate_arguments(step.tool_name, args)
+            if old.status is StepStatus.RUNNING:
+                if recovered is not None or spec.durable_hooks is None:
+                    raise ValueError('Ambiguous in-flight recovery.')
+                value = spec.durable_hooks.recover(args, execution_identity(state.run_id, state.plan, step, spec))
+            else:
+                value = old.result
+            self._registry.validate_result(step.tool_name, value)
+            verification = verify_step(step, args, value, self._registry,
+                dependency_results={d: verified[d] for d in step.depends_on})
+            if not verification.passed:
+                raise ValueError('Published outcome or dependency failed fresh verification.')
+            verified[step.step_id] = value
+            if old.status is StepStatus.RUNNING:
+                recovered = replace(old, status=StepStatus.SUCCEEDED, result=value,
+                    verification=verification, finished_at=_utc_now(), duration_seconds=0.0)
+        if recovered is None:
+            raise ValueError('No exact published outcome was recovered.')
+        trace.add(TraceEventType.RECOVERY, 'Recovered an exact independently verified published outcome.',
+            step_id=recovered.step_id, details={'decision':'recover_verified_publication','scientific_rerun':False})
+        steps = tuple(recovered if s.step_id == recovered.step_id else s for s in state.steps)
+        try:
+            return self._update_state(state, steps=steps, trace=trace.events)
+        except CancellationRequestedError:
+            # Persist the now-known verified outcome using the existing terminal
+            # cancellation arbitration, rather than discard completed science.
+            cancellation = self._load_cancellation(state.run_id)
+            result = AgentRunResult(run_id=state.run_id, request_id=state.request.request_id,
+                status=RunStatus.CANCELLED, planning_only=False, plan=state.plan, steps=steps, trace=trace.events)
+            self._persist_cancelled(state, cancellation, boundary='published_outcome_recovery', result=result)
+            return self._required_run_store().load(state.run_id)
+
     def _fail_stale_running_step(
-        self, state: PersistedRunState
+        self, state: PersistedRunState, *, recovery_error: AgentError | None = None
     ) -> AgentRunResult:
         running = next(
             result for result in state.steps if result.status is StepStatus.RUNNING
@@ -875,6 +947,7 @@ class AgentRuntime:
             tool_name=running.tool_name,
             attempt=running.attempt_count,
             recovery_disposition=RecoveryDisposition.MANUAL_RECONCILIATION,
+            details={} if recovery_error is None else {'publication_recovery_error': recovery_error.code},
         )
         now = _utc_now()
         interrupted_steps: list[StepExecutionResult] = []
@@ -963,7 +1036,7 @@ class AgentRuntime:
             state,
             lifecycle_status=RunLifecycleStatus.INTERRUPTED,
             steps=tuple(interrupted_steps),
-            errors=(error,),
+            errors=(error,) if recovery_error is None else (error, recovery_error),
             trace=trace.events,
         )
         return state.to_run_result()
@@ -1150,6 +1223,8 @@ class AgentRuntime:
                 completed_steps=completed_steps,
                 checkpoint=checkpoint,
                 should_cancel=should_cancel,
+                **({'durable_run_id': run_id} if checkpoint is not None and any(
+                    self._registry.get(step.tool_name).durable_hooks is not None for step in plan.steps) else {}),
             )
         except RunStoreError:
             raise

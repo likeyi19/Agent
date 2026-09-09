@@ -23,8 +23,11 @@ from .analysis import (
     validate_scATAC_feature_space,
 )
 from .data import RawScATACInspection, ScATACInspection, inspect_raw_scATAC, inspect_scATAC
+from .data import ScATACFragmentsResult, prepare_scATAC_fragments
 
 __all__ = [
+    "ScATACFragmentsResult",
+    "prepare_scATAC_fragments",
     "CellAnnotationEvaluationToolResult",
     "CellClusteringEvaluationToolResult",
     "CellClusteringToolResult",

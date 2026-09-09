@@ -1919,7 +1919,27 @@ def verify_step(
     checks = _VerificationChecks()
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "inspect_raw_scATAC":
+        if step.tool_name == "prepare_scATAC_fragments":
+            try:
+                from agent.tools.data.scatac_fragments import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+                # StepOutputRef resolution supplies exact paired intake identities;
+                # verify them against the actual dependency result, not ordering.
+                for name in ('intake_manifest_path', 'intake_manifest_sha256'):
+                    binding = step.arguments.get(name)
+                    if isinstance(binding, StepOutputRef):
+                        if dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
+                            raise ValueError('Dependency identity differs.')
+            except Exception as exc:
+                checks.add('fragments_independent_verification', False,
+                    'Canonical fragments match independently verified lineage and content.',
+                    'Canonical fragments failed independent verification.',
+                    getattr(exc, 'code', 'FRAGMENTS_VERIFICATION_MISMATCH'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('fragments_independent_verification', True,
+                    'Canonical fragments match independently verified lineage and content.',
+                    'Canonical fragments failed independent verification.', 'FRAGMENTS_VERIFICATION_MISMATCH')
+        elif step.tool_name == "inspect_raw_scATAC":
             try:
                 verify_raw_scatac_intake(resolved_arguments, plain_result, registry)
             except Exception as exc:

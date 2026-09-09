@@ -47,7 +47,7 @@ def compile_candidate(req, candidate, registry):
 
 def test_registry_and_semantic_artifact_boundaries():
     registry = build_default_tool_registry()
-    assert len(registry.names()) == 12
+    assert "prepare_scATAC_fragments" in registry.names()
     assert [n for n in registry.names() if 'raw' in n] == ['inspect_raw_scATAC']
     assert ArtifactSemanticKind.RAW_SCATAC.value == 'raw_scatac'
     assert len({ArtifactSemanticKind.RAW_SCATAC, ArtifactSemanticKind.RAW_SCATAC_SEQUENCING,

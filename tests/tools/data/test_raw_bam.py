@@ -766,4 +766,5 @@ def test_fixed_contract_and_compact_evidence(tmp_path):
 
 def test_no_public_data_tool_export():
     import agent.tools.data as data
-    assert data.__all__ == ['ScATACInspection', 'inspect_scATAC', 'RawScATACInspection', 'inspect_raw_scATAC']
+    assert data.__all__ == ['ScATACInspection', 'inspect_scATAC', 'RawScATACInspection', 'inspect_raw_scATAC',
+                            'ScATACFragmentsResult', 'prepare_scATAC_fragments']

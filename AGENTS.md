@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All twelve currently registered tools
+`src/agent/orchestration/registry.py`. All thirteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -71,19 +71,20 @@ derived from the registry.
 | `build_replicate_pseudobulk` | Exact sparse SUM by `(group, replicate, condition)` |
 | `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
 | `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
+| `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library BGZF/tabix fragments with exact support and durable publication recovery |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake now has verified figureless reporting. Unsupported projections fail
+Raw intake and FASTQ fragments have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
 and library/barcode processing contracts are available through their modules.
 They add no registered scientific tools. Reference selection and library/barcode
-decisions remain independent; future preprocessing will consume both alongside
-a freshly verified M10 intake manifest. Raw preprocessing execution remains
-M11.2+ scope. The detailed M11.1 contract and acceptance record is below.
+decisions remain independent. Completed M11.2 FASTQ preprocessing consumes both
+alongside a freshly verified M10 intake manifest. BAM preprocessing remains
+M11.3 scope. Detailed M11.1 and M11.2 contracts and acceptance records are below.
 
 ## Current scientific runtime and verification contracts
 
@@ -3429,7 +3430,7 @@ diff contains the five accepted implementation/test additions and README/AGENTS
 documentation only: no biological datasets, checkpoints, generated artifacts,
 production research-path defaults, dependency changes, or M11.2 execution.
 
-M11.2+ remains unimplemented: FASTQ backend qualification and alignment, actual
+At the M11.1 checkpoint, M11.2+ remained unimplemented: FASTQ backend qualification and alignment, actual
 barcode extraction/orientation/correction behavior, chemistry-specific whitelist
 suitability, aligner-index identity, canonical fragments and final reversible
 cell-ID rendering, Tn5/dedup semantics, BAM backend/correction qualification,
@@ -3441,3 +3442,292 @@ continues to execute zero scientific tools, inspect no biological inputs, and
 produce no scientific preprocessing artifacts; existing managed-workspace and
 durable planning-state persistence remain permitted. M11.2 requires a separate
 scope and qualification before execution work begins.
+
+## Milestone 11.2 — FASTQ to canonical fragments and joint closeout
+
+**Milestone 11.2 status: COMPLETE.** M11.2b/c/d/e establishes verified FASTQ →
+canonical fragments → freshly verified evidence → deterministic figureless report
+through `ResearchAgentApplication`. M11.1 remains the independent reference and
+library/barcode domain layer. The combined implementation is based on
+`78941712bb6011f7140176cea8939fe4b7b30f46`; it does not change M11.1 history.
+The public registry adds only `prepare_scATAC_fragments`. This section supersedes
+historical statements that FASTQ alignment and fragments remain unimplemented.
+
+### Qualified backend and scientific semantics
+
+Chromap upstream is tag `v0.3.2`, commit
+`5bd17e1f1c50805e76904efd021603cb6a1b6e23` (version output `0.3.2-r518`). Stock
+paired barcode BED support saturates at 255. The accepted support-preserving patch
+SHA-256 is `8d862e77d59213aa19b3fbc5f6014585a4b5f414f3e29143b68513ffd961df33`;
+backend policy is `chromap-atac-agent-support-v1`. The qualified executable SHA-256
+is `7ba402d0d69d08fedd525a4de83a4dd749670e88d4de507c236b07f03a285649`.
+Source archive, compiler, build, executable and linked-runtime identities are
+recorded in [qualification-build.json](third_party/patches/chromap/qualification-build.json).
+The unchanged version string alone cannot qualify a binary. No stock fallback,
+PATH lookup, automatic installation, or unqualified replacement is supported.
+
+The patch widens the accepted paired barcode record's support and both in-memory
+and low-memory duplicate accumulators to checked uint64, preserving final-group
+handling and native temporary-record width. Other record types keep stock behavior.
+It changes no mapping, duplicate key, representative selection, barcode correction,
+MAPQ calculation, trimming or Tn5 algorithm. Support is the exact number of
+Chromap-generated paired mappings assigned to the accepted cell-level duplicate
+group, including the representative. The key uses corrected barcode, contig,
+fragment start and length, without strand. Filtering uses the representative's
+MAPQ; support can include lower-MAPQ mappings. It is neither a molecule count nor
+a count of individually MAPQ-passing reads nor a canonical fragment-record count.
+
+The fixed profile uses one thread, paired ATAC BED, cell-level deduplication,
+whole forward barcode reads, and a verified whitelist of 1..32 bases. M11.1's
+broader whitelist resource length range does not establish backend compatibility.
+Chromap performs the sole Tn5 shift: start +4, end -5. Agent applies no second
+shift and never clips or repairs coordinates. Optional upstream summaries remain
+disabled; no FRiP/FRIC or cell-calling fact is derived from them. All shared-library
+lanes execute together once; independent processing namespaces execute separately.
+No library or chemistry identity is guessed from filenames.
+
+### Reference index and runtime resources
+
+`agent.chromap-reference-index`, schema 1, `chromap-reference-index.v1` is a
+backend-specific derived resource, independent of the reference bundle. It binds
+the exact reference manifest, portable reference identity, FASTA/FAI/ordered
+contigs, qualified backend, k=17/w=7 build policy, actual index hash and size,
+and its own content identity. Preparation verifies FASTA/FAI consistency and
+publishes atomically; no aliasing or sequence rewriting occurs. Full index byte
+reproducibility is not inferred from tiny rebuild tests.
+
+New registered execution requires explicit `AGENT_CHROMAP_BIN` and absolute
+`AGENT_CHROMAP_INDEX_ROOT`. The latter is a bounded catalog of at most 4096
+immediate child index directories with valid manifests. Exactly one candidate
+must match reference identity, qualified backend and build policy; zero/multiple
+matches or malformed entries fail closed. Exact reference-manifest binding and
+index content are reverified. No recursive search or automatic rebuild occurs.
+The fixed packaging profile uses qualified `/usr/bin/sort`, `/usr/bin/bgzip`,
+and `/usr/bin/tabix` identities in `_fragments_toolchain.json`. Executables,
+indexes, flags, thread counts and overwrite/retry policy are not request science.
+Registry construction and PLAN_ONLY do not resolve these resources.
+
+### Canonical fragments and verification
+
+`agent.scatac-fragments`, schema 1, `scatac-fragments.v1` binds exact intake,
+library context, reference and index lineage. Compatible targets are human/hg38
+and mouse/mm10. FASTQ only is implemented. Before execution, selected genomic
+mate and barcode streams are fully synchronized to clean EOF, with exact
+normalized record-name/order and count agreement, bounded per-record storage,
+and decoded-stream digests. Optional I1 remains intake/source-snapshot provenance,
+not an aligned barcode stream. Source snapshots and M10 bounded reinspection do
+not establish immutable whole encoded FASTQ hashes against hostile race/rollback.
+
+Canonical UTF-8 record-stream identity is SHA-256 of the exact ordered bytes:
+
+```text
+chrom<TAB>start<TAB>end<TAB>corrected_barcode<TAB>support<LF>
+```
+
+Coordinates are 0-based half-open and valid within exact FAI contigs. Sort order
+is FAI rank, numeric start, numeric end, ASCII barcode. Repeated canonical keys
+fail. Individual support is 1..2**64-1; aggregate support/counts are checked
+through 2**128-1 without floating conversion. Namespace is a library-manifest
+field; identity remains `(namespace, barcode)`. No combined rendered cell-ID
+format or called-cell assignment is introduced.
+
+Each library publishes BGZF plus TBI. The qualified profile is bgzip level 6,
+one thread, tabix BED/TBI, GNU sort one thread/64M buffer and `LC_ALL=C`.
+TBI's 2**29 coordinate boundary is enforced. Temporary sorting uses managed
+staging. Detailed policies, manifests and non-guarantees are in
+[the data-layer contract](docs/m11.2c-fragments.md).
+
+The independent verifier rechecks intake/context/reference/whitelist/index
+resources and recorded backend identity without realignment. It hashes full
+BGZF and TBI bytes, independently decodes all BGZF blocks with CRC/ISIZE/EOF
+checks, streams canonical records, validates coordinates/order/uniqueness,
+whitelist membership and exact stream digest/counts/sum/max/distinct barcodes.
+It checks tabix contig inventory, complete represented-contig queries and a
+deterministic narrow overlap query per represented contig. It does not prove
+alignment biology, rerun correction/deduplication, or repeat the full FASTQ scan.
+Memory includes supplied whitelist candidates and observed distinct barcodes;
+it does not retain full read or fragment-row arrays.
+
+### Public tool, planning and durable lifecycle
+
+```python
+prepare_scATAC_fragments(
+    intake_manifest_path, intake_manifest_sha256,
+    library_context_path, library_context_sha256,
+    reference_bundle_path, reference_bundle_sha256,
+    output_dir,
+)
+```
+
+All arguments are required. The lightweight result has exactly status,
+manifest_path, manifest_sha256, artifact_type, artifact_schema_version,
+contract_version, species, assembly, n_libraries, n_fragment_records,
+and total_support. Strict result validation performs no scientific IO.
+
+Reviewed consumer ports are grouped `intake`, `library_context`, `reference`,
+and managed `output_dir`. Intake accepts an explicit existing request artifact
+or `inspect_raw_scATAC`'s `raw_scatac_intake_manifest.v1`; context/reference are
+request-only. Selecting a path selector mechanically binds its paired SHA.
+The sole producer port `fragments` is `scatac_fragments.v1`, manifest_path/hash.
+The LLM chooses scientific tools and sources. The unchanged generic semantic
+compiler builds exact arguments, StepOutputRefs and dependencies. No inspection
+is auto-inserted, and backend mechanics never enter the model-authored plan.
+Explicit v3 remains compatible; combined prompt/schema remains 30,866 bytes
+against the unchanged 31,000-byte ceiling. M11.2e adds no planning semantics.
+
+Recovery policy is `prepare-scatac-fragments-fastq-v1`; no automatic same-step
+retry is allowed. Specific sanitized errors distinguish data, verification,
+environment, execution and resource failures; storage problems require external
+correction. No arguments or scientific policy are silently changed.
+
+A deterministic publication envelope binds run ID, full plan fingerprint, step,
+tool, recovery policy and exact resolved arguments. The wrapper verifies the
+fragments, writes a strict manifest-SHA receipt, fsyncs and atomically publishes
+that envelope. A stale RUNNING step can recover only its exact intended receipt,
+freshly verify it and reconstruct/checkpoint the result without another alignment.
+No broad artifact scan or ordinary existing-output reuse is permitted. Missing,
+conflicting, corrupt or wrong-policy receipts retain manual reconciliation.
+A failed recovery checkpoint leaves the outcome recoverable on a later resume.
+See [the orchestration contract](docs/m11.2d-integration.md).
+
+Completed nonterminal steps are freshly verified before reuse. Terminal Runtime
+resume remains immutable. Evidence/Application composition freshly verifies even
+terminal successes; backend execution configuration can be removed for resume,
+but verification-required packaging and recorded scientific resources must remain.
+Cancellation follows M5 safe checkpoints: before-step cancellation prevents
+execution; requests inside a tool call wait for its completion and verification.
+Verified fragments survive cancellation and later work is skipped. Existing child
+cleanup on interruption remains unchanged; no preemptive cancellation or second
+state machine was introduced.
+
+### Evidence, figureless reporting and Application
+
+Reporting explicitly projects this tool; registration alone never grants report
+authority. Evidence checks the exact registered result schema/recovery identity,
+freshly verifies source steps, and rechecks fragments before manifest projection.
+Facts are FASTQ input kind, species/target assembly, processing-library count,
+canonical record count, total exact support, artifact contract, backend policy,
+upstream version/commit and support definition. Per-library summaries contain
+namespace, record count, total support, distinct observed fragment barcodes and
+maximum support. They show at most 50 namespaces in deterministic order and an
+explicit omitted count. All manifest/BGZF/TBI artifact identities remain represented
+within the manifest's 4096-library bound. No barcode lists, reads, qualities,
+whitelist contents, fragment rows or full scan vectors enter evidence.
+
+Evidence distinguishes manifest SHA/receipt lineage from full BGZF/TBI hashes,
+complete independent record-stream checks and functional tabix queries. Protection
+is recorded with existing authoritative-digest and verification-basis metadata.
+Observed accepted fragment barcodes are not called or QC-passed cells. Reports
+preserve the exact support definition and claim no TSS/FRiP, biological quality,
+cell calling, QC, cCRE matrix or raw-derived embedding result.
+
+The deterministic report has preprocessing status/reference/counts, bounded
+library summaries, processing interpretation, methods and artifact provenance.
+An inspect→prepare report scopes intake readiness to the earlier intake stage.
+Existing intake-only prose is preserved. No wall-clock time or new arbitrary
+runtime paths enter report content. Existing visualization capability selection
+returns no figure kind; the Application composes evidence and report with no
+visualization. No Application service or visualization implementation change was
+needed. Both remain separate from the scientific tool registry/AgentPlan.
+
+Scripted semantic-v4 Application PLAN_ONLY accepts direct and inspect→prepare
+routes with all scientific access/execution forbidden. Guarded tiny synthetic
+Application EXECUTE tests cover both routes and publication-before-checkpoint
+recovery; each makes one actual patched-Chromap alignment with exact support 301.
+Planner-free Application resume with execution configuration removed reproduces
+the deterministic report. BGZF, TBI and whitelist corruption cause fresh evidence
+failure and no successful report result, while terminal Runtime history remains
+unchanged. Prior report files are historical artifacts, not a fresh success claim.
+
+### Local availability, hygiene and deferred scope
+
+A bounded read-only audit checked immediate entries in `/home/likeyi/program`,
+its EpiZoo/EpiAgent/research/Descart/jiangqun project directories and their immediate
+named data directories (at most 100 entries each). `/home/likeyi/data`,
+`/home/likeyi/datasets`, and `Agent/data` were absent. No direct FASTQ candidates
+were found in the checked locations. Real biological FASTQ acceptance is deferred;
+no chemistry/whitelist was guessed and no broad storage crawl or download occurred.
+Full hg38/mm10 Chromap indexes were not provisioned. This is a production runtime
+resource requirement, not a code defect. Biological end-to-end acceptance may be
+performed later with the complete M11.8 raw→cell-by-cCRE path.
+
+The reviewed third-party directory contains only the patch, MIT license and
+qualification documentation/metadata. No compiled executable, upstream full source
+tree, native genome index, biological dataset, model checkpoint, temporary output,
+or credential is included. Qualification metadata is portable and does not set
+production filesystem defaults. Accepted b/c/d files remain byte-identical to the
+M11.2e starting snapshot.
+
+M11.3 is **BAM → canonical fragments**, not implemented here. Cell calling/QC,
+TSS/FRiP, cCRE overlap/matrix construction and raw-derived EpiZoo inference remain
+later scope. M11.2 completion does not make raw FASTQ or fragment barcodes valid
+EpiZoo cell inputs. Do not begin those capabilities without their separate scope.
+
+### Final acceptance questions and joint review
+
+All fourteen closeout questions were reviewed before commit:
+
+| Question | Answer / evidence |
+| --- | --- |
+| Application natural-language PLAN_ONLY without executables? | Yes; direct and inspect→prepare, scientific IO forbidden |
+| Full Application EXECUTE produces verified fragments? | Yes; three guarded patched-backend Application routes |
+| Evidence freshly verifies artifacts? | Yes; independent verifier and projection recheck |
+| Corrupt fragments can produce a successful report? | No; evidence/report reconstruction fails closed |
+| Observed barcodes reported as called cells? | No; explicit observed-fragment-barcode terminology |
+| QC/TSS/FRiP claimed? | No; no such computed facts or quality claims |
+| Independent namespaces can collide? | No; context partition and namespace identity retained through artifacts/evidence/report |
+| Support above 255 can truncate? | No; checked uint64 support, support-300/301 acceptance and boundary qualification |
+| Stock Chromap fallback possible? | No; pinned executable/runtime policy |
+| Completed resume unnecessarily realigns? | No; one total alignment per independent processing library |
+| Publication recovery unnecessarily realigns? | No; exact receipt recovery, one total alignment |
+| Model serializes FASTQ roles/backend/index/flags? | No; reviewed semantic artifact choices only |
+| Historical M7 Application regressions included? | Yes; all three included and passed |
+| BAM/cell calling/QC/cCRE accidentally implemented? | No; these remain explicitly deferred |
+
+Joint review passes with accepted b/c/d science and lifecycle identities unchanged.
+M11.2e production changes are only the explicit evidence/report projections and
+combined-report intake wording. Application and visualization composition reuse
+their existing interfaces. Complete staged file review and whitespace checks are
+required before the combined M11.2 commit; no M11.1 amend or history rewrite.
+
+### M11.2 closeout validation
+
+Tests use the existing `agent` Conda environment with `PYTHONPATH=src`,
+`PYTHONDONTWRITEBYTECODE=1` and writable Numba/Matplotlib caches under `/tmp`.
+The guarded suites require `RUN_CHROMAP_QUALIFICATION=1` and an explicit local
+`AGENT_CHROMAP_QUALIFICATION_RECORD`; default lightweight pytest performs no
+backend build/install/network activity. GPU/model acceptance gates remain off.
+Counts below overlap and must not be added as independent coverage totals.
+
+| Suite | Result |
+| --- | --- |
+| M11.2b pure / guarded | 55 / 14 passed |
+| M11.2c pure / guarded | 95 / 5 passed |
+| M11.2d pure / guarded Runtime | 62 / 4 passed |
+| M11.2e evidence (including independent namespaces and bounded summary) | 11 passed |
+| M11.2e deterministic figureless report | 5 passed |
+| M11.2e Application PLAN_ONLY | 2 passed |
+| M11.2e Application completed resume / corruption | 4 passed |
+| M11.2e guarded Application direct / inspect DAG / publication recovery | 3 passed |
+| Combined guarded b/c/d regression | 23 passed |
+| Complete e Application suite with backend enabled | 9 passed |
+| Evidence/report/Application regression, including historical M7 Application | 227 passed, 3 gated skips, 3 warnings |
+| Historical M7 Application file within that regression | 3 passed |
+| Combined b/c/d/e, M11.1, M10/raw, orchestration/providers/planner benchmarks | 2238 passed, 3 gated skips, 3 warnings |
+
+The three guarded Application routes each also exercise terminal Application
+resume without aligner configuration. Mutation coverage includes BGZF/TBI/
+whitelist drift, manifest mutation, projection-time changes, forged evidence,
+and rehashed report support/cell/QC/figure claims. Existing unsupported projections,
+processed-H5AD, raw intake and statistical report regressions remain included.
+The report/evidence specifications remain version 1; future incompatible scientific
+projection changes require a reviewed contract/recovery identity change.
+
+Final complete lightweight regression: **2684 passed, 80 skipped, 7 warnings**,
+with `python -m pytest -q` and no exclusions. The 80 skips include the 26 explicitly
+guarded Chromap tests; separate guarded runs above passed. Compared with the
+M11.2d 2659-pass baseline, this restores three historical Application tests and
+adds 22 M11.2e lightweight cases. `git diff --check` and untracked-file whitespace
+checks passed. All 46 accepted b/c/d files matched the starting SHA-256 inventory;
+54 combined source/test/doc/patch files were reviewed for the commit. No full
+reference index, biological data, executable, model or runtime output is included.

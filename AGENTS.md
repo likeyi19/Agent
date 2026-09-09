@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All thirteen currently registered tools
+`src/agent/orchestration/registry.py`. All fourteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -72,11 +72,12 @@ derived from the registry.
 | `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
 | `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
 | `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library BGZF/tabix fragments with exact support and durable publication recovery |
+| `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake and FASTQ fragments have verified figureless reporting. Unsupported projections fail
+Raw intake, FASTQ fragments and external adoption have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
@@ -85,10 +86,14 @@ They add no registered scientific tools. Reference selection and library/barcode
 decisions remain independent. Completed M11.2 FASTQ preprocessing consumes both
 alongside a freshly verified M10 intake manifest. M11.3a adds only producer-neutral
 fragments v2 and a common verified v1/v2 streaming interface; FASTQ production
-remains v1 and all thirteen tools retain their existing contracts. External-fragment
-adoption (M11.3b), qualified BAM production (M11.3c), and M11.4 cell selection/QC
-remain unimplemented. Generic v2 content/resource verification does not qualify
-producer profiles or verify historical processing. Detailed contracts follow.
+remains v1 and the original thirteen tools retain their existing contracts.
+M11.3b adds one external-adoption tool with independent complete source and
+canonicalization/conservation verification under an explicitly selected profile.
+Generic v2 content/resource verification alone does not qualify producer profiles;
+external adoption does not reconstruct historical processing. Qualified BAM
+production (M11.3c), new FASTQ-to-v2 convergence (M11.3d), cell selection/QC
+(M11.4) and cell-by-cCRE construction (M11.5) remain unimplemented.
+Detailed contracts follow.
 
 ## Current scientific runtime and verification contracts
 
@@ -3805,3 +3810,78 @@ M11.3b external-fragment adoption, M11.3c qualified BAM production and their
 producer-specific verification remain future work. CRAM/SAM and M11.4 cell
 selection/QC remain unsupported/unimplemented, as do this path's TSS/FRiP,
 cCRE overlap, matrix/H5AD construction and EpiZoo inference.
+
+## Milestone 11.3b — Verified external fragment adoption
+
+**M11.3b status: COMPLETE (synthetic acceptance).** Based on
+`011f5f50dad2dd98d61f6aee5edff0af08fe5838`, this adds only
+`import_scATAC_fragments`, bringing the registry to fourteen scientific tools.
+This section supersedes the historical M11.3a deferral of external adoption.
+M11.2 FASTQ production remains v1; the accepted v1/v2 domain, generic verification
+and common-reader implementations are unchanged. No FASTQ migration occurred.
+
+The sole reviewed profile is `10x-atac-fragments.v1`, explicitly selected by the
+caller for Cell Ranger ATAC/ARC logical fragment semantics. Five-column sources
+preserve absent strand (`None` in iteration); six-column sources preserve
+`+`, `-` or supplied unknown `.`. Mixed layouts fail. Coordinates are already
+Tn5-adjusted, zero-based and end-exclusive. Positive uint64 support counts read
+pairs including the representative and duplicates; uint128 aggregates are checked.
+No support truncation, second shift, correction, filtering or deduplication occurs.
+
+Plain text, gzip and BGZF are detected from bytes, never filenames. Bounded
+leading opaque `#` headers are admitted and hashed: 65,536 bytes per line,
+1,024 headers and 1 MiB total header bytes. Source identity includes exact path,
+complete encoded/decoded/data/header hashes, size, encoding, layout and summaries.
+The closed `external-fragment-adoption.v1` record binds the reviewed profile,
+explicit human/hg38 or mouse/mm10 reference, namespace, coverage declaration,
+transformation policy and canonical identity. No RawIntakeManifest or
+LibraryProcessingContext is fabricated. An optional source TBI needs explicit
+path/hash binding, BGZF source and successful identity/integrity/functional checks;
+there is no adjacent-index discovery. Output always receives a new verified TBI.
+
+One source uses one explicit namespace. Exact safe barcode identifiers, case and
+GEM suffixes are preserved; identifiers are not called cells. Declared selection
+is `full_export`, `subset_export` or default `unknown`, never inferred. Every
+source record is conserved. Exact FAI bounds/order apply without aliases, clipping,
+assembly inference or conversion. Canonicalization performs only validation,
+external sorting, serialization, BGZF compression and TBI indexing. Duplicate
+complete canonical keys fail rather than being merged or summed.
+
+Independent producer-specific verification separately reparses the complete
+source and reconstructs its canonical stream, then composes generic v2 output
+verification. It distinguishes verified source content, verified conservation,
+and declared historical processing. Alignment, MAPQ filtering, Tn5 processing,
+duplicate determination, barcode correction and cell calling are not historically
+reconstructed. Source/index/reference mutation or any content mismatch fails.
+Packaging uses qualified local sort/bgzip/tabix without Chromap or BAM tooling.
+
+Registry metadata provides grouped request-only source/reference/index bindings
+and a `scatac_fragments.v2` producer port. V4 remains default and v3 compatible;
+no generic compiler/routing/runtime changes were needed. PLAN_ONLY performs no
+scientific IO. Exact durable identity and a closed receipt use immutable policy
+`import-scatac-fragments-external-v1`; publication is staged, verified, fsynced
+and atomic. Exact-receipt recovery freshly verifies all content without rerunning
+adoption. Existing cancellation boundaries are preserved. Explicit evidence and
+deterministic figureless report projections support Application execution/resume
+and never promote arbitrary source metadata to scientific facts.
+
+Acceptance: **114 focused checks passed** (113 new tests plus existing planner
+size regression; 76 deselected); directly affected regression **1947 passed,
+26 skipped, 3 warnings**; full lightweight regression **2911 passed, 80 skipped,
+7 warnings**, with no test exclusions. Synthetic cases exercise real local
+sort/bgzip/tabix and a separate real packaging qualification. Complete catalog
+prompt/schema sizes are v3 **34,059** characters and v4 **28,451** for the measured
+inspection request, retaining scientific guidance. No dependencies changed.
+
+A bounded read-only check of known project/data directories inspected 123 entries
+across eight existing directories. It found no clearly identified compatible
+biological external-fragment source with required provenance/reference; no data
+was downloaded or species/producer guessed. Biological acceptance remains
+deferred to M11.8. Full API, identity, resource/verification limits and acceptance
+details are in [docs/m11.3b-external-fragments.md](docs/m11.3b-external-fragments.md).
+
+M11.3c remains BAM-to-v2 production. M11.3d remains joint closeout and review/likely
+implementation of new FASTQ-to-v2 convergence. M11.4 cell selection/QC and M11.5
+cell-by-cCRE remain unimplemented, as do CRAM/SAM, automatic multi-library/GEM-group
+reconstruction, TSS/FRiP, peak calling, matrix/H5AD construction and model inference.
+No v2 contract correction was required. No commit or push was performed in this task.

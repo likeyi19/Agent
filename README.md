@@ -145,16 +145,30 @@ build or backend fallback occurs.
 and a common freshly verified v1/v2 streaming interface preserve exact support,
 namespace/identifier identity, optional strand and producer-specific provenance.
 Generic verification checks artifact contents and bound resource identities;
-producer-history verification and v2 producer qualification remain future work.
-M11.2 FASTQ production continues publishing v1 unchanged. The registry remains
-at 13 scientific tools.
+producer-specific checks are separate from historical processing claims.
+M11.2 FASTQ production continues publishing v1 unchanged.
 New FASTQ runs are intended to converge on v2 after validation across real
 producer types, provisionally at M11.3d/joint closeout; historical v1 compatibility
 will remain. The reserved v2 FASTQ provenance kind adds no execution route.
 
-M11.3b external-fragment adoption and M11.3c qualified BAM→fragments remain
-unimplemented. CRAM/SAM support, M11.4 cell selection/QC, cCRE matrix construction,
-and raw-derived EpiZoo inference remain later work. See the
+**M11.3b is complete: verified external-fragment adoption.** The new
+`import_scATAC_fragments` tool accepts the explicitly selected
+`10x-atac-fragments.v1` profile: five-column fragments without strand or
+six-column fragments with preserved strand, in plain text, gzip or BGZF.
+Source SHA-256, reference bundle and processing namespace are explicit; an
+optional source TBI must be explicitly bound and verified. Adoption preserves
+coordinates, identifiers and exact read-pair support while sorting and publishing
+canonical v2 BGZF/TBI artifacts. Independent verification reparses the complete
+source and proves record conservation; historical alignment, Tn5 adjustment,
+deduplication and barcode correction remain declared, not reconstructed.
+All 14 scientific tools have semantic planning metadata. External adoption has
+durable recovery and verified figureless Application reporting. Synthetic
+acceptance passed; biological acceptance remains deferred to M11.8. See the
+[M11.3b contract](docs/m11.3b-external-fragments.md).
+
+M11.3c qualified BAM→fragments v2 and M11.3d joint closeout/new FASTQ→v2 convergence
+remain future work. CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
+construction and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 
@@ -258,6 +272,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | --- | --- |
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
+| External fragment adoption | `import_scATAC_fragments`: explicit 10x fragment semantics, complete source validation and conservation, canonical v2 artifacts, durable recovery, and figureless Application reporting |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |

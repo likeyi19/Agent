@@ -1919,7 +1919,20 @@ def verify_step(
     checks = _VerificationChecks()
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "prepare_scATAC_fragments":
+        if step.tool_name == "import_scATAC_fragments":
+            try:
+                from agent.tools.data.scatac_fragment_import import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+            except Exception as exc:
+                checks.add('external_fragments_conservation', False,
+                    'External source contents, conservation and canonical artifacts are verified.',
+                    'External adoption failed independent verification.',
+                    getattr(exc, 'code', 'EXTERNAL_FRAGMENTS_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('external_fragments_conservation', True,
+                    'External source contents, conservation and canonical artifacts are verified.',
+                    'External adoption failed independent verification.', 'EXTERNAL_FRAGMENTS_VERIFICATION_FAILED')
+        elif step.tool_name == "prepare_scATAC_fragments":
             try:
                 from agent.tools.data.scatac_fragments import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)

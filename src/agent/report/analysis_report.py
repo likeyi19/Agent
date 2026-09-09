@@ -552,7 +552,10 @@ def _verified_visualization_snapshot(
     )
 
 
+from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
+
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "import_scATAC_fragments": _EXTERNAL_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_fragments": (
         "input_kind", "species", "assembly", "n_libraries", "n_fragment_records",
         "total_support", "backend_policy", "upstream_version", "upstream_commit",
@@ -753,6 +756,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_fragments": "Canonical FASTQ fragments",
     "inspect_raw_scATAC": "Raw scATAC Intake",
     "inspect_scATAC": "Dataset inspection",
@@ -771,6 +775,20 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "route": "Source route",
+    "source_profile": "Declared source semantic profile",
+    "source_encoding": "Source physical encoding",
+    "reference_identity_sha256": "Reference identity SHA-256",
+    "namespace": "Processing namespace",
+    "source_record_count": "Source fragment records",
+    "n_distinct_fragment_barcodes": "Distinct observed fragment barcodes",
+    "strand_mode": "Strand presence",
+    "source_selection": "Declared source export coverage",
+    "source_index_supplied": "Explicit source TBI supplied",
+    "transformation_policy": "Adoption transformation policy",
+    "source_content_verification": "Source content verification",
+    "conservation_verification": "Exact record conservation",
+    "producer_history": "Historical processing verification",
     "assembly": "Target assembly",
     "n_libraries": "Processing libraries",
     "n_fragment_records": "Canonical fragment records",
@@ -934,6 +952,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
     ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
     ("dataset", "Dataset", frozenset({"inspect_scATAC"})),
@@ -980,6 +999,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "import_scATAC_fragments": ("source_profile", "source_encoding", "source_selection", "transformation_policy", "contract_version"),
     "prepare_scATAC_fragments": ("input_kind", "backend_policy", "upstream_version", "upstream_commit", "contract_version"),
     "inspect_raw_scATAC": ("input_kind", "intake_contract_version"),
     "inspect_scATAC": ("x_storage_type", "x_is_sparse", "x_dtype"),
@@ -1285,6 +1305,20 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "import_scATAC_fragments":
+        lines = [f"### External fragment adoption {occurrence}", "",
+            "External fragment adoption succeeded. Source contents, structural validity, reference compatibility, "
+            "exact record conservation and output integrity were verified.", ""]
+        for fact in step.facts:
+            lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
+        lines.extend(("", "Historical alignment, MAPQ filtering, Tn5 processing, duplicate determination, "
+            "barcode correction and cell selection were not independently reconstructed. "
+            "The selected source profile declares their applicable semantics; source headers are opaque provenance.", "",
+            "Adoption performed validation, sorting, serialization, compression and indexing only. "
+            "No additional Tn5 shift, support summation, barcode correction or filtering was applied.", "",
+            "Observed fragment barcodes are not called or QC-passed cells. No cell calling, TSS/FRiP, QC, "
+            "cCRE matrix construction or foundation-model inference was performed.", "", _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name == "prepare_scATAC_fragments":
         return _render_fragments(step, occurrence)
     if step.tool_name == "inspect_raw_scATAC":
@@ -1433,6 +1467,7 @@ def _render_summary(
 ) -> list[str]:
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
+        "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",
         "epizoo_embed_cells": "EpiZoo representation produced",

@@ -16,6 +16,8 @@ import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
+from .external_fragments import (CONTRACT_FIELDS as _EXTERNAL_FRAGMENTS_FIELDS,
+    FACT_FIELDS as _EXTERNAL_FRAGMENTS_FACT_FIELDS, project_external_fragments)
 
 from agent.orchestration.differential_accessibility_verifier import (
     VERIFICATION_R_SCRIPT,
@@ -378,6 +380,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "import_scATAC_fragments": _ToolProjection(
+        _EXTERNAL_FRAGMENTS_FIELDS, _EXTERNAL_FRAGMENTS_FACT_FIELDS, "import-scatac-fragments-external-v1",
+        (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
+            ("fresh_independent_external_adoption_verification", "strict_manifest_loading",
+             "exact_source_conservation", "authoritative_manifest_sha256", "exact_execution_receipt"),
+            digest_field="manifest_sha256"),),
+    ),
     "prepare_scATAC_fragments": _ToolProjection(
         _FRAGMENTS_FIELDS, _FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-fastq-v1",
         (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
@@ -1208,6 +1217,14 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
+        if step.tool_name == "import_scATAC_fragments":
+            try:
+                derived, fragments_artifacts = project_external_fragments(
+                    step_result.resolved_arguments, step_result.result, step.step_id)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Freshly verified external adoption could not be projected.") from exc
         if step.tool_name == "prepare_scATAC_fragments":
             try:
                 derived, fragments_artifacts = project_fragments(

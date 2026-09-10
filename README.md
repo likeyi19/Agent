@@ -119,11 +119,22 @@ libraries, barcode namespaces, interpretation/correction policies, and whitelist
 identities. These artifacts are intentionally separate: library/barcode decisions
 do not select a genome reference.
 
-Human and mouse share the same future fragment-overlap matrix semantics: each
-fragment contributes its read-support/count (or 1 when absent) to every cCRE it
-overlaps; repeated contributions sum without binarization. Full reference order
-and all-zero columns remain present. Existing EpiZoo filtering stays downstream
-model preprocessing, retaining 700,460 human or 814,020 mouse features.
+M11.5a explicitly supersedes M11.1's proposed support-weighted matrix semantics.
+Human and mouse use canonical fragment-record counts: every canonical fragments-v2
+record contributes one to every distinct cCRE with positive-base overlap, ignoring
+support and strand. Repeated contributions sum without binarization or new
+deduplication. Support has producer-specific meanings and is not a universal
+biological weight. Full reference order and zero columns remain present; selection
+owns exact rows, including zero rows and empty selection. EpiZoo filtering stays
+downstream, retaining 700,460 human or 814,020 mouse features.
+
+**M11.5a freezes matrix science/artifacts and narrow BEDTools qualification.**
+No matrix-building tool or Planner/Application integration is added; the registry
+remains at 17 tools. The project-authoritative mouse full vocabulary is provisioned
+deterministically from the exact Fang2021 H5AD ordered feature names into the
+unchanged reference interface, with a hash-bound derivation receipt. Matrix
+construction and independent reconstruction remain M11.5b. See the
+[M11.5a contract and acceptance](docs/m11.5a-matrix-contract.md).
 
 **M11.2 is complete: FASTQ → verified canonical fragments.**
 `prepare_scATAC_fragments` consumes a validated intake, library-processing context,

@@ -190,6 +190,20 @@ suite passed 1,514 tests; final planning/catalog checks passed 144. Complete cat
 sizes are v3 22,402 + 15,428 = 37,830 bytes and v4 19,211 + 11,269 = 30,480 bytes,
 within unchanged ceilings. These are software/synthetic results, not biological
 cell-calling acceptance.
+
+M11.5a freezes `canonical-fragment-record-overlap-counts.v1`, a closed matrix
+artifact contract, exact sparse logical identity, deterministic H5AD-vocabulary
+reference provisioning and a bounded M11.5-specific BEDTools qualification harness.
+It explicitly supersedes M11.1's support-weighted matrix proposal. The full mouse
+reference is now project-authorized and derived through the existing reference
+interface. No matrix-building tool, full construction, independent matrix
+reconstruction or Planner/Application integration is introduced; the registry
+remains at seventeen. See [M11.5a](docs/m11.5a-matrix-contract.md).
+Focused M11.5a acceptance passes 93 tests; relevant combined regression passes
+748 tests. Full mouse reference provisioning/reinspection reproduces the accepted
+BED and portable reference identities. These results qualify contracts/resources
+and bounded mechanics, not biological matrix construction or model readiness.
+
 The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.
@@ -3480,7 +3494,7 @@ APIs already use direct module imports. M11.1 follows that convention, keeping
 `_ordered_identity` internal and adding no Planner-visible ToolSpecs, registry,
 compiler, Runtime, Application, evidence, or reporting integration.
 
-#### Authoritative future human/mouse matrix semantics
+#### M11.1 matrix proposal — explicitly superseded by M11.5a
 
 Human and mouse use one species-independent fragment-overlap counting algorithm,
 parameterized by the species-specific full reference bundle. For selected cell
@@ -3490,14 +3504,34 @@ parameterized by the species-specific full reference bundle. For selected cell
 X[c,j] = sum of fragment contributions from cell c overlapping cCRE j
 ```
 
-Each fragment contributes to every cCRE it overlaps. Its read-support/count field
-is the contribution when present; otherwise each overlap contributes 1. Repeated
-`(cell, cCRE)` contributions sum. The raw matrix is not binarized; complete
-canonical feature order and all-zero cCRE columns remain present. Species changes
-the reference instance, not the counting rule. Mouse counting semantics are
-resolved; incomplete historical resource provenance is not a counting blocker.
-Existing EpiZoo predefined filtering, frequencies, TF-IDF/tokenization, and model
-inference remain downstream model preprocessing. None is implemented by M11.1.
+The original M11.1 proposal used the read-support/count field when present,
+otherwise one per overlap. **M11.5a intentionally supersedes that weighting.**
+Support in current fragments v2 has different producer-specific meanings across
+FASTQ, BAM and external adoption; it cannot establish one universal biological
+weight. The accepted `canonical-fragment-record-overlap-counts.v1` profile instead
+adds exactly one per canonical record per distinct positively overlapping cCRE.
+Support and strand do not affect overlap/value. No new deduplication, support
+expansion, Tn5 shift, center/endpoint projection or fractional weighting occurs.
+Counts sum without binarization. Exact selection rows and full reference columns,
+including zero rows/columns and empty selection, remain authoritative.
+
+Producer neutrality means equal admitted record geometry/multiplicity, selection
+and reference yield equal logical matrices despite producer/support differences.
+It does not equate upstream scientific policies or claim unique molecules,
+sequencing completeness or universal historical training-matrix equivalence.
+EpiZoo filtering, frequencies, TF-IDF, ranking, tokenization and inference remain
+downstream. M11.5a introduces only internal contracts, reference provisioning and
+bounded BEDTools qualification, not a registered matrix tool. See
+[the M11.5a contract](docs/m11.5a-matrix-contract.md).
+
+Project authority now accepts the full ordered feature vocabulary of
+`/home/likeyi/program/EpiZoo/data/Fang2021_downsampled_2000_cells.h5ad` as the exact
+mouse/mm10 reference vocabulary (1,341,077 features). Deterministic strict
+`chrom:start-end` parsing provisions an ordinary reference BED with an explicit
+hash-bound derivation receipt. This is not rediscovery of a historical BED or a
+second mouse matrix path. The source SHA, derived identities and qualification
+record are in the M11.5a document. Human and mouse both consume the existing
+`scatac-reference-bundle.v1` interface.
 
 #### Joint closeout acceptance and deferred execution
 

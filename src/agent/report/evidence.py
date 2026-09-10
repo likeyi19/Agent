@@ -397,7 +397,7 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             digest_field="manifest_sha256"),),
     ),
     "prepare_scATAC_fragments": _ToolProjection(
-        _FRAGMENTS_FIELDS, _FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-fastq-v1",
+        _FRAGMENTS_FIELDS, _FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-fastq-v2",
         (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
             ("fresh_independent_fragments_verification", "strict_manifest_loading",
              "authoritative_manifest_sha256", "exact_public_lineage_and_execution_receipt"),

@@ -51,7 +51,7 @@ def inputs_for(tiny, groups, white, *, shared=False, executable=None):
 
 def bgzf_bytes(payload):
     """Tiny generated BGZF fixtures, including multiple blocks and EOF."""
-    from agent.tools.data.scatac_fragments_verifier import BGZF_EOF
+    from agent.tools.data._fragment_io import BGZF_EOF
     result = bytearray()
     for offset in range(0, len(payload), 32000):
         block = payload[offset:offset+32000]

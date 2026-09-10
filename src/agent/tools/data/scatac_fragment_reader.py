@@ -1,6 +1,6 @@
-"""Verified streaming views over v1/v2; never migrate or produce fragments.
+"""Verified streaming views over the current v2 contract; never migrate or produce fragments.
 
-Open performs the selected contract's fresh verification. Iteration holds only
+Open performs fresh v2 content/resource verification. Iteration holds only
 one decoded record plus BGZF buffers, checks artifact snapshots before/after,
 and checks the complete stream digest on exhaustion. Consume to exhaustion (or
 close) to run the final mutation check. This is trusted-local-filesystem
@@ -61,28 +61,6 @@ def _record(line, namespace, present):
                           int(support), values[5] if present else None)
 
 
-def _dispatch_manifest(path, expected_sha256):
-    """Read bounded JSON for version dispatch, preserving v1's JSON encodings.
-
-    The selected verifier still enforces its own encoding and full contract;
-    in particular this does not relax v2's strict UTF-8 requirement.
-    """
-    v2.sha(expected_sha256)
-    try:
-        with Path(path).open('rb') as stream:
-            payload = stream.read(v2.MAX_BYTES + 1)
-        if len(payload) > v2.MAX_BYTES:
-            v2.fail()
-        if hashlib.sha256(payload).hexdigest() != expected_sha256:
-            v2.fail('FRAGMENTS_V2_DIGEST_MISMATCH')
-        return payload, json.loads(payload, object_pairs_hook=v2._pairs,
-                                   parse_constant=lambda _: v2.fail())
-    except v2.FragmentsV2Error:
-        raise
-    except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
-        v2.fail()
-
-
 @dataclass(frozen=True)
 class VerifiedFragments:
     verification: FragmentVerification
@@ -90,7 +68,7 @@ class VerifiedFragments:
 
     @property
     def manifest(self):
-        """Copy of the original version's metadata, never a converted manifest."""
+        """Copy of verified v2 metadata."""
         return self.verification.manifest
 
     @property
@@ -103,7 +81,7 @@ class VerifiedFragments:
 
     def iter_fragments(self, namespace):
         """Iterate one explicitly selected library in its canonical order."""
-        from .scatac_fragments_verifier import _bgzf_lines
+        from ._fragment_io import _bgzf_lines
         entries = self.manifest['libraries']
         matches = [e for e in entries if e['namespace'] == namespace]
         if len(matches) != 1:
@@ -124,55 +102,27 @@ class VerifiedFragments:
 
 
 def open_verified_fragments(manifest_path, *, expected_sha256, runtime):
-    """Freshly verify one explicitly versioned artifact and expose its view.
+    """Verify v2 content/resources without guessing or routing by producer origin.
 
-    Runtime supplies the existing qualified packaging tools; no aligner field
-    is needed. V1 still invokes its exact accepted verifier. No tool registration,
-    execution configuration lookup, scientific producer, or format guessing.
+    Generic verification does not qualify producer science. Producer-specific
+    tools/verifiers establish that additional authority before downstream use.
+    Historical v1 artifacts are rejected, never upgraded or rewritten.
     """
+    from .scatac_fragments_v2_verifier import verify_fragments_v2
     initial = take_snapshots([manifest_path])
-    payload, value = _dispatch_manifest(manifest_path, expected_sha256)
-    if type(value) is not dict or value.get('artifact_type') != v2.ARTIFACT_TYPE:
+    _, value = v2.read_manifest_bytes(manifest_path, expected_sha256)
+    if (type(value) is dict and value.get('artifact_type') == v2.ARTIFACT_TYPE
+            and type(value.get('schema_version')) is int and value['schema_version'] == 1):
+        fail('FRAGMENTS_CONTRACT_RETIRED')
+    if (type(value) is not dict or value.get('artifact_type') != v2.ARTIFACT_TYPE
+            or type(value.get('schema_version')) is not int or value['schema_version'] != 2):
         fail('FRAGMENTS_READER_CONTRACT_UNSUPPORTED')
-    version = value.get('schema_version')
-    if type(version) is not int:
-        fail('FRAGMENTS_READER_CONTRACT_UNSUPPORTED')
-    if version == 2:
-        from .scatac_fragments_v2_verifier import verify_fragments_v2
-        verified = verify_fragments_v2(manifest_path, expected_sha256=expected_sha256, runtime=runtime)
-    elif version == 1:
-        from .scatac_fragments_manifest import validate_fragments_manifest
-        from .scatac_fragments_verifier import verify_fragments
-        from . import scatac_reference as ref
-        value = validate_fragments_manifest(value)
-        _, bundle, _ = ref.load_scatac_reference_bundle(value['inputs']['reference_path'],
-                                        expected_sha256=value['inputs']['reference_sha256'])
-        paths = [manifest_path, value['inputs']['reference_path'], bundle.genome.fai.path]
-        paths += [Path(manifest_path).parent / e[k]['path'] for e in value['libraries'] for k in ('bgzf', 'tabix')]
-        before = take_snapshots(paths)
-        value = verify_fragments(manifest_path, expected_sha256=expected_sha256, runtime=runtime)
-        dictionary, fai_sha, ordered = ref._inspect_fai(Path(bundle.genome.fai.path),
-                                                        Path(bundle.genome.fasta.path).stat().st_size)
-        if fai_sha != bundle.genome.fai.sha256 or ordered != value['lineage']['ordered_contig_sha256']:
-            fail('FRAGMENTS_READER_REFERENCE_MISMATCH')
-        check_snapshots(before)
-        verified = FragmentVerification(str(manifest_path), expected_sha256, payload,
-            tuple(dictionary.items()), before, bound_resource_identities='legacy_v1_defined_checks',
-            producer_profile_qualification='legacy_qualified_chromap_policy')
-    else:
-        fail('FRAGMENTS_READER_CONTRACT_UNSUPPORTED')
+    verified = verify_fragments_v2(manifest_path, expected_sha256=expected_sha256, runtime=runtime)
     check_snapshots(initial)
-    value = verified.manifest
     libraries = []
-    for entry in value['libraries']:
-        if version == 1:
-            # Preserve the actual legacy policy strings and full manifest access.
-            provenance = {key: value[key] for key in ('backend', 'mapping_policy', 'inputs', 'lineage', 'semantics')}
-            provenance['library'] = entry
-            support = {'unit': 'paired_mappings', 'definition': value['semantics']['support']}
-            mode = 'absent'
-        else:
-            provenance = entry['provenance']; support = provenance['support']; mode = entry['strand']['mode']
+    for entry in verified.manifest['libraries']:
+        provenance = entry['provenance']
         libraries.append(FragmentLibrary(entry['namespace'], entry['n_fragment_records'], entry['sum_support'],
-            entry['n_distinct_barcodes'], entry['max_support'], mode, canonical(provenance), canonical(support)))
+            entry['n_distinct_barcodes'], entry['max_support'], entry['strand']['mode'],
+            canonical(provenance), canonical(provenance['support'])))
     return VerifiedFragments(verified, tuple(libraries))

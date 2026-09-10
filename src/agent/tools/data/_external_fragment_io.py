@@ -9,7 +9,7 @@ import zlib
 
 from . import external_fragment_manifest as m, scatac_reference as ref
 from ._fragments_common import TBI_LIMIT, run_stage, verify_packaging
-from .scatac_fragments_verifier import _bgzf_lines, _query
+from ._fragment_io import _bgzf_lines, _query
 from .scatac_fragments_v2_verifier import file_sha256, take_snapshots, check_snapshots
 
 

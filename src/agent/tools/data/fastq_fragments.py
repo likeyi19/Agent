@@ -1,6 +1,6 @@
-"""Private FASTQ -> canonical fragments data-layer API for future tool wrapping.
+"""Qualified FASTQ -> canonical fragments v2 production.
 
-One selected processing library per Chromap invocation. No Planner registration,
+One selected processing library per Chromap invocation. The existing public tool wraps this data-layer API; no
 cell calling, QC, or cCRE overlap. Output must be a fresh managed directory.
 """
 from dataclasses import asdict
@@ -15,11 +15,12 @@ from . import _chromap as c
 from .chromap_reference_index import _fsync_directory
 from ._fragments_binding import FragmentInputs, library_binding, preflight
 from ._fragments_canonical import canonicalize
-from ._fragments_common import (ARTIFACT_TYPE, CONTRACT_VERSION, SEMANTICS, PACKAGING_POLICY,
+from ._fragments_common import (PACKAGING_POLICY,
     MAX_TOTAL, FragmentsRuntime, fail, run_stage, snapshots, unchanged, verify_packaging)
 from ._fragments_fastq import scan_group
-from .scatac_fragments_manifest import canonical_fragments_manifest_bytes, portable_identity
-from .scatac_fragments_verifier import verify_fragments
+from . import fastq_fragment_manifest as m, scatac_fragments_v2 as v2
+from .scatac_fragments_v2 import canonical_fragments_manifest_v2_bytes
+from .fastq_fragments_verifier import verify_fragments
 
 
 def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: FragmentsRuntime):
@@ -41,6 +42,13 @@ def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: Frag
         raise
     verify_packaging(runtime)
     bound = preflight(inputs, backend)
+    # The current v2 bound counts source entries across all libraries, including
+    # each library's intake/context bindings. Reject before alignment, not after
+    # producing an artifact that the common boundary cannot represent.
+    source_count = sum(len({p for group in groups for _, p in group.files}) + 2
+                       for _, groups in bound['libraries'])
+    if source_count > v2.MAX_SOURCES:
+        fail('FRAGMENTS_V2_CONTRACT_INVALID')
     executable_snapshots = snapshots([runtime.chromap, runtime.bgzip, runtime.tabix, runtime.sort])
     lock = destination.with_name('.' + destination.name + '.lock')
     with lock.open('a+b') as lease:
@@ -87,7 +95,8 @@ def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: Frag
                 run_stage([runtime.tabix, *PACKAGING_POLICY['tabix'], bgzf],
                     cwd=directory, code='FRAGMENTS_INDEX_MISMATCH')
                 entry = {**library_binding(library, groups), **summary,
-                    'scans': {'group:' + g.group_id: scans['group:' + g.group_id] for g in groups}}
+                    'scans': {'group:' + g.group_id: scans['group:' + g.group_id] for g in groups},
+                    'sources': m.source_resources(groups)}
                 for kind, path in (('bgzf', bgzf), ('tabix', Path(str(bgzf) + '.tbi'))):
                     if not path.is_file() or path.is_symlink():
                         fail('FRAGMENTS_INDEX_MISMATCH')
@@ -102,18 +111,24 @@ def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: Frag
                         if not path.is_file() or path.is_symlink():
                             fail('CHROMAP_OUTPUT_INCOMPLETE')
                         path.unlink()
-            value = dict(artifact_type=ARTIFACT_TYPE, schema_version=1, contract_version=CONTRACT_VERSION,
+            record = dict(artifact_type=m.ARTIFACT_TYPE, schema_version=1, contract_version=m.CONTRACT_VERSION,
+                profile_sha256=hashlib.sha256(m.PROFILE_BYTES).hexdigest(),
                 inputs=asdict(inputs), lineage=bound['lineage'], backend=asdict(backend),
                 mapping_policy={'flags': c.FIXED_FLAGS, 'implementation': c.IMPLEMENTATION_POLICY,
                                 'upstream_tag': 'v0.3.2'},
-                packaging_policy=PACKAGING_POLICY, semantics=SEMANTICS, libraries=entries)
-            value['fragments_identity_sha256'] = portable_identity(value)
-            payload = canonical_fragments_manifest_bytes(value)
+                packaging_policy=PACKAGING_POLICY, semantics=m.SEMANTICS, libraries=entries)
+            (stage / 'profile.json').write_bytes(m.PROFILE_BYTES)
+            (stage / 'production.json').write_bytes(m.canonical_record_bytes(record))
+            value = m.build_manifest(m.load_record(stage / 'production.json'), stage)
+            payload = canonical_fragments_manifest_v2_bytes(value)
             manifest = stage / 'manifest.json'; manifest.write_bytes(payload)
             manifest_sha = hashlib.sha256(payload).hexdigest()
             verify_fragments(manifest, runtime=runtime, expected_sha256=manifest_sha)
             unchanged(bound['snapshots']); unchanged(executable_snapshots)
             c.identify_backend(runtime.chromap, expected_sha256=backend.executable_sha256)
+            # V2 binds owned profile/record resources by absolute locator.
+            payload = m.relocate_manifest(value, destination)
+            manifest.write_bytes(payload); manifest_sha = hashlib.sha256(payload).hexdigest()
             for path in stage.rglob('*'):
                 if path.is_file():
                     with path.open('rb') as stream:
@@ -128,8 +143,8 @@ def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: Frag
             os.rename(stage, destination)
             _fsync_directory(destination.parent)
             return dict(status='success', manifest_path=str(destination / 'manifest.json'),
-                manifest_sha256=manifest_sha, artifact_type=ARTIFACT_TYPE, artifact_schema_version=1,
-                contract_version=CONTRACT_VERSION, species=bound['bundle'].species,
+                manifest_sha256=manifest_sha, artifact_type=v2.ARTIFACT_TYPE, artifact_schema_version=2,
+                contract_version=v2.CONTRACT_VERSION, species=bound['bundle'].species,
                 assembly=bound['bundle'].target_assembly, n_libraries=len(entries),
                 n_fragment_records=sum(e['n_fragment_records'] for e in entries), total_support=total)
         finally:

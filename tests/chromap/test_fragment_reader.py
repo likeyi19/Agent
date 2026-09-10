@@ -1,144 +1,80 @@
-"""Compatibility through the real v1 domain/verifier with external stages faked."""
+"""Current FASTQ v2 boundary and explicit retirement of transitional v1."""
 import hashlib
 import json
 from pathlib import Path
-
 import pytest
-
 from agent.orchestration import build_default_tool_registry
-from agent.tools.data import scatac_fragment_reader as reader
-from agent.tools.data import scatac_fragments_manifest as manifest
-from agent.tools.data import scatac_fragments_verifier as verifier
-from agent.tools.data import scatac_fragments as public
-from agent.tools.data.scatac_fragments_v2_verifier import FragmentVerificationRuntime
-from agent.report.fragments import SUPPORT_DEFINITION
+from agent.tools.data import scatac_fragment_reader as reader, scatac_fragments as public
+from agent.tools.data import scatac_fragments_v2 as v2, fastq_fragment_manifest as producer
+from agent.tools.data.fastq_fragments_verifier import verify_fragments
+from agent.tools.data._fragments_common import FragmentsError
 from fragments_helpers import BC
 from test_fragments_contracts import bound, fake_runtime, published
 
 
-def test_existing_v1_stream_and_exact_metadata_remain_v1(published):
+def test_fastq_v2_common_records_and_full_provenance(published):
     result, runtime, control = published
     path = Path(result['manifest_path']); original = path.read_bytes()
-    legacy = manifest.load_fragments_manifest(path, expected_sha256=result['manifest_sha256'])
-    neutral_runtime = FragmentVerificationRuntime(bgzip=runtime.bgzip, tabix=runtime.tabix, sort=runtime.sort)
-    view = reader.open_verified_fragments(path, expected_sha256=result['manifest_sha256'], runtime=neutral_runtime)
-    assert view.contract_version == 'scatac-fragments.v1'
-    assert view.manifest == legacy
-    assert view.verification.producer_profile_qualification == 'legacy_qualified_chromap_policy'
-    assert view.verification.bound_resource_identities == 'legacy_v1_defined_checks'
-    assert view.verification.producer_history == 'not_verified'
-    rows = list(view.iter_fragments('library_0'))
-    assert rows == [reader.FragmentRecord('library_0', 'chrTiny', 104, 195, BC, 300, None)]
-    assert rows[0].cell_identity == ('library_0', BC)
-    assert view.libraries[0].support_meaning['definition'] == legacy['semantics']['support']
-    assert view.libraries[0].provenance['mapping_policy'] == legacy['mapping_policy']
-    assert path.read_bytes() == original and hashlib.sha256(original).hexdigest() == result['manifest_sha256']
-    assert verifier.verify_fragments(path, runtime=runtime, expected_sha256=result['manifest_sha256']) == legacy
-    assert control['calls'].count('chromap') == 1
+    view = reader.open_verified_fragments(path, expected_sha256=result['manifest_sha256'], runtime=runtime)
+    assert result['artifact_schema_version'] == 2 and view.contract_version == 'scatac-fragments.v2'
+    assert list(view.iter_fragments('library_0')) == [reader.FragmentRecord('library_0','chrTiny',104,195,BC,300,None)]
+    p = view.libraries[0].provenance
+    assert p['kind'] == 'fastq_fragment_production'
+    record = producer.load_record(p['producer_record']['path'], expected_sha256=p['producer_record']['sha256'])
+    assert record['contract_version'] == 'fastq-fragment-production.v1'
+    assert record['libraries'][0]['scans'] and record['libraries'][0]['whitelist_sha256']
+    assert record['lineage']['index_identity'] and record['backend']['executable_sha256']
+    assert record['mapping_policy'] and record['packaging_policy']
+    assert view.libraries[0].support_meaning == {'unit':'paired_mappings','definition':record['semantics']['support']}
+    assert view.verification.producer_profile_qualification == 'not_established'
+    assert verify_fragments(path, runtime=runtime, expected_sha256=result['manifest_sha256']) == view.manifest
+    assert original == path.read_bytes() and control['calls'].count('chromap') == 1
 
 
-def test_reader_reuses_exact_v1_verifier_and_never_v2(published, monkeypatch):
-    from agent.tools.data import scatac_fragments_v2_verifier as v2
-    result, runtime, _ = published; original = verifier.verify_fragments; calls = []
-    def counted(*args, **kwargs):
-        calls.append(True)
-        return original(*args, **kwargs)
-    monkeypatch.setattr(verifier, 'verify_fragments', counted)
-    monkeypatch.setattr(v2, 'verify_fragments_v2', lambda *a, **k: pytest.fail('V1 migrated to V2'))
-    reader.open_verified_fragments(result['manifest_path'], expected_sha256=result['manifest_sha256'], runtime=runtime)
-    assert calls == [True]
-
-
-@pytest.mark.parametrize('encoding', ['utf-8', 'utf-16', 'utf-8-sig'])
-def test_v1_noncanonical_manifest_bytes_are_not_rewritten(published, encoding):
-    result, runtime, _ = published; path = Path(result['manifest_path'])
-    legacy = json.loads(path.read_bytes())
-    payload = json.dumps(legacy, indent=2).encode(encoding)
-    path.write_bytes(payload); digest = hashlib.sha256(payload).hexdigest()
-    assert verifier.verify_fragments(path, expected_sha256=digest, runtime=runtime) == legacy
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    assert view.verification.manifest_bytes == payload
-    assert view.verification.manifest_sha256 == digest and path.read_bytes() == payload
-
-
-def test_v1_whitelist_drift_still_fails(published, bound):
-    result, runtime, _ = published; _, _, white = bound
-    Path(white.resource.path).write_text('T' * 16 + '\n')
-    with pytest.raises(ValueError):
-        reader.open_verified_fragments(result['manifest_path'], expected_sha256=result['manifest_sha256'], runtime=runtime)
-
-
-def test_v1_tool_result_and_projection_authorities_remain_fixed(published):
+def test_current_tool_contract_and_policy(published):
     result, _, _ = published
-    registry = build_default_tool_registry()
-    spec = registry.get('prepare_scATAC_fragments')
+    registry = build_default_tool_registry(); spec = registry.get('prepare_scATAC_fragments')
     registry.validate_result(spec.name, result)
     assert len(registry.names()) == 15
-    assert spec.recovery_policy_version == public.RECOVERY_POLICY == 'prepare-scatac-fragments-fastq-v1'
-    assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v1'
-    assert not spec.optional_arguments
-    assert SUPPORT_DEFINITION == (
-        'Exact number of Chromap-generated paired mappings assigned to the accepted '
-        'cell-level duplicate group under chromap-atac-agent-support-v1, including '
-        'the retained representative.')
+    assert spec.recovery_policy_version == public.RECOVERY_POLICY == 'prepare-scatac-fragments-fastq-v2'
+    assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v2'
+    with pytest.raises(ValueError):
+        registry.validate_result(spec.name, result | {'artifact_schema_version':1,'contract_version':'scatac-fragments.v1'})
 
 
-def test_future_fastq_v2_can_bind_complete_legacy_provenance(published, bound, monkeypatch):
-    """Representability fixture only: no production adapter or migration API."""
-    from agent.tools.data import scatac_fragments_v2 as m
-    from agent.tools.data import scatac_fragments_v2_verifier as v
-    from agent.tools.data._fragments_common import canonical
+@pytest.mark.parametrize('interface', ['reader','fastq','generic'])
+def test_retired_v1_rejected_without_rewrite(tmp_path, monkeypatch, interface):
+    from agent.tools.data import scatac_fragments_v2_verifier as generic
+    path = tmp_path/'historical.json'
+    payload = b'{"artifact_type":"agent.scatac-fragments","schema_version":1,"contract_version":"scatac-fragments.v1"}'
+    path.write_bytes(payload); sha = hashlib.sha256(payload).hexdigest()
+    def forbidden(*args, **kwargs): pytest.fail('Retired artifact triggered execution')
+    monkeypatch.setattr(public, 'resolve_execution', forbidden)
+    if interface == 'reader': call = reader.open_verified_fragments
+    elif interface == 'fastq': call = verify_fragments
+    else: call = generic.verify_fragments_v2
+    with pytest.raises(ValueError, match='CONTRACT_RETIRED'):
+        call(path, expected_sha256=sha, runtime=None)
+    assert path.read_bytes() == payload and list(tmp_path.iterdir()) == [path]
 
-    result, runtime, control = published
-    inputs, group, _ = bound
-    old_path = Path(result['manifest_path']); original = old_path.read_bytes()
-    legacy = manifest.load_fragments_manifest(old_path, expected_sha256=result['manifest_sha256'])
 
-    def resource(path):
-        path = Path(path)
-        return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                    size_bytes=path.stat().st_size)
+def test_old_receipt_policy_is_not_reinterpreted(tmp_path):
+    from agent.tools.data._fragments_common import canonical, digest
+    args = {'output_dir':str(tmp_path)}
+    destination, token, args_sha = public._publication(args, 'execution')
+    destination.mkdir()
+    payload = canonical(dict(artifact_type='agent.fragments-execution-receipt',schema_version=1,
+        policy='prepare-scatac-fragments-fastq-v1',execution_identity=token,
+        arguments_sha256=args_sha,manifest_sha256='0'*64))
+    receipt = destination/'receipt.json'; receipt.write_bytes(payload)
+    with pytest.raises(FragmentsError, match='RECOVERY_MISMATCH'):
+        public.recover_fragments(args, 'execution')
+    assert receipt.read_bytes() == payload
 
-    # The accepted closed v1 record is a concrete witness that the opaque bound
-    # producer-record slot can retain every field, including decoded-role scans,
-    # qualified backend, index, whitelist, namespaces and packaging identities.
-    record = old_path.with_name('synthetic-producer-record.json'); record.write_bytes(original)
-    profile = old_path.with_name('synthetic-profile.json')
-    profile.write_bytes(canonical(legacy['backend']))
-    sources = [{'role': 'fastq', 'resource': resource(path)} for _, path in group.files]
-    sources += [{'role': role, 'resource': resource(path)} for role, path in (
-        ('intake_manifest', inputs.intake_path), ('library_context', inputs.context_path))]
-    sources.sort(key=lambda s: (s['role'], s['resource']['sha256'], s['resource']['path']))
-    provenance = dict(kind='fastq_fragment_production', contract_version='fragment-producer-provenance.v1',
-        profile={'id': legacy['backend']['backend_policy'], 'resource': resource(profile)},
-        sources=sources, producer_record=resource(record),
-        support={'unit': 'paired_mappings', 'definition': legacy['semantics']['support']},
-        processing={key: {'status': 'declared', 'description': legacy['semantics']['tn5'] if key == 'tn5'
-            else 'Exact policy retained in the bound producer record and its context.'} for key in m.PROCESSING_KEYS},
-        source_selection='all_source_records', verification_requirement='producer-specific-verifier-required.v1')
-    entry = legacy['libraries'][0]
-    value = dict(artifact_type=m.ARTIFACT_TYPE, schema_version=2, contract_version=m.CONTRACT_VERSION,
-        reference=dict(manifest_path=inputs.reference_path, manifest_sha256=inputs.reference_sha256,
-            reference_identity_sha256=legacy['lineage']['reference_identity'],
-            species=legacy['lineage']['species'], assembly=legacy['lineage']['assembly'],
-            ordered_contig_sha256=legacy['lineage']['ordered_contig_sha256']), semantics=m.SEMANTICS,
-        libraries=[{key: entry[key] for key in ('namespace', 'bgzf', 'tabix', *m.SUMMARY_KEYS)} |
-                   {'strand': {'mode': 'absent', 'definition': None}, 'provenance': provenance}])
-    value['fragments_identity_sha256'] = m.fragments_identity(value)
-    payload = m.canonical_fragments_manifest_v2_bytes(value)
-    path = old_path.with_name('synthetic-v2.json'); path.write_bytes(payload)
-    monkeypatch.setattr(v, 'verify_packaging', lambda _: None)
-    monkeypatch.setattr(v, '_query', verifier._query)
-    view = reader.open_verified_fragments(path, expected_sha256=hashlib.sha256(payload).hexdigest(), runtime=runtime)
-    retained = view.libraries[0].provenance['producer_record']
-    assert manifest.load_fragments_manifest(retained['path'], expected_sha256=retained['sha256']) == legacy
-    assert Path(retained['path']).read_bytes() == original
-    assert view.libraries[0].provenance == provenance
-    assert view.libraries[0].support_meaning['definition'] == legacy['semantics']['support']
-    assert list(view.iter_fragments('library_0')) == [reader.FragmentRecord('library_0', 'chrTiny', 104, 195, BC, 300, None)]
+
+def test_reader_does_not_qualify_unknown_producer_science(published):
+    result,runtime,_ = published
+    view = reader.open_verified_fragments(result['manifest_path'], expected_sha256=result['manifest_sha256'], runtime=runtime)
+    assert view.verification.artifact_content == 'verified'
+    assert view.verification.bound_resource_identities == 'verified'
     assert view.verification.producer_profile_qualification == 'not_established'
-    assert view.verification.producer_history == 'not_verified'
-    assert old_path.read_bytes() == original and control['calls'].count('chromap') == 1
-    record.write_bytes(original + b' ')
-    with pytest.raises(m.FragmentsV2Error, match='RESOURCE_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=hashlib.sha256(payload).hexdigest(), runtime=runtime)

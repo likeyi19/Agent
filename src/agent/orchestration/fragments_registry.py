@@ -41,7 +41,7 @@ def validate_fragments_result(result):
     from .registry import ToolResultContractError
     if (set(result) != set(ScATACFragmentsResult.__annotations__)
             or result['status'] != 'success' or result['artifact_type'] != 'agent.scatac-fragments'
-            or result['artifact_schema_version'] != 1 or result['contract_version'] != 'scatac-fragments.v1'
+            or type(result['artifact_schema_version']) is not int or result['artifact_schema_version'] != 2 or result['contract_version'] != 'scatac-fragments.v2'
             or result['species'] not in ('human','mouse')
             or result['assembly'] != {'human':'hg38','mouse':'mm10'}[result['species']]
             or re.fullmatch('[0-9a-f]{64}', result['manifest_sha256']) is None
@@ -90,5 +90,5 @@ def fragments_tool_spec():
             'Prepare verified raw scATAC FASTQ sequencing into canonical fragments using repository-owned preprocessing policy.',
             'Requires compatible intake, library-processing context, and reference artifacts. FASTQ only; no cell calling, QC, or cCRE matrix construction.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
-            SemanticProducerPortSpec('fragments','scatac_fragments.v1',
+            SemanticProducerPortSpec('fragments','scatac_fragments.v2',
                 (member('manifest_path'),member('manifest_sha256'))),)))

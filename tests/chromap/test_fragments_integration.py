@@ -7,7 +7,7 @@ import pytest
 from agent.tools.data import _chromap as c
 from agent.tools.data.fastq_fragments import prepare_fastq_fragments
 from agent.tools.data._fragments_common import FragmentsRuntime, FragmentsError
-from agent.tools.data.scatac_fragments_verifier import verify_fragments
+from agent.tools.data.fastq_fragments_verifier import verify_fragments
 from fragments_helpers import BC, inputs_for
 
 
@@ -46,10 +46,16 @@ def test_weighted_layout_e2e(tiny, reads, executables, layout):
     assert path.read_bytes() == before
     assert set(p.name for p in path.parent.iterdir()) == {'fragments.tsv.gz','fragments.tsv.gz.tbi'}
     # Corrupt TBI and update its declared physical hash: usability still fails.
-    from agent.tools.data import scatac_fragments_manifest as fm
+    from agent.tools.data import scatac_fragments_v2 as fm
+    from agent.tools.data import fastq_fragment_manifest as producer
     tbi=Path(str(path)+'.tbi');tbi.write_bytes(b'not a TBI index')
-    entry['tabix']['sha256']=c.sha256(tbi);entry['tabix']['size_bytes']=tbi.stat().st_size
-    Path(result['manifest_path']).write_bytes(fm.canonical_fragments_manifest_bytes(value))
+    root=Path(result['manifest_path']).parent
+    record=producer.load_record(root/'production.json')
+    record['libraries'][0]['tabix']['sha256']=c.sha256(tbi)
+    record['libraries'][0]['tabix']['size_bytes']=tbi.stat().st_size
+    (root/'production.json').write_bytes(producer.canonical_record_bytes(record))
+    value=producer.build_manifest(record,root)
+    Path(result['manifest_path']).write_bytes(fm.canonical_fragments_manifest_v2_bytes(value))
     with pytest.raises(FragmentsError,match='FRAGMENTS_INDEX_MISMATCH'):
         verify_fragments(result['manifest_path'],runtime=runtime)
 
@@ -71,7 +77,7 @@ def test_library_execution_scope(tiny, reads, executables, shared):
 def test_real_sort_fai_order_and_bgzf_repeatability(tmp_path,executables):
     from agent.tools.data._fragments_canonical import canonicalize
     from agent.tools.data._fragments_common import verify_packaging
-    from agent.tools.data.scatac_fragments_verifier import verify_stream
+    from agent.tools.data.fastq_fragments_verifier import verify_stream
     runtime=FragmentsRuntime(executables['candidate']['path']);verify_packaging(runtime)
     raw=tmp_path/'raw.bed'
     raw.write_text(f'chrA\t1\t2\t{BC}\t256\nchrZ\t10\t20\t{BC}\t300\n'

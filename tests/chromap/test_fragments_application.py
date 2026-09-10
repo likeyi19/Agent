@@ -111,7 +111,11 @@ def test_guarded_fragments_application_execute(tiny, reads, executables, monkeyp
     assert not list(app._workspace.run_paths(result.run_id).visualizations.iterdir())
     step = result.run_result.steps[-1]
     assert step.result['total_support'] == 301 and step.verification.passed
+    assert step.result['artifact_schema_version'] == 2
+    assert step.result['contract_version'] == 'scatac-fragments.v2'
     text = Path(result.report.path).read_text()
+    assert 'scatac-fragments.v2' in text
+    assert 'scatac-fragments.v1' not in text
     assert 'Total exact support: ` 301 `' in text
     assert 'Preprocessing has not been performed.' not in text
     if route == 'inspect_dag':

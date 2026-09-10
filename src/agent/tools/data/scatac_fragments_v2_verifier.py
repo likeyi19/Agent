@@ -1,6 +1,6 @@
 """Independent v2 content/reference/resource verification, never production.
 
-Reuses only the v1 verifier's source-neutral BGZF decoder and tabix query helper.
+Uses the source-neutral BGZF decoder and tabix query helper.
 No FASTQ preflight, whitelist validation, Chromap identity/index, or v1 parser is
 used. Profile/source bytes are checked, but no producer profile is qualified and
 no historical processing is reconstructed by this module.
@@ -15,7 +15,7 @@ import subprocess
 from . import scatac_fragments_v2 as m, scatac_reference as reference
 from ._fragments_common import (FragmentsError, MAX_SUPPORT, MAX_TOTAL, TBI_LIMIT,
                                snapshot, verify_packaging)
-from .scatac_fragments_verifier import _bgzf_lines, _query
+from ._fragment_io import _bgzf_lines, _query
 
 
 @dataclass(frozen=True)

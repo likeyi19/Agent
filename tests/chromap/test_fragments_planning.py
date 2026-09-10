@@ -31,7 +31,7 @@ def wire(upstream=False):
 def test_v4_plan_only_without_runtime_or_scientific_io(monkeypatch,upstream):
     from agent.tools.data import scatac_fragments as public, fastq_fragments as private
     from agent.tools.data import _fragments_binding as binding, _fragments_fastq as scan
-    from agent.tools.data import scatac_fragments_verifier as verify
+    from agent.tools.data import fastq_fragments_verifier as verify
     def forbidden(*a,**k):pytest.fail('Scientific IO during PLAN_ONLY')
     monkeypatch.delenv('AGENT_CHROMAP_BIN',raising=False);monkeypatch.delenv('AGENT_CHROMAP_INDEX_ROOT',raising=False)
     for module,name in ((public,'resolve_execution'),(public,'verification_runtime'),(private,'prepare_fastq_fragments'),
@@ -54,7 +54,7 @@ def test_v4_plan_only_without_runtime_or_scientific_io(monkeypatch,upstream):
     assert '/PRIVATE' not in model.prompt and '/PRIVATE' not in str(model.schema)
     for token in ('Chromap','bgzip','tabix','AGENT_CHROMAP','support_bits'):
         assert token not in model.prompt
-    assert 'scatac_fragments.v1' in model.prompt
+    assert 'scatac_fragments.v2' in model.prompt
     assert 'output_dir' not in json.dumps(model.payload)
 
 
@@ -63,12 +63,12 @@ def test_registry_ports_and_executable_allowlist():
     assert set(spec.required_arguments)=={'intake_manifest_path','intake_manifest_sha256','library_context_path',
         'library_context_sha256','reference_bundle_path','reference_bundle_sha256','output_dir'}
     assert not spec.optional_arguments and not spec.retryable_error_codes
-    assert spec.recovery_policy_version=='prepare-scatac-fragments-fastq-v1'
+    assert spec.recovery_policy_version=='prepare-scatac-fragments-fastq-v2'
     ports={p.name:p for p in spec.semantic_planning.consumer_ports}
     assert set(ports)=={'intake','library_context','reference','output_dir'}
     assert ports['intake'].accepted_upstream_types==('raw_scatac_intake_manifest.v1',)
     assert not ports['library_context'].accepted_upstream_types and not ports['reference'].accepted_upstream_types
-    assert spec.semantic_planning.producer_ports[0].semantic_type=='scatac_fragments.v1'
+    assert spec.semantic_planning.producer_ports[0].semantic_type=='scatac_fragments.v2'
     assert len(spec.semantic_planning.producer_ports)==1
     assert ArtifactSemanticKind.SCATAC_FRAGMENTS not in (ArtifactSemanticKind.RAW_SCATAC,
         ArtifactSemanticKind.RAW_SCATAC_SEQUENCING,ArtifactSemanticKind.RAW_SCATAC_INTAKE_MANIFEST)

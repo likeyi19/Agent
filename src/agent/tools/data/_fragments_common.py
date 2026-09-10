@@ -1,4 +1,4 @@
-"""Frozen M11.2c definitions and process boundaries; no scientific registry."""
+"""Shared integer bounds and frozen packaging/process boundaries."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -9,22 +9,10 @@ import subprocess
 
 from . import _chromap as chromap
 
-ARTIFACT_TYPE = 'agent.scatac-fragments'
-CONTRACT_VERSION = 'scatac-fragments.v1'
 MAX_SUPPORT = 2**64 - 1
 MAX_TOTAL = 2**128 - 1
 TBI_LIMIT = 2**29
 MAX_LINE = 1024 * 1024
-SEMANTICS = {
-    'coordinates': '0-based-half-open',
-    'order': 'fai-rank,start-numeric,end-numeric,barcode-ascii.v1',
-    'support': chromap.SUPPORT_SEMANTICS,
-    'tn5': 'Chromap-only:+4-start,-5-end;no-second-shift',
-    'distinct_barcodes': 'observed-accepted-fragment-tokens;not-called-cells',
-    'individual_support_max': MAX_SUPPORT,
-    'aggregate_support_max': MAX_TOTAL,
-    'stream_identity': 'sha256(canonical-utf8-five-tab-fields-with-LF-in-order)',
-}
 TOOLCHAIN = json.loads(Path(__file__).with_name('_fragments_toolchain.json').read_text())
 PACKAGING_POLICY = {'bgzip': ['-c', '-l', '6', '-@', '1'], 'tabix': ['-p', 'bed'],
     'index_format': 'TBI', 'sort': ['--parallel=1', '-S', '64M', '-t', '\t',

@@ -13,8 +13,8 @@ from agent.tools.data import _fragments_common as common
 from agent.tools.data import _fragments_binding as binding
 from agent.tools.data import _fragments_canonical as production
 from agent.tools.data import fastq_fragments as api
-from agent.tools.data import scatac_fragments_verifier as verifier
-from agent.tools.data import scatac_fragments_manifest as manifest
+from agent.tools.data import fastq_fragments_verifier as verifier
+from agent.tools.data import scatac_fragments_v2 as manifest
 from agent.tools.data._fragments_fastq import scan_group
 from fragments_helpers import BC, backend, inputs_for, bgzf_bytes
 
@@ -34,6 +34,8 @@ def fake_runtime(monkeypatch, tiny):
     monkeypatch.setattr(c, 'identify_backend', lambda *a, **k: backend())
     monkeypatch.setattr(api, 'verify_packaging', lambda _: None)
     monkeypatch.setattr(verifier, 'verify_packaging', lambda _: None)
+    from agent.tools.data import scatac_fragments_v2_verifier as generic
+    monkeypatch.setattr(generic, 'verify_packaging', lambda _: None)
     control = {'rows': f'chrTiny\t104\t195\t{BC}\t300\n'.encode(), 'interrupt': None,
                'fail': None, 'after': None, 'calls': []}
     def stage(argv, *, cwd, code, output=None):
@@ -63,6 +65,7 @@ def fake_runtime(monkeypatch, tiny):
         return hashlib.sha256(b''.join(row for row in rows if row.split(b'\t')[0].decode()==chrom
             and int(row.split(b'\t')[1])<right and int(row.split(b'\t')[2])>left)).hexdigest()
     monkeypatch.setattr(verifier, '_query', query)
+    monkeypatch.setattr(generic, '_query', query)
     def listing(argv, **kwargs):
         assert argv[1]=='-l'
         return SimpleNamespace(returncode=0,stdout=b'chrTiny\n')
@@ -213,7 +216,7 @@ def test_source_change_during_stages(tiny,bound,fake_runtime,where):
 
 @pytest.mark.parametrize('kind', ['bgzf','tabix'])
 def test_published_corruption(published,kind):
-    result,runtime,_=published;value=manifest.load_fragments_manifest(result['manifest_path'])
+    result,runtime,_=published;value=manifest.load_fragments_manifest_v2(result['manifest_path'], expected_sha256=result['manifest_sha256'])
     path=Path(result['manifest_path']).parent/value['libraries'][0][kind]['path']
     path.write_bytes(path.read_bytes()[:-3]+b'bad')
     with pytest.raises(common.FragmentsError):verifier.verify_fragments(result['manifest_path'],runtime=runtime)
@@ -235,29 +238,33 @@ def test_strict_manifest(published,mutation):
     elif mutation=='duplicate_library':value['libraries']*=2
     elif mutation=='bad_sha':value['libraries'][0]['bgzf']['sha256']='x'*64
     payload=json.dumps(value).encode()
-    if mutation=='duplicate_key':payload=payload.replace(b'"schema_version": 1',b'"schema_version": 1, "schema_version": 1')
-    elif mutation=='nonfinite':payload=payload.replace(b'"schema_version": 1',b'"schema_version": NaN')
+    if mutation=='duplicate_key':payload=payload.replace(b'"schema_version": 2',b'"schema_version": 2, "schema_version": 2')
+    elif mutation=='nonfinite':payload=payload.replace(b'"schema_version": 2',b'"schema_version": NaN')
     path.write_bytes(payload)
-    with pytest.raises(common.FragmentsError):manifest.load_fragments_manifest(path)
+    with pytest.raises(ValueError):manifest.load_fragments_manifest_v2(path, expected_sha256=c.sha256(path))
 
 
 def test_lightweight_loader_and_portability(published,monkeypatch):
     result,_,_=published
     monkeypatch.setattr(binding,'fresh_intake',lambda _:pytest.fail('Unexpected raw IO'))
-    value=manifest.load_fragments_manifest(result['manifest_path'])
+    value=manifest.load_fragments_manifest_v2(result['manifest_path'], expected_sha256=result['manifest_sha256'])
     other=deepcopy(value)
-    other['inputs']['reference_path']='/relocated/reference.json'
+    other['reference']['manifest_path']='/relocated/reference.json'
     other['libraries'][0]['bgzf']['sha256']='1'*64
-    assert manifest.portable_identity(other)==value['fragments_identity_sha256']
+    assert manifest.fragments_identity(other)==value['fragments_identity_sha256']
     other['libraries'][0]['namespace']='changed'
-    assert manifest.portable_identity(other)!=value['fragments_identity_sha256']
+    assert manifest.fragments_identity(other)!=value['fragments_identity_sha256']
 
 
 def test_independent_verifier_recomputes_counts(published,monkeypatch):
     result,runtime,_=published;path=Path(result['manifest_path'])
-    value=manifest.load_fragments_manifest(path);value['libraries'][0]['sum_support']+=1
-    value['fragments_identity_sha256']=manifest.portable_identity(value)
-    path.write_bytes(manifest.canonical_fragments_manifest_bytes(value))
+    from agent.tools.data import fastq_fragment_manifest as fm
+    record_path=path.parent/'production.json';record=fm.load_record(record_path)
+    record['libraries'][0]['sum_support']+=1
+    record['libraries'][0]['max_support']+=1
+    record_path.write_bytes(fm.canonical_record_bytes(record))
+    value=fm.build_manifest(record,path.parent)
+    path.write_bytes(manifest.canonical_fragments_manifest_v2_bytes(value))
     monkeypatch.setattr(production,'raw_record',lambda *a:pytest.fail('Production parser called'))
     with pytest.raises(common.FragmentsError,match='FRAGMENTS_VERIFICATION_MISMATCH'):
         verifier.verify_fragments(path,runtime=runtime)
@@ -357,7 +364,7 @@ def test_tbi_limit_no_csi_fallback(bound,monkeypatch):
 def test_nonprocess_interruption(tiny,bound,fake_runtime,monkeypatch,point):
     inputs,_,_=bound;runtime,_=fake_runtime
     def interrupt(*a,**k):raise KeyboardInterrupt()
-    target={'scan':'scan_group','verification':'verify_fragments','manifest':'canonical_fragments_manifest_bytes'}[point]
+    target={'scan':'scan_group','verification':'verify_fragments','manifest':'canonical_fragments_manifest_v2_bytes'}[point]
     monkeypatch.setattr(api,target,interrupt)
     with pytest.raises(KeyboardInterrupt):
         api.prepare_fastq_fragments(inputs=inputs,runtime=runtime,output_dir=tiny['root']/'published')
@@ -432,16 +439,16 @@ def test_unexpected_backend_artifact_rejected(tiny,bound,fake_runtime):
 
 
 def test_missing_published_component_has_stable_error(published):
-    result,runtime,_=published;value=manifest.load_fragments_manifest(result['manifest_path'])
+    result,runtime,_=published;value=manifest.load_fragments_manifest_v2(result['manifest_path'], expected_sha256=result['manifest_sha256'])
     (Path(result['manifest_path']).parent/value['libraries'][0]['tabix']['path']).unlink()
     with pytest.raises(common.FragmentsError,match='FRAGMENTS_VERIFICATION_MISMATCH'):
         verifier.verify_fragments(result['manifest_path'],runtime=runtime)
 
 
 def test_validator_rejects_unhashable_nested_shape(published):
-    result,_,_=published;value=manifest.load_fragments_manifest(result['manifest_path'])
-    value['libraries'][0]['group_ids']=[{}]
-    with pytest.raises(common.FragmentsError):manifest.validate_fragments_manifest(value)
+    result,_,_=published;value=manifest.load_fragments_manifest_v2(result['manifest_path'], expected_sha256=result['manifest_sha256'])
+    value['libraries'][0]['provenance']['sources']=[{}]
+    with pytest.raises(ValueError):manifest.validate_fragments_manifest_v2(value)
 
 
 @pytest.mark.parametrize('path',['relative.json','/tmp/../reference.json','/tmp/ref\n.json'])

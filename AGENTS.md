@@ -71,7 +71,7 @@ derived from the registry.
 | `build_replicate_pseudobulk` | Exact sparse SUM by `(group, replicate, condition)` |
 | `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
 | `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
-| `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library BGZF/tabix fragments with exact support and durable publication recovery |
+| `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library v2 BGZF/tabix fragments with exact support, rich Chromap provenance and durable publication recovery |
 | `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
 | `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
 
@@ -85,17 +85,29 @@ M11.1 is complete at the data-domain/artifact layer: immutable reference identit
 and library/barcode processing contracts are available through their modules.
 They add no registered scientific tools. Reference selection and library/barcode
 decisions remain independent. Completed M11.2 FASTQ preprocessing consumes both
-alongside a freshly verified M10 intake manifest. M11.3a adds only producer-neutral
-fragments v2 and a common verified v1/v2 streaming interface; FASTQ production
-remains v1 and the original thirteen tools retain their existing contracts.
-M11.3b adds one external-adoption tool with independent complete source and
-canonicalization/conservation verification under an explicitly selected profile.
-Generic v2 content/resource verification alone does not qualify producer profiles;
-external adoption does not reconstruct historical processing. M11.3c adds the
-single qualified corrected-CB BAM producer with independent transformation
-verification; upstream history remains declared. New FASTQ-to-v2 convergence
-(M11.3d), cell selection/QC (M11.4) and cell-by-cCRE construction (M11.5) remain
-unimplemented.
+alongside a freshly verified M10 intake manifest. M11.3a introduced the
+producer-neutral v2 boundary, M11.3b qualified external adoption, and M11.3c
+qualified corrected-CB BAM transformation. M11.3d now converges FASTQ, BAM and
+external fragment inputs on verified producer-neutral `scatac-fragments.v2`;
+transitional fragments v1 is retired from the current runtime. The common
+reader is v2-only. FASTQ retains its exact qualified M11.2 science and rich
+producer record; its current recovery policy is
+`prepare-scatac-fragments-fastq-v2`. The registry remains fifteen tools.
+
+Generic v2 content/resource verification alone does not qualify producer
+profiles. FASTQ, BAM and external routes retain their producer-specific
+verification and distinct support definitions; upstream history remains
+subject to each producer's declared verification limits. Current downstream
+consumers use the common v2 interface, not origin-based scientific routing.
+
+This pre-release migration intentionally rejects historical v1 fragment
+artifacts and does not support resuming their persisted runs/receipts. There
+is no automatic upgrade or permanent dual-runtime compatibility. Git history
+preserves the historical implementation; milestone sections below describe
+behavior at their original checkpoints, superseded by the current contract.
+Cell selection/QC (M11.4) and cell-by-cCRE construction (M11.5) remain
+unimplemented. The exact current boundary is documented in
+[the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.
 
 ## Current scientific runtime and verification contracts
@@ -4011,3 +4023,29 @@ Measured full inspection catalog sizes: v3 prompt **22,150** + schema **15,296**
 The explicit budgets were updated for complete fifteen-tool guidance; no metadata
 was removed. The historical M9 benchmark corpus remains unchanged and BAM has
 separate v3/v4 acceptance. `git diff --check` passed. No commit or push was made.
+
+## Milestone 11.3d — Fragment convergence and v1 retirement
+
+Fragment-layer convergence: FASTQ, BAM and external fragment inputs now converge
+on verified producer-neutral `scatac-fragments.v2`; transitional fragments v1 is
+retired from the current runtime. This intentionally supersedes the historical
+M11.2/M11.3a–c compatibility statements above without erasing those records.
+
+The existing FASTQ tool publishes schema 2 with a closed, hash-bound
+`fastq-fragment-production.v1` producer record (the record's independent schema
+version is not the retired fragment artifact version). All accepted M11.2
+scientific fields remain: input and reference/index identities, library/group
+and role bindings, whitelist identities, decoded FASTQ scans, pinned backend,
+fixed mapping/packaging/Tn5/support policies, canonical stream and BGZF/TBI
+identities, and exact summaries. The verifier additionally checks encoded
+source hashes and freshly recomputes decoded scans. It does not rerun alignment.
+
+Current FASTQ recovery uses `prepare-scatac-fragments-fastq-v2`. Old fragment
+artifacts, results and receipts fail closed, without an on-the-fly migration.
+Other independently versioned v1 contracts (raw intake, reference/context,
+producer records/profiles, receipt envelopes, and run-state compatibility) are
+unaffected. Their version numbers do not denote fragments v1 support.
+
+See [M11.3d](docs/m11.3d-fragment-convergence.md) for the blast-radius audit,
+provenance mapping, common API, semantic comparison, validation and limitations.
+No M11.4 or M11.5 implementation is included.

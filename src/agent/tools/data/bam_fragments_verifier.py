@@ -10,7 +10,7 @@ from . import bam_fragment_manifest as m, _bam_fragment_io as io, _external_frag
 from . import scatac_fragments_v2 as v2
 from ._fragments_common import digest
 from .scatac_fragments_v2_verifier import verify_fragments_v2, FragmentVerification
-from .scatac_fragments_verifier import _bgzf_lines
+from ._fragment_io import _bgzf_lines
 
 
 @dataclass(frozen=True)

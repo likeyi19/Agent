@@ -16,7 +16,7 @@ from agent.tools.data import scatac_fragments_v2_verifier as v
 from agent.tools.data import scatac_fragment_reader as reader
 from agent.tools.data import scatac_reference as ref
 from agent.tools.data._fragments_common import MAX_SUPPORT, MAX_TOTAL, canonical
-from agent.tools.data.scatac_fragments_verifier import BGZF_EOF
+from agent.tools.data._fragment_io import BGZF_EOF
 
 
 def sha(data):
@@ -418,7 +418,7 @@ def test_noncanonical_json_byte_identity_and_no_source_io(factory, runtime, monk
 
 
 @pytest.mark.parametrize('encoding', ['utf-16', 'utf-8-sig'])
-def test_reader_legacy_encoding_dispatch_does_not_relax_v2(factory, runtime, encoding):
+def test_reader_rejects_non_utf8_v2_encoding(factory, runtime, encoding):
     path, _, value = factory()
     payload = json.dumps(value).encode(encoding); path.write_bytes(payload)
     with pytest.raises(m.FragmentsV2Error):

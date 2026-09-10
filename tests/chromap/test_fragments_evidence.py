@@ -46,7 +46,8 @@ def test_fragments_evidence_facts_artifacts_and_determinism(fragment_run, tmp_pa
     assert payload['steps'][0]['verification']['freshly_verified']
     artifacts = payload['artifacts']
     assert [a['artifact_kind'] for a in artifacts] == [
-        'scatac_fragments_manifest_json', 'scatac_fragments_bgzf', 'scatac_fragments_tabix']
+        'scatac_fragments_manifest_json', 'scatac_fragments_bgzf', 'scatac_fragments_tabix',
+        'fastq_fragment_profile', 'fastq_fragment_production_record']
     import hashlib
     for artifact in artifacts:
         assert artifact['integrity']['authoritative_digest']['value'] == hashlib.sha256(
@@ -115,11 +116,16 @@ def test_library_summary_bound_is_explicit(monkeypatch):
         tabix={'path': f'library_{i}.tbi', 'sha256': '2'*64}) for i in range(52)]
     manifest = {'libraries': entries, 'backend': {'backend_policy': 'chromap-atac-agent-support-v1',
         'upstream_version': '0.3.2', 'upstream_commit': 'pinned'}}
+    from agent.tools.data import fastq_fragment_manifest as producer
+    for entry in entries:
+        entry['provenance'] = {'profile': {'resource': {'path':'/synthetic/profile.json','sha256':'3'*64}},
+            'producer_record': {'path':'/synthetic/production.json','sha256':'4'*64}}
+    monkeypatch.setattr(producer, 'record_for_manifest', lambda *a: manifest)
     # Presentation-bound test only; scientific verification is tested above.
     monkeypatch.setattr(scatac_fragments, 'verify_public_result', lambda *a: manifest)
     facts, artifacts = project_fragments({}, {'manifest_path': '/synthetic/manifest.json'}, 'fragments')
     assert len(facts['library_summary']) == LIBRARY_SUMMARY_LIMIT
-    assert facts['n_libraries_omitted_from_summary'] == 2 and len(artifacts) == 104
+    assert facts['n_libraries_omitted_from_summary'] == 2 and len(artifacts) == 106
 
 
 def test_independent_namespaces_remain_separate_in_evidence_and_report(tiny, reads, fake_runtime, monkeypatch):
@@ -145,7 +151,7 @@ def test_independent_namespaces_remain_separate_in_evidence_and_report(tiny, rea
     assert facts['n_libraries'] == 2 and facts['total_support'] == 600
     assert [row['namespace'] for row in facts['library_summary']] == ['library_0', 'library_1']
     assert [row['n_distinct_fragment_barcodes'] for row in facts['library_summary']] == [1, 1]
-    assert len(payload['artifacts']) == 5
+    assert len(payload['artifacts']) == 7
     report = build_analysis_report(run, evidence, tiny['root'] / 'report', registry=registry)
     text = Path(report['report_path']).read_text()
     assert 'library_0' in text and 'library_1' in text and BC not in text

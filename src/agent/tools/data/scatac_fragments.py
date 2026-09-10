@@ -7,7 +7,7 @@ Only the registry's durable hook can recover a run/plan/step-bound receipt.
 from pathlib import Path
 from typing import TypedDict
 
-RECOVERY_POLICY = 'prepare-scatac-fragments-fastq-v1'
+RECOVERY_POLICY = 'prepare-scatac-fragments-fastq-v2'
 
 
 class ScATACFragmentsResult(TypedDict):
@@ -82,8 +82,8 @@ def _publication(arguments, execution_identity):
 def _summary(value, path, sha):
     return ScATACFragmentsResult(status='success', manifest_path=str(path), manifest_sha256=sha,
         artifact_type=value['artifact_type'], artifact_schema_version=value['schema_version'],
-        contract_version=value['contract_version'], species=value['lineage']['species'],
-        assembly=value['lineage']['assembly'], n_libraries=len(value['libraries']),
+        contract_version=value['contract_version'], species=value['reference']['species'],
+        assembly=value['reference']['assembly'], n_libraries=len(value['libraries']),
         n_fragment_records=sum(e['n_fragment_records'] for e in value['libraries']),
         total_support=sum(e['sum_support'] for e in value['libraries']))
 
@@ -91,7 +91,7 @@ def _summary(value, path, sha):
 def _read_receipt(destination, arguments, expected_identity=None):
     import json
     from ._fragments_common import digest, fail, snapshot
-    from .scatac_fragments_manifest import _pairs
+    from .scatac_fragments_v2 import _pairs
     receipt = destination / 'receipt.json'
     try:
         snapshot(receipt)
@@ -118,7 +118,7 @@ def _read_receipt(destination, arguments, expected_identity=None):
 
 def verify_public_result(arguments, result):
     from ._fragments_common import fail, snapshots, unchanged
-    from .scatac_fragments_verifier import verify_fragments
+    from .fastq_fragments_verifier import verify_fragments
     path = Path(result['manifest_path'])
     destination = path.parent.parent
     output = Path(arguments['output_dir']).resolve()
@@ -133,7 +133,9 @@ def verify_public_result(arguments, result):
     names = {'intake_manifest_path': 'intake_path', 'intake_manifest_sha256': 'intake_sha256',
         'library_context_path': 'context_path', 'library_context_sha256': 'context_sha256',
         'reference_bundle_path': 'reference_path', 'reference_bundle_sha256': 'reference_sha256'}
-    if any(value['inputs'][field] != str(arguments[arg]) for arg, field in names.items()):
+    from .fastq_fragment_manifest import record_for_manifest
+    record = record_for_manifest(value, path.parent)
+    if any(record['inputs'][field] != str(arguments[arg]) for arg, field in names.items()):
         fail('FRAGMENTS_VERIFICATION_MISMATCH')
     if dict(result) != _summary(value, path, result['manifest_sha256']):
         fail('FRAGMENTS_VERIFICATION_MISMATCH')
@@ -144,13 +146,13 @@ def verify_public_result(arguments, result):
 def recover_fragments(arguments, execution_identity):
     """Exact durable receipt lookup only; no aligner, index-root lookup, or rerun."""
     from ._fragments_common import fail
-    from .scatac_fragments_manifest import load_fragments_manifest
+    from .fastq_fragment_manifest import load_manifest
     destination, token, _ = _publication(arguments, execution_identity)
     if not destination.exists() or destination.is_symlink():
         fail('FRAGMENTS_RECOVERY_UNAVAILABLE')
     receipt = _read_receipt(destination, arguments, token)
     path = destination / 'fragments' / 'manifest.json'
-    value = load_fragments_manifest(path, expected_sha256=receipt['manifest_sha256'])
+    value = load_manifest(path, expected_sha256=receipt['manifest_sha256'])
     result = _summary(value, path, receipt['manifest_sha256'])
     verify_public_result(arguments, result)
     return result
@@ -184,21 +186,31 @@ def execute_fragments(arguments, execution_identity=None):
         stage = Path(tempfile.mkdtemp(prefix='.fragments-envelope-', dir=output))
         try:
             result = prepare_fastq_fragments(inputs=inputs, runtime=runtime, output_dir=stage / 'fragments')
+            from .fastq_fragments_verifier import verify_fragments
+            from .fastq_fragment_manifest import load_manifest, relocate_manifest
+            from ._chromap import sha256
+            verify_fragments(result['manifest_path'], runtime=verification_runtime(),
+                             expected_sha256=result['manifest_sha256'])
+            manifest = Path(result['manifest_path'])
+            value = load_manifest(manifest, expected_sha256=result['manifest_sha256'])
+            manifest.write_bytes(relocate_manifest(value, destination / 'fragments'))
+            result['manifest_sha256'] = sha256(manifest)
+            with manifest.open('rb') as stream:
+                os.fsync(stream.fileno())
             receipt = dict(artifact_type='agent.fragments-execution-receipt', schema_version=1,
                 policy=RECOVERY_POLICY, execution_identity=token, arguments_sha256=args_sha,
                 manifest_sha256=result['manifest_sha256'])
             (stage / 'receipt.json').write_bytes(canonical(receipt))
-            from .scatac_fragments_verifier import verify_fragments
-            verify_fragments(result['manifest_path'], runtime=verification_runtime(),
-                             expected_sha256=result['manifest_sha256'])
             with (stage / 'receipt.json').open('rb') as stream:
                 os.fsync(stream.fileno())
+            _fsync_directory(stage / 'fragments')
             _fsync_directory(stage)
             if destination.exists() or destination.is_symlink():
                 fail('FRAGMENTS_ARTIFACT_CONFLICT')
             os.rename(stage, destination)
             _fsync_directory(output)
             result['manifest_path'] = str(destination / 'fragments' / 'manifest.json')
+            verify_public_result(args, result)
             return result
         finally:
             if stage.exists():

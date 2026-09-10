@@ -1,9 +1,7 @@
-"""Producer-neutral fragments v2 domain; no fragment production or adoption.
+"""Current producer-neutral fragments v2 domain.
 
-Profile/source identities are bound claims, not execution authority. There are
-no qualified v2 producers in M11.3a. A producer-specific verifier must establish
-the scientific meaning/history of a future producer; generic verification checks
-contents and resource bytes only. Existing Chromap fragments v1 is unchanged.
+Generic verification checks contents and bound resources. Producer-specific
+verification establishes scientific policy; metadata alone grants no authority.
 """
 from copy import deepcopy
 import hashlib
@@ -122,7 +120,7 @@ def _provenance(value):
         fail('FRAGMENTS_V2_PROVENANCE_INVALID')
     if kind != 'external_fragment_adoption' and any(roles.count(r) != 1 for r in ('intake_manifest', 'library_context')):
         fail('FRAGMENTS_V2_PROVENANCE_INVALID')
-    # Reserve truthful future FASTQ publication without changing the v1 producer.
+    # FASTQ publication requires its rich, separately verified producer record.
     # Rich backend/index/whitelist/decoded-source lineage belongs in a bound,
     # producer-specific record, whose interpretation requires its own verifier.
     if kind == 'fastq_fragment_production' and value['producer_record'] is None:
@@ -183,6 +181,9 @@ def fragments_identity(value):
 def validate_fragments_manifest_v2(value):
     """Closed, bounded manifest validation with no scientific resource IO."""
     try:
+        if (type(value) is dict and value.get('artifact_type') == ARTIFACT_TYPE
+                and type(value.get('schema_version')) is int and value['schema_version'] == 1):
+            fail('FRAGMENTS_CONTRACT_RETIRED')
         shape(value, ('artifact_type', 'schema_version', 'contract_version', 'reference',
                       'semantics', 'libraries', 'fragments_identity_sha256'))
         if (value['artifact_type'] != ARTIFACT_TYPE or type(value['schema_version']) is not int

@@ -129,7 +129,7 @@ model preprocessing, retaining 700,460 human or 814,020 mouse features.
 `prepare_scATAC_fragments` consumes a validated intake, library-processing context,
 and reference bundle. Human FASTQ targets hg38; mouse FASTQ targets mm10. The
 patched/pinned Chromap backend preserves exact duplicate-group support. Output is
-canonical per-library BGZF fragments with tabix indexes and an independently
+canonical per-library v2 BGZF fragments with tabix indexes and an independently
 verified manifest. Identity remains `(namespace, barcode)`; observed fragment
 barcodes are not called cells.
 
@@ -141,15 +141,23 @@ matching index catalog (`AGENT_CHROMAP_INDEX_ROOT`); production full-genome inde
 provisioning and biological FASTQ acceptance remain deferred. No automatic index
 build or backend fallback occurs.
 
-**M11.3a is complete: producer-neutral fragment boundary.** Strict fragments v2
-and a common freshly verified v1/v2 streaming interface preserve exact support,
-namespace/identifier identity, optional strand and producer-specific provenance.
-Generic verification checks artifact contents and bound resource identities;
-producer-specific checks are separate from historical processing claims.
-M11.2 FASTQ production continues publishing v1 unchanged.
-New FASTQ runs are intended to converge on v2 after validation across real
-producer types, provisionally at M11.3d/joint closeout; historical v1 compatibility
-will remain. The reserved v2 FASTQ provenance kind adds no execution route.
+**M11.3d converges all three fragment routes on v2.** FASTQ, qualified BAM,
+and adopted external fragments publish `agent.scatac-fragments`, schema 2,
+`scatac-fragments.v2`. The existing FASTQ tool retains the qualified Chromap
+science and complete M11.2 provenance in a bound producer record. Its recovery
+policy is now `prepare-scatac-fragments-fastq-v2`. The registry remains 15 tools.
+
+The common freshly verified v2 streaming interface preserves reference,
+namespace/barcode identity, exact integer support, optional strand and producer
+provenance. Generic content/resource verification does not qualify producer
+science; each producer retains its own verification and support meaning.
+There is no downstream format branch by producer origin.
+
+This is an intentional pre-release compatibility break. Fragments v1 artifacts
+and their persisted runs/receipts are unsupported by the current runtime;
+there is no automatic upgrade or dual recovery path. Git history and the
+historical M11.2/M11.3a–c records preserve the former v1 behavior. See the
+[M11.3d contract and M11.4 input boundary](docs/m11.3d-fragment-convergence.md).
 
 **M11.3b is complete: verified external-fragment adoption.** The new
 `import_scATAC_fragments` tool accepts the explicitly selected
@@ -183,7 +191,7 @@ not independently proven. All 15 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
 Biological acceptance remains deferred to M11.8.
 
-M11.3d joint closeout/new FASTQ→v2 convergence remains future work. CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
+CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
 construction and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).

@@ -19,13 +19,15 @@ def project_fragments(arguments, result, step_id):
     """Reverify before deriving facts; no production execution or raw payloads."""
     from agent.tools.data.scatac_fragments import verify_public_result
     manifest = verify_public_result(arguments, result)
+    from agent.tools.data.fastq_fragment_manifest import record_for_manifest
+    record = record_for_manifest(manifest, Path(result['manifest_path']).parent)
     libraries = manifest['libraries']
     selected = sorted(libraries, key=lambda entry: entry['namespace'])[:LIBRARY_SUMMARY_LIMIT]
     facts = {
         'input_kind': 'FASTQ',
-        'backend_policy': manifest['backend']['backend_policy'],
-        'upstream_version': manifest['backend']['upstream_version'],
-        'upstream_commit': manifest['backend']['upstream_commit'],
+        'backend_policy': record['backend']['backend_policy'],
+        'upstream_version': record['backend']['upstream_version'],
+        'upstream_commit': record['backend']['upstream_commit'],
         'support_definition': SUPPORT_DEFINITION,
         'library_summary': [dict(namespace=entry['namespace'],
             n_fragment_records=entry['n_fragment_records'], total_support=entry['sum_support'],
@@ -56,4 +58,14 @@ def project_fragments(arguments, result, step_id):
                     ),
                 },
             })
+    for key, kind in (('profile', 'fastq_fragment_profile'), ('producer_record', 'fastq_fragment_production_record')):
+        p = libraries[0]['provenance']
+        resource = p['profile']['resource'] if key == 'profile' else p['producer_record']
+        field = 'libraries[0].provenance.' + ('profile.resource' if key == 'profile' else 'producer_record')
+        artifacts.append(dict(producing_step_id=step_id, tool_name='prepare_scATAC_fragments',
+            result_field='manifest_path', source_manifest_field=field, namespace=libraries[0]['namespace'],
+            artifact_kind=kind, artifact_path=resource['path'], integrity={
+                'authoritative_digest': {'algorithm': 'sha256', 'value': resource['sha256'],
+                    'source_manifest_field': field + '.sha256'},
+                'verification_basis': ('fresh_independent_fragments_verification', 'full_artifact_sha256')}))
     return facts, artifacts

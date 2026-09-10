@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All fourteen currently registered tools
+`src/agent/orchestration/registry.py`. All fifteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -73,11 +73,12 @@ derived from the registry.
 | `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
 | `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library BGZF/tabix fragments with exact support and durable publication recovery |
 | `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
+| `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake, FASTQ fragments and external adoption have verified figureless reporting. Unsupported projections fail
+Raw intake, FASTQ fragments, external adoption and qualified BAM preparation have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
@@ -90,9 +91,11 @@ remains v1 and the original thirteen tools retain their existing contracts.
 M11.3b adds one external-adoption tool with independent complete source and
 canonicalization/conservation verification under an explicitly selected profile.
 Generic v2 content/resource verification alone does not qualify producer profiles;
-external adoption does not reconstruct historical processing. Qualified BAM
-production (M11.3c), new FASTQ-to-v2 convergence (M11.3d), cell selection/QC
-(M11.4) and cell-by-cCRE construction (M11.5) remain unimplemented.
+external adoption does not reconstruct historical processing. M11.3c adds the
+single qualified corrected-CB BAM producer with independent transformation
+verification; upstream history remains declared. New FASTQ-to-v2 convergence
+(M11.3d), cell selection/QC (M11.4) and cell-by-cCRE construction (M11.5) remain
+unimplemented.
 Detailed contracts follow.
 
 ## Current scientific runtime and verification contracts
@@ -3885,3 +3888,126 @@ implementation of new FASTQ-to-v2 convergence. M11.4 cell selection/QC and M11.5
 cell-by-cCRE remain unimplemented, as do CRAM/SAM, automatic multi-library/GEM-group
 reconstruction, TSS/FRiP, peak calling, matrix/H5AD construction and model inference.
 No v2 contract correction was required. No commit or push was performed in this task.
+
+
+## Milestone 11.3c — Qualified BAM fragments
+
+**M11.3c is complete at synthetic acceptance**, based on
+`17d66ac92ec931e0e0980e32f3dd8bbe4a063236`. The new registered tool is
+`prepare_scATAC_bam_fragments`, bringing the inventory to fifteen. This section
+supersedes earlier BAM-production deferrals; earlier milestone records remain
+historical. The full frozen contract is [docs/m11.3c-bam-fragments.md](docs/m11.3c-bam-fragments.md).
+
+Only `agent-cb-paired-atac.v1` executes: one selected BAM group/file, one processing
+library/namespace, human/hg38 or mouse/mm10 with matching source assembly, and
+explicit CB/corrected_identifier/already_corrected context. Selecting the profile
+explicitly declares unshifted coordinates and retained duplicate pairs. No tag,
+filename, reference or namespace inference, raw correction or barcode rewriting.
+Unknown/shifted/physically deduplicated histories are unsupported. CB case and
+suffixes are preserved; both primary mates must agree. Missing CB excludes a
+well-formed pair, while malformed/conflicting CB fails.
+
+The repository-controlled adapter uses pysam 0.24.1 and bundled htslib/samtools
+1.24. `_bam_fragment_toolchain.json` pins decoder extensions, package entry/version
+files, bundled libraries and resolved linked libraries; runtime identity is
+`bd198afb4f2a0faddc6f0de45dd9df236da1f3f16f88f7cb1d8a6956e7b708f5`.
+Existing qualified sort/bgzip/tabix are reused. No dependency changes, Sinto,
+SnapATAC2, standalone samtools, custom BAM parser or aligner were added.
+
+External QNAME sorting establishes exactly one paired primary R1 and R2 with
+consistent RG and reciprocal mate metadata. Missing/duplicate primaries and
+malformed tags/CIGAR/reference/mate state fail. Secondary/supplementary records
+never add support; supplementary/SA evidence excludes the template. Both mates
+must be mapped, same-contig, proper, QC-passing, inward-facing and MAPQ >=30
+excluding 255. Filtering is per pair before aggregation. The fixed first-failure
+order is unmapped, discordant, improper, qc_failed, split, unsupported_cigar,
+geometry, mapq, missing_cb, short_shifted.
+
+CIGAR reference consumption is independently checked. Internal I/D and legal
+3′ clipping are supported; N/P and ambiguous 5′ clipping/terminal indels are
+excluded. Forward start/end must not exceed reverse start/end; overlap is legal.
+Use forward reference_start +4 and reverse CIGAR reference_end -5 exactly once,
+with zero-based half-open bounds and no clipping/repair or arbitrary size cutoff.
+TLEN is never a coordinate source: both zero or opposite outer-span magnitudes.
+Exact BAM SQ names/lengths may be a subset of FAI or differently ordered; present
+sequence MD5 is checked against FASTA. Output follows FAI order. All exact FAI
+contigs, including mitochondria/scaffolds, are eligible without aliases or regexes.
+
+Only identical `(namespace, barcode_identifier, contig, shifted_start, shifted_end)`
+keys collapse. Each eligible primary pair present in the bound BAM contributes
+one, including duplicate-marked pairs. No one-endpoint/cross-barcode collapsing,
+optical/PCR inference or upstream duplicate-count substitution. Positive uint64
+support and uint128 aggregates are checked. Support is not original sequencing
+completeness, unique-record count or molecule count. BAM v2 strand is absent;
+the unchanged common reader exposes `None`. This is an Agent-defined policy,
+not Cell Ranger reproduction.
+
+M10 reinspection remains bounded. Execution additionally binds the full caller-
+supplied BAM SHA-256/size, complete decode, header/SQ and projection-stream hashes,
+reference/context/intake/profile and stable source snapshots. An identical intake
+can relocate under M11.1's existing hash-based binding; the BAM path must still
+match the selected intake source. No input index or coordinate order is required.
+No input-index verification or historical alignment/correction proof is claimed.
+
+The closed `bam-fragment-production.v1` record occupies the existing v2 BAM
+provenance variant and binds policies, runtime, arguments, source/history,
+qualification/exclusion counts, canonical summary and output identities. Generic
+v2 contracts and processing-status enums were not changed. Historical source
+selection remains unspecified. Producer-specific verification independently
+redecodes/rechecks pairing, CIGAR endpoints, shifts and exact key/support records,
+then composes generic v2 verification. Only low-level IO/decoding, schema and
+mechanical sorting are shared with production. Hand-derived fixtures and fourteen
+self-consistent but scientifically wrong artifacts test independent fault detection.
+
+Production and reconstruction use bounded projections, two primaries per group
+and 64 MiB external sorts, including distinct-barcode counting; scratch is linear
+in decoded projections/eligible pairs. Single-record/header htslib allocations
+precede post-decode limits. Existing generic v2 distinct-barcode set memory and
+hostile-filesystem race limitations remain. No full BAM or per-record barcode
+vector is retained. Managed scratch is cleaned on success/handled failure.
+
+Grouped metadata supplies intake/context/reference/BAM identities and the v2
+fragments port, with explicit profile and managed output. V4 remains default and
+v3 supported; no generic compiler/executor/Application redesign or workflow
+completion. PLAN_ONLY opens/hashes no BAM, inspects no reference and launches no
+scientific subprocess. Recovery policy `prepare-scatac-fragments-bam-v1` binds
+arguments, profile hash and exact durable execution identity. Verified/fsynced
+staging publishes atomically; exact receipt recovery freshly verifies everything
+without calling production, scanning outputs, overwriting or changing policy.
+Existing cancellation boundaries are preserved.
+
+Evidence and deterministic figureless reports distinguish verified source bytes,
+Agent transformation and output integrity from declared/unproven upstream
+sequencing completeness, aligner correctness, barcode correction, duplicate
+retention and prior coordinate history. Observed barcodes are not called or
+QC-passed cells. No TSS/FRiP, QC, cCRE matrix or EpiZoo claims are made.
+
+The bounded biological-availability check examined 144 immediate entries in ten
+known project/data directories, with no truncation, recursion or downloads. No
+candidate BAM/companion fragments was found; M11.8 biological E2E remains deferred.
+M11.2 FASTQ still publishes v1 with unchanged recovery/evidence/report behavior;
+M11.3a v1/v2 reader and M11.3b external v2 adoption remain compatible. M11.3d is
+joint fragments closeout and FASTQ-to-v2 convergence review/implementation. M11.4
+is cell calling/QC and M11.5 cell-by-cCRE. No FASTQ migration, CRAM/SAM, generic
+BAM broadening or downstream raw-data science was implemented.
+
+Implementation validation before the final audit: **159 BAM synthetic checks passed** within the full lightweight
+suite: **3,070 passed, 80 skipped, 7 warnings**, with no test exclusions. All
+directly affected intake/reference/context, FASTQ, external/common-fragment,
+planning/provider/benchmark, lifecycle and reporting/Application tests are
+included. Fourteen forged artifacts passed generic integrity but were rejected
+by independent BAM reconstruction. Final review corrected new-code restrictions
+on hash-identical intake relocation and valid RG strings containing spaces,
+without changing the frozen science or existing domain contracts.
+
+The final acceptance audit additionally corrected runtime qualification ordering
+in the BAM verifier: packaging checks precede reconstruction subprocesses, and
+decoder checks precede M10 source reinspection during binding. Two added
+regressions reject unqualified decoder/sort identities before source processing;
+the scientific profile and existing producer contracts are unchanged.
+
+Measured full inspection catalog sizes: v3 prompt **22,150** + schema **15,296**
+= **37,446** bytes; v4 prompt **19,998** + schema **10,123** = **30,121** bytes.
+The explicit budgets were updated for complete fifteen-tool guidance; no metadata
+was removed. The historical M9 benchmark corpus remains unchanged and BAM has
+separate v3/v4 acceptance. `git diff --check` passed. No commit or push was made.

@@ -40,6 +40,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "inspect_raw_scATAC",
         "prepare_scATAC_fragments",
         "import_scATAC_fragments",
+        "prepare_scATAC_bam_fragments",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -250,6 +251,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "inspect_raw_scATAC": "inspect-raw-scatac-v1",
         "prepare_scATAC_fragments": "prepare-scatac-fragments-fastq-v1",
         "import_scATAC_fragments": "import-scatac-fragments-external-v1",
+        "prepare_scATAC_bam_fragments": "prepare-scatac-fragments-bam-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
         "build_cell_neighbors": "build-cell-neighbors-v1",
         "cluster_cells": "cluster-cells-v1",

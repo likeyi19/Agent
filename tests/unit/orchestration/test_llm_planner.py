@@ -798,14 +798,14 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M11.3b adds the fourteenth tool with complete source/profile semantics.
-    # Measured v3: 14,146 schema + 19,913 prompt = 34,059 bytes. Preserve all
+    # M11.3c adds the fifteenth tool with full BAM source/profile semantics.
+    # Measured v3: 15,296 schema + 22,150 prompt = 37,446 bytes. Preserve all
     # guidance and update the explicit catalog-size budget for this capability.
-    assert len(serialized_schema.encode("utf-8")) <= 14_500
-    assert len(prompt.encode("utf-8")) <= 20_500
+    assert len(serialized_schema.encode("utf-8")) <= 15_500
+    assert len(prompt.encode("utf-8")) <= 22_500
     assert len(serialized_schema.encode("utf-8")) + len(
         prompt.encode("utf-8")
-    ) <= 35_000
+    ) <= 38_000
     assert count_key(schema, "anyOf") <= 5
     assert count_objects(schema) <= 2 * len(registry.names()) + 3
     assert count_key(schema, "$ref") >= 80

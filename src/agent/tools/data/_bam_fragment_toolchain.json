@@ -1,0 +1,38 @@
+{
+  "files": {
+    "__init__.py": "47c1a657938298a9fcffbf01c41081d2a4eb91a9d3f48ea2e7573927c5870543",
+    "libbz2-a1e77c99.so.1.0.6": "f47d4a40be7b806ec4c17a2dbb816436bd55c4d17fef2b678344b70e6d8478a9",
+    "libcalignedsegment.cpython-311-x86_64-linux-gnu.so": "500885a56e0cde95143aa45303bdc7c9f1ef01a8250deafba689bdd606c82613",
+    "libcalignmentfile.cpython-311-x86_64-linux-gnu.so": "902855b035e401ba1672f762718d05c63056f978dfdb655ed347529bc258eada",
+    "libcbcf.cpython-311-x86_64-linux-gnu.so": "d80a27e27363ab7ef12686e6af4b883eab7fd0fc038c1f10c4aa234e31b525a9",
+    "libcbcftools.cpython-311-x86_64-linux-gnu.so": "b54294637a879c3f208711c80d6b1ab3618789c3b65f3d9b3ede272ef5791f9c",
+    "libcbgzf.cpython-311-x86_64-linux-gnu.so": "d3ad01c8c29b6017c1dd428b770b3d78960b56d49ef9681cc1343c28d9370b5a",
+    "libcfaidx.cpython-311-x86_64-linux-gnu.so": "d33e4cd270c309a595ed82b0da029e76c16d58a2d2404fe0a796658dc828c3d9",
+    "libchtslib.cpython-311-x86_64-linux-gnu.so": "ecc42bde49a79826264b49ab1a5f89fece820ddfc4489ff58442be830c304807",
+    "libcsamfile.cpython-311-x86_64-linux-gnu.so": "2caa45d0e5b1c9bef183c78d06bde843e195f8e59350a6adf14e6e2a576c00fa",
+    "libcsamtools.cpython-311-x86_64-linux-gnu.so": "54600f6f9fed61fe6e1bebcbad8642c6cbfde11b52033b5a1183667d16176436",
+    "libctabix.cpython-311-x86_64-linux-gnu.so": "e2e6a10abd1e39fb825ec4097ea858fa920df95b07e604a476a6941a54503f31",
+    "libctabixproxies.cpython-311-x86_64-linux-gnu.so": "2bf30669731e5b65b3533c70b44ac1aa484ed8fcb4c5bf975f154d32849ee0e3",
+    "libcutils.cpython-311-x86_64-linux-gnu.so": "20022bedec9f86634bb95433076cb0b1b550abcb6ea7a9688f69af58e3b9e750",
+    "libcvcf.cpython-311-x86_64-linux-gnu.so": "19497d68d7c431d4a30e27a06ca763ee1ecaed40c8bbc0ad75145d3a2e0880b8",
+    "liblzma-51a76f52.so.5.2.4": "69b55fe5057972f72ce6ded957fac923a4d0ae67fd6132874ec1f6ee6a23b835",
+    "linked.ld-linux-x86-64.so.2": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01",
+    "linked.libbz2-a1e77c99.so.1.0.6": "f47d4a40be7b806ec4c17a2dbb816436bd55c4d17fef2b678344b70e6d8478a9",
+    "linked.libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+    "linked.libcbcftools.cpython-311-x86_64-linux-gnu.so": "b54294637a879c3f208711c80d6b1ab3618789c3b65f3d9b3ede272ef5791f9c",
+    "linked.libchtslib.cpython-311-x86_64-linux-gnu.so": "ecc42bde49a79826264b49ab1a5f89fece820ddfc4489ff58442be830c304807",
+    "linked.libcsamtools.cpython-311-x86_64-linux-gnu.so": "54600f6f9fed61fe6e1bebcbad8642c6cbfde11b52033b5a1183667d16176436",
+    "linked.libcutils.cpython-311-x86_64-linux-gnu.so": "20022bedec9f86634bb95433076cb0b1b550abcb6ea7a9688f69af58e3b9e750",
+    "linked.liblzma-51a76f52.so.5.2.4": "69b55fe5057972f72ce6ded957fac923a4d0ae67fd6132874ec1f6ee6a23b835",
+    "linked.libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+    "linked.libpthread.so.0": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78",
+    "linked.libz.so.1": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+    "version.py": "88490a06a3b9385c82769a1581f848b062f127586580389a6add81baf307a7db"
+  },
+  "identity_sha256": "bd198afb4f2a0faddc6f0de45dd9df236da1f3f16f88f7cb1d8a6956e7b708f5",
+  "versions": {
+    "htslib": "1.24",
+    "pysam": "0.24.1",
+    "samtools": "1.24"
+  }
+}

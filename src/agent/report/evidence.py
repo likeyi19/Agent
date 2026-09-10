@@ -16,6 +16,8 @@ import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
+from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
+    FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
 from .external_fragments import (CONTRACT_FIELDS as _EXTERNAL_FRAGMENTS_FIELDS,
     FACT_FIELDS as _EXTERNAL_FRAGMENTS_FACT_FIELDS, project_external_fragments)
 
@@ -380,6 +382,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "prepare_scATAC_bam_fragments": _ToolProjection(
+        _BAM_FRAGMENTS_FIELDS, _BAM_FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-bam-v1",
+        (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
+            ("fresh_independent_bam_transformation_verification", "strict_manifest_loading",
+             "exact_bam_transformation", "authoritative_manifest_sha256", "exact_execution_receipt"),
+            digest_field="manifest_sha256"),),
+    ),
     "import_scATAC_fragments": _ToolProjection(
         _EXTERNAL_FRAGMENTS_FIELDS, _EXTERNAL_FRAGMENTS_FACT_FIELDS, "import-scatac-fragments-external-v1",
         (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
@@ -1217,6 +1226,14 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
+        if step.tool_name == "prepare_scATAC_bam_fragments":
+            try:
+                derived, fragments_artifacts = project_bam_fragments(
+                    step_result.resolved_arguments, step_result.result, step.step_id)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Freshly verified BAM preparation could not be projected.") from exc
         if step.tool_name == "import_scATAC_fragments":
             try:
                 derived, fragments_artifacts = project_external_fragments(

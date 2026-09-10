@@ -73,7 +73,7 @@ def test_v1_tool_result_and_projection_authorities_remain_fixed(published):
     registry = build_default_tool_registry()
     spec = registry.get('prepare_scATAC_fragments')
     registry.validate_result(spec.name, result)
-    assert len(registry.names()) == 14
+    assert len(registry.names()) == 15
     assert spec.recovery_policy_version == public.RECOVERY_POLICY == 'prepare-scatac-fragments-fastq-v1'
     assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v1'
     assert not spec.optional_arguments

@@ -1919,7 +1919,25 @@ def verify_step(
     checks = _VerificationChecks()
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "import_scATAC_fragments":
+        if step.tool_name == "prepare_scATAC_bam_fragments":
+            try:
+                from agent.tools.data.scatac_bam_fragments import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+                for name in ('intake_manifest_path', 'intake_manifest_sha256'):
+                    binding = step.arguments.get(name)
+                    if isinstance(binding, StepOutputRef):
+                        if dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
+                            raise ValueError('Dependency identity differs.')
+            except Exception as exc:
+                checks.add('bam_fragments_transformation', False,
+                    'BAM source contents, Agent transformation and canonical artifacts are verified.',
+                    'BAM preparation failed independent verification.',
+                    getattr(exc, 'code', 'BAM_FRAGMENTS_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('bam_fragments_transformation', True,
+                    'BAM source contents, Agent transformation and canonical artifacts are verified.',
+                    'BAM preparation failed independent verification.', 'BAM_FRAGMENTS_VERIFICATION_FAILED')
+        elif step.tool_name == "import_scATAC_fragments":
             try:
                 from agent.tools.data.scatac_fragment_import import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)

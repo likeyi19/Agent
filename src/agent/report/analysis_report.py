@@ -552,10 +552,12 @@ def _verified_visualization_snapshot(
     )
 
 
+from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "import_scATAC_fragments": _EXTERNAL_FRAGMENT_REPORT_FIELDS,
+    "prepare_scATAC_bam_fragments": _BAM_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_fragments": (
         "input_kind", "species", "assembly", "n_libraries", "n_fragment_records",
         "total_support", "backend_policy", "upstream_version", "upstream_commit",
@@ -757,6 +759,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 
 _TOOL_TITLES: Mapping[str, str] = {
     "import_scATAC_fragments": "External fragment adoption",
+    "prepare_scATAC_bam_fragments": "BAM fragment preparation",
     "prepare_scATAC_fragments": "Canonical FASTQ fragments",
     "inspect_raw_scATAC": "Raw scATAC Intake",
     "inspect_scATAC": "Dataset inspection",
@@ -775,6 +778,16 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "source_bam_sha256": "Full source BAM SHA-256",
+    "n_templates": "Complete source templates",
+    "eligible_pairs": "Eligible source read pairs",
+    "n_decoded_records": "Decoded BAM records",
+    "exclusion_accounting": "Excluded templates by first failure",
+    "mapq_policy": "Agent BAM MAPQ policy",
+    "tn5_policy": "Agent BAM Tn5 policy",
+    "bam_transformation_verification": "BAM transformation verification",
+    "output_verification": "Output integrity",
+    "source_history": "Explicit source-history declarations",
     "route": "Source route",
     "source_profile": "Declared source semantic profile",
     "source_encoding": "Source physical encoding",
@@ -952,6 +965,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
     ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
@@ -999,6 +1013,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "prepare_scATAC_bam_fragments": ("source_profile", "mapq_policy", "tn5_policy", "source_history", "contract_version"),
     "import_scATAC_fragments": ("source_profile", "source_encoding", "source_selection", "transformation_policy", "contract_version"),
     "prepare_scATAC_fragments": ("input_kind", "backend_policy", "upstream_version", "upstream_commit", "contract_version"),
     "inspect_raw_scATAC": ("input_kind", "intake_contract_version"),
@@ -1305,6 +1320,22 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "prepare_scATAC_bam_fragments":
+        lines = [f"### BAM fragment preparation {occurrence}", "",
+            "BAM fragment preparation succeeded. Complete source bytes, the exact Agent BAM transformation "
+            "and output integrity were independently verified.", ""]
+        for fact in step.facts:
+            lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
+        lines.extend(("", "Original sequencing completeness, historical aligner correctness and barcode correction "
+            "were not independently established. Unshifted source coordinates and retained duplicate pairs are "
+            "explicit accepted source-history declarations; BAM coordinates cannot prove that no previous "
+            "transformation or duplicate removal occurred.", "",
+            "This is an Agent-defined policy, not Cell Ranger reproduction. Support counts individually passing "
+            "pairs present in this BAM, including duplicate-marked pairs; it is not a molecule count. "
+            "Strand is absent. Observed fragment barcodes are not called or QC-passed cells. "
+            "No cell calling, TSS/FRiP, QC, cCRE matrix or EpiZoo inference was performed.", "",
+            _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name == "import_scATAC_fragments":
         lines = [f"### External fragment adoption {occurrence}", "",
             "External fragment adoption succeeded. Source contents, structural validity, reference compatibility, "
@@ -1467,6 +1498,7 @@ def _render_summary(
 ) -> list[str]:
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
+        "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",

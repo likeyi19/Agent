@@ -3338,6 +3338,7 @@ def build_default_tool_registry() -> ToolRegistry:
     )
     from .fragments_registry import fragments_tool_spec
     from .external_fragments_registry import external_fragments_tool_spec
+    from .bam_fragments_registry import bam_fragments_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3353,6 +3354,7 @@ def build_default_tool_registry() -> ToolRegistry:
         raw_intake_spec,
         fragments_tool_spec(),
         external_fragments_tool_spec(),
+        bam_fragments_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

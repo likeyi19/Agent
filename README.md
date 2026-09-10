@@ -104,10 +104,10 @@ verified manifest provenance and SHA-256 identify the authoritative intake artif
 Evidence/reports contain no whole raw manifest, reads, read names, barcode values,
 qualities, complete BAM reference dictionaries, or raw sequencing payloads.
 
-M10 provides intake/preflight; M11.2 adds FASTQ preprocessing below. Sort/index
-observations alone do not authorize transformations. BAM transformations,
-realignment/liftOver, cell calling/QC, cell-by-cCRE construction, and model
-inference from raw sequencing remain deferred.
+M10 provides intake/preflight; M11.2 adds FASTQ and M11.3c adds qualified BAM
+preprocessing below. Sort/index observations alone do not authorize transformations.
+Realignment/liftOver, cell calling/QC, cell-by-cCRE construction and model inference
+from raw sequencing remain deferred.
 
 ## Milestone 11 status
 
@@ -161,13 +161,29 @@ coordinates, identifiers and exact read-pair support while sorting and publishin
 canonical v2 BGZF/TBI artifacts. Independent verification reparses the complete
 source and proves record conservation; historical alignment, Tn5 adjustment,
 deduplication and barcode correction remain declared, not reconstructed.
-All 14 scientific tools have semantic planning metadata. External adoption has
+External adoption has reviewed semantic planning metadata and
 durable recovery and verified figureless Application reporting. Synthetic
 acceptance passed; biological acceptance remains deferred to M11.8. See the
 [M11.3b contract](docs/m11.3b-external-fragments.md).
 
-M11.3c qualified BAM→fragments v2 and M11.3d joint closeout/new FASTQ→v2 convergence
-remain future work. CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
+**M11.3c is complete at synthetic acceptance: qualified BAM → fragments v2.**
+`prepare_scATAC_bam_fragments` supports only `agent-cb-paired-atac.v1`: one BAM,
+selected group, processing library and namespace, explicit corrected `CB`, exact
+human/hg38 or mouse/mm10 reference, and caller-declared unshifted coordinates and
+retained duplicate pairs. The pinned pysam/htslib adapter requires neither source
+coordinate sorting nor an index. Both mates require MAPQ ≥30 excluding 255;
+Agent applies +4/−5 once and sums individually eligible pairs only at identical
+namespace/barcode/endpoint keys, including duplicate-marked pairs. All exact FAI
+contigs remain eligible; strand is absent. This is not Cell Ranger reproduction.
+
+Complete source identity, independent BAM transformation verification, v2 output
+integrity, exact durable recovery and figureless Application reporting are
+supported. Historical alignment/correction and source-history declarations are
+not independently proven. All 15 scientific tools have semantic metadata;
+PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
+Biological acceptance remains deferred to M11.8.
+
+M11.3d joint closeout/new FASTQ→v2 convergence remains future work. CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
 construction and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
@@ -273,6 +289,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
 | External fragment adoption | `import_scATAC_fragments`: explicit 10x fragment semantics, complete source validation and conservation, canonical v2 artifacts, durable recovery, and figureless Application reporting |
+| Qualified BAM fragments | `prepare_scATAC_bam_fragments`: explicit corrected-CB profile, complete BAM identity, independently recomputed exact-key support, strand-absent v2, durable recovery and figureless reporting |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |

@@ -150,8 +150,9 @@ def test_corpus_covers_required_categories_workflows_and_tools(
     }
     # The accepted M9 v3 corpus covers processed-H5AD workflows. M10.4 raw
     # sequencing/adoption planning is covered separately in tests/raw_intake/,
-    # tests/chromap/ and tests/external_fragments/ (including explicit v3).
-    assert expected_tools | {"inspect_raw_scATAC", "prepare_scATAC_fragments", "import_scATAC_fragments"} == set(build_default_tool_registry().names())
+    # tests/chromap/, tests/external_fragments/ and tests/bam_fragments/
+    # (including explicit v3). The historical M9 corpus itself is unchanged.
+    assert expected_tools | {"inspect_raw_scATAC", "prepare_scATAC_fragments", "import_scATAC_fragments", "prepare_scATAC_bam_fragments"} == set(build_default_tool_registry().names())
 
 
 def test_corpus_uses_only_synthetic_path_values(

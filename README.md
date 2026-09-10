@@ -159,6 +159,13 @@ there is no automatic upgrade or dual recovery path. Git history and the
 historical M11.2/M11.3a–c records preserve the former v1 behavior. See the
 [M11.3d contract and M11.4 input boundary](docs/m11.3d-fragment-convergence.md).
 
+**M11.4a freezes QC science and resources.** Immutable QC reference bundles,
+deterministic transcript-TSS construction, independent source reinspection, and
+narrow local pysam/BEDTools qualification are available as data-layer APIs.
+The registry remains 15 tools. Production hg38/mm10 annotation provisioning is
+deferred; per-barcode QC execution and explicit cell selection remain future
+M11.4b/M11.4c work. See [the frozen QC contract](docs/m11.4a-qc-resources.md).
+
 **M11.3b is complete: verified external-fragment adoption.** The new
 `import_scATAC_fragments` tool accepts the explicitly selected
 `10x-atac-fragments.v1` profile: five-column fragments without strand or

@@ -105,8 +105,14 @@ artifacts and does not support resuming their persisted runs/receipts. There
 is no automatic upgrade or permanent dual-runtime compatibility. Git history
 preserves the historical implementation; milestone sections below describe
 behavior at their original checkpoints, superseded by the current contract.
-Cell selection/QC (M11.4) and cell-by-cCRE construction (M11.5) remain
-unimplemented. The exact current boundary is documented in
+M11.4a freezes QC science/resources through immutable QC bundles, deterministic
+transcript-TSS construction, independent source reinspection, and narrow local
+pysam/BEDTools qualification. These are data-layer APIs; the registry remains
+fifteen tools. Canonical production hg38/mm10 annotation provisioning is deferred.
+Per-barcode QC execution (M11.4b), explicit selection (M11.4c), and cell-by-cCRE
+construction (M11.5) remain unimplemented. QC threshold selection will not claim
+true cell calling. See [the M11.4a contract](docs/m11.4a-qc-resources.md).
+The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.
 

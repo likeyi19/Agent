@@ -1,0 +1,16 @@
+{
+  "libraries": {
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01",
+    "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9",
+    "/usr/lib/x86_64-linux-gnu/libc.so.6": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+    "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a",
+    "/usr/lib/x86_64-linux-gnu/liblzma.so.5.2.5": "7fa51c1500cb9fcc4c7d69b7fe0a6d7203cfe6af64373f6c411c5445ef1b402c",
+    "/usr/lib/x86_64-linux-gnu/libm.so.6": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+    "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128",
+    "/usr/lib/x86_64-linux-gnu/libz.so.1.2.11": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370"
+  },
+  "profile": "bedtools-qc-point-incidence.v1",
+  "qualified_path": "/usr/bin/bedtools",
+  "sha256": "770cdb969bd7dea9ceb34925753601f9871514247cf436ee101c513e4611f77c",
+  "version": "bedtools v2.30.0"
+}

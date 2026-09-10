@@ -212,7 +212,7 @@ def _binding_schema(
 
 # Internal JSON Schema labels only; wire-v3 payload shapes remain unchanged.
 _BINDING_DEF_NAMES = dict(input='i', ref='r', input_or_ref='ir',
-    input_or_null='in', ref_or_null='rn', input_or_ref_or_null='irn')
+    input_or_null='in', ref_or_null='rn', input_or_ref_or_null='b')
 
 
 def _binding_definitions(request: AgentRequest) -> Mapping[str, JsonValue]:
@@ -664,6 +664,12 @@ def _build_prompt(
                 for name,metadata in tuple(section.items()):
                     if metadata[0] in aliases:
                         section[name]=({'m':aliases[metadata[0]]},*metadata[1:])
+    from ._catalog_compaction import share_catalog_values
+    prompt_payload['tools'], shared, names, marker = share_catalog_values(prompt_payload['tools'])
+    prompt_payload['catalog_values'] = shared
+    prompt_payload['catalog_keys'] = names
+    prompt_payload['catalog_ref_key'] = marker
+    prompt_payload['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'
     return json.dumps(
         prompt_payload,
         ensure_ascii=False,

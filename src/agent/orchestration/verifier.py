@@ -1919,7 +1919,23 @@ def verify_step(
     checks = _VerificationChecks()
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "compute_scATAC_qc":
+        if step.tool_name == "select_scATAC_cells":
+            try:
+                from agent.tools.data.scatac_cell_selection import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+                for name in ('barcode_qc_manifest_path','barcode_qc_manifest_sha256'):
+                    binding = step.arguments.get(name)
+                    if isinstance(binding, StepOutputRef) and dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
+                        raise ValueError('Dependency identity differs.')
+            except Exception as exc:
+                checks.add('cell_selection_independent_reconstruction', False,
+                    'Every threshold decision and selected identity is independently reconstructed.',
+                    'Selection source-level verification failed.', getattr(exc,'code','SELECTION_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('cell_selection_independent_reconstruction', True,
+                    'Every threshold decision and selected identity is independently reconstructed.',
+                    'Selection source-level verification failed.', 'SELECTION_VERIFICATION_FAILED')
+        elif step.tool_name == "compute_scATAC_qc":
             try:
                 from agent.tools.data.scatac_barcode_qc import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)

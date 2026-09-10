@@ -602,7 +602,7 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "r",
         "ir",
         "in",
-        "irn",
+        "b",
         "rn",
     }
     assert schema["required"] == (
@@ -670,8 +670,8 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     }
     assert ref_variant["properties"]["binding_type"]["enum"] == ("ref",)
     optional_schema = embed_arguments["properties"]["checkpoint_path"]
-    assert optional_schema == {"$ref": "#/$defs/irn"}
-    assert schema["$defs"]["irn"]["anyOf"] == (
+    assert optional_schema == {"$ref": "#/$defs/b"}
+    assert schema["$defs"]["b"]["anyOf"] == (
         {"$ref": "#/$defs/i"},
         {"$ref": "#/$defs/r"},
         {"type": "null"},
@@ -750,7 +750,7 @@ def test_input_only_and_composable_binding_defs_preserve_requiredness() -> None:
     assert arguments["input_path"] == {"$ref": "#/$defs/ir"}
     assert arguments["device"] == {"$ref": "#/$defs/in"}
     assert arguments["checkpoint_path"] == {
-        "$ref": "#/$defs/irn"
+        "$ref": "#/$defs/b"
     }
     assert schema["$defs"]["in"]["anyOf"] == (
         {"$ref": "#/$defs/i"},
@@ -798,8 +798,8 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M11.4b adds tool sixteen. Lossless repeated-description/schema-reference
-    # compaction gives 14,546 schema + 22,277 prompt = 36,823 bytes.
+    # M11.4c adds tool seventeen. Lossless catalog/reference compaction
+    # gives 15,428 schema + 22,402 prompt = 37,830 bytes.
     # Preserve the existing budgets and the complete scientific catalog.
     assert len(serialized_schema.encode("utf-8")) <= 15_500
     assert len(prompt.encode("utf-8")) <= 22_500
@@ -858,6 +858,8 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
         "species",
     ]
     assert set(payload["tools"]) == set(registry.names())
+    from catalog_expansion import expand_catalog
+    payload["tools"] = expand_catalog(payload)
     species = payload["tools"]["epizoo_embed_cells"][2]["species"]
     assert species[2]["c"] == [
         "human",

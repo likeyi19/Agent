@@ -330,7 +330,8 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
             registry,
         )
     )
-    prompt_tools = payload["tools"]
+    from catalog_expansion import expand_catalog
+    prompt_tools = expand_catalog(payload)
     def expand(meaning):
         return payload["meanings"][meaning["m"]] if isinstance(meaning, dict) else meaning
     source_codes = {

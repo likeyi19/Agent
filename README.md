@@ -171,7 +171,7 @@ in exact ASCII tuple order. All three qualified fragment producers use the same
 unweighted canonical-record depth, fixed endpoint/TSS incidence, and fragment-length
 metrics. Exact rational values and stable undefined reasons remain in a compressed
 table; a bounded whole-artifact length histogram accompanies it. No cell calling
-or selection is performed. There are now 16 registered scientific tools.
+or selection is performed by this QC step.
 
 Production uses the explicitly configured qualified `AGENT_QC_BEDTOOLS` runtime;
 an independent verifier reconstructs every row without the BEDTools intersection.
@@ -181,6 +181,22 @@ Tiny synthetic bundles require explicit test opt-in (`AGENT_QC_ALLOW_SYNTHETIC=1
 No canonical biological hg38/mm10 QC bundle is supplied by this milestone.
 Durable recovery and figureless Application evidence/reporting freshly verify QC.
 See [the M11.4b contract and API](docs/m11.4b-barcode-qc.md).
+
+**M11.4c adds explicit QC selection.** `select_scATAC_cells` consumes one exact
+verified QC artifact and caller-supplied thresholds, publishing
+`scatac-cell-selection.v1`. Every observed barcode gets a decision and all applicable
+failure reasons. Exact rational comparisons, stable undefined-metric behavior,
+reversible rendered IDs and ordered selected identities provide the M11.5 row
+handoff. Empty selection is valid. Selected barcodes are **QC-selected candidate
+cells**; statistical background-versus-cell calling is **not assessed**.
+
+M11.4a, M11.4b and M11.4c together complete M11.4 under the explicit-QC-selection
+scope: fragments v2 → barcode QC → optional explicit QC selection → ordered candidate
+set. There are 17 registered scientific tools. Metrics-only QC remains valid;
+selection is never inserted automatically. Automatic calling, doublets, FRiP,
+cCRE construction and biological cell-calling validation remain deferred.
+See [the M11.4c contract, API and M11.5 handoff](docs/m11.4c-explicit-selection.md).
+
 
 **M11.3b is complete: verified external-fragment adoption.** The new
 `import_scATAC_fragments` tool accepts the explicitly selected
@@ -210,11 +226,11 @@ contigs remain eligible; strand is absent. This is not Cell Ranger reproduction.
 Complete source identity, independent BAM transformation verification, v2 output
 integrity, exact durable recovery and figureless Application reporting are
 supported. Historical alignment/correction and source-history declarations are
-not independently proven. All 16 scientific tools have semantic metadata;
+not independently proven. All 17 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
 Biological acceptance remains deferred to M11.8.
 
-CRAM/SAM support, M11.4c cell selection, M11.5 cell-by-cCRE
+CRAM/SAM support, automatic statistical cell calling, M11.5 cell-by-cCRE
 construction and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).

@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All sixteen currently registered tools
+`src/agent/orchestration/registry.py`. All seventeen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -75,6 +75,7 @@ derived from the registry.
 | `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
 | `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
 | `compute_scATAC_qc` | Complete observed-barcode QC v1: canonical-record depth, fixed TSS incidence/enrichment, length bins/ratios, independently verified without production intersection |
+| `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
@@ -152,10 +153,43 @@ change between reads. Science, artifact schema and policy remain unchanged.
 After these fixes, all 88 QC tests and the full lightweight suite pass:
 3,276 passed, 81 skipped, 7 existing warnings (660.97 seconds).
 
-Explicit selection (M11.4c), cell-by-cCRE construction (M11.5), and biological
-QC validation (M11.8) remain deferred. QC threshold selection will not claim true
-cell calling. No FRiP, peak/cCRE/blacklist overlap or raw-derived EpiZoo inference
-is implemented by barcode QC.
+M11.4c adds `select_scATAC_cells` as tool seventeen. It consumes exact verified
+`scatac-barcode-qc.v1` plus caller-supplied `explicit_qc_thresholds.v1`, producing
+immutable `scatac-cell-selection.v1`. Required minimum QC-record depth and TSS
+enrichment have no defaults; optional minimum flank evidence, maximum QC depth
+and maximum nucleosome signal are disabled when absent/null. Inclusive comparisons
+use exact integers/rationals. Undefined TSS fails; undefined nucleosome signal
+fails only with its maximum enabled. Every observed tuple receives a decision with
+all applicable ordered reasons; empty selection succeeds. Statistical calling is
+`none` / `not_assessed`; selected barcodes are QC-selected candidate cells.
+
+A selected-only sidecar supplies contiguous future matrix row indices in original
+namespace/barcode ASCII tuple order. Reversible canonical unpadded base64url IDs
+retain original identities. A dedicated digest includes the formally defined empty
+set. Fresh selection verification independently reconstructs thresholds, decisions,
+rendered IDs, selected order and summaries over freshly verified QC. Ordinary
+selection calculation reads only the QC table. QC qualification and exact lineage
+remain bound; synthetic provenance cannot become production-qualified.
+
+Recovery policy `select-scatac-cells-v1` binds exact durable execution, arguments,
+QC hash, selection profile and thresholds. Atomic publication, receipt recovery,
+cooperative cancellation and bounded figureless reporting use existing orchestration.
+V4 remains default; explicit v3 remains structurally supported. Lossless prompt-only
+catalog value/key sharing and omitted trailing null guidance preserve complete
+semantics without raising size ceilings. Metrics-only QC remains valid, with no
+mandatory or automatically inserted selection.
+
+M11.4a, M11.4b and M11.4c complete M11.4 under the narrower explicit-QC-selection
+scope. Automatic statistical cell calling, doublets, FRiP, peak/cCRE/blacklist overlap,
+M11.5 cell-by-cCRE construction and M11.8 biological validation remain deferred.
+No production hg38/mm10 QC bundle or biological cell-calling acceptance is claimed.
+See [the M11.4c contract and M11.5 handoff](docs/m11.4c-explicit-selection.md).
+M11.4c final lightweight acceptance passes all 121 selection tests within the full
+suite: 3,398 passed, 81 skipped, 7 existing warnings (882.62 seconds). The affected
+suite passed 1,514 tests; final planning/catalog checks passed 144. Complete catalog
+sizes are v3 22,402 + 15,428 = 37,830 bytes and v4 19,211 + 11,269 = 30,480 bytes,
+within unchanged ceilings. These are software/synthetic results, not biological
+cell-calling acceptance.
 The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.

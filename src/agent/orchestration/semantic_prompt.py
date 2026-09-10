@@ -315,7 +315,18 @@ def build_semantic_planning_prompt(
     catalog['catalog_format']['request_source_mode'] = mode_names
     for tool in catalog['tools'].values():
         for name, port in tuple(tool[1].items()):
-            tool[1][name] = (port[0], mode_codes[port[1]], *port[2:])
+            guidance = port[5]
+            if guidance is not None:
+                guidance = list(guidance)
+                while guidance and guidance[-1] is None: guidance.pop()
+            tool[1][name] = (port[0], mode_codes[port[1]], *port[2:5], guidance)
+    catalog['catalog_format']['guidance_tail'] = 'Pad to 5 with null.'
+    from ._catalog_compaction import share_catalog_values
+    catalog['tools'], shared, names, marker = share_catalog_values(catalog['tools'])
+    catalog['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'
+    catalog['catalog_values'] = shared
+    catalog['catalog_keys'] = names
+    catalog['catalog_ref_key'] = marker
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (

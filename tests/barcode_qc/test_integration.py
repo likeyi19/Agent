@@ -52,7 +52,7 @@ def test_v3_v4_and_registry(qc_case,monkeypatch):
     payload=dict(schema_version=3,status='plan',reason=None,steps=[dict(step_id='qc',tool_name='compute_scATAC_qc',
         arguments={k:dict(binding_type='input',input_name=k) for k in args},depends_on=[],description='QC.')])
     assert dict(LLMPlanner(Model(payload),wire_mode=PlanningWireMode.V3).plan(req,registry).steps[0].arguments)==args
-    assert len(registry.names())==16
+    assert len(registry.names())==17
     result=public.compute_scATAC_qc(**args)
     monkeypatch.setattr(public,'verify_public_result',lambda *a:pytest.fail('IO-free result validation'))
     registry.validate_result('compute_scATAC_qc',result)

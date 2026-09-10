@@ -554,10 +554,12 @@ def _verified_visualization_snapshot(
 
 from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
+from .cell_selection import REPORT_FIELDS as _CELL_SELECTION_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
+    "select_scATAC_cells": _CELL_SELECTION_REPORT_FIELDS,
     "import_scATAC_fragments": _EXTERNAL_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_bam_fragments": _BAM_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_fragments": (
@@ -761,6 +763,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 
 _TOOL_TITLES: Mapping[str, str] = {
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
+    "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
     "prepare_scATAC_fragments": "Canonical FASTQ fragments",
@@ -781,6 +784,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    **{k:k.replace("_", " ").capitalize() for k in _CELL_SELECTION_REPORT_FIELDS},
     "n_observed_barcodes": "Observed namespace/barcode identities",
     "n_qc_fragment_records": "Primary nuclear QC fragment records",
     "tss_defined": "Barcodes with defined TSS enrichment",
@@ -979,6 +983,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
+    ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
     ("barcode_qc", "Observed-barcode QC", frozenset({"compute_scATAC_qc"})),
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
@@ -1027,6 +1032,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "select_scATAC_cells": ("selection_method","cell_call_method","cell_call_state","resource_qualification","qc_identity_sha256","selection_profile_sha256"),
     "compute_scATAC_qc": ("tss_method","science_profile_sha256","qc_resource_identity_sha256","resource_qualification","contract_version"),
     "prepare_scATAC_bam_fragments": ("source_profile", "mapq_policy", "tn5_policy", "source_history", "contract_version"),
     "import_scATAC_fragments": ("source_profile", "source_encoding", "source_selection", "transformation_policy", "contract_version"),
@@ -1335,6 +1341,14 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "select_scATAC_cells":
+        lines=[f"### Explicit QC selection {occurrence}", "",
+            "Selected barcodes are QC-selected candidate cells. Selection is QC-threshold based; statistical background-versus-cell calling was not assessed.", ""]
+        for fact in step.facts:
+            lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
+        lines.extend(("", "Failure reasons may overlap; their counts do not form a partition. No doublet detection, FRiP, cCRE matrix or EpiZoo inference was performed by this step.",
+            "", _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name == "compute_scATAC_qc":
         lines=[f"### Observed-barcode QC {occurrence}", "",
             "Complete per-observed-barcode QC metrics were independently verified against fragments and QC resources.", ""]
@@ -1525,6 +1539,7 @@ def _render_summary(
     labels = {
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
+        "select_scATAC_cells": "Explicit QC selection succeeded; statistical cell calling was not assessed",
         "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",

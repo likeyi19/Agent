@@ -99,6 +99,7 @@ class ArtifactSemanticKind(str, Enum):
     SCATAC_FRAGMENTS = "scatac_fragments"
     SCATAC_QC_REFERENCE = "scatac_qc_reference"
     SCATAC_BARCODE_QC = "scatac_barcode_qc"
+    SCATAC_CELL_SELECTION = "scatac_cell_selection"
     SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
     SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
@@ -3342,6 +3343,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .external_fragments_registry import external_fragments_tool_spec
     from .bam_fragments_registry import bam_fragments_tool_spec
     from .barcode_qc_registry import barcode_qc_tool_spec
+    from .cell_selection_registry import cell_selection_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3359,6 +3361,7 @@ def build_default_tool_registry() -> ToolRegistry:
         external_fragments_tool_spec(),
         bam_fragments_tool_spec(),
         barcode_qc_tool_spec(),
+        cell_selection_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

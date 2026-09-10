@@ -19,7 +19,7 @@ from agent.orchestration import (
     ToolRegistry,
     build_default_tool_registry,
 )
-from agent.orchestration.llm_planner import _build_prompt, _sanitized_catalog
+from agent.orchestration.llm_planner import _build_prompt, _sanitized_catalog, _prompt_catalog
 
 
 @pytest.fixture(scope="module")
@@ -331,6 +331,8 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
         )
     )
     prompt_tools = payload["tools"]
+    def expand(meaning):
+        return payload["meanings"][meaning["m"]] if isinstance(meaning, dict) else meaning
     source_codes = {
         code: meaning
         for code, meaning in payload["catalog_format"]["source"].items()
@@ -347,7 +349,7 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
         for argument_name, argument_spec in argument_specs.items():
             planning = argument_spec.planning
             argument_meaning, source_code, options = arguments[argument_name]
-            assert argument_meaning == planning.description
+            assert expand(argument_meaning) == planning.description
             assert source_codes[source_code] == planning.source_eligibility.value
             if planning.accepted_artifact_kinds:
                 assert options["a"] == [
@@ -363,7 +365,7 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
         assert set(results) == set(spec.result_contract.planning_fields)
         for result_name, planning in spec.result_contract.planning_fields.items():
             result_meaning, artifact, provenance, bindable = results[result_name]
-            assert result_meaning == planning.description
+            assert expand(result_meaning) == planning.description
             assert artifact == (
                 None
                 if planning.artifact_kind is None
@@ -376,3 +378,11 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
             )
             assert bindable is planning.downstream_bindable
         assert notes == list(spec.planning.conditional_notes)
+
+    # Expand the actual provider prompt, including choices/defaults/options,
+    # and compare the whole catalog rather than only selected semantic fields.
+    for tool in prompt_tools.values():
+        for section in (tool[2], tool[3]):
+            for metadata in section.values():
+                metadata[0] = expand(metadata[0])
+    assert prompt_tools == json.loads(json.dumps(_prompt_catalog(registry)))

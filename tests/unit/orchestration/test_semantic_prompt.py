@@ -550,6 +550,10 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
 
     assert payload["semantic_prompt_version"] == 1
     assert payload["user_request"] == request.prompt
+    modes = payload["catalog"]["catalog_format"].pop("request_source_mode")
+    for tool in payload["catalog"]["tools"].values():
+        for port in tool[1].values():
+            port[1] = modes[port[1]]
     assert payload["catalog"] == json.loads(
         json.dumps(build_semantic_planning_catalog(request, registry))
     )

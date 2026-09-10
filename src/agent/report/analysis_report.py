@@ -553,9 +553,11 @@ def _verified_visualization_snapshot(
 
 
 from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
+from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
     "import_scATAC_fragments": _EXTERNAL_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_bam_fragments": _BAM_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_fragments": (
@@ -758,6 +760,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
     "prepare_scATAC_fragments": "Canonical FASTQ fragments",
@@ -778,6 +781,16 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "n_observed_barcodes": "Observed namespace/barcode identities",
+    "n_qc_fragment_records": "Primary nuclear QC fragment records",
+    "tss_defined": "Barcodes with defined TSS enrichment",
+    "tss_undefined": "Barcodes with zero TSS background",
+    "science_profile_sha256": "Frozen QC science SHA-256",
+    "qc_resource_identity_sha256": "QC reference identity SHA-256",
+    "resource_qualification": "QC resource qualification",
+    "tss_method": "Agent TSS incidence method",
+    "producer_authority": "Fresh fragment producer verification basis",
+    "qc_summary": "Exact bounded QC summaries",
     "source_bam_sha256": "Full source BAM SHA-256",
     "n_templates": "Complete source templates",
     "eligible_pairs": "Eligible source read pairs",
@@ -966,6 +979,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
+    ("barcode_qc", "Observed-barcode QC", frozenset({"compute_scATAC_qc"})),
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
     ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
@@ -1013,6 +1027,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "compute_scATAC_qc": ("tss_method","science_profile_sha256","qc_resource_identity_sha256","resource_qualification","contract_version"),
     "prepare_scATAC_bam_fragments": ("source_profile", "mapq_policy", "tn5_policy", "source_history", "contract_version"),
     "import_scATAC_fragments": ("source_profile", "source_encoding", "source_selection", "transformation_policy", "contract_version"),
     "prepare_scATAC_fragments": ("input_kind", "backend_policy", "upstream_version", "upstream_commit", "contract_version"),
@@ -1320,6 +1335,16 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "compute_scATAC_qc":
+        lines=[f"### Observed-barcode QC {occurrence}", "",
+            "Complete per-observed-barcode QC metrics were independently verified against fragments and QC resources.", ""]
+        for fact in step.facts:
+            lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
+        lines.extend(("", "Observed barcodes are not automatically called cells. Background-versus-cell calling was not performed. "
+            "No QC selection was applied. Record depth is retained artifact content, not molecules or raw sequencing depth. "
+            "Support did not weight QC. No FRiP, cCRE matrix or EpiZoo inference was performed by this QC step.",
+            "",_fact_ids_line(step.facts),""))
+        return lines
     if step.tool_name == "prepare_scATAC_bam_fragments":
         lines = [f"### BAM fragment preparation {occurrence}", "",
             "BAM fragment preparation succeeded. Complete source bytes, the exact Agent BAM transformation "
@@ -1499,6 +1524,7 @@ def _render_summary(
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
+        "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
         "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",

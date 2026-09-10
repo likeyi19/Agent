@@ -304,6 +304,18 @@ def build_semantic_planning_prompt(
         raise ValueError("Semantic prompt cannot contain repair and failover together.")
 
     catalog = build_semantic_planning_catalog(request, registry)
+    # Lossless prompt-only labels; the public semantic catalog and compiler
+    # retain their full mode names. No scientific guidance is omitted.
+    mode_names = {
+        'n': 'none_available', 'u': 'unique_available', 'x': 'not_allowed',
+        'd': 'deterministic_scoped', 'o': 'optional_explicit',
+        'c': 'explicit_choice_required',
+    }
+    mode_codes = {name: code for code, name in mode_names.items()}
+    catalog['catalog_format']['request_source_mode'] = mode_names
+    for tool in catalog['tools'].values():
+        for name, port in tuple(tool[1].items()):
+            tool[1][name] = (port[0], mode_codes[port[1]], *port[2:])
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (

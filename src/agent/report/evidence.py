@@ -18,6 +18,8 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from .barcode_qc import (CONTRACT_FIELDS as _BARCODE_QC_FIELDS,
+    FACT_FIELDS as _BARCODE_QC_FACT_FIELDS, project_barcode_qc)
 from .external_fragments import (CONTRACT_FIELDS as _EXTERNAL_FRAGMENTS_FIELDS,
     FACT_FIELDS as _EXTERNAL_FRAGMENTS_FACT_FIELDS, project_external_fragments)
 
@@ -382,6 +384,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "compute_scATAC_qc": _ToolProjection(
+        _BARCODE_QC_FIELDS, _BARCODE_QC_FACT_FIELDS, "compute-scatac-qc-v1",
+        (_ArtifactProjection("manifest_path", "scatac_barcode_qc_manifest_json",
+            ("fresh_independent_barcode_qc_reconstruction", "strict_manifest_loading",
+             "authoritative_manifest_sha256", "exact_execution_receipt"),
+            digest_field="manifest_sha256"),),
+    ),
     "prepare_scATAC_bam_fragments": _ToolProjection(
         _BAM_FRAGMENTS_FIELDS, _BAM_FRAGMENTS_FACT_FIELDS, "prepare-scatac-fragments-bam-v1",
         (_ArtifactProjection("manifest_path", "scatac_fragments_manifest_json",
@@ -1226,6 +1235,14 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
+        if step.tool_name == "compute_scATAC_qc":
+            try:
+                derived, fragments_artifacts = project_barcode_qc(
+                    step_result.resolved_arguments, step_result.result, step.step_id)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Freshly verified barcode QC could not be projected.") from exc
         if step.tool_name == "prepare_scATAC_bam_fragments":
             try:
                 derived, fragments_artifacts = project_bam_fragments(

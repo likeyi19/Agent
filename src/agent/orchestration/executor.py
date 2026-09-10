@@ -926,13 +926,26 @@ class PlanExecutor:
                     started_at=started_at,
                 )
                 notify("STEP_RUNNING")
+                from agent.tools._cancellation import cancellation_scope, ToolWorkCancelled
                 try:
-                    if durable_run_id is not None and spec.durable_hooks is not None:
-                        from .durable_tool_recovery import execution_identity
-                        returned_result = spec.durable_hooks.execute(attempt_arguments,
-                            execution_identity(durable_run_id, plan, step, spec))
-                    else:
-                        returned_result = spec.function(**attempt_arguments)
+                    with cancellation_scope(lambda: observe_cancellation(
+                            'during_registered_tool',step_id=step.step_id,attempt=attempt)):
+                        if durable_run_id is not None and spec.durable_hooks is not None:
+                            from .durable_tool_recovery import execution_identity
+                            returned_result = spec.durable_hooks.execute(attempt_arguments,
+                                execution_identity(durable_run_id, plan, step, spec))
+                        else:
+                            returned_result = spec.function(**attempt_arguments)
+                except ToolWorkCancelled:
+                    if not cancelled:
+                        raise RuntimeError('Tool cancellation requires observed run cancellation.')
+                    finished_at = _utc_now()
+                    results_by_id[step.step_id] = StepExecutionResult(
+                        step_id=step.step_id,tool_name=step.tool_name,status=StepStatus.FAILED,
+                        attempt_count=attempt,resolved_arguments=argument_snapshot,
+                        error=errors[-1],started_at=started_at,finished_at=finished_at,
+                        duration_seconds=max(0.0,perf_counter()-started_clock))
+                    break
                 except Exception as exc:
                     tool_error = self._registry.classify_exception(
                         step.tool_name,

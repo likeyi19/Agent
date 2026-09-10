@@ -207,7 +207,12 @@ def _binding_schema(
             if has_inputs
             else "ref"
         )
-    return {"$ref": f"#/$defs/{definition}"}
+    return {"$ref": f"#/$defs/{_BINDING_DEF_NAMES[definition]}"}
+
+
+# Internal JSON Schema labels only; wire-v3 payload shapes remain unchanged.
+_BINDING_DEF_NAMES = dict(input='i', ref='r', input_or_ref='ir',
+    input_or_null='in', ref_or_null='rn', input_or_ref_or_null='irn')
 
 
 def _binding_definitions(request: AgentRequest) -> Mapping[str, JsonValue]:
@@ -263,7 +268,13 @@ def _binding_definitions(request: AgentRequest) -> Mapping[str, JsonValue]:
                 },
             }
         )
-    return definitions
+    def compact(value):
+        if isinstance(value, dict):
+            return {k: ('#/$defs/'+_BINDING_DEF_NAMES[v.removeprefix('#/$defs/')]
+                        if k=='$ref' else compact(v)) for k,v in value.items()}
+        if isinstance(value, tuple): return tuple(compact(v) for v in value)
+        return value
+    return {_BINDING_DEF_NAMES[k]:compact(v) for k,v in definitions.items()}
 
 
 def _tool_step_schema(
@@ -636,6 +647,23 @@ def _build_prompt(
             ),
             "diagnostic": failover_context.to_prompt_dict(),
         }
+    # Deduplicate exact repeated meanings, preserving every semantic value.
+    # References occur only in documented meaning slots, never scientific inputs.
+    from collections import Counter
+    meanings = Counter()
+    for tool in prompt_payload['tools'].values():
+        for section in (tool[2],tool[3]):
+            for metadata in section.values(): meanings[metadata[0]]+=1
+    repeated = sorted(text for text,n in meanings.items() if n>1 and len(text)>40)
+    if repeated:
+        aliases={text:i for i,text in enumerate(repeated)}
+        prompt_payload['meanings']=repeated
+        prompt_payload['catalog_format']['meaning_reference']='A meaning object {m: i} expands to the exact text in meanings[i].'
+        for tool in prompt_payload['tools'].values():
+            for section in (tool[2],tool[3]):
+                for name,metadata in tuple(section.items()):
+                    if metadata[0] in aliases:
+                        section[name]=({'m':aliases[metadata[0]]},*metadata[1:])
     return json.dumps(
         prompt_payload,
         ensure_ascii=False,

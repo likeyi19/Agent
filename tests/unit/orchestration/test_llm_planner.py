@@ -598,12 +598,12 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     assert schema["type"] == "object"
     assert "anyOf" not in schema
     assert set(schema["$defs"]) == {
-        "input",
-        "ref",
-        "input_or_ref",
-        "input_or_null",
-        "input_or_ref_or_null",
-        "ref_or_null",
+        "i",
+        "r",
+        "ir",
+        "in",
+        "irn",
+        "rn",
     }
     assert schema["required"] == (
         "schema_version",
@@ -651,12 +651,12 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "overwrite",
     }
 
-    required_binding = schema["$defs"]["input_or_ref"]
+    required_binding = schema["$defs"]["ir"]
     input_ref, output_ref = required_binding["anyOf"]
-    assert input_ref == {"$ref": "#/$defs/input"}
-    assert output_ref == {"$ref": "#/$defs/ref"}
-    input_variant = schema["$defs"]["input"]
-    ref_variant = schema["$defs"]["ref"]
+    assert input_ref == {"$ref": "#/$defs/i"}
+    assert output_ref == {"$ref": "#/$defs/r"}
+    input_variant = schema["$defs"]["i"]
+    ref_variant = schema["$defs"]["r"]
     assert input_variant["properties"]["input_name"]["enum"] == (
         "input_path",
         "output_dir",
@@ -670,10 +670,10 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     }
     assert ref_variant["properties"]["binding_type"]["enum"] == ("ref",)
     optional_schema = embed_arguments["properties"]["checkpoint_path"]
-    assert optional_schema == {"$ref": "#/$defs/input_or_ref_or_null"}
-    assert schema["$defs"]["input_or_ref_or_null"]["anyOf"] == (
-        {"$ref": "#/$defs/input"},
-        {"$ref": "#/$defs/ref"},
+    assert optional_schema == {"$ref": "#/$defs/irn"}
+    assert schema["$defs"]["irn"]["anyOf"] == (
+        {"$ref": "#/$defs/i"},
+        {"$ref": "#/$defs/r"},
         {"type": "null"},
     )
 
@@ -746,14 +746,14 @@ def test_input_only_and_composable_binding_defs_preserve_requiredness() -> None:
     )
     arguments = branch["properties"]["arguments"]["properties"]
 
-    assert arguments["species"] == {"$ref": "#/$defs/input"}
-    assert arguments["input_path"] == {"$ref": "#/$defs/input_or_ref"}
-    assert arguments["device"] == {"$ref": "#/$defs/input_or_null"}
+    assert arguments["species"] == {"$ref": "#/$defs/i"}
+    assert arguments["input_path"] == {"$ref": "#/$defs/ir"}
+    assert arguments["device"] == {"$ref": "#/$defs/in"}
     assert arguments["checkpoint_path"] == {
-        "$ref": "#/$defs/input_or_ref_or_null"
+        "$ref": "#/$defs/irn"
     }
-    assert schema["$defs"]["input_or_null"]["anyOf"] == (
-        {"$ref": "#/$defs/input"},
+    assert schema["$defs"]["in"]["anyOf"] == (
+        {"$ref": "#/$defs/i"},
         {"type": "null"},
     )
     assert "literal" not in json.dumps(schema, sort_keys=True)
@@ -798,9 +798,9 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M11.3c adds the fifteenth tool with full BAM source/profile semantics.
-    # Measured v3: 15,296 schema + 22,150 prompt = 37,446 bytes. Preserve all
-    # guidance and update the explicit catalog-size budget for this capability.
+    # M11.4b adds tool sixteen. Lossless repeated-description/schema-reference
+    # compaction gives 14,546 schema + 22,277 prompt = 36,823 bytes.
+    # Preserve the existing budgets and the complete scientific catalog.
     assert len(serialized_schema.encode("utf-8")) <= 15_500
     assert len(prompt.encode("utf-8")) <= 22_500
     assert len(serialized_schema.encode("utf-8")) + len(

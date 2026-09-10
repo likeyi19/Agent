@@ -106,7 +106,7 @@ qualities, complete BAM reference dictionaries, or raw sequencing payloads.
 
 M10 provides intake/preflight; M11.2 adds FASTQ and M11.3c adds qualified BAM
 preprocessing below. Sort/index observations alone do not authorize transformations.
-Realignment/liftOver, cell calling/QC, cell-by-cCRE construction and model inference
+Realignment/liftOver, cell calling, cell-by-cCRE construction and model inference
 from raw sequencing remain deferred.
 
 ## Milestone 11 status
@@ -145,7 +145,7 @@ build or backend fallback occurs.
 and adopted external fragments publish `agent.scatac-fragments`, schema 2,
 `scatac-fragments.v2`. The existing FASTQ tool retains the qualified Chromap
 science and complete M11.2 provenance in a bound producer record. Its recovery
-policy is now `prepare-scatac-fragments-fastq-v2`. The registry remains 15 tools.
+policy is now `prepare-scatac-fragments-fastq-v2`.
 
 The common freshly verified v2 streaming interface preserves reference,
 namespace/barcode identity, exact integer support, optional strand and producer
@@ -162,9 +162,25 @@ historical M11.2/M11.3a–c records preserve the former v1 behavior. See the
 **M11.4a freezes QC science and resources.** Immutable QC reference bundles,
 deterministic transcript-TSS construction, independent source reinspection, and
 narrow local pysam/BEDTools qualification are available as data-layer APIs.
-The registry remains 15 tools. Production hg38/mm10 annotation provisioning is
-deferred; per-barcode QC execution and explicit cell selection remain future
-M11.4b/M11.4c work. See [the frozen QC contract](docs/m11.4a-qc-resources.md).
+These APIs add no tools. Production hg38/mm10 annotation provisioning remains
+deferred. See [the frozen QC contract](docs/m11.4a-qc-resources.md).
+
+**M11.4b adds verified per-barcode QC.** `compute_scATAC_qc` publishes
+`scatac-barcode-qc.v1` for every observed `(namespace, barcode_identifier)`,
+in exact ASCII tuple order. All three qualified fragment producers use the same
+unweighted canonical-record depth, fixed endpoint/TSS incidence, and fragment-length
+metrics. Exact rational values and stable undefined reasons remain in a compressed
+table; a bounded whole-artifact length histogram accompanies it. No cell calling
+or selection is performed. There are now 16 registered scientific tools.
+
+Production uses the explicitly configured qualified `AGENT_QC_BEDTOOLS` runtime;
+an independent verifier reconstructs every row without the BEDTools intersection.
+An independently provisioned operator qualification catalog
+(`AGENT_QC_RESOURCE_CATALOG`) must approve the exact production QC resource.
+Tiny synthetic bundles require explicit test opt-in (`AGENT_QC_ALLOW_SYNTHETIC=1`).
+No canonical biological hg38/mm10 QC bundle is supplied by this milestone.
+Durable recovery and figureless Application evidence/reporting freshly verify QC.
+See [the M11.4b contract and API](docs/m11.4b-barcode-qc.md).
 
 **M11.3b is complete: verified external-fragment adoption.** The new
 `import_scATAC_fragments` tool accepts the explicitly selected
@@ -194,11 +210,11 @@ contigs remain eligible; strand is absent. This is not Cell Ranger reproduction.
 Complete source identity, independent BAM transformation verification, v2 output
 integrity, exact durable recovery and figureless Application reporting are
 supported. Historical alignment/correction and source-history declarations are
-not independently proven. All 15 scientific tools have semantic metadata;
+not independently proven. All 16 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
 Biological acceptance remains deferred to M11.8.
 
-CRAM/SAM support, M11.4 cell selection/QC, M11.5 cell-by-cCRE
+CRAM/SAM support, M11.4c cell selection, M11.5 cell-by-cCRE
 construction and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).

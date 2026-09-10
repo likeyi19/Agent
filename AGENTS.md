@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All fifteen currently registered tools
+`src/agent/orchestration/registry.py`. All sixteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -74,11 +74,12 @@ derived from the registry.
 | `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library v2 BGZF/tabix fragments with exact support, rich Chromap provenance and durable publication recovery |
 | `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
 | `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
+| `compute_scATAC_qc` | Complete observed-barcode QC v1: canonical-record depth, fixed TSS incidence/enrichment, length bins/ratios, independently verified without production intersection |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake, FASTQ fragments, external adoption and qualified BAM preparation have verified figureless reporting. Unsupported projections fail
+Raw intake, FASTQ fragments, external adoption, qualified BAM preparation and barcode QC have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
@@ -92,7 +93,7 @@ external fragment inputs on verified producer-neutral `scatac-fragments.v2`;
 transitional fragments v1 is retired from the current runtime. The common
 reader is v2-only. FASTQ retains its exact qualified M11.2 science and rich
 producer record; its current recovery policy is
-`prepare-scatac-fragments-fastq-v2`. The registry remains fifteen tools.
+`prepare-scatac-fragments-fastq-v2`.
 
 Generic v2 content/resource verification alone does not qualify producer
 profiles. FASTQ, BAM and external routes retain their producer-specific
@@ -107,11 +108,54 @@ preserves the historical implementation; milestone sections below describe
 behavior at their original checkpoints, superseded by the current contract.
 M11.4a freezes QC science/resources through immutable QC bundles, deterministic
 transcript-TSS construction, independent source reinspection, and narrow local
-pysam/BEDTools qualification. These are data-layer APIs; the registry remains
-fifteen tools. Canonical production hg38/mm10 annotation provisioning is deferred.
-Per-barcode QC execution (M11.4b), explicit selection (M11.4c), and cell-by-cCRE
-construction (M11.5) remain unimplemented. QC threshold selection will not claim
-true cell calling. See [the M11.4a contract](docs/m11.4a-qc-resources.md).
+pysam/BEDTools qualification. These data-layer APIs are unchanged by M11.4b.
+See [the M11.4a contract](docs/m11.4a-qc-resources.md).
+
+M11.4b implements `compute_scATAC_qc` as tool sixteen, publishing immutable
+`scatac-barcode-qc.v1` metrics for all observed namespace/barcode tuples. Every
+canonical record counts once, independent of producer support. QC-contig records
+contribute endpoints at start and end-1, without another shift, to the exact frozen
+TSS windows; distinct/opposite-strand TSS multiplicity remains. Exact rational
+enrichment and nucleosome signal retain stable null reasons. No barcode is selected
+or automatically called a cell. The aggregate length histogram is whole-artifact,
+with 1–1000 and >=1001 bins, over QC-contig records only.
+
+Fresh generic v2 and applicable producer-specific verification, exact parent
+reference matching, QC-source reinspection, and runtime/resource qualification
+are mandatory. Production uses only explicit `AGENT_QC_BEDTOOLS`; the independent
+binary-search verifier never invokes the production intersection. Production
+QC bundles require an independently provisioned `AGENT_QC_RESOURCE_CATALOG`
+attestation binding exact resource/reference/annotation identities and release.
+Tiny synthetic execution requires `AGENT_QC_ALLOW_SYNTHETIC=1`; it is not biological
+qualification. No canonical production hg38/mm10 bundle is provisioned here.
+
+Policy `compute-scatac-qc-v1` binds exact durable execution, source/resource/method
+and runtime identities to atomic verified publication. Recovery reconstructs QC
+independently without production recomputation. Existing cooperative cancellation
+handles private scratch and preserves published success. Figureless evidence and
+reports contain bounded verified summaries, never the per-barcode table.
+V4 remains default; explicit v3 retains its payload contract with lossless prompt
+description sharing and shorter internal schema references. Existing size budgets
+are unchanged. V4 also losslessly encodes repeated request-source mode labels
+through a prompt legend; the public catalog, compiler and wire payloads are
+unchanged. See [the M11.4b contract](docs/m11.4b-barcode-qc.md).
+
+M11.4b synthetic acceptance passes all 78 new QC tests within the full lightweight
+suite: 3,266 passed, 81 skipped, 7 existing warnings (647.57 seconds). Rehashed
+scientific forgeries fail source-level verification; three producer fixtures with
+support totals 5/2/1,100 yield byte-identical QC tables/histograms. These results
+do not establish biological preprocessing or cell-calling acceptance.
+
+The final M11.4b acceptance audit corrected malformed BEDTools incidence acceptance
+and a publication-token/fresh-binding mismatch when qualification catalog bytes
+change between reads. Science, artifact schema and policy remain unchanged.
+After these fixes, all 88 QC tests and the full lightweight suite pass:
+3,276 passed, 81 skipped, 7 existing warnings (660.97 seconds).
+
+Explicit selection (M11.4c), cell-by-cCRE construction (M11.5), and biological
+QC validation (M11.8) remain deferred. QC threshold selection will not claim true
+cell calling. No FRiP, peak/cCRE/blacklist overlap or raw-derived EpiZoo inference
+is implemented by barcode QC.
 The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.

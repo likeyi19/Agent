@@ -22,16 +22,24 @@ from agent.tools.data.external_fragment_manifest import PROFILE_ID
 from agent.tools.data.scatac_fragments_v2_verifier import FragmentVerificationRuntime
 
 
-def fastq_fixture(tmp_path, monkeypatch, namespaces=1):
+def fastq_fixture(tmp_path, monkeypatch, namespaces=1, ccre_rows=None, zero_barcode=None):
     fixture_dir=Path(__file__).parents[1]/'chromap'
     monkeypatch.syspath_prepend(str(fixture_dir))
     from fragments_helpers import BC, inputs_for, backend
     fixtures=runpy.run_path(str(fixture_dir/'conftest.py'))
     tiny=fixtures['tiny'].__wrapped__(tmp_path)
+    if ccre_rows is not None:
+        from agent.tools.data import scatac_reference as ref
+        tiny['bed'].write_text(''.join('\t'.join(map(str,r))+'\n' for r in ccre_rows))
+        tiny['bundle']=ref.build_scatac_reference_bundle(species='human',target_assembly='hg38',
+            fasta_path=tiny['fa'],fai_path=tiny['fai'],ccre_bed_path=tiny['bed'])
+        tiny['pointer']=ref.publish_scatac_reference_bundle(tiny['bundle'],tmp_path/'matrix-reference.json')
     reads=fixtures['reads'].__wrapped__(tiny)
     groups=[]
     for i in range(namespaces):
-        group,white=reads([(996,1110,BC,2),(2996,3106,BC,3)],name=f'reads-{i}')
+        records=[(996,1110,BC,2),(2996,3106,BC,3)]
+        if zero_barcode: records.append((1096,1210,zero_barcode,1))
+        group,white=reads(records,name=f'reads-{i}',whitelist=(BC,zero_barcode) if zero_barcode else (BC,))
         groups.append(group)
     inputs=inputs_for(tiny,groups,white)
     exe=tmp_path/'fixture-chromap';exe.write_text('fixture only')
@@ -39,7 +47,8 @@ def fastq_fixture(tmp_path, monkeypatch, namespaces=1):
     original=fastq.run_stage
     def stage(argv,**kwargs):
         if '--preset' in argv:
-            Path(argv[argv.index('--output')+1]).write_text(f'chrTiny\t1000\t1105\t{BC}\t2\nchrTiny\t3000\t3101\t{BC}\t3\n')
+            extra=f'chrTiny\t1100\t1205\t{zero_barcode}\t1\n' if zero_barcode else ''
+            Path(argv[argv.index('--output')+1]).write_text(f'chrTiny\t1000\t1105\t{BC}\t2\n'+extra+f'chrTiny\t3000\t3101\t{BC}\t3\n')
         else:original(argv,**kwargs)
     monkeypatch.setattr(fastq,'run_stage',stage)
     result=fastq.prepare_fastq_fragments(inputs=inputs,runtime=FragmentsRuntime(str(exe)),output_dir=tmp_path/'fastq')
@@ -54,16 +63,18 @@ def fastq_fixture(tmp_path, monkeypatch, namespaces=1):
     return tiny,result,BC
 
 
-def bam_fixture(tiny,barcode):
+def bam_fixture(tiny,barcode,zero_barcode=None):
     import pysam
     root=tiny['root'];bam=root/'input.bam'
     with pysam.AlignmentFile(str(bam),'wb',header={'HD':{'VN':'1.6'},'SQ':[{'SN':'chrTiny','LN':12000}]}) as out:
-        for i,(left,right) in enumerate(((996,1110),(2996,3106))):
+        records=[(996,1110,barcode),(2996,3106,barcode)]
+        if zero_barcode: records.append((1096,1210,zero_barcode))
+        for i,(left,right,cell_barcode) in enumerate(records):
             for flag,start,mate,tlen in ((99,left,right-50,right-left),(147,right-50,left,left-right)):
                 r=pysam.AlignedSegment(out.header);r.query_name=f'template-{i}';r.flag=flag
                 r.reference_id=r.next_reference_id=0;r.reference_start=start;r.next_reference_start=mate
                 r.template_length=tlen;r.cigarstring='50M';r.mapping_quality=30;r.query_sequence='A'*50
-                r.set_tag('CB',barcode);out.write(r)
+                r.set_tag('CB',cell_barcode);out.write(r)
     intake=inspect_raw_scATAC(str(bam),str(root/'bam-intake'),species='human',raw_assay='SCATAC',source_genome_assembly='hg38')
     _,manifest,_=raw.load_raw_intake_manifest(intake['manifest_path'])
     context=lc.build_scatac_library_processing_context(intake_manifest_path=intake['manifest_path'],

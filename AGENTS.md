@@ -181,7 +181,7 @@ mandatory or automatically inserted selection.
 
 M11.4a, M11.4b and M11.4c complete M11.4 under the narrower explicit-QC-selection
 scope. Automatic statistical cell calling, doublets, FRiP, peak/cCRE/blacklist overlap,
-M11.5 cell-by-cCRE construction and M11.8 biological validation remain deferred.
+registered M11.5 matrix execution and M11.8 biological validation remain deferred.
 No production hg38/mm10 QC bundle or biological cell-calling acceptance is claimed.
 See [the M11.4c contract and M11.5 handoff](docs/m11.4c-explicit-selection.md).
 M11.4c final lightweight acceptance passes all 121 selection tests within the full
@@ -203,6 +203,19 @@ Focused M11.5a acceptance passes 93 tests; relevant combined regression passes
 748 tests. Full mouse reference provisioning/reinspection reproduces the accepted
 BED and portable reference identities. These results qualify contracts/resources
 and bounded mechanics, not biological matrix construction or model readiness.
+
+M11.5b implements data-layer `build_cell_by_ccre` and `verify_cell_by_ccre` with
+unchanged M11.5a science. Verified fragments, exact selection and full reference
+produce a single int64 CSR H5AD plus the frozen manifest. SQLite bounds selected
+lookup, record identity, duplicate-incidence rejection and aggregation. Production
+uses the pinned BEDTools profile; independent verification reconstructs every
+entry through a separate augmented interval tree and disk aggregation. Empty
+selection and zero rows/columns remain valid. Human/mouse share both algorithms.
+Publication verifies the complete private stage before atomic rename and supports
+cooperative cleanup. No registry, Planner, Application, evidence/reporting or
+durable receipt/resume integration is introduced; these remain M11.5c. Synthetic
+acceptance and operational bounds are recorded in
+[the M11.5b implementation record](docs/m11.5b-matrix-construction.md).
 
 The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).

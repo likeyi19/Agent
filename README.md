@@ -132,9 +132,15 @@ downstream, retaining 700,460 human or 814,020 mouse features.
 No matrix-building tool or Planner/Application integration is added; the registry
 remains at 17 tools. The project-authoritative mouse full vocabulary is provisioned
 deterministically from the exact Fang2021 H5AD ordered feature names into the
-unchanged reference interface, with a hash-bound derivation receipt. Matrix
-construction and independent reconstruction remain M11.5b. See the
+unchanged reference interface, with a hash-bound derivation receipt. See the
 [M11.5a contract and acceptance](docs/m11.5a-matrix-contract.md).
+
+**M11.5b adds bounded data-layer matrix construction and complete independent
+verification.** Exact verified fragments, selection and reference produce one
+ordered int64 CSR H5AD. SQLite-backed BEDTools incidence counting and a separate
+augmented interval-tree verifier preserve full axes and zero rows/columns. This
+does not add a registered tool; Planner/Application, reporting and durable lifecycle
+integration remain M11.5c. See [implementation and evidence](docs/m11.5b-matrix-construction.md).
 
 **M11.2 is complete: FASTQ → verified canonical fragments.**
 `prepare_scATAC_fragments` consumes a validated intake, library-processing context,
@@ -241,8 +247,8 @@ not independently proven. All 17 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
 Biological acceptance remains deferred to M11.8.
 
-CRAM/SAM support, automatic statistical cell calling, M11.5 cell-by-cCRE
-construction and raw-derived EpiZoo inference remain unimplemented. See the
+CRAM/SAM support, automatic statistical cell calling, registered M11.5 matrix
+execution and raw-derived EpiZoo inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 

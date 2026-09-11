@@ -367,3 +367,95 @@ def test_all_derived_resources_forged_together(inputs):
     q.validate_scatac_qc_reference_bundle(forged)
     with pytest.raises(science.ScATACQCError,match='DERIVATION_MISMATCH'):
         q.reinspect_scatac_qc_reference_bundle_sources(forged)
+
+
+@pytest.mark.parametrize('size,accepted', [
+    (2 * 1024**3 + 1, True), (4 * 1024**3, True),
+    (4 * 1024**3 + 1, False), (True, False), (0, False),
+    ('3323462848', False), (3323462848.0, False),
+])
+def test_gtf_annotation_manifest_size_boundary(inputs, size, accepted):
+    _gtf(inputs)
+    b = q.build_scatac_qc_reference_bundle(**inputs)
+    b = replace(b, annotation=replace(b.annotation,
+        resource=replace(b.annotation.resource, size_bytes=size)))
+    b = replace(b, resource_identity_sha256=q._identity(b))
+    if accepted:
+        assert q.validate_scatac_qc_reference_bundle(b) == b
+        assert json.loads(q.canonical_qc_reference_bundle_bytes(b))['annotation']['resource']['size_bytes'] == size
+        # Plausible metadata alone does not establish real source integrity.
+        with pytest.raises(science.ScATACQCError, match='QC_RESOURCE_MISMATCH'):
+            q.reinspect_scatac_qc_reference_bundle_sources(b)
+    else:
+        with pytest.raises(science.ScATACQCError):
+            q.validate_scatac_qc_reference_bundle(b)
+
+
+@pytest.mark.parametrize('role', ['parent_manifest', 'tss', 'lineage', 'synthetic'])
+def test_non_gtf_resource_manifest_bound_unchanged(inputs, role):
+    b = q.build_scatac_qc_reference_bundle(**inputs)
+    for size, accepted in ((q.MAX_SIDECAR_BYTES, True), (q.MAX_SIDECAR_BYTES + 1, False)):
+        if role == 'synthetic':
+            forged = replace(b, annotation=replace(b.annotation,
+                resource=replace(b.annotation.resource, size_bytes=size)))
+        else:
+            forged = replace(b, **{role: replace(getattr(b, role), size_bytes=size)})
+        forged = replace(forged, resource_identity_sha256=q._identity(forged))
+        if accepted:
+            q.validate_scatac_qc_reference_bundle(forged)
+        else:
+            with pytest.raises(science.ScATACQCError):
+                q.validate_scatac_qc_reference_bundle(forged)
+
+
+def test_sparse_source_size_gate_before_hashing(tmp_path, monkeypatch):
+    path = tmp_path / 'sparse.gtf'
+    hashed = []
+    monkeypatch.setattr(parent, '_file_hash', lambda p: hashed.append(p) or '0'*64)
+    for size in (q.MAX_SIDECAR_BYTES + 1, q.MAX_ANNOTATION_BYTES):
+        with path.open('wb') as f:
+            f.truncate(size)
+        assert q._file(path, max_bytes=q._annotation_limit(q.GTF_PROFILE)).size_bytes == size
+        with pytest.raises(science.ScATACQCError, match='QC_RESOURCE_LIMIT'):
+            q._file(path)
+    with path.open('wb') as f:
+        f.truncate(q.MAX_ANNOTATION_BYTES + 1)
+    with pytest.raises(science.ScATACQCError, match='QC_RESOURCE_LIMIT'):
+        q._file(path, max_bytes=q._annotation_limit(q.GTF_PROFILE))
+    assert len(hashed) == 2
+
+
+def test_gtf_builder_load_and_reinspection_share_bound(inputs, monkeypatch):
+    _gtf(inputs)
+    # A bounded comment makes the annotation larger than the parent manifest.
+    path = inputs['annotation_path']
+    path.write_bytes(b'#' + b'x' * 3000 + b'\n' + path.read_bytes())
+    size = path.stat().st_size
+    monkeypatch.setattr(q, 'MAX_SIDECAR_BYTES', size - 1)
+    monkeypatch.setattr(q, 'MAX_ANNOTATION_BYTES', size)
+    b = q.build_scatac_qc_reference_bundle(**inputs)
+    loaded = q.load_scatac_qc_reference_bundle(inputs['output_dir'] / 'manifest.json')[1]
+    assert q.reinspect_scatac_qc_reference_bundle_sources(loaded) == b
+    monkeypatch.setattr(q, 'MAX_ANNOTATION_BYTES', size - 1)
+    with pytest.raises(science.ScATACQCError):
+        q.load_scatac_qc_reference_bundle(inputs['output_dir'] / 'manifest.json')
+    with pytest.raises(science.ScATACQCError):
+        q.reinspect_scatac_qc_reference_bundle_sources(b)
+    with pytest.raises(science.ScATACQCError, match='QC_RESOURCE_LIMIT'):
+        q.build_scatac_qc_reference_bundle(**(inputs | {'output_dir': inputs['output_dir'].with_name('other')}))
+
+
+@pytest.mark.parametrize('field,value', [('format', 'gtf'), ('parser_profile', q.GTF_PROFILE),
+    ('qualification', 'source_declared_not_production_qualified')])
+def test_forged_annotation_profile_cannot_widen_bound(inputs, field, value):
+    b = q.build_scatac_qc_reference_bundle(**inputs)
+    annotation = replace(b.annotation, **{field: value},
+        resource=replace(b.annotation.resource, size_bytes=q.MAX_SIDECAR_BYTES + 1))
+    b = replace(b, annotation=annotation)
+    b = replace(b, resource_identity_sha256=q._identity(b))
+    with pytest.raises(science.ScATACQCError):
+        q.validate_scatac_qc_reference_bundle(b)
+    malformed = b.to_dict()
+    malformed['annotation']['resource']['max_bytes'] = q.MAX_ANNOTATION_BYTES
+    with pytest.raises(science.ScATACQCError):
+        q.validate_scatac_qc_reference_bundle(malformed)

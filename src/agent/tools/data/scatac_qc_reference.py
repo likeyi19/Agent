@@ -23,6 +23,9 @@ MAX_ROW_BYTES = 4096
 MAX_TSS_ROWS = 1_000_000
 MAX_TRANSCRIPTS = 5_000_000
 MAX_SIDECAR_BYTES = 2 * 1024**3
+# Plain GENCODE 49 CHR is 3,323,462,848 bytes. Streaming GTF decoding
+# needs source-only headroom; derived sidecars and synthetic fixtures do not.
+MAX_ANNOTATION_BYTES = 4 * 1024**3
 TSS_DOMAIN = b'agent.qc-ordered-tss.v1\0'
 CONSTRUCTION_PROFILE = 'protein-coding-all-transcript-tss.v1'
 SYNTHETIC_PROFILE = 'synthetic-transcript-tsv.v1'
@@ -113,11 +116,19 @@ def _integer(value, low=0, high=MAX_TRANSCRIPTS):
         fail()
 
 
-def _resource(value):
+def _annotation_limit(parser_profile):
+    if parser_profile == GTF_PROFILE:
+        return MAX_ANNOTATION_BYTES
+    if parser_profile == SYNTHETIC_PROFILE:
+        return MAX_SIDECAR_BYTES
+    fail('QC_ANNOTATION_PARSER_UNQUALIFIED')
+
+
+def _resource(value, *, max_bytes=None):
     d = _shape(value, QCResource)
     parent._path_text(d['path'])
     _sha(d['sha256'])
-    _integer(d['size_bytes'], 1, MAX_SIDECAR_BYTES)
+    _integer(d['size_bytes'], 1, MAX_SIDECAR_BYTES if max_bytes is None else max_bytes)
     return QCResource(**d)
 
 
@@ -164,7 +175,6 @@ def validate_scatac_qc_reference_bundle(value):
         for k in ('parent_manifest', 'tss', 'lineage'):
             d[k] = _resource(d[k])
         a = _shape(d['annotation'], QCAnnotationSource)
-        a['resource'] = _resource(a['resource'])
         _text(a['source']); _text(a['release'])
         parser = (a['format'], a['qualification'], a['parser_profile'], a['parser_identity_sha256'])
         if parser not in (
@@ -173,6 +183,7 @@ def validate_scatac_qc_reference_bundle(value):
             fail('QC_ANNOTATION_PARSER_UNQUALIFIED')
         if a['parser_profile'] == GTF_PROFILE and a['source'] != 'GENCODE':
             fail('QC_ANNOTATION_SOURCE_INVALID')
+        a['resource'] = _resource(a['resource'], max_bytes=_annotation_limit(a['parser_profile']))
         d['annotation'] = QCAnnotationSource(**a)
         s = QCConstructionSummary(**_shape(d['construction'], QCConstructionSummary))
         for v in asdict(s).values():
@@ -196,9 +207,9 @@ def canonical_qc_reference_bundle_bytes(value):
     return canonical(validate_scatac_qc_reference_bundle(value).to_dict())
 
 
-def _file(path):
+def _file(path, *, max_bytes=None):
     p = parent._source_path(path)
-    if p.stat().st_size > MAX_SIDECAR_BYTES:
+    if p.stat().st_size > (MAX_SIDECAR_BYTES if max_bytes is None else max_bytes):
         fail('QC_RESOURCE_LIMIT')
     return QCResource(str(p), parent._file_hash(p), p.stat().st_size)
 
@@ -293,7 +304,7 @@ def build_scatac_qc_reference_bundle(*, parent_manifest_path, parent_manifest_sh
         cs = tuple(classifications)
         if any(type(c) is not QCContig for c in cs) or [(c.name, c.length) for c in cs] != list(dictionary.items()):
             fail('QC_CONTIG_INVALID')
-        annotation = _file(annotation_path)
+        annotation = _file(annotation_path, max_bytes=_annotation_limit(parser_profile))
         before = [parent._snapshot(Path(x.path)) for x in (pr, annotation)]
         final = Path(output_dir).absolute()
         if final.exists() or final.is_symlink():
@@ -398,7 +409,9 @@ def reinspect_scatac_qc_reference_bundle_sources(value):
     try:
         resources = (b.parent_manifest, b.annotation.resource, b.tss, b.lineage)
         before = [parent._snapshot(Path(r.path)) for r in resources]
-        if any(_file(r.path) != r for r in resources):
+        limits = (MAX_SIDECAR_BYTES, _annotation_limit(b.annotation.parser_profile),
+                  MAX_SIDECAR_BYTES, MAX_SIDECAR_BYTES)
+        if any(_file(r.path, max_bytes=limit) != r for r, limit in zip(resources, limits)):
             fail('QC_RESOURCE_MISMATCH')
         p, dictionary = _parent(b.parent_manifest)
         if (p.reference_identity_sha256 != b.parent_reference_identity_sha256

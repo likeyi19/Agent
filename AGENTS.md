@@ -129,7 +129,8 @@ binary-search verifier never invokes the production intersection. Production
 QC bundles require an independently provisioned `AGENT_QC_RESOURCE_CATALOG`
 attestation binding exact resource/reference/annotation identities and release.
 Tiny synthetic execution requires `AGENT_QC_ALLOW_SYNTHETIC=1`; it is not biological
-qualification. No canonical production hg38/mm10 bundle is provisioned here.
+qualification. M11.6b now provisions the exact production hg38/mm10 bundles
+and immutable operator catalog; biological qualification remains deferred.
 
 Policy `compute-scatac-qc-v1` binds exact durable execution, source/resource/method
 and runtime identities to atomic verified publication. Recovery reconstructs QC
@@ -184,7 +185,8 @@ M11.4a, M11.4b and M11.4c complete M11.4 under the narrower explicit-QC-selectio
 scope. Automatic statistical cell calling, doublets, FRiP, QC peak/cCRE/blacklist
 overlap metrics and M11.8 biological validation remain deferred. M11.5c now
 registers matrix execution.
-No production hg38/mm10 QC bundle or biological cell-calling acceptance is claimed.
+M11.4c did not provision production resources; M11.6b now supplies hg38/mm10
+QC bundles/catalog without claiming biological cell-calling acceptance.
 See [the M11.4c contract and M11.5 handoff](docs/m11.4c-explicit-selection.md).
 M11.4c final lightweight acceptance passes all 121 selection tests within the full
 suite: 3,398 passed, 81 skipped, 7 existing warnings (882.62 seconds). The affected
@@ -242,8 +244,8 @@ lossless phrase sharing and shared/pruned schema definitions. Executable wire
 payloads, compiler rules, provider routing and science are unchanged. Scripted
 provider tests establish interface correctness, not live-provider planning quality.
 
-Full-mm10 production-chain acceptance remains a resource dependency: a separately
-operator-qualified mm10 QC reference and qualification catalog are not provisioned.
+Full-mm10 production-chain execution remains operational acceptance work.
+M11.6b now supplies the operator-qualified mm10 QC reference and catalog dependency.
 The accepted full 1,341,077-column mouse component result is unchanged; QC lineage
 is not relaxed. Automatic statistical calling, doublets, FRiP filtering, peak calling,
 raw-derived EpiZoo preprocessing/inference and biological throughput qualification
@@ -271,6 +273,22 @@ provisioned by M11.6a. M11.6c owns full-reference indexes/runtime handoff; M11.7
 owns real-data operational acceptance and M11.8 retains biological validation.
 This documentation-only slice adds no helper or tool and changes no Planner,
 compiler, QC/matrix science or existing qualification policy.
+
+M11.6b is **ready for final acceptance**: both authenticated production parents, complete
+explicit contig reviews, exact GENCODE 49/hg38 and M25/mm10 source validation,
+QC constructions and independent source reconstructions pass. The initial
+immutable two-species catalog passes exact positive/negative production gates.
+A focused size audit classified the human blocker as annotation-source byte
+bound only. The repository-controlled GTF-only bound is now 4 GiB; synthetic
+annotations, TSS and lineage retain 2 GiB, and all parser/scientific limits remain
+unchanged. The accepted mouse artifact and both parents/classifications are
+preserved. Focused tests pass 126; the affected QC suite passes 208. Final complete
+lightweight regression passes 3,579 tests, with 83 skipped and 7 existing warnings
+in 1,409.40 seconds (exit 0), all RUN_* gates disabled and no exclusions. Registry
+remains 18, with no Planner/compiler/wire/Application or M11.4/M11.5 science
+change. M11.6c indexes/runtime and M11.7 operational acceptance remain unstarted;
+biological validation remains M11.8. See
+[the M11.6b evidence and size audit](docs/m11.6b-production-qc-resources.md).
 
 ## Current scientific runtime and verification contracts
 

@@ -115,10 +115,16 @@ statistical cell calling and model inference from raw sequencing remain deferred
 [resource specification](docs/m11.6a-production-resource-specification.md) pins
 GENCODE 49/hg38 and M25/mm10 comprehensive chromosome GTF products, parent
 provenance and classification review gates, immutable catalogs, and separate
-Chromap build/deployment locations. No production payloads are provisioned here.
-M11.6b owns parent/QC provisioning and attestation; M11.6c owns full-reference
-indexes and runtime handoff. The registry remains at 18 tools; Planner/compiler
-and QC/matrix science are unchanged. Biological acceptance remains deferred.
+Chromap build/deployment locations.
+
+**[M11.6b is ready for final acceptance](docs/m11.6b-production-qc-resources.md):** both
+authenticated production parents and GENCODE 49/hg38 and M25/mm10 QC bundles
+passed independent reconstruction; the immutable two-species catalog passed
+production qualification. A GTF-only 4 GiB guard resolves the human source-size
+blocker while preserving 2 GiB sidecar/synthetic limits and frozen science.
+M11.6c owns full-reference indexes and runtime handoff. The registry remains at 18 tools; Planner/compiler
+and QC/matrix science are unchanged. Final complete lightweight regression:
+3,579 passed, 83 skipped, 7 existing warnings. Biological acceptance remains deferred.
 
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:
@@ -168,8 +174,8 @@ QC runtime/resource qualification remains mandatory. PLAN_ONLY reads no scientif
 payloads and performs no matrix work. See [the API and closeout](docs/m11.5c-agent-integration.md).
 
 The full mouse 1,341,077-column component acceptance remains valid. A complete
-production mm10 QC → selection → full matrix acceptance still needs a separately
-operator-qualified mm10 QC bundle/catalog. This resource dependency is deferred.
+production mm10 QC → selection → full matrix run remains operational acceptance
+work. M11.6b now supplies its operator-qualified mm10 QC bundle/catalog dependency.
 Automatic statistical cell calling, doublets, FRiP filtering, peak calling,
 raw-derived EpiZoo preprocessing/inference and biological throughput qualification
 are separate future work.

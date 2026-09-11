@@ -262,33 +262,49 @@ The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.
 
-M11.6a freezes the production resource specification and operator workflow in
-[the M11.6a contract](docs/m11.6a-production-resource-specification.md): GENCODE
-49/hg38 and M25/mm10 comprehensive chromosome GTF products, source-authority
-gates, complete explicit contig review, immutable catalog retention, and separate
-Chromap build/publication locations. Final authoritative parent manifests precede
-dependent QC/index construction. Payload checksums, final parent authority and
-per-contig attestations remain explicit M11.6b gates; no production resources are
-provisioned by M11.6a. M11.6c owns full-reference indexes/runtime handoff; M11.7
-owns real-data operational acceptance and M11.8 retains biological validation.
-This documentation-only slice adds no helper or tool and changes no Planner,
-compiler, QC/matrix science or existing qualification policy.
+**Milestone 11.6 — Production Reference & Runtime Resource Provisioning is complete.**
+Its accepted components are:
 
-M11.6b is **ready for final acceptance**: both authenticated production parents, complete
-explicit contig reviews, exact GENCODE 49/hg38 and M25/mm10 source validation,
-QC constructions and independent source reconstructions pass. The initial
-immutable two-species catalog passes exact positive/negative production gates.
-A focused size audit classified the human blocker as annotation-source byte
-bound only. The repository-controlled GTF-only bound is now 4 GiB; synthetic
-annotations, TSS and lineage retain 2 GiB, and all parser/scientific limits remain
-unchanged. The accepted mouse artifact and both parents/classifications are
-preserved. Focused tests pass 126; the affected QC suite passes 208. Final complete
-lightweight regression passes 3,579 tests, with 83 skipped and 7 existing warnings
-in 1,409.40 seconds (exit 0), all RUN_* gates disabled and no exclusions. Registry
-remains 18, with no Planner/compiler/wire/Application or M11.4/M11.5 science
-change. M11.6c indexes/runtime and M11.7 operational acceptance remain unstarted;
-biological validation remains M11.8. See
-[the M11.6b evidence and size audit](docs/m11.6b-production-qc-resources.md).
+- [M11.6a — Production resource specification and operator workflow](docs/m11.6a-production-resource-specification.md): source-authority and complete contig-review gates, immutable catalog retention, and separate build/publication locations.
+- [M11.6b — Production parent/QC resources and qualification](docs/m11.6b-production-qc-resources.md): authenticated human/hg38 and mouse/mm10 parents; full ordered cCRE vocabularies of 1,355,445 and 1,341,077; production-qualified GENCODE 49 and M25 QC resources, independent reconstruction, and the immutable two-species qualification catalog.
+- [M11.6c — Full-reference Chromap resources and runtime handoff](docs/m11.6c-production-chromap-resources.md): durable qualified patched Chromap, full hg38/mm10 indexes, exact pre/post-publication verification, unique lookup, negative gates and bounded non-biological usability checks.
+
+Qualified QC BEDTools and matrix BEDTools retain their separate profiles. The
+complete production handoff uses only `AGENT_QC_RESOURCE_CATALOG`,
+`AGENT_QC_BEDTOOLS`, `AGENT_MATRIX_BEDTOOLS`, `AGENT_CHROMAP_BIN`, and
+`AGENT_CHROMAP_INDEX_ROOT`; machine-local activation remains explicit and outside
+portable scientific contracts. Production resources and indexes remain outside Git.
+
+M11.6b's accepted hardening raises only the qualified GTF annotation-source
+engineering bound to 4 GiB. Parent resources, TSS, lineage, synthetic annotations
+and other QC sidecars retain 2 GiB. Parser/transcript/TSS semantics and all other
+scientific limits are unchanged. Focused tests passed 126; the affected QC suite
+passed 208; full lightweight acceptance passed 3,579 tests, with 83 skipped and
+7 existing warnings in 1,409.40 seconds (exit 0), all RUN_* gates disabled and no
+exclusions. M11.6c changed no runtime/source code; 198 contract/orchestration and
+5 guarded synthetic backend/runtime tests passed.
+
+Both full indexes were constructed successfully on the current lab host. Native
+sizes are 12,552,803,536 bytes (human, ≈12.55 GB) and 11,780,233,560 bytes (mouse,
+≈11.78 GB). Human child RSS was observed at approximately 26.1 GiB. The mouse
+RSS observation was not isolated and is not an independent mouse peak. These
+operator observations define neither universal hardware minima nor throughput
+qualification.
+
+M11.6 establishes production resource readiness and runtime qualification only.
+It does not establish real biological raw-data acceptance, biological preprocessing
+correctness, production throughput qualification, automatic statistical cell
+calling, doublet detection, FRiP, peak calling or biological model-readiness.
+Selection retains `cell_call_method=none`, `cell_call_state=not_assessed`, and
+`selection_method=explicit_qc_thresholds.v1`. ToolRegistry remains 18. Planner,
+semantic compiler, v3/v4 wire schemas, Application, fragment science, M11.4
+QC/selection science and M11.5 matrix science are unchanged. No provisioning
+capability becomes a Planner-visible scientific tool.
+
+**M11.7 — Real-Data End-to-End Production Acceptance** will test the already
+accepted software/resources on real biological data at real scale. **M11.8 —
+Biological Validation & Raw Preprocessing Closeout** retains biological validation.
+Neither milestone is implemented by this documentation-only closeout.
 
 ## Current scientific runtime and verification contracts
 
@@ -3871,9 +3887,10 @@ named data directories (at most 100 entries each). `/home/likeyi/data`,
 `/home/likeyi/datasets`, and `Agent/data` were absent. No direct FASTQ candidates
 were found in the checked locations. Real biological FASTQ acceptance is deferred;
 no chemistry/whitelist was guessed and no broad storage crawl or download occurred.
-Full hg38/mm10 Chromap indexes were not provisioned. This is a production runtime
-resource requirement, not a code defect. Biological end-to-end acceptance may be
-performed later with the complete M11.8 raw→cell-by-cCRE path.
+At the M11.2 checkpoint, full hg38/mm10 Chromap indexes were not provisioned.
+M11.6c now supplies those accepted production resources. M11.7 owns real-data
+operational acceptance; M11.8 retains biological validation and raw preprocessing
+closeout.
 
 The reviewed third-party directory contains only the patch, MIT license and
 qualification documentation/metadata. No compiled executable, upstream full source

@@ -111,20 +111,43 @@ statistical cell calling and model inference from raw sequencing remain deferred
 
 ## Milestone 11 status
 
-**M11.6a specifies production resources and the operator workflow.** The
-[resource specification](docs/m11.6a-production-resource-specification.md) pins
-GENCODE 49/hg38 and M25/mm10 comprehensive chromosome GTF products, parent
-provenance and classification review gates, immutable catalogs, and separate
-Chromap build/deployment locations.
+**Milestone 11.6 — Production Reference & Runtime Resource Provisioning is complete.**
+The accepted slices are [M11.6a — production resource specification and operator
+workflow](docs/m11.6a-production-resource-specification.md), [M11.6b — production
+parent/QC resources and qualification](docs/m11.6b-production-qc-resources.md), and
+[M11.6c — full-reference Chromap resources and runtime
+handoff](docs/m11.6c-production-chromap-resources.md).
 
-**[M11.6b is ready for final acceptance](docs/m11.6b-production-qc-resources.md):** both
-authenticated production parents and GENCODE 49/hg38 and M25/mm10 QC bundles
-passed independent reconstruction; the immutable two-species catalog passed
-production qualification. A GTF-only 4 GiB guard resolves the human source-size
-blocker while preserving 2 GiB sidecar/synthetic limits and frozen science.
-M11.6c owns full-reference indexes and runtime handoff. The registry remains at 18 tools; Planner/compiler
-and QC/matrix science are unchanged. Final complete lightweight regression:
-3,579 passed, 83 skipped, 7 existing warnings. Biological acceptance remains deferred.
+Authenticated human/hg38 and mouse/mm10 parents retain full ordered cCRE
+vocabularies of 1,355,445 and 1,341,077, respectively. Production-qualified GENCODE
+49/human and M25/mouse QC resources share an immutable two-species catalog.
+Qualified QC and matrix BEDTools runtimes, the durable qualified patched Chromap
+executable, and both full-reference Chromap indexes complete the existing handoff:
+`AGENT_QC_RESOURCE_CATALOG`, `AGENT_QC_BEDTOOLS`, `AGENT_MATRIX_BEDTOOLS`,
+`AGENT_CHROMAP_BIN`, and `AGENT_CHROMAP_INDEX_ROOT`.
+
+The accepted GTF-only 4 GiB annotation-source guard changes only an engineering
+bound; other QC resources/sidecars retain 2 GiB and QC scientific semantics are
+unchanged. Full lightweight acceptance passed 3,579 tests, with 83 skipped and
+7 existing warnings. Both indexes were constructed on the current lab host:
+human native size ≈12.55 GB, mouse ≈11.78 GB; human child RSS was observed at
+≈26.1 GiB. Mouse RSS was not isolated. These are operator observations, not
+universal hardware requirements or throughput qualification.
+
+M11.6 establishes production resource readiness and runtime qualification, not
+real biological raw-data acceptance, biological preprocessing correctness,
+throughput qualification, automatic statistical cell calling, doublet detection,
+FRiP, peak calling or biological model-readiness. Selection retains
+`cell_call_method=none`, `cell_call_state=not_assessed`, and
+`selection_method=explicit_qc_thresholds.v1`. Registry remains 18; Planner,
+semantic compiler, v3/v4 wire schemas, Application, fragment science, M11.4
+QC/selection science and M11.5 matrix science are unchanged. Provisioning adds
+no Planner-visible scientific tool.
+
+Next: **M11.7 — Real-Data End-to-End Production Acceptance** tests the accepted
+software/resources on real biological data at real scale. **M11.8 — Biological
+Validation & Raw Preprocessing Closeout** retains biological validation. Neither
+milestone is implemented by this closeout.
 
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:

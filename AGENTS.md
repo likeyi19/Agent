@@ -260,6 +260,18 @@ The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).
 Detailed contracts follow.
 
+M11.6a freezes the production resource specification and operator workflow in
+[the M11.6a contract](docs/m11.6a-production-resource-specification.md): GENCODE
+49/hg38 and M25/mm10 comprehensive chromosome GTF products, source-authority
+gates, complete explicit contig review, immutable catalog retention, and separate
+Chromap build/publication locations. Final authoritative parent manifests precede
+dependent QC/index construction. Payload checksums, final parent authority and
+per-contig attestations remain explicit M11.6b gates; no production resources are
+provisioned by M11.6a. M11.6c owns full-reference indexes/runtime handoff; M11.7
+owns real-data operational acceptance and M11.8 retains biological validation.
+This documentation-only slice adds no helper or tool and changes no Planner,
+compiler, QC/matrix science or existing qualification policy.
+
 ## Current scientific runtime and verification contracts
 
 ### EpiZoo input, inference, and artifacts

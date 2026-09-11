@@ -111,6 +111,15 @@ statistical cell calling and model inference from raw sequencing remain deferred
 
 ## Milestone 11 status
 
+**M11.6a specifies production resources and the operator workflow.** The
+[resource specification](docs/m11.6a-production-resource-specification.md) pins
+GENCODE 49/hg38 and M25/mm10 comprehensive chromosome GTF products, parent
+provenance and classification review gates, immutable catalogs, and separate
+Chromap build/deployment locations. No production payloads are provisioned here.
+M11.6b owns parent/QC provisioning and attestation; M11.6c owns full-reference
+indexes and runtime handoff. The registry remains at 18 tools; Planner/compiler
+and QC/matrix science are unchanged. Biological acceptance remains deferred.
+
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:
 1,355,445 features for human/hg38 and 1,341,077 for mouse/mm10.

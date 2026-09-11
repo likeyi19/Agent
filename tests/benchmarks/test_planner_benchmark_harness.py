@@ -153,7 +153,7 @@ def test_corpus_covers_required_categories_workflows_and_tools(
     # tests/chromap/, tests/external_fragments/ and tests/bam_fragments/
     # (including explicit v3). The historical M9 corpus itself is unchanged.
     # M11.4b QC coverage lives in tests/barcode_qc/, including explicit v3.
-    assert expected_tools | {"inspect_raw_scATAC", "prepare_scATAC_fragments", "import_scATAC_fragments", "prepare_scATAC_bam_fragments", "compute_scATAC_qc", "select_scATAC_cells"} == set(build_default_tool_registry().names())
+    assert expected_tools | {"inspect_raw_scATAC", "prepare_scATAC_fragments", "import_scATAC_fragments", "prepare_scATAC_bam_fragments", "compute_scATAC_qc", "select_scATAC_cells", "build_scATAC_cell_by_ccre"} == set(build_default_tool_registry().names())
 
 
 def test_corpus_uses_only_synthetic_path_values(

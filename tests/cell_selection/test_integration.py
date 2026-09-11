@@ -101,7 +101,7 @@ def test_v3_v4_and_registry(selection_case,monkeypatch):
     payload=dict(schema_version=3,status='plan',reason=None,steps=[dict(step_id='qc',tool_name='select_scATAC_cells',
         arguments=({k:dict(binding_type='input',input_name=k) for k in args}|{k:None for k in ('min_tss_flank_evidence','max_qc_fragment_records','max_nucleosome_signal')}),depends_on=[],description='Select.')])
     assert dict(LLMPlanner(Model(payload),wire_mode=PlanningWireMode.V3).plan(req,registry).steps[0].arguments)==args
-    assert len(registry.names())==17
+    assert len(registry.names())==18
     result=public.select_scATAC_cells(**args)
     monkeypatch.setattr(public,'verify_public_result',lambda *a:pytest.fail('IO-free result validation'))
     registry.validate_result('select_scATAC_cells',result)

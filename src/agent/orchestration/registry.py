@@ -100,6 +100,7 @@ class ArtifactSemanticKind(str, Enum):
     SCATAC_QC_REFERENCE = "scatac_qc_reference"
     SCATAC_BARCODE_QC = "scatac_barcode_qc"
     SCATAC_CELL_SELECTION = "scatac_cell_selection"
+    SCATAC_CELL_BY_CCRE = "scatac_cell_by_ccre"
     SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
     SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
@@ -2800,7 +2801,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "input_path": _planning_argument(
                 path_types,
                 "Raw sparse scATAC regulatory matrix to validate.",
-                source=direct,
+                source=composable,
                 artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
             ),
             "output_dir": _planning_argument(
@@ -2950,7 +2951,10 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=tuple(
-                _semantic_argument_port(argument, required=required)
+                (SemanticConsumerPortSpec('input_path',(_semantic_member('value','input_path'),),True,
+                    request_sources=(_semantic_request('input_path',_semantic_request_member('value','input_path')),),
+                    accepted_upstream_types=('scatac_matrix_h5ad.v1',)) if argument=='input_path'
+                 else _semantic_argument_port(argument, required=required))
                 for argument, required in (
                     ("input_path", True),
                     ("output_dir", True),
@@ -3344,6 +3348,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .bam_fragments_registry import bam_fragments_tool_spec
     from .barcode_qc_registry import barcode_qc_tool_spec
     from .cell_selection_registry import cell_selection_tool_spec
+    from .matrix_registry import matrix_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3362,6 +3367,7 @@ def build_default_tool_registry() -> ToolRegistry:
         bam_fragments_tool_spec(),
         barcode_qc_tool_spec(),
         cell_selection_tool_spec(),
+        matrix_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

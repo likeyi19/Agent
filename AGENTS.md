@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All seventeen currently registered tools
+`src/agent/orchestration/registry.py`. All eighteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -76,11 +76,12 @@ derived from the registry.
 | `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
 | `compute_scATAC_qc` | Complete observed-barcode QC v1: canonical-record depth, fixed TSS incidence/enrichment, length bins/ratios, independently verified without production intersection |
 | `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
+| `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake, FASTQ fragments, external adoption, qualified BAM preparation and barcode QC have verified figureless reporting. Unsupported projections fail
+Raw intake, FASTQ fragments, external adoption, qualified BAM preparation, barcode QC, explicit selection and cell-by-cCRE construction have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
@@ -180,8 +181,9 @@ semantics without raising size ceilings. Metrics-only QC remains valid, with no
 mandatory or automatically inserted selection.
 
 M11.4a, M11.4b and M11.4c complete M11.4 under the narrower explicit-QC-selection
-scope. Automatic statistical cell calling, doublets, FRiP, peak/cCRE/blacklist overlap,
-registered M11.5 matrix execution and M11.8 biological validation remain deferred.
+scope. Automatic statistical cell calling, doublets, FRiP, QC peak/cCRE/blacklist
+overlap metrics and M11.8 biological validation remain deferred. M11.5c now
+registers matrix execution.
 No production hg38/mm10 QC bundle or biological cell-calling acceptance is claimed.
 See [the M11.4c contract and M11.5 handoff](docs/m11.4c-explicit-selection.md).
 M11.4c final lightweight acceptance passes all 121 selection tests within the full
@@ -196,9 +198,9 @@ artifact contract, exact sparse logical identity, deterministic H5AD-vocabulary
 reference provisioning and a bounded M11.5-specific BEDTools qualification harness.
 It explicitly supersedes M11.1's support-weighted matrix proposal. The full mouse
 reference is now project-authorized and derived through the existing reference
-interface. No matrix-building tool, full construction, independent matrix
-reconstruction or Planner/Application integration is introduced; the registry
-remains at seventeen. See [M11.5a](docs/m11.5a-matrix-contract.md).
+interface. M11.5a introduced no matrix-building tool, full construction, independent
+matrix reconstruction or Planner/Application integration; the registry then
+remained at seventeen. See [M11.5a](docs/m11.5a-matrix-contract.md).
 Focused M11.5a acceptance passes 93 tests; relevant combined regression passes
 748 tests. Full mouse reference provisioning/reinspection reproduces the accepted
 BED and portable reference identities. These results qualify contracts/resources
@@ -212,10 +214,47 @@ uses the pinned BEDTools profile; independent verification reconstructs every
 entry through a separate augmented interval tree and disk aggregation. Empty
 selection and zero rows/columns remain valid. Human/mouse share both algorithms.
 Publication verifies the complete private stage before atomic rename and supports
-cooperative cleanup. No registry, Planner, Application, evidence/reporting or
-durable receipt/resume integration is introduced; these remain M11.5c. Synthetic
+cooperative cleanup. That data-layer milestone did not introduce registry, Planner,
+Application, evidence/reporting or durable receipt/resume integration. Synthetic
 acceptance and operational bounds are recorded in
 [the M11.5b implementation record](docs/m11.5b-matrix-construction.md).
+
+M11.5c registers `build_scATAC_cell_by_ccre` as tool eighteen, reusing the frozen
+M11.5a/b science. Raw input → verified fragments → qualified QC → explicit selected
+candidates → full ordered cell-by-cCRE matrix now composes through existing semantic
+ports and AgentApplication. Three exact manifest path/SHA pairs and managed output
+are the public inputs; `AGENT_MATRIX_BEDTOOLS` is operator runtime configuration.
+No scientific matrix knobs or species-specific construction branches are added.
+
+Policy `build-scatac-cell-by-ccre-v1` binds exact arguments, durable execution and
+matrix profile. An outer receipt envelope preserves the frozen two-file matrix
+artifact. Resume never reruns production; existing recovery/verification/evidence
+boundaries freshly invoke the independent verifier, including upstream verification
+and disk-backed scientific reconstruction. Cooperative cancellation cleans private
+work and terminates active intersection; published terminal success is preserved.
+Evidence and deterministic figureless reporting describe canonical fragment-record
+counts, full axes, zero rows and the overlap diagnostic without model-readiness or
+cell-calling claims. Nonempty outputs compose with explicit existing feature-space
+validation; empty matrices remain successful but downstream nonempty rules persist.
+
+Complete v3/v4 catalogs retain all semantic content and existing size ceilings via
+lossless phrase sharing and shared/pruned schema definitions. Executable wire
+payloads, compiler rules, provider routing and science are unchanged. Scripted
+provider tests establish interface correctness, not live-provider planning quality.
+
+Full-mm10 production-chain acceptance remains a resource dependency: a separately
+operator-qualified mm10 QC reference and qualification catalog are not provisioned.
+The accepted full 1,341,077-column mouse component result is unchanged; QC lineage
+is not relaxed. Automatic statistical calling, doublets, FRiP filtering, peak calling,
+raw-derived EpiZoo preprocessing/inference and biological throughput qualification
+remain deferred. See [M11.5c API, lifecycle and acceptance](docs/m11.5c-agent-integration.md).
+
+M11.5c final acceptance passes 45 focused integration tests, 1,071 orchestration/
+Application/report regressions, and 979 relevant data/integration tests with 28
+skipped. The complete lightweight suite passes 3,563 tests, with 83 skipped and 7
+existing warnings (1,323.45 seconds), all `RUN_*` gates disabled. Complete catalog
+sizes are v3 22,315 + 15,480 = 37,795 bytes and v4 18,977 + 11,460 = 30,437 bytes,
+within unchanged ceilings. These are software/synthetic acceptance results.
 
 The exact current fragment boundary is documented in
 [the M11.3d contract](docs/m11.3d-fragment-convergence.md).

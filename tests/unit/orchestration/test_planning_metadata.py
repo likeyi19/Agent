@@ -333,7 +333,10 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
     from catalog_expansion import expand_catalog
     prompt_tools = expand_catalog(payload)
     def expand(meaning):
-        return payload["meanings"][meaning["m"]] if isinstance(meaning, dict) else meaning
+        import re
+        value=payload["meanings"][meaning["m"]] if isinstance(meaning, dict) else meaning
+        marker=payload['catalog_phrase_marker']
+        return re.sub(re.escape(marker)+r'(\d+)'+re.escape(marker),lambda m:payload['catalog_phrases'][int(m[1])],value)
     source_codes = {
         code: meaning
         for code, meaning in payload["catalog_format"]["source"].items()

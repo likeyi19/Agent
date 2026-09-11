@@ -400,6 +400,8 @@ def build_semantic_planning_prompt(
             ),
             "diagnostic": diagnostic,
         }
+    from ._catalog_compaction import share_catalog_text
+    share_catalog_text(payload["catalog"])
     return json.dumps(
         payload,
         ensure_ascii=False,

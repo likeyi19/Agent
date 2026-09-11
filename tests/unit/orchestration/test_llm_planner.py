@@ -601,9 +601,9 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "i",
         "r",
         "ir",
-        "in",
         "b",
-        "rn",
+        "d",
+        "t",
     }
     assert schema["required"] == (
         "schema_version",
@@ -798,8 +798,7 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M11.4c adds tool seventeen. Lossless catalog/reference compaction
-    # gives 15,428 schema + 22,402 prompt = 37,830 bytes.
+    # M11.5c adds tool eighteen with lossless text/schema sharing.
     # Preserve the existing budgets and the complete scientific catalog.
     assert len(serialized_schema.encode("utf-8")) <= 15_500
     assert len(prompt.encode("utf-8")) <= 22_500

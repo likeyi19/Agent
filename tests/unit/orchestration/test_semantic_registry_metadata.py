@@ -490,12 +490,14 @@ def test_feature_space_semantic_authority_covers_the_full_execution_interface() 
     )
     for rule in rules:
         assert rule.target_port == rule.argument_name == rule.input_name == rule.selector
-    assert not any(channel.consumer_tool_name == tool.name
-                   for channel in contract.step_output_channels)
+    channels=[channel for channel in contract.step_output_channels if channel.consumer_tool_name==tool.name]
+    assert len(channels)==1
+    assert channels[0].producer_tool_name=='build_scATAC_cell_by_ccre'
+    assert channels[0].target_port=='input_path'
     assert tool.semantic_planning is not None
     for port in tool.semantic_planning.consumer_ports:
         assert port.required is (port.name in tool.required_arguments)
-        assert not port.accepted_upstream_types
+        assert port.accepted_upstream_types == (('scatac_matrix_h5ad.v1',) if port.name=='input_path' else ())
 
 
 def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> None:

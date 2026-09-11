@@ -142,13 +142,11 @@ def build_semantic_wire_v4_schema(
                     "step_id": {"type": "string"},
                     "tool": {"type": "string", "enum": (tool_name,)},
                     "sources": sources_schema,
-                    "control_dependencies": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
+                    "control_dependencies": {"$ref": "#/$defs/d"},
                 }
             )
         )
+    definitions["d"] = {"type":"array","items":{"type":"string"}}
     definitions["step"] = {"anyOf": tuple(step_variants)}
     definitions["plan_decision"] = _closed_object_schema(
         {

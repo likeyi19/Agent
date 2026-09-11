@@ -35,7 +35,7 @@ def test_current_tool_contract_and_policy(published):
     result, _, _ = published
     registry = build_default_tool_registry(); spec = registry.get('prepare_scATAC_fragments')
     registry.validate_result(spec.name, result)
-    assert len(registry.names()) == 17
+    assert len(registry.names()) == 18
     assert spec.recovery_policy_version == public.RECOVERY_POLICY == 'prepare-scatac-fragments-fastq-v2'
     assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v2'
     with pytest.raises(ValueError):

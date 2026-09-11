@@ -133,7 +133,7 @@ def test_missing_explicit_binding(bam_factory,missing):
 def test_registry_contract_and_no_hidden_result_io(bam_factory, monkeypatch):
     args = bam_factory(); result = public.prepare_scATAC_bam_fragments(**args)
     registry = build_default_tool_registry(); spec = registry.get('prepare_scATAC_bam_fragments')
-    assert len(registry.names()) == 17
+    assert len(registry.names()) == 18
     assert spec.recovery_policy_version == public.RECOVERY_POLICY
     assert not spec.retryable_error_codes
     assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v2'

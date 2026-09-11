@@ -106,8 +106,8 @@ qualities, complete BAM reference dictionaries, or raw sequencing payloads.
 
 M10 provides intake/preflight; M11.2 adds FASTQ and M11.3c adds qualified BAM
 preprocessing below. Sort/index observations alone do not authorize transformations.
-Realignment/liftOver, cell calling, cell-by-cCRE construction and model inference
-from raw sequencing remain deferred.
+M11.5c now adds cell-by-cCRE construction. Realignment/liftOver, automatic
+statistical cell calling and model inference from raw sequencing remain deferred.
 
 ## Milestone 11 status
 
@@ -129,8 +129,8 @@ owns exact rows, including zero rows and empty selection. EpiZoo filtering stays
 downstream, retaining 700,460 human or 814,020 mouse features.
 
 **M11.5a freezes matrix science/artifacts and narrow BEDTools qualification.**
-No matrix-building tool or Planner/Application integration is added; the registry
-remains at 17 tools. The project-authoritative mouse full vocabulary is provisioned
+At that milestone no matrix-building tool or Planner/Application integration was
+added; the registry remained at 17 tools. The project-authoritative mouse full vocabulary is provisioned
 deterministically from the exact Fang2021 H5AD ordered feature names into the
 unchanged reference interface, with a hash-bound derivation receipt. See the
 [M11.5a contract and acceptance](docs/m11.5a-matrix-contract.md).
@@ -139,8 +139,31 @@ unchanged reference interface, with a hash-bound derivation receipt. See the
 verification.** Exact verified fragments, selection and reference produce one
 ordered int64 CSR H5AD. SQLite-backed BEDTools incidence counting and a separate
 augmented interval-tree verifier preserve full axes and zero rows/columns. This
-does not add a registered tool; Planner/Application, reporting and durable lifecycle
-integration remain M11.5c. See [implementation and evidence](docs/m11.5b-matrix-construction.md).
+data-layer milestone did not add a registered tool. M11.5c now supplies
+Planner/Application, reporting and durable lifecycle integration. See [implementation and evidence](docs/m11.5b-matrix-construction.md).
+
+**M11.5c integrates the full matrix into Agent.** The eighteenth registered tool,
+`build_scATAC_cell_by_ccre`, consumes exact fragments-v2, selection-v1 and reference
+manifest path/SHA pairs. Existing artifacts and same-plan upstream outputs compose
+through reviewed semantic ports:
+
+```text
+raw input → verified fragments → QC → selected cells → full cell-by-cCRE matrix
+```
+
+The tool reuses the frozen constructor and independent verifier, publishes an
+immutable H5AD with a durable receipt, and supports resume, cancellation, bounded
+evidence and figureless reports. Empty selections and zero rows remain valid.
+`AGENT_MATRIX_BEDTOOLS` configures the explicitly qualified executable; existing
+QC runtime/resource qualification remains mandatory. PLAN_ONLY reads no scientific
+payloads and performs no matrix work. See [the API and closeout](docs/m11.5c-agent-integration.md).
+
+The full mouse 1,341,077-column component acceptance remains valid. A complete
+production mm10 QC → selection → full matrix acceptance still needs a separately
+operator-qualified mm10 QC bundle/catalog. This resource dependency is deferred.
+Automatic statistical cell calling, doublets, FRiP filtering, peak calling,
+raw-derived EpiZoo preprocessing/inference and biological throughput qualification
+are separate future work.
 
 **M11.2 is complete: FASTQ → verified canonical fragments.**
 `prepare_scATAC_fragments` consumes a validated intake, library-processing context,
@@ -209,9 +232,9 @@ cells**; statistical background-versus-cell calling is **not assessed**.
 
 M11.4a, M11.4b and M11.4c together complete M11.4 under the explicit-QC-selection
 scope: fragments v2 → barcode QC → optional explicit QC selection → ordered candidate
-set. There are 17 registered scientific tools. Metrics-only QC remains valid;
-selection is never inserted automatically. Automatic calling, doublets, FRiP,
-cCRE construction and biological cell-calling validation remain deferred.
+set. M11.4c brought the registry to 17 tools; M11.5c adds matrix construction as
+tool 18. Metrics-only QC remains valid; selection is never inserted automatically.
+Automatic calling, doublets, FRiP and biological cell-calling validation remain deferred.
 See [the M11.4c contract, API and M11.5 handoff](docs/m11.4c-explicit-selection.md).
 
 
@@ -243,12 +266,12 @@ contigs remain eligible; strand is absent. This is not Cell Ranger reproduction.
 Complete source identity, independent BAM transformation verification, v2 output
 integrity, exact durable recovery and figureless Application reporting are
 supported. Historical alignment/correction and source-history declarations are
-not independently proven. All 17 scientific tools have semantic metadata;
+not independently proven. All 18 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
 Biological acceptance remains deferred to M11.8.
 
-CRAM/SAM support, automatic statistical cell calling, registered M11.5 matrix
-execution and raw-derived EpiZoo inference remain unimplemented. See the
+CRAM/SAM support, automatic statistical cell calling and raw-derived EpiZoo
+inference remain unimplemented. See the
 [M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 

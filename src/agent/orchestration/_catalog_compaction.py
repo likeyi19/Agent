@@ -42,3 +42,54 @@ def share_catalog_values(catalog):
         if isinstance(value,(list,tuple)):return tuple(rename(v) for v in value)
         return value
     return rename(result),rename(definitions),{aliases[k]:k for k in names},marker
+
+
+def share_catalog_text(payload):
+    """Losslessly share repeated phrases in catalog text, never request values.
+
+    Phrase definitions contain original text, without references. A collision-free
+    marker makes expansion one substitution pass; keys and wire enums are untouched.
+    This keeps the complete eighteen-tool catalog within existing byte ceilings.
+    """
+    fields=('tools','catalog_values','meanings')
+    strings=[]
+    def collect(value):
+        if isinstance(value,str): strings.append(value)
+        elif isinstance(value,dict):
+            strings.extend(value.keys())
+            for child in value.values(): collect(child)
+        elif isinstance(value,(list,tuple)):
+            for child in value: collect(child)
+    for field in fields: collect(payload.get(field,()))
+    marker='~'
+    while any(marker in s for s in strings): marker+='~'
+    texts=[s for s in strings if ' ' in s]
+    phrases=[]
+    while len(phrases)<100:
+        counts=Counter()
+        for text in texts:
+            words=text.split(' ')
+            for start in range(len(words)):
+                for n in range(2,min(16,len(words)-start)+1):
+                    phrase=' '.join(words[start:start+n])
+                    if len(phrase)>15 and marker not in phrase: counts[phrase]+=1
+        tag=marker+str(len(phrases))+marker
+        candidates=[((len(s)-len(tag))*n-len(s)-3,s) for s,n in counts.items() if n>1]
+        if not candidates: break
+        saving,phrase=max(candidates)
+        if saving<=0: break
+        phrases.append(phrase)
+        texts=[s.replace(phrase,tag) for s in texts]
+    def compact(value):
+        if isinstance(value,str):
+            for i,phrase in enumerate(phrases): value=value.replace(phrase,marker+str(i)+marker)
+            return value
+        if isinstance(value,dict): return {k:compact(v) for k,v in value.items()}
+        if isinstance(value,(list,tuple)): return tuple(compact(v) for v in value)
+        return value
+    if phrases:
+        for field in fields:
+            if field in payload: payload[field]=compact(payload[field])
+        payload['catalog_phrases']=phrases
+        payload['catalog_phrase_marker']=marker
+        payload['catalog_format']['phrase_reference']='In catalog strings, <catalog_phrase_marker>N<catalog_phrase_marker> expands once to catalog_phrases[N].'

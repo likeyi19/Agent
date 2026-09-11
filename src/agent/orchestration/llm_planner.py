@@ -295,10 +295,10 @@ def _tool_step_schema(
     return _closed_object_schema(
         {
             "step_id": {"type": "string"},
-            "tool_name": {"type": "string", "enum": (tool_name,)},
+            "tool_name": {"enum": (tool_name,)},
             "arguments": _closed_object_schema(argument_properties),
-            "depends_on": {"type": "array", "items": {"type": "string"}},
-            "description": {"type": ("string", "null")},
+            "depends_on": {"$ref": "#/$defs/d"},
+            "description": {"$ref": "#/$defs/t"},
         }
     )
 
@@ -327,7 +327,27 @@ def _response_schema(
         "reason": {"type": ("string", "null")},
     }
     schema = dict(_closed_object_schema(root_properties))
-    schema["$defs"] = _binding_definitions(request)
+    schema["$defs"] = dict(_binding_definitions(request),
+        d={"type":"array","items":{"type":"string"}},t={"type":("string","null")})
+    # Keep only reachable definitions; enums already constrain their value types.
+    # This changes schema spelling, not accepted v3 payloads or parser behavior.
+    def references(value):
+        if isinstance(value, dict):
+            if "$ref" in value: yield value["$ref"].removeprefix("#/$defs/")
+            for k,child in value.items():
+                if k!="$defs": yield from references(child)
+        elif isinstance(value,(tuple,list)):
+            for child in value: yield from references(child)
+    needed=set(references(schema)); pending=list(needed)
+    while pending:
+        for name in references(schema["$defs"][pending.pop()]):
+            if name not in needed: needed.add(name); pending.append(name)
+    schema["$defs"]={k:v for k,v in schema["$defs"].items() if k in needed}
+    for key in ("schema_version","status"):
+        schema["properties"][key].pop("type")
+    for name in ("i","r"):
+        if name in schema["$defs"]:
+            schema["$defs"][name]["properties"]["binding_type"].pop("type")
     return schema
 
 
@@ -670,6 +690,8 @@ def _build_prompt(
     prompt_payload['catalog_keys'] = names
     prompt_payload['catalog_ref_key'] = marker
     prompt_payload['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'
+    from ._catalog_compaction import share_catalog_text
+    share_catalog_text(prompt_payload)
     return json.dumps(
         prompt_payload,
         ensure_ascii=False,

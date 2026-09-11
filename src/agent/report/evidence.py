@@ -18,6 +18,7 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
 from .cell_selection import (CONTRACT_FIELDS as _CELL_SELECTION_FIELDS,
     FACT_FIELDS as _CELL_SELECTION_FACT_FIELDS, project_cell_selection)
 from .barcode_qc import (CONTRACT_FIELDS as _BARCODE_QC_FIELDS,
@@ -386,6 +387,15 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "build_scATAC_cell_by_ccre": _ToolProjection(
+        _MATRIX_FIELDS, _MATRIX_FACT_FIELDS, "build-scatac-cell-by-ccre-v1",
+        (_ArtifactProjection("manifest_path", "scatac_cell_by_ccre_manifest_json",
+            ("fresh_independent_matrix_reconstruction", "strict_manifest_loading",
+             "authoritative_manifest_sha256", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("matrix_path", "scatac_cell_by_ccre_h5ad",
+            ("fresh_independent_matrix_reconstruction", "full_artifact_sha256", "exact_sparse_logical_identity"),
+            digest_field="matrix_sha256")),
+    ),
     "select_scATAC_cells": _ToolProjection(
         _CELL_SELECTION_FIELDS, _CELL_SELECTION_FACT_FIELDS, "select-scatac-cells-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_selection_manifest_json",
@@ -1244,6 +1254,14 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
+        if step.tool_name == "build_scATAC_cell_by_ccre":
+            try:
+                derived, fragments_artifacts = project_matrix(
+                    step_result.resolved_arguments, step_result.result, step.step_id)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Freshly verified cell-by-cCRE matrix could not be projected.") from exc
         if step.tool_name == "select_scATAC_cells":
             try:
                 derived, fragments_artifacts = project_cell_selection(

@@ -554,6 +554,9 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     catalog = payload["catalog"]
     catalog["tools"] = expand_catalog(catalog)
     for key in ("catalog_values", "catalog_keys", "catalog_ref_key"): catalog.pop(key)
+    catalog.pop("catalog_phrases", None)
+    catalog.pop("catalog_phrase_marker", None)
+    catalog["catalog_format"].pop("phrase_reference", None)
     catalog["catalog_format"].pop("catalog_reference")
     catalog["catalog_format"].pop("guidance_tail")
     modes = catalog["catalog_format"].pop("request_source_mode")

@@ -555,10 +555,12 @@ def _verified_visualization_snapshot(
 from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
 from .cell_selection import REPORT_FIELDS as _CELL_SELECTION_REPORT_FIELDS
+from .matrix import REPORT_FIELDS as _MATRIX_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
+    "build_scATAC_cell_by_ccre": _MATRIX_REPORT_FIELDS,
     "select_scATAC_cells": _CELL_SELECTION_REPORT_FIELDS,
     "import_scATAC_fragments": _EXTERNAL_FRAGMENT_REPORT_FIELDS,
     "prepare_scATAC_bam_fragments": _BAM_FRAGMENT_REPORT_FIELDS,
@@ -763,6 +765,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 
 _TOOL_TITLES: Mapping[str, str] = {
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
+    "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
     "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
@@ -785,6 +788,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 
 _FIELD_LABELS: Mapping[str, str] = {
     **{k:k.replace("_", " ").capitalize() for k in _CELL_SELECTION_REPORT_FIELDS},
+    **{k:k.replace("_", " ").capitalize() for k in _MATRIX_REPORT_FIELDS},
     "n_observed_barcodes": "Observed namespace/barcode identities",
     "n_qc_fragment_records": "Primary nuclear QC fragment records",
     "tss_defined": "Barcodes with defined TSS enrichment",
@@ -984,6 +988,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
+    ("cell_by_ccre", "Cell-by-cCRE matrix", frozenset({"build_scATAC_cell_by_ccre"})),
     ("barcode_qc", "Observed-barcode QC", frozenset({"compute_scATAC_qc"})),
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
@@ -1032,6 +1037,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "build_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","upstream_identities"),
     "select_scATAC_cells": ("selection_method","cell_call_method","cell_call_state","resource_qualification","qc_identity_sha256","selection_profile_sha256"),
     "compute_scATAC_qc": ("tss_method","science_profile_sha256","qc_resource_identity_sha256","resource_qualification","contract_version"),
     "prepare_scATAC_bam_fragments": ("source_profile", "mapq_policy", "tn5_policy", "source_history", "contract_version"),
@@ -1341,6 +1347,15 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "build_scATAC_cell_by_ccre":
+        lines=[f"### Cell-by-cCRE matrix {occurrence}", "",
+            "Generated a full ordered cell-by-cCRE matrix of canonical fragment-record counts. "
+            "Rows retain the exact QC-selected candidates, including zero rows; columns retain the full reference vocabulary.", ""]
+        for fact in step.facts:
+            lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
+        lines.extend(("", "The overlap diagnostic is the fraction of selected canonical fragment records overlapping any cCRE. "
+            "It does not establish model readiness or statistical cell calling.", "", _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name == "select_scATAC_cells":
         lines=[f"### Explicit QC selection {occurrence}", "",
             "Selected barcodes are QC-selected candidate cells. Selection is QC-threshold based; statistical background-versus-cell calling was not assessed.", ""]
@@ -1539,6 +1554,7 @@ def _render_summary(
     labels = {
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
+        "build_scATAC_cell_by_ccre": "Full ordered canonical fragment-record matrix generated",
         "select_scATAC_cells": "Explicit QC selection succeeded; statistical cell calling was not assessed",
         "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",

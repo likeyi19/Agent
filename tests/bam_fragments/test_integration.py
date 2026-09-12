@@ -165,10 +165,18 @@ def test_application_execute_report_resume_and_corruption(bam_factory, tmp_path,
         target.write_bytes(target.read_bytes() + b'changed')
     monkeypatch.setattr(production, 'prepare_in_stage', lambda *a: pytest.fail('Adoption repeated on resume'))
     resumed = ResearchAgentApplication(tmp_path / 'workspace').resume(result.run_id)
-    if mutation:
+    if mutation and mutation != 'source':
         assert resumed.status.value == 'FAILED' and resumed.error.code == 'APP_EVIDENCE_FAILED'
     else:
         assert resumed == result and Path(resumed.report.path).read_text() == text
+    if mutation == 'source':
+        # Application reuse preserves historical qualification; current source
+        # freshness remains a separate, strict operator audit.
+        from agent.orchestration.verification_authority import accepted_authorities
+        with pytest.raises(ValueError):
+            with accepted_authorities(app.run_store, result.run_id,
+                    source_policy='current_source_freshness.v1'):
+                pass
 
 
 @pytest.mark.parametrize('before', [False, True])

@@ -17,5 +17,5 @@ def project_barcode_qc(arguments,result,step_id):
         artifacts.append(dict(producing_step_id=step_id,tool_name='compute_scATAC_qc',result_field='manifest_path',
             source_manifest_field=field,artifact_kind=kind,artifact_path=str(Path(result['manifest_path']).parent/resource['path']),
             integrity={'authoritative_digest':{'algorithm':'sha256','value':resource['sha256'],'source_manifest_field':field+'.sha256'},
-                'verification_basis':('fresh_independent_barcode_qc_reconstruction','full_artifact_sha256')}))
+                'verification_basis':('independent_barcode_qc_reconstruction','full_artifact_sha256')}))
     return facts,artifacts

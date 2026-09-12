@@ -31,6 +31,6 @@ def project_bam_fragments(arguments,result,step_id):
     artifacts=[dict(producing_step_id=step_id,tool_name='prepare_scATAC_bam_fragments',result_field='manifest_path',
         source_manifest_field=field,namespace=entry['namespace'],artifact_kind=kind,artifact_path=r['path'],
         integrity={'authoritative_digest':{'algorithm':'sha256','value':r['sha256'],'source_manifest_field':field+'.sha256'},
-        'verification_basis':('fresh_independent_bam_transformation_verification','full_artifact_sha256','generic_v2_artifact_verification')})
+        'verification_basis':('independent_bam_transformation_verification','full_artifact_sha256','generic_v2_artifact_verification')})
         for field,kind,r in resources]
     return facts,artifacts

@@ -52,7 +52,7 @@ def project_fragments(arguments, result, step_id):
                     'authoritative_digest': {'algorithm': 'sha256', 'value': entry[kind]['sha256'],
                         'source_manifest_field': field + '.sha256'},
                     'verification_basis': (
-                        'fresh_independent_fragments_verification', 'full_artifact_sha256',
+                        'independent_fragments_verification', 'full_artifact_sha256',
                         'full_bgzf_crc_and_canonical_record_stream_verification' if kind == 'bgzf'
                         else 'tabix_contig_inventory_full_contig_and_narrow_overlap_queries',
                     ),
@@ -67,5 +67,5 @@ def project_fragments(arguments, result, step_id):
             artifact_kind=kind, artifact_path=resource['path'], integrity={
                 'authoritative_digest': {'algorithm': 'sha256', 'value': resource['sha256'],
                     'source_manifest_field': field + '.sha256'},
-                'verification_basis': ('fresh_independent_fragments_verification', 'full_artifact_sha256')}))
+                'verification_basis': ('independent_fragments_verification', 'full_artifact_sha256')}))
     return facts, artifacts

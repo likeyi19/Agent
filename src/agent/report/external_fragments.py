@@ -43,5 +43,5 @@ def project_external_fragments(arguments, result, step_id):
         artifacts.append(dict(producing_step_id=step_id, tool_name='import_scATAC_fragments', result_field='manifest_path',
             source_manifest_field=field, namespace=entry['namespace'], artifact_kind=kind, artifact_path=resource['path'],
             integrity={'authoritative_digest': {'algorithm': 'sha256', 'value': resource['sha256'], 'source_manifest_field': field + '.sha256'},
-                       'verification_basis': ('fresh_independent_external_adoption_verification', 'full_artifact_sha256', basis)}))
+                       'verification_basis': ('independent_external_adoption_verification', 'full_artifact_sha256', basis)}))
     return facts, artifacts

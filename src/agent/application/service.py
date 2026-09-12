@@ -19,6 +19,7 @@ from agent.orchestration import (
     PlanningWireMode,
     ToolRegistry,
 )
+from agent.orchestration.verification_authority import accepted_authorities
 from agent.providers import (
     PlanningModelFactoryError,
     PlanningModelFactoryRegistry,
@@ -412,7 +413,11 @@ class ResearchAgentApplication:
         report: ArtifactReference | None = None
         failure: _StageFailure | None = None
         try:
-            with self._workspace.composition_lease(run):
+            # Runtime/recovery has finished. Reuse only authority loaded from our
+            # trusted store; all evidence and presentation checks still run.
+            with self._workspace.composition_lease(run), accepted_authorities(
+                self._run_store, run_result.run_id
+            ):
                 evidence_path, evidence = self._evidence(run_result, run)
                 try:
                     kinds = get_supported_visualization_kinds(
@@ -464,6 +469,13 @@ class ResearchAgentApplication:
             )
         except _StageFailure as exc:
             failure = exc
+        except Exception as exc:
+            # Authority loading or final anchor validation failed. Never retry
+            # with a weaker verification path or return application success.
+            report = None
+            failure = _StageFailure(
+                "APP_EVIDENCE_FAILED", ApplicationStage.EVIDENCE, exc
+            )
         if failure is not None:
             return self._base_result(
                 run_result,

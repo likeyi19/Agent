@@ -148,3 +148,33 @@ def test_private_publication_proof_preserves_source_scan_count(configured, monke
         result = public.execute_fragments(args, '1' * 64)
         public.verify_public_result(args, result)
     assert len(calls) == 2
+
+
+def test_fastq_application_reuses_all_scientific_authorities(dag, tiny, monkeypatch):
+    from agent.application import ResearchAgentApplication
+    from agent.orchestration import AgentRequest
+    from test_fragments_orchestration import FixedPlanner
+    plan, group, control = dag
+    app = ResearchAgentApplication(tiny['root']/'application', planner=FixedPlanner(plan))
+    counts = Counter()
+    original = VerificationContext.verify
+    def verify(self, kind, function, args, kwargs):
+        def independent(*a, **kw):
+            counts[kind] += 1
+            return function(*a, **kw)
+        return original(self, kind, independent, args, kwargs)
+    monkeypatch.setattr(VerificationContext, 'verify', verify)
+    result = app.run(AgentRequest('authority-request', 'Tiny FASTQ DAG.', {}))
+    assert result.status.value == 'SUCCEEDED', result
+    assert result.evidence and result.report and result.visualization is None
+    assert result.run_result.steps[-1].result['total_count'] == 1
+    assert counts == dict(fastq_fragment_production=1, generic_fragments=1, qc=1, selection=1, matrix=1)
+    before = dict(counts)
+    state = app.run_store.load(result.run_id)
+    for _, name in group.files:
+        path = Path(name)
+        path.rename(path.with_suffix('.archived'))
+    assert app.resume(result.run_id) == result
+    assert dict(counts) == before
+    assert app.run_store.load(result.run_id) == state
+    assert control['calls'].count('chromap') == 1

@@ -335,6 +335,18 @@ resource and verifier identities, and fails closed on mutation or incompatibilit
 Standalone and recovery verification remain deep; v1/legacy records are not upgraded.
 Evidence, Visualization, Report and preserved real-run closeout remain deferred.
 
+### Post-M11.7b.3a application authority reuse
+
+Post-M11.7b.3a extends the .2 loader to successful application postprocessing.
+Evidence, visualization and report consumers retain fresh application/presentation
+checks while reusing compatible persisted scientific authority. Standalone/default
+report APIs and runtime recovery remain deep; missing authority takes the existing
+strict path without persistent upgrade. Evidence scientific bases describe the
+independent proof without claiming it was reconstructed during every consumption.
+Old evidence projections are not silently migrated. See the
+[application audit and reuse contract](docs/post-m11.7b.3a-application-authority-reuse.md).
+Legacy qualification and preserved real-run closeout remain deferred.
+
 ### EpiZoo input, inference, and artifacts
 
 The registered `epizoo_embed_cells` tool supports human and mouse only. Its

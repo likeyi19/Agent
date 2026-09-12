@@ -159,8 +159,14 @@ extends new durable scientific execution across FASTQ/BAM/external fragments →
 → Selection → Matrix. Every layer retains its independent scientific verification;
 compatible authority prevents repeated upstream reconstruction and raw-source
 hashing. Historical verified source identity and explicit current-source freshness
-are separate policies. Standalone/recovery verification stays deep; application
-Evidence/Visualization/Report and the preserved legacy run remain deferred.
+are separate policies. Standalone/recovery verification stays deep; the preserved
+legacy run remains deferred. Application reuse is described below.
+
+[Post-M11.7b.3a — Application authority reuse](docs/post-m11.7b.3a-application-authority-reuse.md)
+now scopes successful application postprocessing with the existing trusted authority
+loader. Evidence, visualization discovery and report verification retain their own
+checks while reusing compatible scientific proofs. Standalone and runtime recovery
+remain deep; legacy qualification and preserved-run closeout remain deferred.
 
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:

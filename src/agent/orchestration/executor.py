@@ -1057,12 +1057,18 @@ class PlanExecutor:
                 for dependency in step.depends_on
                 if dependency in verified_results
             }
+            authority_options = {}
+            if durable_run_id is not None and step.tool_name == 'prepare_scATAC_fragments':
+                from .durable_tool_recovery import execution_identity
+                authority_options['authority_execution_identity'] = execution_identity(
+                    durable_run_id, plan, step, self._registry.get(step.tool_name))
             verification = verify_step(
                 step,
                 argument_snapshot,
                 returned_result,
                 self._registry,
                 dependency_results=dependency_results,
+                **authority_options,
             )
             trace.add(
                 TraceEventType.VERIFICATION,

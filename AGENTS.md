@@ -308,6 +308,18 @@ Neither milestone is implemented by this documentation-only closeout.
 
 ## Current scientific runtime and verification contracts
 
+### Post-M11.7b.1 verification authority foundation
+
+The [verification authority contract](docs/post-m11.7b.1-verification-authority.md)
+adds versioned scientific, integrity/lineage and presentation scopes. Canonical
+v2 integrity and producer-specific FASTQ/BAM/external qualifications are distinct;
+none substitutes for another. New durable FASTQ steps persist artifact-bound
+authority in accepted step verification. An explicit QC verifier call can reuse
+compatible stored authority while retaining integrity/resource checks and QC
+reconstruction. Standalone/default calls and recovery remain deep; Evidence,
+Visualization and Report integration are deferred. Physical hashing remains;
+70→2 optimization is not complete. Legacy M11.7b-2 records are not upgraded.
+
 ### EpiZoo input, inference, and artifacts
 
 The registered `epizoo_embed_cells` tool supports human and mouse only. Its

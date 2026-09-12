@@ -1103,7 +1103,8 @@ def _decode_verification(
     mapping = _mapping(value, "verification")
     _exact_keys(
         mapping,
-        {"passed", "target_type", "target_id", "checks", "error"},
+        {"passed", "target_type", "target_id", "checks", "error"}
+        | ({"artifact_authority"} if "artifact_authority" in mapping else set()),
         "verification",
     )
     error = mapping["error"]
@@ -1116,6 +1117,7 @@ def _decode_verification(
             for item in _sequence(mapping["checks"], "verification.checks")
         ),
         None if error is None else _decode_error(error, legacy=legacy_errors),
+        mapping.get('artifact_authority'),
     )
 
 

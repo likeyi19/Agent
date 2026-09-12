@@ -1902,6 +1902,7 @@ def verify_step(
     registry: ToolRegistry,
     *,
     dependency_results: Mapping[str, Mapping[str, object]] | None = None,
+    authority_execution_identity: str | None = None,
 ) -> VerificationResult:
     """Verify one lightweight result without invoking scientific tools."""
 
@@ -1917,6 +1918,7 @@ def verify_step(
         raise TypeError("`dependency_results` must be a mapping.")
 
     checks = _VerificationChecks()
+    artifact_authority = None
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
         if step.tool_name == "build_scATAC_cell_by_ccre":
@@ -2001,6 +2003,12 @@ def verify_step(
         elif step.tool_name == "prepare_scATAC_fragments":
             try:
                 from agent.tools.data.scatac_fragments import verify_public_result
+                captured = None
+                if authority_execution_identity is not None:
+                    from agent.tools.data.fastq_verification_authority import capture_publication, check_integrity
+                    captured = capture_publication(resolved_arguments, plain_result, authority_execution_identity)
+                    from agent.tools.data._fragments_common import snapshots, unchanged
+                    authority_snapshots = snapshots(f['path'] for f in captured.record['files'])
                 verify_public_result(resolved_arguments, plain_result)
                 # StepOutputRef resolution supplies exact paired intake identities;
                 # verify them against the actual dependency result, not ordering.
@@ -2009,6 +2017,10 @@ def verify_step(
                     if isinstance(binding, StepOutputRef):
                         if dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
                             raise ValueError('Dependency identity differs.')
+                if captured is not None:
+                    check_integrity(captured, resolved_arguments, plain_result, authority_execution_identity)
+                    unchanged(authority_snapshots)
+                    artifact_authority = captured.record
             except Exception as exc:
                 checks.add('fragments_independent_verification', False,
                     'Canonical fragments match independently verified lineage and content.',
@@ -2083,12 +2095,16 @@ def verify_step(
             _verify_differential_accessibility(
                 resolved_arguments, plain_result, checks
             )
-    return checks.result(
+    verification = checks.result(
         target_type="step",
         target_id=step.step_id,
         step_id=step.step_id,
         tool_name=step.tool_name,
     )
+    if verification.passed and artifact_authority is not None:
+        from dataclasses import replace
+        verification = replace(verification, artifact_authority=artifact_authority)
+    return verification
 
 
 def _status_is_consistent(result: StepExecutionResult) -> bool:

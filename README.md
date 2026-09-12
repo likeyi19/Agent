@@ -149,6 +149,11 @@ software/resources on real biological data at real scale. **M11.8 — Biological
 Validation & Raw Preprocessing Closeout** retains biological validation. Neither
 milestone is implemented by this closeout.
 
+[Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
+introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
+reuse in QC verification. Default verification remains deep; evidence/report
+optimization and qualification of the preserved legacy run are deferred.
+
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:
 1,355,445 features for human/hg38 and 1,341,077 for mouse/mm10.

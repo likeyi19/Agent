@@ -121,7 +121,8 @@ def _serialize(value: object) -> Any:
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, _JsonModel):
-        return {model_field.name: _serialize(getattr(value, model_field.name)) for model_field in fields(value)}
+        return {model_field.name: _serialize(getattr(value, model_field.name)) for model_field in fields(value)
+                if not (model_field.metadata.get('omit_none') and getattr(value, model_field.name) is None)}
     if isinstance(value, Mapping):
         return {key: _serialize(value[key]) for key in sorted(value)}
     if isinstance(value, (tuple, list)):
@@ -365,6 +366,7 @@ class VerificationResult(_JsonModel):
     target_id: str
     checks: tuple[VerificationCheck, ...] = ()
     error: AgentError | None = None
+    artifact_authority: Mapping[str, JsonValue] | None = field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self) -> None:
         if not isinstance(self.passed, bool):
@@ -379,6 +381,12 @@ class VerificationResult(_JsonModel):
             raise TypeError("`error` must be an AgentError or None.")
         if self.passed and (self.error is not None or any(not check.passed for check in self.checks)):
             raise ValueError("A passed verification cannot contain failures or an error.")
+        if self.artifact_authority is not None:
+            from .verification_authority import VerifiedArtifactAuthority
+            if not self.passed or self.target_type != 'step':
+                raise ValueError('Only completed step verification can record artifact authority.')
+            authority = VerifiedArtifactAuthority(self.artifact_authority)
+            object.__setattr__(self, 'artifact_authority', authority.record)
 
 
 @dataclass(frozen=True)

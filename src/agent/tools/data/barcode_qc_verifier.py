@@ -15,10 +15,10 @@ from .scatac_fragments_v2_verifier import take_snapshots,check_snapshots
 from agent.tools._cancellation import cancellation_checkpoint
 
 
-def verify_barcode_qc(path,*,expected_sha256):
+def verify_barcode_qc(path,*,expected_sha256, fragments_authority=None):
     path=Path(path);before=take_snapshots([path])
     manifest=m.load_manifest(path,expected_sha256);value=manifest.to_dict()
-    bound=bind(value['arguments'])
+    bound=bind(value['arguments'], fragments_authority=fragments_authority)
     if (value['reference_identity_sha256']!=bound.reference.parent_reference_identity_sha256
         or value['qc_resource_identity_sha256']!=bound.reference.resource_identity_sha256
         or value['producer_authority']!=bound.producer_authority

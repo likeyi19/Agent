@@ -61,7 +61,7 @@ def resource_qualification(bundle):
     return dict(mode='operator_qualified',catalog_sha256=hashlib.sha256(raw).hexdigest(),basis=matches[0]['qualification_basis'])
 
 
-def qualified_fragments(path,sha):
+def qualified_fragments(path,sha, *, fragments_authority=None):
     # The declared producer kind selects its reviewed verifier, never a QC algorithm.
     value=v2.load_fragments_manifest_v2(path,expected_sha256=sha)
     if (sum(e['n_fragment_records'] for e in value['libraries'])>m.MAX_RECORDS
@@ -69,18 +69,27 @@ def qualified_fragments(path,sha):
     kinds={e['provenance']['kind'] for e in value['libraries']}
     if len(kinds)!=1: fail('QC_PRODUCER_UNQUALIFIED')
     kind=next(iter(kinds)); runtime=packaging_runtime()
+    if fragments_authority is not None:
+        from .fragments_authority_contract import StoredFragmentAuthority
+        from agent.schemas.verification_authority import AuthorityError
+        if type(fragments_authority) is not StoredFragmentAuthority:
+            raise AuthorityError('QC requires stored producer-specific scientific authority.')
+        fragments_authority.validate(path,sha,producer_kind=kind)
     if kind=='fastq_fragment_production':
         from .fastq_fragments_verifier import verify_fragments
         from .scatac_fragments import verification_runtime
-        verify_fragments(path,expected_sha256=sha,runtime=verification_runtime())
+        if fragments_authority is None:
+            verify_fragments(path,expected_sha256=sha,runtime=verification_runtime())
         basis='qualified_fastq_source_and_producer_record';history='alignment_not_rerun'
     elif kind=='bam_fragment_production':
         from .bam_fragments_verifier import verify_bam_fragments
-        verify_bam_fragments(path,expected_sha256=sha,runtime=runtime)
+        if fragments_authority is None:
+            verify_bam_fragments(path,expected_sha256=sha,runtime=runtime)
         basis='independent_bam_transformation';history='upstream_history_declared'
     elif kind=='external_fragment_adoption':
         from .external_fragments_verifier import verify_external_fragments
-        verify_external_fragments(path,expected_sha256=sha,runtime=runtime)
+        if fragments_authority is None:
+            verify_external_fragments(path,expected_sha256=sha,runtime=runtime)
         basis='independent_external_conservation';history='upstream_history_declared'
     else: fail('QC_PRODUCER_UNQUALIFIED')
     view=open_verified_fragments(path,expected_sha256=sha,runtime=runtime)
@@ -98,13 +107,17 @@ class BoundQC:
     executable: str
     backend_identity: dict
     snapshots: tuple
+    fragments_authority: object = None
 
     def unchanged(self):
         self.fragments.verification.check_unchanged();check_snapshots(self.snapshots)
+        if self.fragments_authority is not None:
+            self.fragments_authority.validate(self.fragments.verification.manifest_path,
+                                               self.fragments.verification.manifest_sha256)
         if resource_qualification(self.reference)!=self.resource_qualification: fail('QC_RESOURCE_UNQUALIFIED')
 
 
-def bind(arguments):
+def bind(arguments, *, fragments_authority=None):
     args=m.validate_arguments(arguments);cancellation_checkpoint()
     snapshots=take_snapshots([args['fragments_manifest_path'],args['qc_reference_manifest_path']])
     executable,backend=backend_runtime()
@@ -112,12 +125,13 @@ def bind(arguments):
     snapshots=tuple(sorted(snapshots+take_snapshots([r.path for r in (bundle.parent_manifest,bundle.annotation.resource,bundle.tss,bundle.lineage)])))
     qualification=resource_qualification(bundle)
     qr.reinspect_scatac_qc_reference_bundle_sources(bundle)
-    view,producer=qualified_fragments(args['fragments_manifest_path'],args['fragments_manifest_sha256'])
+    view,producer=qualified_fragments(args['fragments_manifest_path'],args['fragments_manifest_sha256'],
+                                    fragments_authority=fragments_authority)
     reference=view.manifest['reference']
     if (reference['reference_identity_sha256']!=bundle.parent_reference_identity_sha256
         or reference['manifest_sha256']!=bundle.parent_manifest.sha256
         or tuple(view.contigs)!=tuple((c.name,c.length) for c in bundle.contigs)): fail('QC_REFERENCE_MISMATCH')
     if qualification['mode']=='synthetic_only' and sum(x.n_fragment_records for x in view.libraries)>10000: fail('QC_RESOURCE_LIMIT')
-    bound=BoundQC(view,bundle,producer,qualification,executable,backend,snapshots)
+    bound=BoundQC(view,bundle,producer,qualification,executable,backend,snapshots,fragments_authority)
     bound.unchanged();cancellation_checkpoint()
     return bound

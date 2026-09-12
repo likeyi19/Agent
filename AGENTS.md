@@ -333,7 +333,8 @@ or hash raw sources; explicit `current_source_freshness.v1` checks recorded curr
 source bytes. Operation-scoped reuse validates content, execution, dependency,
 resource and verifier identities, and fails closed on mutation or incompatibility.
 Standalone and recovery verification remain deep; v1/legacy records are not upgraded.
-Evidence, Visualization, Report and preserved real-run closeout remain deferred.
+Later Evidence, Visualization, Report and preserved real-run integration are
+recorded in the .3a–.3c sections below.
 
 ### Post-M11.7b.3a application authority reuse
 
@@ -345,7 +346,7 @@ strict path without persistent upgrade. Evidence scientific bases describe the
 independent proof without claiming it was reconstructed during every consumption.
 Old evidence projections are not silently migrated. See the
 [application audit and reuse contract](docs/post-m11.7b.3a-application-authority-reuse.md).
-Legacy qualification and preserved real-run closeout remain deferred.
+Legacy qualification and preserved real-run closeout are recorded in .3b/.3c below.
 
 ### Post-M11.7b.3b explicit legacy authority qualification
 
@@ -359,7 +360,24 @@ artifact/run-state schema migration occurs. Missing evidence and incompatible
 authority fail closed. Initial producer qualification requires the source evidence
 required by the existing verifier; subsequent reuse retains historical-source
 semantics. See the [legacy qualification contract](docs/post-m11.7b.3b-legacy-authority-qualification.md).
-Actual preserved-run qualification and application closeout remain deferred.
+Actual preserved-run qualification and application closeout are recorded below.
+
+### Post-M11.7b.3c preserved real-run qualification and closeout
+
+The preserved human PBMC 1k Next GEM run `m117b-pbmc1k-nextgem-r1:run`
+was explicitly qualified through the accepted .3b API. All four scientific owners
+received schema-2 authority; FASTQ retained its distinct producer qualification.
+All existing payloads, receipts and terminal execution records remained byte-identical
+(`SUCCEEDED`, revision 14). With explicit operator authorization, the incompatible
+historical evidence was archived byte-for-byte and the existing application rebuilt
+presentation. Rebuild and repeat terminal resume both succeeded without scientific
+owner reconstruction or production execution; presentation checks remained active.
+No source/test, Planner/compiler, registry, scientific or recovery contract changed.
+Standalone and recovery remain strict. See the [real-run closeout record](docs/post-m11.7b.3c-preserved-real-run-closeout.md)
+for exact identities, counters, invariance and final regression acceptance.
+Domain acceptance passed 1,468 tests (3 skipped, 3 existing warnings). Exactly one
+full lightweight regression after freeze passed 3,752 tests (83 skipped, 7 existing
+warnings); all 275 source/test hashes were unchanged and all RUN_* gates disabled.
 
 ### EpiZoo input, inference, and artifacts
 

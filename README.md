@@ -151,28 +151,36 @@ milestone is implemented by this closeout.
 
 [Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
 introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
-reuse in QC verification. Default verification remains deep; evidence/report
-optimization and qualification of the preserved legacy run are deferred.
+reuse in QC verification. Default verification remains deep; later authority propagation, application reuse
+and explicit preserved-run qualification are described below.
 
 [Post-M11.7b.2 — Scientific authority propagation](docs/post-m11.7b.2-scientific-authority-propagation.md)
 extends new durable scientific execution across FASTQ/BAM/external fragments → QC
 → Selection → Matrix. Every layer retains its independent scientific verification;
 compatible authority prevents repeated upstream reconstruction and raw-source
 hashing. Historical verified source identity and explicit current-source freshness
-are separate policies. Standalone/recovery verification stays deep; the preserved
-legacy run remains deferred. Application reuse is described below.
+are separate policies. Standalone/recovery verification stays deep. Application
+reuse and preserved-run qualification are described below.
 
 [Post-M11.7b.3a — Application authority reuse](docs/post-m11.7b.3a-application-authority-reuse.md)
 now scopes successful application postprocessing with the existing trusted authority
 loader. Evidence, visualization discovery and report verification retain their own
 checks while reusing compatible scientific proofs. Standalone and runtime recovery
-remain deep; preserved-run closeout remains deferred.
+remain deep.
 
 [Post-M11.7b.3b — Explicit legacy qualification](docs/post-m11.7b.3b-legacy-authority-qualification.md)
 adds an operator API to deeply verify existing raw-processing outputs and publish
 current authority in an additive sidecar bound to unchanged terminal execution
 history. Qualification performs no production or schema migration. Normal loading
-remains read-only; applying this mechanism to the preserved real run remains deferred.
+remains read-only.
+
+[Post-M11.7b.3c — Preserved real-run closeout](docs/post-m11.7b.3c-preserved-real-run-closeout.md)
+applies these mechanisms to the preserved human PBMC 1k Next GEM run. Explicit
+qualification issued all four scientific authorities without changing payloads or
+execution/publication history. After explicitly authorized archival of old evidence,
+normal application resume rebuilt a verified figureless report and repeated resume
+reused it, with zero scientific reconstruction or production execution. No source
+or test changes were required. The closeout record contains acceptance results.
 
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:

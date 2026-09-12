@@ -63,6 +63,9 @@ def verify_stream(path, entry, contigs, whitelist):
     return per_contig, probes, overlaps
 
 
+from .authority_context import owned_verification
+
+@owned_verification('fastq_fragment_production')
 def verify_fragments(manifest_path, *, runtime, expected_sha256=None):
     """Revalidate full FASTQ provenance, independent rows, then generic v2 IO."""
     from ._fragments_common import FragmentsError

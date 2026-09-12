@@ -131,6 +131,9 @@ def verify_axes(f,db,bound,budget):
             offset += len(expected); budget.check()
 
 
+from .authority_context import owned_verification
+
+@owned_verification('matrix')
 def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path, limits=io.MatrixLimits(), scratch_parent=None):
     """Fresh complete scientific verification; returns bounded evidence, no matrix copy."""
     start = time.monotonic(); path = Path(manifest_path)

@@ -164,6 +164,9 @@ def reconstruct(bound, directory, runtime):
     return expected,counts,summary
 
 
+from .authority_context import owned_verification
+
+@owned_verification('bam_fragment_production')
 def verify_bam_fragments(manifest_path, *, expected_sha256, runtime, temporary_root=None):
     # Qualify executable bytes before any reconstruction subprocess uses them.
     physical.verify_packaging(runtime)

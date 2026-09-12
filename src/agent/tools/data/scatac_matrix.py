@@ -162,6 +162,8 @@ def execute_matrix(arguments,execution_identity=None):
             _fsync_dir(stage);cancellation_checkpoint()
             if destination.exists() or destination.is_symlink():m.fail('MATRIX_OUTPUT_CONFLICT')
             os.rename(stage,destination);_fsync_dir(output)
+            from .authority_context import publication_moved
+            publication_moved(stage, destination)
             # No cancellation checkpoint after the outer immutable publication.
             return _summary(value,destination/'artifact/manifest.json',built['manifest_sha256'])
         finally:

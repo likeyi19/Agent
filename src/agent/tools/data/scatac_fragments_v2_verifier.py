@@ -185,6 +185,9 @@ def _verify(manifest_path, expected_sha256, runtime):
     return FragmentVerification(str(manifest_path), expected_sha256, payload, contigs, before)
 
 
+from .authority_context import owned_verification
+
+@owned_verification('generic_fragments')
 def verify_fragments_v2(manifest_path, *, expected_sha256, runtime):
     """Full contents and exact bound bytes; not producer-history verification."""
     try:

@@ -90,6 +90,9 @@ def _reconstruct_source(path, contigs, directory, runtime):
     return source, summary
 
 
+from .authority_context import owned_verification
+
+@owned_verification('external_fragment_adoption')
 def verify_external_fragments(manifest_path, *, expected_sha256, runtime, temporary_root=None):
     """Fresh source + conservation + generic v2 verification in managed scratch."""
     try:

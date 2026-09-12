@@ -50,6 +50,9 @@ def failures(counts, t):
     return tuple(k for k in REASONS if flags[k])
 
 
+from .authority_context import owned_verification
+
+@owned_verification('selection')
 def verify_cell_selection(path, *, expected_sha256):
     path=Path(path);before=take_snapshots([path]);manifest=m.load_manifest(path,expected_sha256);value=manifest.to_dict();args=value['arguments']
     qp=Path(args['barcode_qc_manifest_path']);q=verify_barcode_qc(qp,expected_sha256=args['barcode_qc_manifest_sha256']).to_dict()

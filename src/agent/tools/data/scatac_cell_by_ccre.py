@@ -78,6 +78,8 @@ def build_cell_by_ccre(*, fragments_manifest_path, fragments_manifest_sha256,
             _fsync_dir(publication)
             if destination.exists() or destination.is_symlink(): m.fail('MATRIX_OUTPUT_CONFLICT')
             os.rename(publication,destination); _fsync_dir(destination.parent)
+            from .authority_context import publication_moved
+            publication_moved(publication, destination)
         return dict(manifest_path=str(destination/'manifest.json'),manifest_sha256=digest,
                     identity_sha256=value['identity_sha256'],**summary,diagnostic=diagnostic,
                     construction_seconds=construction_seconds,verification_seconds=verified['verification_seconds'],

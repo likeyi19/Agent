@@ -142,6 +142,8 @@ def prepare_fastq_fragments(*, inputs: FragmentInputs, output_dir, runtime: Frag
                 fail('FRAGMENTS_ARTIFACT_CONFLICT')
             os.rename(stage, destination)
             _fsync_directory(destination.parent)
+            from .authority_context import publication_moved
+            publication_moved(stage, destination)
             return dict(status='success', manifest_path=str(destination / 'manifest.json'),
                 manifest_sha256=manifest_sha, artifact_type=v2.ARTIFACT_TYPE, artifact_schema_version=2,
                 contract_version=v2.CONTRACT_VERSION, species=bound['bundle'].species,

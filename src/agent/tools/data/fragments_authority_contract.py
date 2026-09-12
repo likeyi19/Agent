@@ -1,7 +1,7 @@
 """Producer-neutral v2 authority requirements; qualification never crosses origins.
 
-The three contracts can be represented and checked now. Issuing/reuse adapters
-are enabled separately; only FASTQ is integrated in Post-M11.7b.1.
+The .1 qualification contracts are shared by all .2 scientific DAG adapters.
+The legacy version-1 physical validator below retains FASTQ-only support.
 """
 from dataclasses import dataclass
 import hashlib
@@ -58,8 +58,9 @@ class FragmentsAuthorityContract:
 
     def require(self, authority):
         value = authority.record
+        integrity = VerificationScope.INTEGRITY if value['schema_version'] == 1 else VerificationScope.HISTORICAL_INTEGRITY
         if (value['artifact_type'] != v2.ARTIFACT_TYPE or value['artifact_contract'] != v2.CONTRACT_VERSION
-                or value['integrity_scope'] != VerificationScope.INTEGRITY.value
+                or value['integrity_scope'] != integrity.value
                 or value['scope'] != VerificationScope.SCIENTIFIC.value
                 or value['producer_qualification'] != self.qualification
                 or value['science_profile'] != self.profile_sha256 or value['verifier'] != self.verifier):

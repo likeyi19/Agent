@@ -159,6 +159,8 @@ def execute_external_fragments(arguments, execution_identity=None):
             if destination.exists() or destination.is_symlink():
                 m.fail('EXTERNAL_FRAGMENTS_ARTIFACT_CONFLICT')
             os.rename(stage, destination); _fsync_directory(output)
+            from .authority_context import publication_moved
+            publication_moved(stage, destination)
             path = destination / 'fragments' / 'manifest.json'
             result = _summary(final, path, sha)
             verify_public_result(args, result)

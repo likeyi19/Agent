@@ -154,6 +154,14 @@ introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
 reuse in QC verification. Default verification remains deep; evidence/report
 optimization and qualification of the preserved legacy run are deferred.
 
+[Post-M11.7b.2 — Scientific authority propagation](docs/post-m11.7b.2-scientific-authority-propagation.md)
+extends new durable scientific execution across FASTQ/BAM/external fragments → QC
+→ Selection → Matrix. Every layer retains its independent scientific verification;
+compatible authority prevents repeated upstream reconstruction and raw-source
+hashing. Historical verified source identity and explicit current-source freshness
+are separate policies. Standalone/recovery verification stays deep; application
+Evidence/Visualization/Report and the preserved legacy run remain deferred.
+
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:
 1,355,445 features for human/hg38 and 1,341,077 for mouse/mm10.

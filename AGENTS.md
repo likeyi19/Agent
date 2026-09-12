@@ -320,6 +320,21 @@ reconstruction. Standalone/default calls and recovery remain deep; Evidence,
 Visualization and Report integration are deferred. Physical hashing remains;
 70→2 optimization is not complete. Legacy M11.7b-2 records are not upgraded.
 
+### Post-M11.7b.2 scientific authority propagation
+
+[Scientific authority propagation](docs/post-m11.7b.2-scientific-authority-propagation.md)
+extends the .1 foundation to new durable FASTQ, BAM and external fragment steps,
+QC, Selection and Matrix. Each layer independently verifies its own science once;
+compatible immediate dependency authority replaces covered upstream reconstruction.
+Producer qualification scopes remain distinct from generic canonical v2 integrity.
+Authority schema 2 explicitly separates historical verified raw-source identities
+from current artifact/resource integrity. Ordinary downstream reuse does not scan
+or hash raw sources; explicit `current_source_freshness.v1` checks recorded current
+source bytes. Operation-scoped reuse validates content, execution, dependency,
+resource and verifier identities, and fails closed on mutation or incompatibility.
+Standalone and recovery verification remain deep; v1/legacy records are not upgraded.
+Evidence, Visualization, Report and preserved real-run closeout remain deferred.
+
 ### EpiZoo input, inference, and artifacts
 
 The registered `epizoo_embed_cells` tool supports human and mouse only. Its

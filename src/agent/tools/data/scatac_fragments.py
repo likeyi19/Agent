@@ -209,6 +209,8 @@ def execute_fragments(arguments, execution_identity=None):
                 fail('FRAGMENTS_ARTIFACT_CONFLICT')
             os.rename(stage, destination)
             _fsync_directory(output)
+            from .authority_context import publication_moved
+            publication_moved(stage, destination)
             result['manifest_path'] = str(destination / 'fragments' / 'manifest.json')
             verify_public_result(args, result)
             return result

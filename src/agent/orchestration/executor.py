@@ -469,6 +469,9 @@ class PlanExecutor:
         )
         return ExecutionOutcome(tuple(results), (error,), trace.events)
 
+    from agent.tools.data.authority_context import execution_authorities
+
+    @execution_authorities
     def execute(
         self,
         plan: AgentPlan,
@@ -618,6 +621,17 @@ class PlanExecutor:
                         cancelled,
                     )
                 )
+                if phase == 'STEP_SUCCEEDED':
+                    from agent.tools.data.authority_context import current
+                    from agent.schemas.verification_authority import VerifiedArtifactAuthority
+                    context = current()
+                    if context is not None:
+                        for saved in results_by_id.values():
+                            if saved.verification is not None and saved.verification.artifact_authority is not None:
+                                authority = VerifiedArtifactAuthority(saved.verification.artifact_authority)
+                                record = authority.record
+                                context.accepted[record['publication_path'], record['manifest_sha256']] = {
+                                    'record': record, 'identity': authority.identity_sha256}
 
         try:
             for step in ordered_steps:
@@ -932,6 +946,11 @@ class PlanExecutor:
                             'during_registered_tool',step_id=step.step_id,attempt=attempt)):
                         if durable_run_id is not None and spec.durable_hooks is not None:
                             from .durable_tool_recovery import execution_identity
+                            from agent.tools.data.authority_context import current
+                            from agent.tools.data.scientific_authority import TOOLS
+                            if current() is not None and step.tool_name in TOOLS:
+                                current().register_execution(TOOLS[step.tool_name], attempt_arguments['output_dir'],
+                                    execution_identity(durable_run_id, plan, step, spec))
                             returned_result = spec.durable_hooks.execute(attempt_arguments,
                                 execution_identity(durable_run_id, plan, step, spec))
                         else:
@@ -1058,7 +1077,8 @@ class PlanExecutor:
                 if dependency in verified_results
             }
             authority_options = {}
-            if durable_run_id is not None and step.tool_name == 'prepare_scATAC_fragments':
+            from agent.tools.data.scientific_authority import TOOLS
+            if durable_run_id is not None and step.tool_name in TOOLS:
                 from .durable_tool_recovery import execution_identity
                 authority_options['authority_execution_identity'] = execution_identity(
                     durable_run_id, plan, step, self._registry.get(step.tool_name))

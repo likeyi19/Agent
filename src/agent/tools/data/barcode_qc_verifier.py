@@ -15,6 +15,9 @@ from .scatac_fragments_v2_verifier import take_snapshots,check_snapshots
 from agent.tools._cancellation import cancellation_checkpoint
 
 
+from .authority_context import owned_verification
+
+@owned_verification('qc')
 def verify_barcode_qc(path,*,expected_sha256, fragments_authority=None):
     path=Path(path);before=take_snapshots([path])
     manifest=m.load_manifest(path,expected_sha256);value=manifest.to_dict()

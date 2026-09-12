@@ -125,6 +125,8 @@ def execute_cell_selection(arguments,execution_identity=None):
             _fsync_dir(stage);check_snapshots(before);cancellation_checkpoint()
             if destination.exists() or destination.is_symlink(): fail('SELECTION_OUTPUT_CONFLICT')
             os.rename(stage,destination);_fsync_dir(output)
+            from .authority_context import publication_moved
+            publication_moved(stage, destination)
             # No cancellation after publication: executor checkpoints verified
             # success before observing later cancellation, retaining this artifact.
             return _summary(value,destination/'manifest.json',sha)

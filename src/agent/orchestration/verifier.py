@@ -2004,7 +2004,8 @@ def verify_step(
             try:
                 from agent.tools.data.scatac_fragments import verify_public_result
                 captured = None
-                if authority_execution_identity is not None:
+                from agent.tools.data.authority_context import current
+                if authority_execution_identity is not None and current() is None:
                     from agent.tools.data.fastq_verification_authority import capture_publication, check_integrity
                     captured = capture_publication(resolved_arguments, plain_result, authority_execution_identity)
                     from agent.tools.data._fragments_common import snapshots, unchanged
@@ -2104,6 +2105,22 @@ def verify_step(
     if verification.passed and artifact_authority is not None:
         from dataclasses import replace
         verification = replace(verification, artifact_authority=artifact_authority)
+    if verification.passed and authority_execution_identity is not None:
+        from agent.tools.data.authority_context import current
+        from agent.tools.data.scientific_authority import issue, TOOLS
+        context = current()
+        if context is not None and step.tool_name in TOOLS:
+            try:
+                authority = issue(context, step.tool_name, resolved_arguments, plain_result, authority_execution_identity)
+            except Exception as exc:
+                checks.add('scientific_authority_publication', False,
+                    'Scientific authority matches accepted publication.',
+                    'Scientific authority could not be bound to publication.',
+                    getattr(exc, 'code', 'VERIFICATION_AUTHORITY_INVALID'), ErrorCategory.VERIFICATION_ERROR)
+                return checks.result(target_type='step', target_id=step.step_id,
+                                     step_id=step.step_id, tool_name=step.tool_name)
+            from dataclasses import replace
+            verification = replace(verification, artifact_authority=authority.record)
     return verification
 
 

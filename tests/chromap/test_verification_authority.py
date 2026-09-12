@@ -19,6 +19,14 @@ from test_fragments_orchestration import configured, FixedPlanner, plan_for
 REAL_RUN = subprocess.run
 
 
+@pytest.fixture(autouse=True)
+def version_one_issuance(monkeypatch):
+    # Preserve every accepted .1 corruption/freshness assertion against actual
+    # v1 records. New automatic v2 issuance has separate scientific-DAG tests.
+    from agent.tools.data import authority_context
+    monkeypatch.setattr(authority_context, 'VerificationContext', lambda: None)
+
+
 @pytest.fixture
 def accepted(configured, tiny, monkeypatch):
     args, control, group, white, _ = configured

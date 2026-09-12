@@ -12,6 +12,7 @@ from .orchestration import freeze_json_mapping, _serialize
 class VerificationScope(str, Enum):
     SCIENTIFIC = 'scientific_correctness.v1'
     INTEGRITY = 'artifact_integrity_lineage.v1'
+    HISTORICAL_INTEGRITY = 'artifact_integrity_lineage_historical_sources.v1'
     PRESENTATION = 'presentation_validation.v1'
 
 
@@ -41,16 +42,17 @@ class AuthorityValidation:
 
     def __post_init__(self):
         _sha(self.authority_sha256)
-        if self.scope is not VerificationScope.INTEGRITY:
+        if self.scope not in (VerificationScope.INTEGRITY, VerificationScope.HISTORICAL_INTEGRITY):
             raise AuthorityError('Authority reuse establishes integrity/lineage only.')
 
 
 @dataclass(frozen=True)
 class VerifiedArtifactAuthority:
-    """Closed v1 record; only an accepted RunStore step can anchor its reuse.
+    """Closed versioned record; only accepted RunStore state anchors reuse.
 
     File closure includes physical payloads, sidecars, upstream manifests and
-    source/resources. Semantic identities remain explicit in separate fields.
+    resources (and v1 sources). V2 separates historical source identities.
+    Semantic identities remain explicit in separate fields.
     A receipt is one binding, never the authority issuer.
     """
     record: Mapping
@@ -62,14 +64,20 @@ class VerifiedArtifactAuthority:
                   'arguments_sha256', 'receipt_sha256', 'upstream', 'resources',
                   'science_profile', 'producer_qualification', 'verifier', 'scope',
                   'completion', 'integrity_scope'}
+        if isinstance(value, Mapping) and value.get('schema_version') == 2:
+            fields |= {'source_policy', 'historical_sources'}
         if not isinstance(value, Mapping) or set(value) != fields:
             raise AuthorityError('Invalid authority schema.')
-        if type(value['schema_version']) is not int or value['schema_version'] != 1:
+        if type(value['schema_version']) is not int or value['schema_version'] not in (1, 2):
             raise AuthorityError('Unsupported authority schema.')
         if value['completion'] != 'succeeded' or value['scope'] not in {s.value for s in VerificationScope}:
             raise AuthorityError('Incomplete or unknown verification scope.')
-        if value['integrity_scope'] != VerificationScope.INTEGRITY.value:
+        expected_integrity = VerificationScope.INTEGRITY if value['schema_version'] == 1 else VerificationScope.HISTORICAL_INTEGRITY
+        if value['integrity_scope'] != expected_integrity.value:
             raise AuthorityError('Missing canonical integrity scope.')
+        if value['schema_version'] == 2 and (value['source_policy'] != 'historical_verified_sources.v1'
+                or not isinstance(value['historical_sources'], (tuple, list))):
+            raise AuthorityError('Unsupported historical source policy.')
         qualification = value['producer_qualification']
         if (not isinstance(qualification, Mapping)
                 or (qualification and (set(qualification) != {'kind', 'scope', 'profile_id', 'compatibility_version'}
@@ -103,6 +111,16 @@ class VerifiedArtifactAuthority:
             paths.append(entry['path'])
         if paths != sorted(set(paths)):
             raise AuthorityError('Noncanonical file closure.')
+        if value['schema_version'] == 2:
+            historical_paths = []
+            for entry in value['historical_sources']:
+                if (not isinstance(entry, Mapping) or set(entry) != {'path', 'sha256', 'size_bytes'}
+                        or type(entry['path']) is not str or not Path(entry['path']).is_absolute()
+                        or type(entry['size_bytes']) is not int or entry['size_bytes'] < 0):
+                    raise AuthorityError('Invalid historical source identity.')
+                _sha(entry['sha256']); historical_paths.append(entry['path'])
+            if historical_paths != sorted(set(historical_paths)) or set(paths) & set(historical_paths):
+                raise AuthorityError('Historical sources overlap the current artifact closure.')
         object.__setattr__(self, 'record', freeze_json_mapping(value, 'artifact_authority'))
 
     def to_dict(self):

@@ -667,10 +667,12 @@ class FileRunStore:
         return request
 
     def _write_atomic(self, path: Path, state: PersistedRunState) -> None:
-        record = state.to_dict()
+        self._write_record_atomic(path, state.to_dict(), RUN_STATE_FORMAT, RUN_STATE_SCHEMA_VERSION)
+
+    def _write_record_atomic(self, path, record, format_name, version):
         envelope = {
-            "format": RUN_STATE_FORMAT,
-            "schema_version": RUN_STATE_SCHEMA_VERSION,
+            "format": format_name,
+            "schema_version": version,
             "integrity": {
                 "algorithm": "sha256",
                 "digest": _record_digest(record),
@@ -711,6 +713,72 @@ class FileRunStore:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    def _load_qualified_authorities(self, run_id):
+        """Read additive qualification; never modify terminal execution history."""
+        with self._lock(run_id, exclusive=False):
+            state = self._load_path(self.state_path(run_id), expected_run_id=run_id)
+            return self._load_qualification_path(run_id, state)
+
+    def _load_qualification_path(self, run_id, state):
+        path = self.state_path(run_id).with_suffix('.authority.json')
+        if path.is_symlink():
+            raise RunStateCorruptionError('Qualification sidecar must not be a symlink.')
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise RunStoreIOError('Unable to read scientific qualification.') from exc
+        try:
+            value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys,
+                               parse_constant=_reject_constant)
+            if (set(value) != {'format', 'schema_version', 'integrity', 'record'}
+                    or value['format'] != 'agent.scientific-authority-qualification'
+                    or type(value['schema_version']) is not int or value['schema_version'] != 1):
+                raise ValueError('Invalid qualification envelope.')
+            record = value['record']
+            if (set(record) != {'run_id', 'source_state_sha256', 'authorities'}
+                    or record['run_id'] != run_id
+                    or record['source_state_sha256'] != _record_digest(state.to_dict())
+                    or not isinstance(record['authorities'], dict) or not record['authorities']
+                    or value['integrity'] != {'algorithm': 'sha256', 'digest': _record_digest(record)}):
+                raise ValueError('Qualification does not match accepted execution.')
+            return record['authorities']
+        except (ValueError, TypeError, KeyError, RecursionError) as exc:
+            raise RunStateCorruptionError('Invalid scientific qualification sidecar.') from exc
+
+    def _publish_qualified_authorities(self, run_id, authorities, *, expected_state):
+        from agent.tools._cancellation import cancellation_checkpoint
+        # A cancellation callback may itself read RunStore. Invoke it before
+        # taking the state lock; the small atomic write has no internal callback.
+        cancellation_checkpoint()
+        with self._lock(run_id, exclusive=True):
+            state = self._load_path(self.state_path(run_id), expected_run_id=run_id)
+            if (state != expected_state or state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED
+                    or state.source_schema_version != RUN_STATE_SCHEMA_VERSION):
+                raise RunStateConflictError('Qualification execution anchor changed.')
+            existing = self._load_qualification_path(run_id, state)
+            if existing:
+                if existing != authorities:
+                    raise RunStateConflictError('Scientific qualification already exists.')
+                return
+            record = dict(run_id=run_id, source_state_sha256=_record_digest(state.to_dict()),
+                          authorities=authorities)
+            path = self.state_path(run_id).with_suffix('.authority.json')
+            try:
+                self._write_record_atomic(path, record,
+                    'agent.scientific-authority-qualification', 1)
+            except BaseException:
+                # Readers hold the same state lock. A failed publication must
+                # not expose new authority after this operation releases it.
+                path.unlink(missing_ok=True)
+                descriptor = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                raise
 
     def _write_cancellation_atomic(
         self, path: Path, request: CancellationRequest

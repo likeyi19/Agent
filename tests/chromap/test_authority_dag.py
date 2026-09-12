@@ -178,3 +178,49 @@ def test_fastq_application_reuses_all_scientific_authorities(dag, tiny, monkeypa
     assert dict(counts) == before
     assert app.run_store.load(result.run_id) == state
     assert control['calls'].count('chromap') == 1
+
+
+def test_explicit_legacy_fastq_qualification(dag, tiny, monkeypatch):
+    from dataclasses import replace
+    from agent.orchestration import AgentRuntime, AgentRequest, FileRunStore
+    from agent.orchestration.verification_authority import qualify_legacy_authorities, accepted_authorities
+    from test_fragments_orchestration import FixedPlanner
+    from agent.tools.data import fastq_fragments as production
+    from agent.tools.data.scatac_matrix import verify_public_result
+    plan, group, control = dag
+    class LegacyStore(FileRunStore):
+        def update(self, state, *, expected_revision):
+            steps = tuple(replace(s, verification=replace(s.verification, artifact_authority=None))
+                          if s.verification else s for s in state.steps)
+            return super().update(replace(state, steps=steps), expected_revision=expected_revision)
+    store = LegacyStore(tiny['root']/'legacy-state')
+    run = AgentRuntime(planner=FixedPlanner(plan), run_store=store).run(
+        AgentRequest('authority-request', 'Legacy FASTQ DAG.', {}))
+    assert run.status.value == 'SUCCEEDED', run
+    state = store.load(run.run_id)
+    assert all(s.verification.artifact_authority is None for s in state.steps)
+    assert state.steps[-1].result['total_count'] == 1
+    before = store.state_path(run.run_id).read_bytes()
+    counts = Counter()
+    original = VerificationContext.verify
+    def verify(self, kind, function, args, kwargs):
+        def deep(*a, **kw):
+            counts[kind] += 1
+            return function(*a, **kw)
+        return original(self, kind, deep, args, kwargs)
+    monkeypatch.setattr(VerificationContext, 'verify', verify)
+    monkeypatch.setattr(production, 'prepare_fastq_fragments',
+        lambda *a, **kw: pytest.fail('FASTQ production during qualification'))
+    authorities = qualify_legacy_authorities(store, run.run_id)
+    assert counts == dict(fastq_fragment_production=1, generic_fragments=1, qc=1, selection=1, matrix=1)
+    assert authorities['fragments'].record['producer_qualification']['scope'] == 'fastq_source_and_producer_record.v1'
+    assert store.state_path(run.run_id).read_bytes() == before
+    previous = dict(counts)
+    for _, name in group.files:
+        path = Path(name)
+        path.rename(path.with_suffix('.archived'))
+    assert qualify_legacy_authorities(store, run.run_id) == authorities
+    with accepted_authorities(store, run.run_id):
+        verify_public_result(state.steps[-1].resolved_arguments, state.steps[-1].result)
+    assert dict(counts) == previous
+    assert control['calls'].count('chromap') == 1

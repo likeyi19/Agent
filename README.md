@@ -166,7 +166,13 @@ legacy run remains deferred. Application reuse is described below.
 now scopes successful application postprocessing with the existing trusted authority
 loader. Evidence, visualization discovery and report verification retain their own
 checks while reusing compatible scientific proofs. Standalone and runtime recovery
-remain deep; legacy qualification and preserved-run closeout remain deferred.
+remain deep; preserved-run closeout remains deferred.
+
+[Post-M11.7b.3b — Explicit legacy qualification](docs/post-m11.7b.3b-legacy-authority-qualification.md)
+adds an operator API to deeply verify existing raw-processing outputs and publish
+current authority in an additive sidecar bound to unchanged terminal execution
+history. Qualification performs no production or schema migration. Normal loading
+remains read-only; applying this mechanism to the preserved real run remains deferred.
 
 **M11.1 is complete: reference identity and library/barcode processing contracts.**
 `ScATACReferenceBundle` identifies the genome and full ordered cCRE vocabulary:

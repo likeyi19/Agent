@@ -347,6 +347,20 @@ Old evidence projections are not silently migrated. See the
 [application audit and reuse contract](docs/post-m11.7b.3a-application-authority-reuse.md).
 Legacy qualification and preserved real-run closeout remain deferred.
 
+### Post-M11.7b.3b explicit legacy authority qualification
+
+Post-M11.7b.3b adds explicit `qualify_legacy_authorities(store, run_id)` for
+successful schema-3 raw-processing runs with supported existing artifact/receipt
+contracts but missing current authority (including supported FASTQ authority-v1).
+The existing owner verifiers deeply verify outputs; one atomic qualification
+sidecar carries current schema-2 authority bound to unchanged terminal history.
+Normal loaders remain read-only. No production, historical record rewriting or
+artifact/run-state schema migration occurs. Missing evidence and incompatible
+authority fail closed. Initial producer qualification requires the source evidence
+required by the existing verifier; subsequent reuse retains historical-source
+semantics. See the [legacy qualification contract](docs/post-m11.7b.3b-legacy-authority-qualification.md).
+Actual preserved-run qualification and application closeout remain deferred.
+
 ### EpiZoo input, inference, and artifacts
 
 The registered `epizoo_embed_cells` tool supports human and mouse only. Its

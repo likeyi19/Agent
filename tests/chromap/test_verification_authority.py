@@ -13,6 +13,7 @@ from agent.schemas.verification_authority import AuthorityError, VerifiedArtifac
 from agent.tools.data import fastq_fragments_verifier as deep
 from agent.tools.data import _barcode_qc_binding as binding
 from agent.tools.data.fastq_verification_authority import require_compatible
+from agent.tools.data.authority_context import VerificationContext as ScientificVerificationContext
 from test_fragments_contracts import bound, fake_runtime
 from test_fragments_orchestration import configured, FixedPlanner, plan_for
 
@@ -303,3 +304,23 @@ def test_unknown_persisted_verifier_fails_before_reuse(accepted):
         def load(self, _): return changed
     with pytest.raises(AuthorityError):
         load_fragment_authority(UnknownStore(), run.run_id, step.step_id)
+
+
+def test_explicit_v1_qualification_preserves_historical_record(accepted, monkeypatch):
+    from agent.orchestration.verification_authority import qualify_legacy_authorities
+    from agent.tools.data import authority_context
+    store, run, calls, _, group, _ = accepted
+    original = store.state_path(run.run_id).read_bytes()
+    assert run.steps[0].verification.artifact_authority['schema_version'] == 1
+    monkeypatch.setattr(authority_context, 'VerificationContext', ScientificVerificationContext)
+    before = len(calls)
+    authorities = qualify_legacy_authorities(store, run.run_id)
+    assert len(calls) > before
+    step = run.steps[0]
+    assert authorities[step.step_id].record['schema_version'] == 2
+    assert store.state_path(run.run_id).read_bytes() == original
+    for _, name in group.files:
+        path = Path(name)
+        path.rename(path.with_suffix('.archived'))
+    handle = load_fragment_authority(store, run.run_id, step.step_id)
+    assert handle.validate(step.result['manifest_path'], step.result['manifest_sha256']).scope is VerificationScope.HISTORICAL_INTEGRITY

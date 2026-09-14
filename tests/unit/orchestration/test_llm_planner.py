@@ -604,6 +604,7 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "b",
         "d",
         "t",
+        "s",
     }
     assert schema["required"] == (
         "schema_version",
@@ -624,7 +625,10 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     assert tuple(by_tool) == registry.names()
 
     for tool_name in registry.names():
-        branch = by_tool[tool_name]
+        specialized = by_tool[tool_name]
+        assert specialized["$ref"] == "#/$defs/s"
+        envelope = schema["$defs"]["s"]
+        branch = dict(envelope, properties={**envelope["properties"], **specialized["properties"]})
         assert branch["type"] == "object"
         assert branch["additionalProperties"] is False
         assert set(branch["required"]) == set(branch["properties"])

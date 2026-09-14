@@ -134,7 +134,7 @@ def verify_axes(f,db,bound,budget):
 from .authority_context import owned_verification
 
 @owned_verification('matrix')
-def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path, limits=io.MatrixLimits(), scratch_parent=None):
+def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, limits=io.MatrixLimits(), scratch_parent=None):
     """Fresh complete scientific verification; returns bounded evidence, no matrix copy."""
     start = time.monotonic(); path = Path(manifest_path)
     m.absolute_path(str(path)); m.sha(expected_sha256)
@@ -142,6 +142,10 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path, limits
     with path.open('rb') as f: raw = f.read(m.MAX_MANIFEST_BYTES+1)
     if hashlib.sha256(raw).hexdigest() != expected_sha256: m.fail('MATRIX_MANIFEST_MISMATCH')
     value = m.load_manifest_bytes(raw)
+    if value['contract_version'] == 'scatac-cell-by-ccre.external.v1':
+        result = _verify_external(path, value, expected_sha256, limits, scratch_parent)
+        check_snapshots(before)
+        return result
     payload = path.parent/'matrix.h5ad'
     if payload.stat().st_size != value['matrix']['size_bytes'] or bed.file_sha(payload) != value['matrix']['sha256']:
         m.fail('MATRIX_PAYLOAD_MISMATCH')
@@ -184,3 +188,42 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path, limits
     return dict(manifest_path=str(path),manifest_sha256=expected_sha256,identity_sha256=value['identity_sha256'],
                 **summary,diagnostic=diagnostic,verification_seconds=time.monotonic()-start,
                 verification_scratch_peak_bytes=budget.peak_bytes)
+
+
+def _verify_external(path, value, expected_sha256, limits, scratch_parent):
+    """Matrix-owner conservation proof; does not invoke the adoption writer."""
+    from . import external_matrix_contract as e, _external_matrix_io as external
+    started = time.monotonic()
+    source = Path(value['source']['path']); payload = path.parent/'matrix.h5ad'
+    rp = value['reference']
+    args = dict(reference_manifest_path=rp['manifest_path'],reference_manifest_sha256=rp['manifest_sha256'],
+                species=value['species'],assembly=value['assembly'],matrix_semantics=value['matrix_semantics'])
+    ref, reference_snapshots = external.reference(args, limits)
+    before = tuple(sorted(set(reference_snapshots + take_snapshots([path,source,payload]))))
+    if (ref.reference_identity_sha256 != rp['identity_sha256']
+            or ref.ccre.ordered_feature_sha256 != value['ordered_feature_sha256']): m.fail('MATRIX_REFERENCE_MISMATCH')
+    for file,record in ((source,value['source']),(payload,value['matrix'])):
+        if file.stat().st_size > limits.max_scratch_bytes: m.fail('MATRIX_RESOURCE_LIMIT')
+        if file.stat().st_size != record['size_bytes'] or bed.file_sha(file) != record['sha256']: m.fail('MATRIX_PAYLOAD_MISMATCH')
+    with tempfile.TemporaryDirectory(prefix='.matrix-conservation-',dir=scratch_parent) as directory:
+        budget = io.Budget(directory,limits)
+        with io.database(Path(directory)/'axes.sqlite',budget) as db, h5py.File(source,'r') as src, h5py.File(payload,'r') as out:
+            n,p,cells = external.inspect_axes(src,ref,args,db,budget)
+            if (value['shape'] != [n,p] or value['ordered_cells_sha256'] != cells
+                    or external.inspect_axes(out,ref,args,db,budget,published=True) != (n,p,cells)):
+                m.fail('MATRIX_CONSERVATION_MISMATCH')
+            source_summary = e.logical_identity(n,p,io.csr_rows(src,n,p,budget),value['matrix_semantics'])
+            # Read source CSR directly, independently of the chunk-copy writer.
+            # Canonical source validation above guarantees unique sorted entries.
+            def compare():
+                for row,(cols,values) in enumerate(io.csr_rows(out,n,p,budget)):
+                    left,right = map(int,src['X']['indptr'][row:row+2])
+                    if (cols != src['X']['indices'][left:right].astype(object).tolist()
+                            or values != src['X']['data'][left:right].astype(object).tolist()):
+                        m.fail('MATRIX_CONSERVATION_MISMATCH')
+                    yield cols,values
+            summary = e.logical_identity(n,p,compare(),value['matrix_semantics'])
+            if source_summary != summary or any(value[k] != v for k,v in summary.items()): m.fail('MATRIX_CONSERVATION_MISMATCH')
+    check_snapshots(before)
+    return dict(manifest_path=str(path),manifest_sha256=expected_sha256,identity_sha256=value['identity_sha256'],
+                **summary,verification_seconds=time.monotonic()-started,verification_scratch_peak_bytes=budget.peak_bytes)

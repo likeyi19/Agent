@@ -999,4 +999,5 @@ def test_production_registry_membership_includes_raw_intake_after_milestone10_4(
         "compute_scATAC_qc",
         "select_scATAC_cells",
         "build_scATAC_cell_by_ccre",
+        "adopt_scATAC_cell_by_ccre",
     )

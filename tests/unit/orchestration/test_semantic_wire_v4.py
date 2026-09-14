@@ -290,7 +290,7 @@ def test_schema_without_request_inputs_omits_input_source_variant(
     )
 
     assert "input_name" not in schema["$defs"]
-    variants = schema["$defs"]["source_value"]["anyOf"]
+    variants = schema["$defs"]["v"]["anyOf"]
     assert tuple(
         schema["$defs"][source["$ref"].removeprefix("#/$defs/")]["properties"]["kind"]["enum"]
         for source in variants
@@ -978,7 +978,7 @@ def test_source_variants_have_only_kind_as_enum_discriminator(registry, inputs) 
     schema = build_semantic_wire_v4_schema(registry, AgentRequest("schema", "Plan.", inputs))
     variants = [
         schema["$defs"][ref["$ref"].removeprefix("#/$defs/")]
-        for ref in schema["$defs"]["source_value"]["anyOf"]
+        for ref in schema["$defs"]["v"]["anyOf"]
     ]
     assert all("target" not in variant["properties"] for variant in variants)
     common = set.intersection(*(set(variant["properties"]) for variant in variants))
@@ -990,7 +990,7 @@ def test_source_variants_have_only_kind_as_enum_discriminator(registry, inputs) 
         source = step["properties"]["sources"]["items"]
         assert source["additionalProperties"] is False
         assert source["required"] == ("target", "source")
-        assert source["properties"]["source"] == {"$ref": "#/$defs/source_value"}
+        assert source["properties"]["source"] == {"$ref": "#/$defs/v"}
 
 
 def _nested_payload(steps):

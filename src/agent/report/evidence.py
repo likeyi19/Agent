@@ -18,6 +18,7 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
 from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
 from .cell_selection import (CONTRACT_FIELDS as _CELL_SELECTION_FIELDS,
     FACT_FIELDS as _CELL_SELECTION_FACT_FIELDS, project_cell_selection)
@@ -387,6 +388,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "adopt_scATAC_cell_by_ccre": _ToolProjection(
+        _ADOPTED_MATRIX_FIELDS, _ADOPTED_MATRIX_FACT_FIELDS, "adopt-scatac-cell-by-ccre-v1",
+        (_ArtifactProjection("manifest_path", "scatac_external_cell_by_ccre_manifest_json",
+            ("independent_source_output_conservation", "strict_manifest_loading", "authoritative_manifest_sha256", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("matrix_path", "scatac_cell_by_ccre_h5ad",
+            ("independent_source_output_conservation", "full_artifact_sha256", "exact_sparse_logical_identity"), digest_field="matrix_sha256")),
+    ),
     "build_scATAC_cell_by_ccre": _ToolProjection(
         _MATRIX_FIELDS, _MATRIX_FACT_FIELDS, "build-scatac-cell-by-ccre-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_by_ccre_manifest_json",

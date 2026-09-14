@@ -292,15 +292,13 @@ def _tool_step_schema(
             argument_spec,
             optional=True,
         )
-    return _closed_object_schema(
-        {
-            "step_id": {"type": "string"},
-            "tool_name": {"enum": (tool_name,)},
-            "arguments": _closed_object_schema(argument_properties),
-            "depends_on": {"$ref": "#/$defs/d"},
-            "description": {"$ref": "#/$defs/t"},
-        }
-    )
+    # JSON Schema $ref siblings intersect constraints: the shared closed
+    # envelope declares every step field; these two properties specialize it.
+    return {"$ref": "#/$defs/s", "properties": {
+        "tool_name": {"enum": (tool_name,)},
+        "arguments": _closed_object_schema(argument_properties),
+    }}
+
 
 
 def _response_schema(
@@ -328,7 +326,9 @@ def _response_schema(
     }
     schema = dict(_closed_object_schema(root_properties))
     schema["$defs"] = dict(_binding_definitions(request),
-        d={"type":"array","items":{"type":"string"}},t={"type":("string","null")})
+        d={"type":"array","items":{"type":"string"}},t={"type":("string","null")},
+        s=_closed_object_schema({"step_id":{"type":"string"}, "tool_name":{}, "arguments":{},
+            "depends_on":{"$ref":"#/$defs/d"}, "description":{"$ref":"#/$defs/t"}}))
     # Keep only reachable definitions; enums already constrain their value types.
     # This changes schema spelling, not accepted v3 payloads or parser behavior.
     def references(value):

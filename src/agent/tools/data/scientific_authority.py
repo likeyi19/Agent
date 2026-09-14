@@ -18,7 +18,7 @@ from .fragments_authority_contract import CONTRACTS
 TOOLS = {
     **{c.tool_name: k for k, c in CONTRACTS.items()},
     'compute_scATAC_qc': 'qc', 'select_scATAC_cells': 'selection',
-    'build_scATAC_cell_by_ccre': 'matrix',
+    'build_scATAC_cell_by_ccre': 'matrix', 'adopt_scATAC_cell_by_ccre': 'matrix',
 }
 MODULES = {
     'fastq_fragment_production': 'scatac_fragments',
@@ -171,6 +171,14 @@ def describe(kind, path, sha, context):
         owned.extend(root / value[k]['path'] for k in ('decisions', 'selected'))
         profile = PROFILE_SHA256
         verifier = dict(id='agent.cell-selection-independent', compatibility_version='1')
+    elif kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-ccre.external.v1':
+        from .external_matrix_contract import PROFILE_SHA256
+        rp = value['reference']
+        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256']))
+        owned.append(root / value['matrix']['path'])
+        sources.append(dict(value['source']))
+        profile = PROFILE_SHA256
+        verifier = dict(id='agent.cell-by-ccre-independent', compatibility_version='external-1')
     else:
         from .scatac_matrix_contract import PROFILE_SHA256
         fp, sp, rp = (value['upstream'][k] for k in ('fragments', 'selection', 'reference'))
@@ -227,7 +235,7 @@ def runtime_compatibility(kind, description, kwargs):
         _, bundle, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'], expected_sha256=args['qc_reference_manifest_sha256'])
         if backend_runtime()[1] != value['backend_identity'] or resource_qualification(bundle) != value['resource_qualification']:
             raise AuthorityError('QC runtime/resource qualification changed.')
-    if kind == 'matrix':
+    if kind == 'matrix' and description['manifest']['contract_version'] != 'scatac-cell-by-ccre.external.v1':
         from . import _matrix_bedtools as bed
         if bed.qualify_runtime(kwargs['bedtools_path']) != description['manifest']['backend']:
             raise AuthorityError('Matrix runtime qualification changed.')
@@ -266,7 +274,8 @@ def issue(context, tool_name, arguments, result, execution_identity):
 
 def _publication_record(context, tool_name, arguments, result, execution_identity, result_metadata):
     """Pure provenance description, not a trust-issuing entry point."""
-    kind = TOOLS[tool_name]; module = _module(MODULES[kind])
+    kind = TOOLS[tool_name]
+    module = _module('scatac_matrix_adoption' if tool_name == 'adopt_scATAC_cell_by_ccre' else MODULES[kind])
     publication = module._publication(arguments, execution_identity)
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]

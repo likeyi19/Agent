@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All eighteen currently registered tools
+`src/agent/orchestration/registry.py`. All nineteen currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -77,6 +77,7 @@ derived from the registry.
 | `compute_scATAC_qc` | Complete observed-barcode QC v1: canonical-record depth, fixed TSS incidence/enrichment, length bins/ratios, independently verified without production intersection |
 | `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
 | `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
+| `adopt_scATAC_cell_by_ccre` | Exact external canonical int64 CSR H5AD adoption; declared value semantics, source/output conservation, matrix-owner authority, truthful external provenance |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
@@ -326,6 +327,18 @@ without fabricated fragment/QC lineage and should reuse matrix-owner authority;
 aggregated peak counts cannot generally reconstruct exact fragment-derived counts.
 Binary overlap evidence remains a proposed weaker semantics, **not approved for
 implementation**. M11.8 retains its original designation and introduces no M12 code.
+
+**M12.1 EXACT EXTERNAL CELL-BY-CCRE ADOPTION ACCEPTED.**
+M12.1 implements the narrow external variant `scatac-cell-by-ccre.external.v1`
+through `adopt_scATAC_cell_by_ccre`. It requires exact complete reference columns,
+unique ordered source cells, canonical signed-int64 CSR and explicit external
+`fragment_counts`, `insertion_counts` or `binary_accessibility` declarations.
+The existing matrix owner independently proves source/output conservation;
+no fragment/QC/selection history or model readiness is fabricated. Matrix v1
+science/serialization remains unchanged. Shared publication, schema-2 authority,
+PLAN_ONLY and figureless Application reporting retain their existing boundaries.
+See [M12.1's exact input and acceptance contract](docs/m12.1-exact-external-cell-by-ccre-adoption.md).
+M12 remains open; peak projection and binary overlap evidence remain unapproved.
 
 ## Current scientific runtime and verification contracts
 

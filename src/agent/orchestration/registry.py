@@ -3349,6 +3349,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .barcode_qc_registry import barcode_qc_tool_spec
     from .cell_selection_registry import cell_selection_tool_spec
     from .matrix_registry import matrix_tool_spec
+    from .matrix_adoption_registry import matrix_adoption_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3368,6 +3369,7 @@ def build_default_tool_registry() -> ToolRegistry:
         barcode_qc_tool_spec(),
         cell_selection_tool_spec(),
         matrix_tool_spec(),
+        matrix_adoption_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

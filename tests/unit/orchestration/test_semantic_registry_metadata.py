@@ -491,9 +491,10 @@ def test_feature_space_semantic_authority_covers_the_full_execution_interface() 
     for rule in rules:
         assert rule.target_port == rule.argument_name == rule.input_name == rule.selector
     channels=[channel for channel in contract.step_output_channels if channel.consumer_tool_name==tool.name]
-    assert len(channels)==1
-    assert channels[0].producer_tool_name=='build_scATAC_cell_by_ccre'
-    assert channels[0].target_port=='input_path'
+    assert len(channels)==2
+    assert {channel.producer_tool_name for channel in channels} == {'build_scATAC_cell_by_ccre','adopt_scATAC_cell_by_ccre'}
+    assert all(channel.target_port=='input_path' and channel.source_port=='dataset' for channel in channels)
+    assert all(tuple((member.output_key,member.argument_name) for member in channel.members) == (('matrix_path','input_path'),) for channel in channels)
     assert tool.semantic_planning is not None
     for port in tool.semantic_planning.consumer_ports:
         assert port.required is (port.name in tool.required_arguments)

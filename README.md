@@ -156,10 +156,11 @@ no scientific reconstruction or new production code was needed.
 This representative acceptance does not certify every candidate as a singlet,
 establish statistical cell calling, or qualify real BAM/external-fragment/mouse
 generalization or model readiness. Retained depth/nucleosome outliers and historical
-timing limitations are explicit in the closeout record. Next is
-[M12 — Matrix-Level Input Support](docs/m12-matrix-level-input-audit.md);
-the prior audit is preserved, and binary overlap projection remains a proposal
-that is **not approved for implementation**.
+timing limitations are explicit in the closeout record.
+[M12.1 — Exact external cell-by-cCRE adoption](docs/m12.1-exact-external-cell-by-ccre-adoption.md)
+now supports constrained canonical int64 CSR H5AD with truthful external provenance
+and verified source conservation. M12 remains open. The [prior audit](docs/m12-matrix-level-input-audit.md)
+is preserved; peak projection and binary overlap evidence remain **unapproved**.
 
 [Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
 introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
@@ -458,6 +459,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
+| Exact external cCRE adoption | `adopt_scATAC_cell_by_ccre`: constrained int64 CSR H5AD, exact complete reference vocabulary, explicit external value semantics, independently verified conservation, durable matrix authority and figureless reporting; see [M12.1](docs/m12.1-exact-external-cell-by-ccre-adoption.md) |
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
 | External fragment adoption | `import_scATAC_fragments`: explicit 10x fragment semantics, complete source validation and conservation, canonical v2 artifacts, durable recovery, and figureless Application reporting |

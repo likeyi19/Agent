@@ -117,7 +117,7 @@ def build_semantic_wire_v4_schema(
             {"$ref": "#/$defs/step_port_source"},
         )
     )
-    definitions["source_value"] = {"anyOf": tuple(source_variants)}
+    definitions["v"] = {"anyOf": tuple(source_variants)}
     step_variants: list[JsonValue] = []
     for tool_name in tool_names:
         semantic = registry.get(tool_name).semantic_planning
@@ -129,7 +129,7 @@ def build_semantic_wire_v4_schema(
             sources_schema["items"] = _closed_object_schema(
                 {
                     "target": {"type": "string", "enum": target_names},
-                    "source": {"$ref": "#/$defs/source_value"},
+                    "source": {"$ref": "#/$defs/v"},
                 }
             )
         else:
@@ -180,6 +180,16 @@ def build_semantic_wire_v4_schema(
         )
     )
     root["$defs"] = definitions
+    # Enumerated values already constrain their types. Keep the same accepted
+    # payloads while avoiding repeated type spellings in the complete catalog.
+    def prune_enum_types(value):
+        if isinstance(value, dict):
+            if "enum" in value:
+                value.pop("type", None)
+            for child in value.values(): prune_enum_types(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value: prune_enum_types(child)
+    prune_enum_types(root)
     return root
 
 

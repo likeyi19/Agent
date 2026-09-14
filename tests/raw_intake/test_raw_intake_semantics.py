@@ -96,7 +96,12 @@ def test_raw_planning_guidance_reflects_accepted_application_reporting():
     req, registry = request(), build_default_tool_registry()
     model = Model(wire())
     LLMPlanner(model).plan(req, registry)
-    for context in (model.prompt, str(build_semantic_planning_catalog(req, registry))):
+    import re
+    catalog = json.loads(model.prompt)['catalog']
+    marker = catalog['catalog_phrase_marker']
+    expanded = re.sub(re.escape(marker) + r'(\d+)' + re.escape(marker),
+        lambda match: catalog['catalog_phrases'][int(match[1])], json.dumps(catalog))
+    for context in (expanded, str(build_semantic_planning_catalog(req, registry))):
         assert 'Reporting integration is deferred' not in context
         assert 'Application composes verified evidence and a figureless report after execution' in context
         assert 'The manifest cannot be consumed as a processed H5AD or EpiZoo input' in context

@@ -1921,7 +1921,19 @@ def verify_step(
     artifact_authority = None
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "build_scATAC_cell_by_ccre":
+        if step.tool_name == "adopt_scATAC_cell_by_ccre":
+            try:
+                from agent.tools.data.scatac_matrix_adoption import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+            except Exception as exc:
+                checks.add('matrix_external_conservation', False,
+                    'Every external sparse value and ordered axis identity is conserved.',
+                    'External matrix conservation verification failed.', getattr(exc,'code','MATRIX_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('matrix_external_conservation', True,
+                    'Every external sparse value and ordered axis identity is conserved.',
+                    'External matrix conservation verification failed.', 'MATRIX_VERIFICATION_FAILED')
+        elif step.tool_name == "build_scATAC_cell_by_ccre":
             try:
                 from agent.tools.data.scatac_matrix import verify_public_result, ARGUMENTS
                 verify_public_result(resolved_arguments, plain_result)

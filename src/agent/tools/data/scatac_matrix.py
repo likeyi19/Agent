@@ -91,15 +91,15 @@ def _load(path,sha):
     return m.load_manifest_bytes(raw)
 
 
-def _receipt(destination,args,token=None):
+def _receipt(destination,args,token=None, *, policy=RECOVERY_POLICY, profile=m.PROFILE_SHA256):
     try:
         with (destination/'receipt.json').open('rb') as f:raw=f.read(16385)
         if len(raw)>16384:m.fail('MATRIX_RECOVERY_MISMATCH')
         r=json.loads(raw,object_pairs_hook=v2._pairs,parse_constant=lambda _:m.fail('MATRIX_RECOVERY_MISMATCH'))
         m.shape(r,('artifact_type','schema_version','policy','execution_identity','arguments_sha256','manifest_sha256','matrix_profile_sha256'))
         if (r['artifact_type']!='agent.cell-by-ccre-receipt' or type(r['schema_version']) is not int or r['schema_version']!=1
-                or r['policy']!=RECOVERY_POLICY or r['arguments_sha256']!=digest(args)
-                or r['matrix_profile_sha256']!=m.PROFILE_SHA256
+                or r['policy']!=policy or r['arguments_sha256']!=digest(args)
+                or r['matrix_profile_sha256']!=profile
                 or destination.name!='cell-by-ccre-'+r['execution_identity']
                 or token is not None and r['execution_identity']!=token):m.fail('MATRIX_RECOVERY_MISMATCH')
         m.sha(r['execution_identity']);m.sha(r['manifest_sha256'])
@@ -139,6 +139,19 @@ def execute_matrix(arguments,execution_identity=None):
     output=Path(args['output_dir'])
     if output!=output.resolve() or destination.exists() or destination.is_symlink():m.fail('MATRIX_OUTPUT_CONFLICT')
     backend=executable()
+    def build(output):
+        return scientific.build_cell_by_ccre(
+            fragments_manifest_path=args['fragments_manifest_path'],fragments_manifest_sha256=args['fragments_manifest_sha256'],
+            selection_manifest_path=args['selected_cells_manifest_path'],selection_manifest_sha256=args['selected_cells_manifest_sha256'],
+            reference_manifest_path=args['reference_manifest_path'],reference_manifest_sha256=args['reference_manifest_sha256'],
+            output_dir=output,bedtools_path=backend)
+    return _execute_publication(args,destination,token,build,_summary,RECOVERY_POLICY,m.PROFILE_SHA256)
+
+
+def _execute_publication(args,destination,token,build,summary,policy,profile):
+    """Shared matrix receipt, lease, cancellation and atomic publication envelope."""
+    output=Path(args['output_dir'])
+    if output!=output.resolve() or destination.exists() or destination.is_symlink():m.fail('MATRIX_OUTPUT_CONFLICT')
     # Fresh accepted authority binding occurs inside the unchanged constructor,
     # before projections/intersections/H5AD. PLAN_ONLY never enters this function.
     output.mkdir(parents=True,exist_ok=True)
@@ -149,14 +162,10 @@ def execute_matrix(arguments,execution_identity=None):
         if destination.exists() or destination.is_symlink():m.fail('MATRIX_OUTPUT_CONFLICT')
         stage=Path(tempfile.mkdtemp(prefix='.matrix-attempt-',dir=output))
         try:
-            built=scientific.build_cell_by_ccre(
-                fragments_manifest_path=args['fragments_manifest_path'],fragments_manifest_sha256=args['fragments_manifest_sha256'],
-                selection_manifest_path=args['selected_cells_manifest_path'],selection_manifest_sha256=args['selected_cells_manifest_sha256'],
-                reference_manifest_path=args['reference_manifest_path'],reference_manifest_sha256=args['reference_manifest_sha256'],
-                output_dir=stage/'artifact',bedtools_path=backend)
+            built=build(stage/'artifact')
             value=_load(Path(built['manifest_path']),built['manifest_sha256'])
-            receipt=dict(artifact_type='agent.cell-by-ccre-receipt',schema_version=1,policy=RECOVERY_POLICY,
-                execution_identity=token,arguments_sha256=digest(args),manifest_sha256=built['manifest_sha256'],matrix_profile_sha256=m.PROFILE_SHA256)
+            receipt=dict(artifact_type='agent.cell-by-ccre-receipt',schema_version=1,policy=policy,
+                execution_identity=token,arguments_sha256=digest(args),manifest_sha256=built['manifest_sha256'],matrix_profile_sha256=profile)
             (stage/'receipt.json').write_bytes(m.canonical(receipt))
             with (stage/'receipt.json').open('rb') as f:os.fsync(f.fileno())
             _fsync_dir(stage);cancellation_checkpoint()
@@ -165,7 +174,7 @@ def execute_matrix(arguments,execution_identity=None):
             from .authority_context import publication_moved
             publication_moved(stage, destination)
             # No cancellation checkpoint after the outer immutable publication.
-            return _summary(value,destination/'artifact/manifest.json',built['manifest_sha256'])
+            return summary(value,destination/'artifact/manifest.json',built['manifest_sha256'])
         finally:
             if stage.exists():shutil.rmtree(stage)
 

@@ -115,7 +115,7 @@ class VerificationContext:
             return reuse_result(kind, description, self.proofs[key], kwargs)
         # Source freshness is owned here, not by later downstream consumption.
         from .fragments_authority_contract import CONTRACTS
-        sources = description['historical_sources'] if kind in CONTRACTS else []
+        sources = description['historical_sources'] if kind in CONTRACTS or (kind == 'matrix' and description['manifest']['contract_version'] == 'scatac-cell-by-ccre.external.v1') else []
         paths = [f['path'] for f in description['files'] + sources]
         before = {p: snapshot(p) for p in paths}
         result = function(*args, **kwargs)

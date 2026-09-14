@@ -1,6 +1,7 @@
 """Lossless prompt-only sharing of repeated registry catalog values."""
 from collections import Counter
 import json
+import re
 
 
 def share_catalog_values(catalog):
@@ -49,30 +50,30 @@ def share_catalog_text(payload):
 
     Phrase definitions contain original text, without references. A collision-free
     marker makes expansion one substitution pass; keys and wire enums are untouched.
-    This keeps the complete eighteen-tool catalog within existing byte ceilings.
+    This keeps the complete registry catalog within existing byte ceilings.
     """
     fields=('tools','catalog_values','meanings')
-    strings=[]
+    strings=[]; keys=[]
     def collect(value):
         if isinstance(value,str): strings.append(value)
         elif isinstance(value,dict):
-            strings.extend(value.keys())
+            keys.extend(value.keys())
             for child in value.values(): collect(child)
         elif isinstance(value,(list,tuple)):
             for child in value: collect(child)
     for field in fields: collect(payload.get(field,()))
     marker='~'
-    while any(marker in s for s in strings): marker+='~'
-    texts=[s for s in strings if ' ' in s]
+    while any(marker in s for s in (*strings, *keys)): marker+='~'
+    texts=[s for s in strings if ' ' in s or '_' in s]
     phrases=[]
-    while len(phrases)<100:
+    while len(phrases)<256:
         counts=Counter()
         for text in texts:
-            words=text.split(' ')
+            words=re.findall(r'[^ _]+[ _]?', text)
             for start in range(len(words)):
-                for n in range(2,min(16,len(words)-start)+1):
-                    phrase=' '.join(words[start:start+n])
-                    if len(phrase)>15 and marker not in phrase: counts[phrase]+=1
+                for n in range(1,min(16,len(words)-start)+1):
+                    phrase=''.join(words[start:start+n])
+                    if len(phrase)>8 and marker not in phrase: counts[phrase]+=1
         tag=marker+str(len(phrases))+marker
         candidates=[((len(s)-len(tag))*n-len(s)-3,s) for s,n in counts.items() if n>1]
         if not candidates: break

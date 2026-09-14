@@ -301,10 +301,31 @@ semantic compiler, v3/v4 wire schemas, Application, fragment science, M11.4
 QC/selection science and M11.5 matrix science are unchanged. No provisioning
 capability becomes a Planner-visible scientific tool.
 
-**M11.7 — Real-Data End-to-End Production Acceptance** will test the already
-accepted software/resources on real biological data at real scale. **M11.8 —
-Biological Validation & Raw Preprocessing Closeout** retains biological validation.
-Neither milestone is implemented by this documentation-only closeout.
+**M11 RAW PREPROCESSING ACCEPTED AND CLOSED.**
+[M11.8 — Biological Validation & Raw Preprocessing Closeout](docs/m11.8-biological-closeout.md)
+completes representative biological/production acceptance of the preserved human
+PBMC Next GEM FASTQ run `m117b-pbmc1k-nextgem-r1:run`, building on M11.7 execution
+and Post-M11.7b scientific/application acceptance. The original explicit thresholds
+remain unchanged. Bounded inspection reused four schema-2 authorities with zero
+scientific execution or owner reconstruction, and left preserved artifacts,
+terminal state, evidence and reports unchanged. No production/source/test changes
+or new authority layer were needed; no regression was repeated for documentation.
+
+The 1,119 QC-selected candidates contain 82.2282% of canonical fragment records;
+median QC depth is 14,358, Agent TSS enrichment 29.376 and nucleosome signal 0.579.
+The full 1,119 × 1,355,445 int64 CSR has 11,535,823 nonzeros and no empty rows.
+Retained high-depth/nucleosome outliers are explicitly documented, not filtered
+post hoc. Statistical cell calling remains `none/not_assessed`; singlet purity,
+cell-type composition, model readiness, universal throughput and real BAM/external/
+mouse biological generalization are not established. Historical route-specific
+biological deferrals below remain coverage limits, not silently satisfied tests.
+
+Next: [M12 — Matrix-Level Input Support](docs/m12-matrix-level-input-audit.md).
+The preceding read-only audit is preserved: exact full-cCRE adoption is feasible
+without fabricated fragment/QC lineage and should reuse matrix-owner authority;
+aggregated peak counts cannot generally reconstruct exact fragment-derived counts.
+Binary overlap evidence remains a proposed weaker semantics, **not approved for
+implementation**. M11.8 retains its original designation and introduces no M12 code.
 
 ## Current scientific runtime and verification contracts
 

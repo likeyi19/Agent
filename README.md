@@ -144,10 +144,22 @@ semantic compiler, v3/v4 wire schemas, Application, fragment science, M11.4
 QC/selection science and M11.5 matrix science are unchanged. Provisioning adds
 no Planner-visible scientific tool.
 
-Next: **M11.7 — Real-Data End-to-End Production Acceptance** tests the accepted
-software/resources on real biological data at real scale. **M11.8 — Biological
-Validation & Raw Preprocessing Closeout** retains biological validation. Neither
-milestone is implemented by this closeout.
+**M11 RAW PREPROCESSING ACCEPTED AND CLOSED.**
+[M11.8 — Biological Validation & Raw Preprocessing Closeout](docs/m11.8-biological-closeout.md)
+accepts the preserved human PBMC Next GEM FASTQ run under its frozen explicit
+QC-selection policy, building on M11.7 execution and Post-M11.7b verification.
+The 1,119 selected candidates have median QC depth 14,358 and median Agent TSS
+enrichment 29.376. The full 1,119 × 1,355,445 CSR matrix has 11,535,823 nonzeros
+and no empty rows. Bounded descriptive inspection reused existing authority;
+no scientific reconstruction or new production code was needed.
+
+This representative acceptance does not certify every candidate as a singlet,
+establish statistical cell calling, or qualify real BAM/external-fragment/mouse
+generalization or model readiness. Retained depth/nucleosome outliers and historical
+timing limitations are explicit in the closeout record. Next is
+[M12 — Matrix-Level Input Support](docs/m12-matrix-level-input-audit.md);
+the prior audit is preserved, and binary overlap projection remains a proposal
+that is **not approved for implementation**.
 
 [Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
 introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
@@ -321,7 +333,8 @@ source and proves record conservation; historical alignment, Tn5 adjustment,
 deduplication and barcode correction remain declared, not reconstructed.
 External adoption has reviewed semantic planning metadata and
 durable recovery and verified figureless Application reporting. Synthetic
-acceptance passed; biological acceptance remains deferred to M11.8. See the
+acceptance passed; route-specific biological acceptance remains unqualified by
+the representative FASTQ M11.8 closeout. See the
 [M11.3b contract](docs/m11.3b-external-fragments.md).
 
 **M11.3c is complete at synthetic acceptance: qualified BAM → fragments v2.**
@@ -339,7 +352,8 @@ integrity, exact durable recovery and figureless Application reporting are
 supported. Historical alignment/correction and source-history declarations are
 not independently proven. All 18 scientific tools have semantic metadata;
 PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
-Biological acceptance remains deferred to M11.8.
+Route-specific biological acceptance remains unqualified by the representative
+FASTQ M11.8 closeout.
 
 CRAM/SAM support, automatic statistical cell calling and raw-derived EpiZoo
 inference remain unimplemented. See the

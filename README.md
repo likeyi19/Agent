@@ -157,10 +157,15 @@ This representative acceptance does not certify every candidate as a singlet,
 establish statistical cell calling, or qualify real BAM/external-fragment/mouse
 generalization or model readiness. Retained depth/nucleosome outliers and historical
 timing limitations are explicit in the closeout record.
+**[M12 — Matrix-Level Input Support is closed](docs/m12-matrix-level-input-closeout.md).**
 [M12.1 — Exact external cell-by-cCRE adoption](docs/m12.1-exact-external-cell-by-ccre-adoption.md)
-now supports constrained canonical int64 CSR H5AD with truthful external provenance
-and verified source conservation. M12 remains open. The [prior audit](docs/m12-matrix-level-input-audit.md)
-is preserved; peak projection and binary overlap evidence remain **unapproved**.
+supports constrained H5AD with the exact complete canonical cCRE vocabulary,
+int64 CSR values, truthful external provenance and verified source conservation.
+This complements the existing raw FASTQ/BAM/fragments → canonical cell-by-cCRE route.
+**M12.2 generic ordinary cell-by-peak projection is unsupported by design:**
+the paired PBMC validation did not justify production approval of binary overlap
+evidence. This is a scientific/product decision, not pending implementation.
+There is no automatic peak conversion or arbitrary matrix-format support.
 
 [Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
 introduces producer-neutral v2 authority contracts and explicit FASTQ-authority

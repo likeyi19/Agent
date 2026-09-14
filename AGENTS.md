@@ -321,12 +321,10 @@ cell-type composition, model readiness, universal throughput and real BAM/extern
 mouse biological generalization are not established. Historical route-specific
 biological deferrals below remain coverage limits, not silently satisfied tests.
 
-Next: [M12 — Matrix-Level Input Support](docs/m12-matrix-level-input-audit.md).
-The preceding read-only audit is preserved: exact full-cCRE adoption is feasible
-without fabricated fragment/QC lineage and should reuse matrix-owner authority;
-aggregated peak counts cannot generally reconstruct exact fragment-derived counts.
-Binary overlap evidence remains a proposed weaker semantics, **not approved for
-implementation**. M11.8 retains its original designation and introduces no M12 code.
+**M12 MATRIX-LEVEL INPUT SUPPORT CLOSED.**
+The [final M12 closeout](docs/m12-matrix-level-input-closeout.md) supersedes the
+open-status and proposal language in the preserved [initial audit](docs/m12-matrix-level-input-audit.md)
+and M12.1 milestone record. M11.8 retains its original designation.
 
 **M12.1 EXACT EXTERNAL CELL-BY-CCRE ADOPTION ACCEPTED.**
 M12.1 implements the narrow external variant `scatac-cell-by-ccre.external.v1`
@@ -338,7 +336,22 @@ no fragment/QC/selection history or model readiness is fabricated. Matrix v1
 science/serialization remains unchanged. Shared publication, schema-2 authority,
 PLAN_ONLY and figureless Application reporting retain their existing boundaries.
 See [M12.1's exact input and acceptance contract](docs/m12.1-exact-external-cell-by-ccre-adoption.md).
-M12 remains open; peak projection and binary overlap evidence remain unapproved.
+M12.1 is the supported production matrix-level input path. Raw FASTQ/BAM/fragments
+→ canonical cell-by-cCRE remains supported through the existing explicit stages.
+
+**M12.2 GENERIC ORDINARY CELL-BY-PEAK PROJECTION IS UNSUPPORTED BY DESIGN.**
+EpiZoo uses count-dependent TF-IDF ranking and rank embeddings; aggregated peak
+counts cannot generally recover localized canonical fragment-derived counts.
+M12.2a's 32-cell paired PBMC validation separated canonical count/rank loss (C→B)
+from additional peak-geometry distortion (B→P). Material support changes, shifts
+beyond canonical sampling variability and severe paired-cell failures did not
+justify production approval, despite high median cosine similarity. This does
+not prove every possible peak vocabulary must fail. The decision is scientific
+and product scope, not unfinished implementation. No projected artifact profile
+or fallback conversion is approved: do not silently use largest overlap,
+fractional weighting, count copying or binary OR. Exact adoption, matrix-owner
+authority, scientific contracts and the nineteen-tool registry remain unchanged.
+Durable evidence and the bounded findings are linked from the M12 closeout.
 
 ## Current scientific runtime and verification contracts
 

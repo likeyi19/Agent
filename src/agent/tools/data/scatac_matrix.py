@@ -148,7 +148,8 @@ def execute_matrix(arguments,execution_identity=None):
     return _execute_publication(args,destination,token,build,_summary,RECOVERY_POLICY,m.PROFILE_SHA256)
 
 
-def _execute_publication(args,destination,token,build,summary,policy,profile):
+def _execute_publication(args,destination,token,build,summary,policy,profile, *,
+                         load_manifest=_load, receipt_factory=None):
     """Shared matrix receipt, lease, cancellation and atomic publication envelope."""
     output=Path(args['output_dir'])
     if output!=output.resolve() or destination.exists() or destination.is_symlink():m.fail('MATRIX_OUTPUT_CONFLICT')
@@ -163,9 +164,11 @@ def _execute_publication(args,destination,token,build,summary,policy,profile):
         stage=Path(tempfile.mkdtemp(prefix='.matrix-attempt-',dir=output))
         try:
             built=build(stage/'artifact')
-            value=_load(Path(built['manifest_path']),built['manifest_sha256'])
+            value=load_manifest(Path(built['manifest_path']),built['manifest_sha256'])
             receipt=dict(artifact_type='agent.cell-by-ccre-receipt',schema_version=1,policy=policy,
                 execution_identity=token,arguments_sha256=digest(args),manifest_sha256=built['manifest_sha256'],matrix_profile_sha256=profile)
+            if receipt_factory is not None:
+                receipt=receipt_factory(args,token,built['manifest_sha256'])
             (stage/'receipt.json').write_bytes(m.canonical(receipt))
             with (stage/'receipt.json').open('rb') as f:os.fsync(f.fileno())
             _fsync_dir(stage);cancellation_checkpoint()

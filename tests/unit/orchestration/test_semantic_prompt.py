@@ -559,6 +559,7 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     catalog["catalog_format"].pop("phrase_reference", None)
     catalog["catalog_format"].pop("catalog_reference")
     catalog["catalog_format"].pop("guidance_tail")
+    catalog["catalog_format"].pop("input_lineage")
     modes = catalog["catalog_format"].pop("request_source_mode")
     for tool in payload["catalog"]["tools"].values():
         for port in tool[1].values():

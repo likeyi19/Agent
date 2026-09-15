@@ -739,6 +739,9 @@ class AgentRuntime:
         with store.execution_lease(run_id):
             return self._resume_with_lease(run_id)
 
+    from .verification_authority import resume_annotation_authorities
+
+    @resume_annotation_authorities
     def _resume_with_lease(self, run_id: str) -> AgentRunResult:
         state = self._required_run_store().load(run_id)
         if state.lifecycle_status in {
@@ -901,6 +904,12 @@ class AgentRuntime:
                 raise ValueError('Persisted arguments differ from the authoritative plan.')
             spec = self._registry.get(step.tool_name)
             self._registry.validate_arguments(step.tool_name, args)
+            authority_options = {}
+            if step.tool_name == 'annotate_scATAC_cell_types':
+                from agent.tools.data.authority_context import current
+                identity = execution_identity(state.run_id, state.plan, step, spec)
+                current().register_execution('annotation', args['output_dir'], identity)
+                authority_options['authority_execution_identity'] = identity
             if old.status is StepStatus.RUNNING:
                 if recovered is not None or spec.durable_hooks is None:
                     raise ValueError('Ambiguous in-flight recovery.')
@@ -909,7 +918,7 @@ class AgentRuntime:
                 value = old.result
             self._registry.validate_result(step.tool_name, value)
             verification = verify_step(step, args, value, self._registry,
-                dependency_results={d: verified[d] for d in step.depends_on})
+                dependency_results={d: verified[d] for d in step.depends_on}, **authority_options)
             if not verification.passed:
                 raise ValueError('Published outcome or dependency failed fresh verification.')
             verified[step.step_id] = value

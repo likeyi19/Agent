@@ -19,8 +19,10 @@ TOOLS = {
     **{c.tool_name: k for k, c in CONTRACTS.items()},
     'compute_scATAC_qc': 'qc', 'select_scATAC_cells': 'selection',
     'build_scATAC_cell_by_ccre': 'matrix', 'adopt_scATAC_cell_by_ccre': 'matrix',
+    'annotate_scATAC_cell_types': 'annotation',
 }
 MODULES = {
+    'annotation': 'agent.tools.analysis.scatac_annotation',
     'fastq_fragment_production': 'scatac_fragments',
     'bam_fragment_production': 'scatac_bam_fragments',
     'external_fragment_adoption': 'scatac_fragment_import',
@@ -30,7 +32,7 @@ MODULES = {
 
 def _module(name):
     from importlib import import_module
-    return import_module('.' + name, __package__)
+    return import_module(name if name.startswith('agent.') else '.' + name, __package__)
 
 
 def _resource_paths(value):
@@ -67,6 +69,9 @@ def _load(kind, path, sha):
     elif kind == 'selection':
         from ._cell_selection_contract import load_manifest
         value = load_manifest(path, actual).to_dict()
+    elif kind == 'annotation':
+        from agent.tools.analysis.annotation_contract import load_manifest
+        value = load_manifest(path, actual)
     elif kind == 'matrix':
         from .scatac_matrix_contract import load_manifest_bytes
         value = load_manifest_bytes(raw)
@@ -97,7 +102,27 @@ def describe(kind, path, sha, context):
         resources.extend(f['path'] for f in described['files'])
         sources.extend(described['historical_sources'])
 
-    if kind in CONTRACTS or kind == 'generic_fragments':
+    if kind == 'annotation':
+        from agent.tools.analysis import annotation_contract as annotation, marker_annotation
+        from agent.orchestration.verification_authority import bind_annotation_matrix
+        args = value['arguments']
+        spec = annotation.specification(args['annotation_spec_path'], args['annotation_spec_sha256'])
+        authority, _ = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], context)
+        if value['inputs'] != spec or value['source_authority_sha256'] != authority:
+            raise AuthorityError('Annotation source authority or specification changed.')
+        dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
+        owned.extend(root / name for name in value['sidecars'])
+        resources.extend([args['annotation_spec_path'], spec['groups']['path'],
+                          spec['gene_resource']['path'], spec['signature_resource']['path']])
+        runtime = annotation.backend_runtime()
+        resources.extend([runtime.rscript, marker_annotation.__file__,
+                          str(Path(marker_annotation.__file__).parent / 'r/maestro_markers_v1.R')])
+        resources.extend(str(Path(runtime.upstream_dir) / name) for name in marker_annotation.SOURCES)
+        for package in ('presto', 'Matrix', 'dplyr'):
+            resources.extend(str(p.resolve()) for p in (Path(runtime.r_library)/package).rglob('*') if p.is_file())
+        profile = annotation.PROFILE_SHA256
+        verifier = dict(id='agent.cell-type-annotation-replay', compatibility_version='1')
+    elif kind in CONTRACTS or kind == 'generic_fragments':
         kinds = {e['provenance']['kind'] for e in value['libraries']}
         if len(kinds) != 1 or not kinds <= CONTRACTS.keys():
             raise AuthorityError('No compatible producer qualification contract.')
@@ -256,6 +281,9 @@ def reuse_result(kind, description, proof, kwargs):
             return BamProductionVerification(fragment)
         from .external_fragments_verifier import ExternalAdoptionVerification
         return ExternalAdoptionVerification(fragment)
+    if kind == 'annotation':
+        from agent.tools.analysis.scatac_annotation import _summary
+        return _summary(description['manifest'], path, sha)
     if kind in ('qc', 'selection'):
         module = _module('_barcode_qc_contract' if kind == 'qc' else '_cell_selection_contract')
         return module.load_manifest(path, sha)
@@ -279,7 +307,7 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     publication = module._publication(arguments, execution_identity)
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]
-    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind == 'matrix' else ''
+    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'annotation') else ''
     path = destination / directory / 'manifest.json'
     if str(path) != result['manifest_path']:
         raise AuthorityError('Publication belongs to a different execution.')

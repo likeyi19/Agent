@@ -273,3 +273,68 @@ def qualify_legacy_authorities(store, run_id):
         if candidates:
             store._publish_qualified_authorities(run_id, candidates, expected_state=state)
         return result
+
+
+def bind_annotation_matrix(specification, path, sha, context):
+    """Import one explicit accepted matrix dependency from an operator-owned store.
+
+    The store is runtime configuration, never supplied by a planner. No source
+    qualification, directory discovery, or scientific reconstruction occurs here.
+    """
+    import os
+    from pathlib import Path
+    from .run_store import FileRunStore
+    root = os.environ.get('AGENT_ANNOTATION_SOURCE_STORE')
+    if not root or not Path(root).is_absolute() or Path(root) != Path(root).resolve():
+        raise AuthorityError('AGENT_ANNOTATION_SOURCE_STORE must identify the trusted source RunStore.')
+    store = FileRunStore(root)
+    run_id, step_id = specification['source_run_id'], specification['source_step_id']
+    from .run_store import RunNotFoundError
+    try:
+        stored, authority, _, anchor = _accepted(store, run_id, step_id)
+    except RunNotFoundError as exc:
+        raise AuthorityError('Explicit annotation source run is not available in the trusted store.') from exc
+    if (stored.tool_name != 'build_scATAC_cell_by_ccre' or authority.record['schema_version'] != 2
+            or authority.record['publication_path'] != str(path)
+            or authority.record['manifest_sha256'] != sha):
+        raise AuthorityError('Annotation requires the exact accepted canonical matrix owner publication.')
+    key = (str(root), run_id, step_id, anchor)
+    if key not in context.source_contexts:
+        imported = _load_context(store, run_id, 'historical_verified_sources.v1')
+        for name in ('accepted', 'proofs', 'locations', '_hashes'):
+            target, source = getattr(context, name), getattr(imported, name)
+            if any(k in target and target[k] != v for k, v in source.items()):
+                raise AuthorityError('Conflicting accepted source authority.')
+            target.update(source)
+        previous = context.validate_anchors
+        def validate():
+            previous()
+            imported.validate_anchors()
+        context.validate_anchors = validate
+        context.source_contexts[key] = imported
+    context.validate_anchors()
+    description, proof = context.describe('matrix', Path(path), sha)
+    if proof not in context.proofs:
+        raise AuthorityError('Missing accepted matrix scientific proof.')
+    return authority.identity_sha256, description['manifest']
+
+
+def resume_annotation_authorities(function):
+    """Use the existing authority operation for the new annotation resume policy.
+
+    Historical raw-processing recovery policies retain their strict behavior.
+    Terminal Application consumption continues through accepted_authorities.
+    """
+    from functools import wraps
+    @wraps(function)
+    def resume(runtime, run_id):
+        from agent.schemas.run_state import RunLifecycleStatus
+        store = runtime._required_run_store()
+        state = store.load(run_id)
+        if (state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
+                RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}
+                or not any(s.tool_name == 'annotate_scATAC_cell_types' for s in state.steps)):
+            return function(runtime, run_id)
+        with accepted_authorities(store, run_id):
+            return function(runtime, run_id)
+    return resume

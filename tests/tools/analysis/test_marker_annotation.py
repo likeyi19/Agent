@@ -117,3 +117,36 @@ def test_sparse_assignment_needs_no_validator():
     assert result['candidate_evidence'][0]['positive']==['G']
     assert result['cells'][0]['primary_annotation']=='A'
     assert result['cells'][1]['primary_annotation'] is None
+
+
+def test_native_child_cancellation_reaps_and_cleans(canonical,tmp_path,monkeypatch):
+    """Cancellation affects lifecycle only; native scientific parameters stay fixed."""
+    import os
+    import sys
+    import pandas as pd
+    from scipy import sparse
+    from agent.tools._cancellation import cancellation_scope,ToolWorkCancelled
+    b,a=canonical
+    groups=tmp_path/'groups.tsv'
+    pd.DataFrame({'cell_id':a.obs_names,'group':['a']*3+['b']*3}).to_csv(groups,sep='\t',index=False)
+    gene=tmp_path/'genes-resource.tsv';gene.write_text('synthetic fixture\n')
+    sig=tmp_path/'signatures.tsv';sig.write_text('candidate\tgene\nA\tG\nA\tH\n')
+    upstream=tmp_path/'upstream'
+    for name in m.SOURCES:
+        path=upstream/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic backend\n')
+        monkeypatch.setitem(m.SOURCES,name,m.sha256(path))
+    monkeypatch.setattr(m,'enhanced_rp',lambda *args:(sparse.csr_matrix([[1.,1.]]*6),['G','H']))
+    started=tmp_path/'child.pid'
+    executable=tmp_path/'rscript'
+    executable.write_text('#!'+sys.executable+'\nimport os,time\nfrom pathlib import Path\nPath('+repr(str(started))+').write_text(str(os.getpid()))\ntime.sleep(30)\n')
+    executable.chmod(0o700)
+    def resource(path,sem,norm):
+        return m.Resource(str(path),m.sha256(path),'test','1','human','hg38','test','symbol',norm,sem)
+    with cancellation_scope(lambda:started.exists()),pytest.raises(ToolWorkCancelled):
+        m.annotate_cell_groups(matrix=b,groups_path=str(groups),groups_sha256=m.sha256(groups),grouping_provenance='test',
+            gene_resource=resource(gene,'maestro-refgenes-transcripts-exons.v1','none'),
+            signature_resource=resource(sig,'candidate-gene-list.v1','uppercase'),
+            runtime=m.Runtime(str(upstream),str(executable),str(tmp_path)),profile=m.PROFILE,output_dir=str(tmp_path/'cancelled'))
+    with pytest.raises(ProcessLookupError):os.kill(int(started.read_text()),0)
+    assert not (tmp_path/'cancelled').exists() and not list(tmp_path.glob('.marker-annotation-*'))
+    assert m.sha256(tmp_path/'matrix.h5ad')==b.matrix_sha256

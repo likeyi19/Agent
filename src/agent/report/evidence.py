@@ -18,6 +18,7 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from .annotation import CONTRACT_FIELDS as _ANNOTATION_FIELDS, FACT_FIELDS as _ANNOTATION_FACT_FIELDS
 from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
 from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
 from .cell_selection import (CONTRACT_FIELDS as _CELL_SELECTION_FIELDS,
@@ -388,6 +389,13 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "annotate_scATAC_cell_types": _ToolProjection(
+        _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "annotate-scatac-cell-types-v1",
+        (_ArtifactProjection("manifest_path", "scatac_cell_type_annotation_manifest_json",
+            ("pinned_annotation_backend_replay", "accepted_matrix_authority_lineage", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("annotated_h5ad_path", "scatac_annotated_h5ad",
+            ("exact_canonical_matrix_preservation", "exact_primary_annotation_propagation", "full_artifact_sha256"), digest_field="annotated_h5ad_sha256")),
+    ),
     "adopt_scATAC_cell_by_ccre": _ToolProjection(
         _ADOPTED_MATRIX_FIELDS, _ADOPTED_MATRIX_FACT_FIELDS, "adopt-scatac-cell-by-ccre-v1",
         (_ArtifactProjection("manifest_path", "scatac_external_cell_by_ccre_manifest_json",

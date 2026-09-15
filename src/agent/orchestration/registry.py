@@ -101,6 +101,7 @@ class ArtifactSemanticKind(str, Enum):
     SCATAC_BARCODE_QC = "scatac_barcode_qc"
     SCATAC_CELL_SELECTION = "scatac_cell_selection"
     SCATAC_CELL_BY_CCRE = "scatac_cell_by_ccre"
+    SCATAC_CELL_TYPE_ANNOTATION = "scatac_cell_type_annotation"
     SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
     SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
@@ -3350,6 +3351,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .cell_selection_registry import cell_selection_tool_spec
     from .matrix_registry import matrix_tool_spec
     from .matrix_adoption_registry import matrix_adoption_tool_spec
+    from .annotation_registry import annotation_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3370,6 +3372,7 @@ def build_default_tool_registry() -> ToolRegistry:
         cell_selection_tool_spec(),
         matrix_tool_spec(),
         matrix_adoption_tool_spec(),
+        annotation_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

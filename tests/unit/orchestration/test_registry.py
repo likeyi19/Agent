@@ -45,6 +45,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "select_scATAC_cells",
         "build_scATAC_cell_by_ccre",
         "adopt_scATAC_cell_by_ccre",
+        "annotate_scATAC_cell_types",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -260,6 +261,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "select_scATAC_cells": "select-scatac-cells-v1",
         "build_scATAC_cell_by_ccre": "build-scatac-cell-by-ccre-v1",
         "adopt_scATAC_cell_by_ccre": "adopt-scatac-cell-by-ccre-v1",
+        "annotate_scATAC_cell_types": "annotate-scatac-cell-types-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
         "build_cell_neighbors": "build-cell-neighbors-v1",
         "cluster_cells": "cluster-cells-v1",

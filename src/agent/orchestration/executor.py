@@ -677,12 +677,18 @@ class PlanExecutor:
                     dependency: verified_results[dependency]
                     for dependency in step.depends_on
                 }
+                authority_options = {}
+                if step.tool_name == 'annotate_scATAC_cell_types' and durable_run_id is not None:
+                    from .durable_tool_recovery import execution_identity
+                    authority_options['authority_execution_identity'] = execution_identity(
+                        durable_run_id, plan, step, self._registry.get(step.tool_name))
                 verification = verify_step(
                     step,
                     resolved_arguments,
                     persisted.result,
                     self._registry,
                     dependency_results=dependency_results,
+                    **authority_options,
                 )
                 trace.add(
                     TraceEventType.VERIFICATION,

@@ -556,10 +556,12 @@ from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
 from .cell_selection import REPORT_FIELDS as _CELL_SELECTION_REPORT_FIELDS
 from .matrix import REPORT_FIELDS as _MATRIX_REPORT_FIELDS
+from .annotation import REPORT_FIELDS as _ANNOTATION_REPORT_FIELDS
 from .matrix_adoption import REPORT_FIELDS as _ADOPTED_MATRIX_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
     "build_scATAC_cell_by_ccre": _MATRIX_REPORT_FIELDS,
     "adopt_scATAC_cell_by_ccre": _ADOPTED_MATRIX_REPORT_FIELDS,
@@ -769,6 +771,7 @@ _TOOL_TITLES: Mapping[str, str] = {
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
     "adopt_scATAC_cell_by_ccre": "External cell-by-cCRE adoption",
+    "annotate_scATAC_cell_types": "Primary cell-type annotation",
     "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
@@ -790,6 +793,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    **{k:k.replace("_", " ").capitalize() for k in _ANNOTATION_REPORT_FIELDS},
     **{k:k.replace("_", " ").capitalize() for k in _CELL_SELECTION_REPORT_FIELDS},
     **{k:k.replace("_", " ").capitalize() for k in (*_MATRIX_REPORT_FIELDS, *_ADOPTED_MATRIX_REPORT_FIELDS)},
     "n_observed_barcodes": "Observed namespace/barcode identities",
@@ -989,6 +993,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
     ("external_cell_by_ccre", "External cell-by-cCRE adoption", frozenset({"adopt_scATAC_cell_by_ccre"})),
@@ -1041,6 +1046,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adopt_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","source_sha256","reference_identity_sha256"),
     "build_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","upstream_identities"),
     "select_scATAC_cells": ("selection_method","cell_call_method","cell_call_state","resource_qualification","qc_identity_sha256","selection_profile_sha256"),
@@ -1352,6 +1358,18 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == "annotate_scATAC_cell_types":
+        lines=[f"### Primary cell-type annotation {occurrence}", "",
+            "Primary marker-based annotation was propagated from exact groups to every canonical cell. "
+            "The derived annotated H5AD preserves the source matrix and ordered axes.", ""]
+        for fact in step.facts:
+            label = "Annotation contract" if fact.field == "contract_version" else _FIELD_LABELS[fact.field]
+            lines.append(f"- {label}: {_inline_code(fact.value)}")
+        lines.extend(("", "Unassigned and ambiguous cells remain present with missing primary labels. "
+            "Validation was not assessed. CellMarker and EpiAgent are optional, non-gating validators; "
+            "neither changes or rescues primary labels. No accuracy or probability calibration is established.",
+            "", _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name == "adopt_scATAC_cell_by_ccre":
         lines=[f"### External cell-by-cCRE adoption {occurrence}", "",
             "Adopted an external matrix with the exact complete canonical cCRE vocabulary. "
@@ -1566,6 +1584,7 @@ def _render_summary(
 ) -> list[str]:
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
+        "annotate_scATAC_cell_types": "Primary marker-based cell-type annotation and annotated H5AD published",
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
         "build_scATAC_cell_by_ccre": "Full ordered canonical fragment-record matrix generated",

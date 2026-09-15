@@ -54,7 +54,11 @@ def test_v4_plan_only_without_runtime_or_scientific_io(monkeypatch,upstream):
     assert '/PRIVATE' not in model.prompt and '/PRIVATE' not in str(model.schema)
     for token in ('Chromap','bgzip','tabix','AGENT_CHROMAP','support_bits'):
         assert token not in model.prompt
-    assert 'scatac_fragments.v2' in model.prompt
+    import sys
+    from pathlib import Path
+    sys.path.insert(0,str(Path(__file__).parents[1]/'unit/orchestration'))
+    from catalog_expansion import expand_catalog
+    assert 'scatac_fragments.v2' in json.dumps(expand_catalog(json.loads(model.prompt)['catalog']))
     assert 'output_dir' not in json.dumps(model.payload)
 
 

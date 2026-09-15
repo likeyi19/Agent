@@ -319,8 +319,10 @@ def build_semantic_planning_prompt(
             if guidance is not None:
                 guidance = list(guidance)
                 while guidance and guidance[-1] is None: guidance.pop()
-            tool[1][name] = (port[0], mode_codes[port[1]], *port[2:5], guidance)
+            compact = (port[0], mode_codes[port[1]], *port[2:5], guidance)
+            tool[1][name] = (*compact[:4], guidance) if port[4] is None else compact
     catalog['catalog_format']['guidance_tail'] = 'Pad to 5 with null.'
+    catalog['catalog_format']['input_lineage'] = 'Five-item input ports omit null required_lineage; guidance is last.'
     from ._catalog_compaction import share_catalog_values
     catalog['tools'], shared, names, marker = share_catalog_values(catalog['tools'])
     catalog['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'

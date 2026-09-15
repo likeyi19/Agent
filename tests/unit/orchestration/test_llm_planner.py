@@ -842,7 +842,8 @@ def test_every_request_exposes_the_same_complete_tool_catalog(
         for branch in schema["properties"]["steps"]["items"]["anyOf"]
     )
 
-    assert set(prompt_payload["tools"]) == set(registry.names())
+    from catalog_expansion import expand_catalog
+    assert set(expand_catalog(prompt_payload)) == set(registry.names())
     assert schema_tools == registry.names()
 
 
@@ -860,7 +861,8 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
         "input_path",
         "species",
     ]
-    assert set(payload["tools"]) == set(registry.names())
+    from catalog_expansion import expand_catalog
+    assert set(expand_catalog(payload)) == set(registry.names())
     from catalog_expansion import expand_catalog
     payload["tools"] = expand_catalog(payload)
     species = payload["tools"]["epizoo_embed_cells"][2]["species"]

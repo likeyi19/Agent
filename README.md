@@ -109,6 +109,14 @@ preprocessing below. Sort/index observations alone do not authorize transformati
 M11.5c now adds cell-by-cCRE construction. Realignment/liftOver, automatic
 statistical cell calling and model inference from raw sequencing remain deferred.
 
+Direct marker-based cell-type annotation is available through
+[`annotate_scATAC_cell_types`](docs/m13.5-agent-annotation-integration.md).
+It consumes an accepted canonical fragment-count matrix, exact independent groups,
+and explicit pinned tissue/context resources, and publishes primary labels in a
+new annotated H5AD while preserving the source matrix. Unresolved cells remain
+present. CellMarker and EpiAgent remain optional private validators; neither gates
+or changes primary annotation.
+
 ## Milestone 11 status
 
 **Milestone 11.6 — Production Reference & Runtime Resource Provisioning is complete.**
@@ -472,7 +480,8 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
-| Cell annotation | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
+| Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
+| Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
 | Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
 | Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
 | Differential accessibility | `run_replicate_differential_accessibility`: biological-replicate DA with pinned edgeR v4 quasi-likelihood fitting/testing and independent verification |

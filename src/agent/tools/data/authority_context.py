@@ -44,6 +44,7 @@ class VerificationContext:
         self.locations = {}
         self.accepted = {}
         self._hashes = {}
+        self.source_contexts = {}
         self.validate_anchors = lambda: None
         self.execution = None
         self.defer_hash_cancellation = False
@@ -132,7 +133,7 @@ class VerificationContext:
             metadata = dict(contigs=result.contigs)
         elif kind in ('bam_fragment_production', 'external_fragment_adoption'):
             metadata = dict(contigs=result.fragments.contigs)
-        elif kind == 'matrix':
+        elif kind in ('matrix', 'annotation'):
             metadata = result
         else:
             metadata = {}

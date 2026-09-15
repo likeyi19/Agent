@@ -20,6 +20,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
 
+from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data import scatac_matrix_contract as matrix_contract
 from agent.tools.data._ordered_identity import ordered_identity_sha256
 
@@ -262,7 +263,9 @@ def annotate_cell_groups(*, matrix: MatrixInput, groups_path: str, groups_sha256
     destination.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix='.marker-annotation-', dir=destination.parent))
     try:
+        cancellation_checkpoint()
         rp, genes = enhanced_rp(a.X, a.var_names.tolist(), cells, gene_path, upstream / 'MAESTRO/scATAC_Genescore.py')
+        cancellation_checkpoint()
         sparse.save_npz(stage / 'rp.npz', rp)
         mmwrite(str(stage / 'rp-genes-by-cells.mtx'), rp.T, precision=17)
         (stage / 'genes.tsv').write_text('\n'.join(genes)+'\n')
@@ -271,8 +274,25 @@ def annotate_cell_groups(*, matrix: MatrixInput, groups_path: str, groups_sha256
         script = Path(__file__).parent / 'r/maestro_markers_v1.R'
         env = dict(os.environ, R_LIBS_USER=runtime.r_library, R_ENVIRON_USER='/dev/null', R_PROFILE_USER='/dev/null')
         with (stage / 'marker-runtime.txt').open('w') as log:
-            subprocess.run([runtime.rscript, '--vanilla', str(script), str(stage), str(upstream)],
-                           env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+            with subprocess.Popen([runtime.rscript, '--vanilla', str(script), str(stage), str(upstream)],
+                                  env=env, stdout=log, stderr=subprocess.STDOUT) as process:
+                try:
+                    while True:
+                        cancellation_checkpoint()
+                        try:
+                            status = process.wait(timeout=.2)
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
+                    if status:
+                        raise subprocess.CalledProcessError(status, process.args)
+                except BaseException:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill(); process.wait()
+                    raise
         f = pd.read_csv(stage / 'markers-signature-input.tsv', sep='\t', dtype={'cluster':str, 'gene':str}, keep_default_na=False, quoting=csv.QUOTE_NONE)
         result = score_candidates(cells, groups, genes, list(f[['cluster','gene','avg_logFC']].itertuples(index=False, name=None)), signatures)
         for key, rows in result.items():
@@ -294,6 +314,7 @@ def annotate_cell_groups(*, matrix: MatrixInput, groups_path: str, groups_sha256
         (stage / 'result.json').write_text(json.dumps(provenance, sort_keys=True, allow_nan=False)+'\n')
         if destination.exists():
             raise ValueError('Output appeared during computation')
+        cancellation_checkpoint()
         stage.rename(destination)
         return provenance
     finally:

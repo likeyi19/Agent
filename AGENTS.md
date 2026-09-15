@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All nineteen currently registered tools
+`src/agent/orchestration/registry.py`. All twenty currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -78,11 +78,12 @@ derived from the registry.
 | `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
 | `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
 | `adopt_scATAC_cell_by_ccre` | Exact external canonical int64 CSR H5AD adoption; declared value semantics, source/output conservation, matrix-owner authority, truthful external provenance |
+| `annotate_scATAC_cell_types` | Primary MAESTRO marker annotation of exact canonical groups; explicit resources/context, annotation authority and immutable-source annotated H5AD |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
 Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake, FASTQ fragments, external adoption, qualified BAM preparation, barcode QC, explicit selection and cell-by-cCRE construction have verified figureless reporting. Unsupported projections fail
+Raw intake, FASTQ fragments, external adoption, qualified BAM preparation, barcode QC, explicit selection, cell-by-cCRE construction and primary cell-type annotation have verified figureless reporting. Unsupported projections fail
 closed; arbitrary new result fields never become report facts.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
@@ -352,6 +353,79 @@ or fallback conversion is approved: do not silently use largest overlap,
 fractional weighting, count copying or binary OR. Exact adoption, matrix-owner
 authority, scientific contracts and the nineteen-tool registry remain unchanged.
 Durable evidence and the bounded findings are linked from the M12 closeout.
+
+## Current Milestone 13 primary annotation contract
+
+[M13.5](docs/m13.5-agent-annotation-integration.md) exposes
+`annotate_scATAC_cell_types`. Canonical `scatac-cell-by-ccre.v1` with the accepted
+`canonical-fragment-record-overlap-counts.v1` profile is its initial supported
+matrix input. It requires an already accepted matrix run/step with schema-2
+scientific authority, an exact independently supplied ordered cell/group TSV,
+and pinned gene/signature resources with explicit species, assembly and
+biological tissue/context. A bounded `scatac-annotation-inputs.v1` specification
+binds those prerequisites. The trusted source RunStore and pinned MAESTRO/R
+runtime are operator configuration, never planner-selected execution resources.
+M12 external adoption, insertion counts, arbitrary binary/count matrices and
+ordinary peaks are not qualified annotation inputs.
+
+The accepted M13.3/M13.4b component owns its private sparse binary working copy,
+MAESTRO Enhanced RP, native marker statistics, signature scoring and primary
+assignment. A unique positive usable maximum assigns the primary annotation;
+insufficient evidence, nonpositive maxima and positive ties retain missing labels
+with explicit statuses. Sparse unique positive evidence remains assigned. There
+are no new thresholds, hidden tissue defaults or PBMC-specific engine branches.
+Another tissue is represented through explicit appropriate resources/context.
+Annotation consumes groups and never performs or implicitly schedules clustering.
+
+Publication produces `scatac-cell-type-annotation.v1` and a new annotated H5AD.
+The canonical source remains immutable. Every cell, full ordered cCRE vocabulary,
+canonical sparse value and existing matrix metadata is preserved. Compact obs
+columns are `annotation_group`, `primary_annotation`, and `annotation_status`;
+missing labels are real categorical missing values. Large RP/marker/candidate
+and coverage evidence remains in sidecars. Matrix science belongs to the source
+matrix authority; M13 owns annotation, exact propagation and derivative
+preservation. The annotated dataset composes through the existing canonical
+matrix-H5AD semantic port while its annotation authority stays separate.
+
+The existing accepted-authority loader validates source execution, publication,
+lineage and current artifact/resource integrity without reconstructing upstream
+M11/M12 science. M13 independently reloads inputs and replays the pinned primary
+backend once, checking its own evidence, assignments, propagation and derivative.
+This is scientific backend replay, not a second implementation of RP/statistics.
+Existing schema-2 authority, staged/fsynced atomic publication, receipts and
+cooperative cancellation are reused. Active R children are reaped on cancellation.
+Application evidence/reporting and terminal resume reuse accepted M13 authority.
+Strict annotation verification and interrupted-publication recovery verify M13
+only; recovered annotation authority survives subsequent revalidation. Historical
+raw-only recovery contracts remain unchanged. PLAN_ONLY performs no scientific IO.
+
+Validation is optional and non-gating. Option A keeps CellMarker corroboration
+and EpiAgent supervised validation private. Neither overwrites primary annotation
+or rescues unresolved cells; no voting or combined confidence exists. Each model
+owns its preprocessing. EpiAgent retains its qualified exact-float32 working-copy
+boundary and pinned checkpoint, outside canonical matrix ownership. Historical
+PBMC 899/904 broad-lineage concordance is not accuracy, and EpiAgent-NT has no
+explicit NK class. No validator is invoked by the public primary tool.
+
+Automatic clustering, tissue inference, LLM biological guessing, arbitrary peaks,
+unqualified matrix semantics, cross-species/ontology mapping, classifier training,
+public validator exposure, automatic label correction and guaranteed fine-subtype
+accuracy remain deferred or unsupported. PBMC is a qualification example, not
+the supported-tissue boundary; other tissue/mouse biological qualification is
+not implied. The single preserved PBMC public-path acceptance reproduced all
+1,119 cells, 1,090 assigned and 29 unresolved, with exact accepted group/per-cell
+labels, unchanged canonical matrix bytes/content and unchanged source authority.
+Production plus one M13 owner replay completed in 348.20 seconds; Application
+presentation and terminal resume reused authority. Upstream owner reconstruction
+and validator execution counts were zero. M13-focused tests passed 72; the related
+owner/publication regression passed 151. The one permitted full lightweight run
+reported 3,861 passed, 83 skipped, three catalog-related failures and seven
+existing warnings. All three failures were corrected; the final affected
+planning/orchestration regression passed 896 tests, and the report-label correction
+passed 85 reporting/Application tests. No second full run was performed. A clean
+full-suite pass on the corrected final revision remains the bounded closeout
+follow-up; Milestone 13 is not yet unconditionally closed. Exact records and the
+unchanged catalog ceilings are documented in the linked integration record.
 
 ## Current scientific runtime and verification contracts
 

@@ -49,10 +49,10 @@ def share_catalog_text(payload):
     """Losslessly share repeated phrases in catalog text, never request values.
 
     Phrase definitions contain original text, without references. A collision-free
-    marker makes expansion one substitution pass; keys and wire enums are untouched.
+    marker makes expansion one substitution pass. Wire enums remain untouched.
     This keeps the complete registry catalog within existing byte ceilings.
     """
-    fields=('tools','catalog_values','meanings')
+    fields=('tools','catalog_values','meanings','catalog_keys')
     strings=[]; keys=[]
     def collect(value):
         if isinstance(value,str): strings.append(value)
@@ -64,7 +64,7 @@ def share_catalog_text(payload):
     for field in fields: collect(payload.get(field,()))
     marker='~'
     while any(marker in s for s in (*strings, *keys)): marker+='~'
-    texts=[s for s in strings if ' ' in s or '_' in s]
+    texts=list((*strings,*keys))
     phrases=[]
     while len(phrases)<256:
         counts=Counter()
@@ -73,7 +73,7 @@ def share_catalog_text(payload):
             for start in range(len(words)):
                 for n in range(1,min(16,len(words)-start)+1):
                     phrase=''.join(words[start:start+n])
-                    if len(phrase)>8 and marker not in phrase: counts[phrase]+=1
+                    if len(phrase)>5 and marker not in phrase: counts[phrase]+=1
         tag=marker+str(len(phrases))+marker
         candidates=[((len(s)-len(tag))*n-len(s)-3,s) for s,n in counts.items() if n>1]
         if not candidates: break
@@ -85,7 +85,7 @@ def share_catalog_text(payload):
         if isinstance(value,str):
             for i,phrase in enumerate(phrases): value=value.replace(phrase,marker+str(i)+marker)
             return value
-        if isinstance(value,dict): return {k:compact(v) for k,v in value.items()}
+        if isinstance(value,dict): return {compact(k):compact(v) for k,v in value.items()}
         if isinstance(value,(list,tuple)): return tuple(compact(v) for v in value)
         return value
     if phrases:
@@ -93,4 +93,4 @@ def share_catalog_text(payload):
             if field in payload: payload[field]=compact(payload[field])
         payload['catalog_phrases']=phrases
         payload['catalog_phrase_marker']=marker
-        payload['catalog_format']['phrase_reference']='In catalog strings, <catalog_phrase_marker>N<catalog_phrase_marker> expands once to catalog_phrases[N].'
+        payload['catalog_format']['phrase_reference']='Expand <catalog_phrase_marker>N<catalog_phrase_marker> once to catalog_phrases[N] in strings/keys before key aliases.'

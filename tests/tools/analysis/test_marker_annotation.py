@@ -19,12 +19,15 @@ def test_exact_mapping(rows):
 
 @pytest.mark.parametrize('markers,status,candidate', [([], 'insufficient_evidence',None),
     ([('opaque/a','G',0)],'unresolved',None), ([('opaque/a','G',-1)],'unresolved',None),
-    ([('opaque/a','H',1)],'ambiguous',None),([('opaque/a','G',.00000001)],'candidate','A')])
+    ([('opaque/a','H',1)],'ambiguous',None),([('opaque/a','G',.00000001)],'assigned','A')])
 def test_states(markers,status,candidate):
     result=score(markers)
     assert result['groups'][0]['status']==status
     assert result['groups'][0]['candidate']==candidate
-    assert all(r['accepted_identity'] is None for r in result['groups']+result['cells'])
+    assert result['groups'][0]['primary_annotation']==candidate
+    assert result['cells'][0]['primary_annotation']==candidate
+    assert all('accepted_identity' not in r for r in result['groups']+result['cells'])
+    assert result['groups'][0]['validation_state']=='not_assessed'
     assert [r['cell_id'] for r in result['cells']]==['c2','c1']
     assert result==score(markers)
 
@@ -103,3 +106,14 @@ def test_private_rp_immutable(canonical,tmp_path,monkeypatch):
     rp,genes=m.enhanced_rp(a.X,a.var_names.tolist(),a.obs_names.tolist(),tmp_path/'unused',source)
     assert (a.X!=before).nnz==0 and (rp.data==1).all()
     assert m.sha256(Path(b.manifest_path).parent/'matrix.h5ad')==b.matrix_sha256
+
+
+def test_sparse_assignment_needs_no_validator():
+    result=score([('opaque/a','G',1e-12)])
+    group=result['groups'][0]
+    assert group['status']=='assigned' and group['primary_annotation']=='A'
+    assert group['validation_state']=='not_assessed'
+    assert result['candidate_evidence'][0]['matched_entries']==1
+    assert result['candidate_evidence'][0]['positive']==['G']
+    assert result['cells'][0]['primary_annotation']=='A'
+    assert result['cells'][1]['primary_annotation'] is None

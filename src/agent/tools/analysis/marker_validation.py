@@ -1,4 +1,4 @@
-"""Pinned, group-level external marker associations, separate from primary scoring."""
+"""Optional external biological corroboration; never assigns or changes primary labels."""
 from __future__ import annotations
 
 import csv
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .marker_annotation import checked_file, identifier, sha256
 
-PROFILE = 'external-marker-associations.v1'
+PROFILE = 'external-marker-corroboration.v1'
 FIELDS = ['species','tissue_class','tissue_type','uberonongology_id','cancer_type',
           'cell_type','cell_name','cellontology_id','marker','Symbol','GeneID','Genetype',
           'Genename','UNIPROTID','technology_seq','marker_source','PMID','Title','journal','year']
@@ -67,16 +67,14 @@ def load_knowledge(resource):
     return result
 
 
-def validate_marker_annotation_candidates(*, primary_path, primary_sha256, genes_path, genes_sha256,
+def corroborate_marker_annotation(*, primary_path, primary_sha256, genes_path, genes_sha256,
         markers_path, markers_sha256, resource: KnowledgeResource, mapping_path, mapping_sha256,
         species, context, profile):
-    """Consume pinned M13.3 group evidence plus its retained genes/filtered markers.
+    """Read primary annotation and return separate, non-gating corroboration.
 
-    Supported means positive marker association evidence exists at the mapped
-    external type's scope. Competing associations remain insufficient evidence:
-    membership does not establish marker exclusivity or identity contradiction.
-    This positive-only profile cannot emit a scientifically proven conflicting
-    state. No state authorizes accepted identity or calibrated confidence.
+    Positive and competing associations describe biological knowledge, not
+    correctness, contradiction, calibrated confidence or label approval.
+    The input annotation is immutable, including when it is unresolved.
     """
     if profile != PROFILE or species not in ('Human','Mouse'):
         raise ValueError('Unsupported explicit profile/species')
@@ -109,10 +107,12 @@ def validate_marker_annotation_candidates(*, primary_path, primary_sha256, genes
     if len(set(group_ids))!=len(group_ids):
         raise ValueError('Duplicate primary groups')
     for g in group_rows:
-        if g['status'] not in ('candidate','ambiguous','unresolved','insufficient_evidence') or g['accepted_identity'] is not None:
+        if 'accepted_identity' in g or g['status'] not in ('assigned','ambiguous','unresolved','insufficient_evidence'):
             raise ValueError('Unsupported primary annotation state')
-        if (g['status']=='candidate') != (g['candidate'] is not None):
-            raise ValueError('Inconsistent primary candidate state')
+        if 'primary_annotation' not in g or (g['status']=='assigned') != (g['candidate'] is not None) or g['primary_annotation'] != g['candidate']:
+            raise ValueError('Inconsistent primary annotation state')
+        if g['candidate'] is not None:
+            identifier(g['candidate'])
     effects={g:{} for g in group_ids}
     with checked_file(markers_path,markers_sha256).open(newline='') as f:
         import math
@@ -146,23 +146,24 @@ def validate_marker_annotation_candidates(*, primary_path, primary_sha256, genes
         positive=[e for e in evidence if e['relationship'] in ('equivalent','broader') and e['positive_markers']]
         competing=[e for e in evidence if e['relationship']=='incompatible' and e['positive_markers']]
         state=('not_applicable' if g['candidate'] is None else 'unmapped' if not evidence
-               else 'insufficient_evidence' if competing else 'supported' if positive else 'insufficient_evidence')
+               else 'mixed' if competing else 'corroborating' if positive else 'insufficient_evidence')
         result.append(dict(group=g['group'],primary_candidate=g['candidate'],primary_state=g['status'],
-            accepted_identity=None,validation_state=state,evidence=evidence,
-            validation_scope='mapped_external_type_marker_associations_only',
+            primary_annotation=g['primary_annotation'],corroboration_state=state,evidence=evidence,
+            corroboration_scope='mapped_external_type_marker_associations_only',
             compatible_positive_associations=bool(positive),competing_positive_associations=bool(competing),
             conflict_assessment='not_established_by_positive_marker_membership',
             reason={'not_applicable':'primary_has_no_candidate','unmapped':'no_declared_alignment',
-                                        'supported':'positive_compatible_associations_not_identity_acceptance',
-                    'insufficient_evidence':('competing_nonexclusive_associations_require_review' if competing else 'no_positive_equivalent_or_broader_associations')}[state]))
+                                        'corroborating':'positive_compatible_associations',
+                    'mixed':'competing_nonexclusive_associations',
+                    'insufficient_evidence':'no_positive_equivalent_or_broader_associations'}[state]))
     dependencies=dict(primary=dict(path=str(primary_path),sha256=primary_sha256),genes=dict(path=str(genes_path),sha256=genes_sha256),
                       markers=dict(path=str(markers_path),sha256=markers_sha256),resource=asdict(resource),
                       mapping=dict(path=str(mapping_path),sha256=mapping_sha256),species=species,context=context)
-    output=dict(schema='agent.external-marker-validation.v1',profile=profile,dependencies=dependencies,groups=result,
+    output=dict(schema='agent.external-marker-corroboration.v1',profile=profile,dependencies=dependencies,groups=result,
                 interpretation='RNA/protein literature associations with accessibility-derived evidence; not assay equivalence or independent trials',
                 source_row_reference='1-based TSV line; header is line 1',normalization_audit=[dict(row=r['row'],original_marker=r['original']['marker'],
                 normalized=r['normalized'],mapping_status=r['mapping_status']) for r in selected],
-                accepted_identity_policy='none')
+                annotation_policy='read_only; no_overwrite_or_fallback')
     for p,h in [(primary_path,primary_sha256),(genes_path,genes_sha256),(markers_path,markers_sha256),
                 (mapping_path,mapping_sha256),(resource.snapshot_path,resource.snapshot_sha256),(resource.table_path,resource.table_sha256)]:
         checked_file(p,h)

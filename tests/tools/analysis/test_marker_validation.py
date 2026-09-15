@@ -11,8 +11,8 @@ from agent.tools.analysis import marker_validation as v
 def case(tmp_path):
     def write(name,value):
         p=tmp_path/name;p.write_text(json.dumps(value));return str(p),v.sha256(p)
-    primary={'groups':[dict(group='opaque',candidate='candidate-A',status='candidate',accepted_identity=None),
-                       dict(group='unresolved',candidate=None,status='unresolved',accepted_identity=None)]}
+    primary={'groups':[dict(group='opaque',candidate='candidate-A',status='assigned',primary_annotation='candidate-A'),
+                       dict(group='unresolved',candidate=None,status='unresolved',primary_annotation=None)]}
     p,ph=write('primary.json',primary);g,gh=write('genes.json',['G','H','J'])
     marker=tmp_path/'markers.tsv';marker.write_text('cluster\tgene\tavg_logFC\nopaque\tG\t1\nunresolved\tH\t2\n')
     table=tmp_path/'knowledge.tsv'
@@ -34,29 +34,32 @@ def change(args,key,edit):
 
 def test_supported_immutable_and_deterministic(case):
     before=Path(case['primary_path']).read_bytes()
-    result=v.validate_marker_annotation_candidates(**case)
-    assert result==v.validate_marker_annotation_candidates(**case)
-    assert result['groups'][0]['validation_state']=='supported'
+    result=v.corroborate_marker_annotation(**case)
+    assert result==v.corroborate_marker_annotation(**case)
+    assert result['groups'][0]['corroboration_state']=='corroborating'
     assert result['groups'][1]['primary_state']=='unresolved'
-    assert result['groups'][1]['validation_state']=='not_applicable'
-    assert all(r['accepted_identity'] is None for r in result['groups'])
+    assert result['groups'][1]['corroboration_state']=='not_applicable'
+    assert result['groups'][0]['primary_annotation']=='candidate-A'
+    assert result['groups'][1]['primary_annotation'] is None
     assert Path(case['primary_path']).read_bytes()==before
     assert result['groups'][0]['evidence'][0]['unmeasured']==['UNMEASURED']
 
 
 def test_competing_associations_do_not_fabricate_conflict(case):
     p=Path(case['markers_path']);p.write_text(p.read_text()+'opaque\tH\t1\n');case['markers_sha256']=v.sha256(p)
-    result=v.validate_marker_annotation_candidates(**case)
-    assert result['groups'][0]['validation_state']=='insufficient_evidence'
+    result=v.corroborate_marker_annotation(**case)
+    assert result['groups'][0]['corroboration_state']=='mixed'
+    assert result['groups'][0]['primary_annotation']=='candidate-A'
     assert result['groups'][0]['competing_positive_associations']
     assert result['groups'][0]['conflict_assessment']=='not_established_by_positive_marker_membership'
 
 
 def test_negative_not_absence_or_conflict(case):
     p=Path(case['markers_path']);p.write_text(p.read_text().replace('opaque\tG\t1','opaque\tG\t-1'));case['markers_sha256']=v.sha256(p)
-    r=v.validate_marker_annotation_candidates(**case)['groups'][0]
-    assert r['validation_state']=='insufficient_evidence'
+    r=v.corroborate_marker_annotation(**case)['groups'][0]
+    assert r['corroboration_state']=='insufficient_evidence'
     assert r['evidence'][0]['lower_rp_markers']==['G']
+    assert r['primary_annotation']=='candidate-A'
 
 
 def test_ambiguous_aliases(case):
@@ -69,43 +72,43 @@ def test_ambiguous_aliases(case):
 @pytest.mark.parametrize('key,value',[('species','Mouse'),('context','other'),('profile','other')])
 def test_input_mismatch(case,key,value):
     case[key]=value
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 @pytest.mark.parametrize('field', ['primary_path','genes_path','markers_path','mapping_path'])
 def test_hash_mismatch(case,field):
     Path(case[field]).write_text('changed')
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 def test_resource_change_identity(case):
     from dataclasses import replace
-    old=v.validate_marker_annotation_candidates(**case)['identity_sha256']
+    old=v.corroborate_marker_annotation(**case)['identity_sha256']
     case['resource']=replace(case['resource'],release='new explicit release')
-    assert v.validate_marker_annotation_candidates(**case)['identity_sha256']!=old
+    assert v.corroborate_marker_annotation(**case)['identity_sha256']!=old
     Path(case['resource'].table_path).write_text('changed')
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 @pytest.mark.parametrize('field,value',[('tissues',['unknown']),('species','Mouse'),('context','elsewhere'),('resource_table_sha256','a'*64),('primary_sha256','a'*64)])
 def test_mapping_context_contract(case,field,value):
     change(case,'mapping_path',lambda x:x.update({field:value}))
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 def test_unmapped_and_narrower(case):
     change(case,'mapping_path',lambda x:x['candidates'].update({'candidate-A':[]}))
-    assert v.validate_marker_annotation_candidates(**case)['groups'][0]['validation_state']=='unmapped'
+    assert v.corroborate_marker_annotation(**case)['groups'][0]['corroboration_state']=='unmapped'
 
 
 def test_unknown_cell_identity(case):
     change(case,'mapping_path',lambda x:x['candidates']['candidate-A'][0].update(external_type='unknown'))
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 def test_case_collision(case):
     change(case,'genes_path',lambda x:x.append('g'))
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
 
 
 def test_missing_symbol_does_not_poison_known_mapping(case):
@@ -126,9 +129,29 @@ def test_narrower_type_not_equivalent_support(case):
         x['candidates']['candidate-A']=x['candidates']['candidate-A'][:1]
         x['candidates']['candidate-A'][0]['relationship']='narrower'
     change(case,'mapping_path',edit)
-    assert v.validate_marker_annotation_candidates(**case)['groups'][0]['validation_state']=='insufficient_evidence'
+    assert v.corroborate_marker_annotation(**case)['groups'][0]['corroboration_state']=='insufficient_evidence'
 
 
 def test_duplicate_marker_rejected(case):
     p=Path(case['markers_path']);p.write_text(p.read_text()+'opaque\tG\t2\n');case['markers_sha256']=v.sha256(p)
-    with pytest.raises(ValueError):v.validate_marker_annotation_candidates(**case)
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
+
+
+@pytest.mark.parametrize('mutation', [
+    {'status':'candidate','accepted_identity':None},
+    {'primary_annotation':'different-label'},
+    {'status':'unresolved','primary_annotation':None},
+])
+def test_inconsistent_or_historical_primary_contract_rejected(case,mutation):
+    change(case,'primary_path',lambda x:x['groups'][0].update(mutation))
+    change(case,'mapping_path',lambda x:x.update(primary_sha256=case['primary_sha256']))
+    with pytest.raises(ValueError):v.corroborate_marker_annotation(**case)
+
+
+def test_missing_validation_resource_does_not_change_primary(case):
+    from dataclasses import replace
+    before=Path(case['primary_path']).read_bytes()
+    case['resource']=replace(case['resource'],snapshot_path=str(Path(case['primary_path']).parent/'unavailable'))
+    with pytest.raises(FileNotFoundError):v.corroborate_marker_annotation(**case)
+    assert Path(case['primary_path']).read_bytes()==before
+    assert json.loads(before)['groups'][0]['primary_annotation']=='candidate-A'

@@ -1,4 +1,4 @@
-"""Private M13 scientific component; no orchestration or final identity assignment."""
+"""Private marker-based primary annotation; downstream validation is optional."""
 from __future__ import annotations
 
 import ast
@@ -144,7 +144,7 @@ def read_signatures(path):
 
 
 def score_candidates(cells, groups, genes, markers, signatures):
-    """Qualified list-weighted sum(logFC)/log2(entries); no biological acceptance."""
+    """Qualified scoring and structural primary assignment; no validation gate."""
     order = exact_groups(cells, groups)
     gene_set = {identifier(g).upper() for g in genes}
     if len(gene_set) != len(genes):
@@ -180,16 +180,16 @@ def score_candidates(cells, groups, genes, markers, signatures):
         top = max(scores.values())
         winners = [c for c, s in scores.items() if s == top]
         status = ('insufficient_evidence' if not any(counts.values()) else 'unresolved' if top <= 0
-                  else 'ambiguous' if len(winners) != 1 else 'candidate')
+                  else 'ambiguous' if len(winners) != 1 else 'assigned')
         assignments.append(dict(group=group, n_cells=sum(g == group for _, g in groups),
-                                candidate=winners[0] if status == 'candidate' else None,
-                                accepted_identity=None, status=status, top_score=top,
+                                candidate=winners[0] if status == 'assigned' else None,
+                                primary_annotation=winners[0] if status == 'assigned' else None, status=status, top_score=top,
                                 top_candidates=winners, validation_state='not_assessed',
-                                reason={'candidate':'unique_positive_maximum_only', 'ambiguous':'exact_positive_top_tie',
+                                reason={'assigned':'unique_positive_maximum', 'ambiguous':'exact_positive_top_tie',
                                         'unresolved':'nonpositive_maximum', 'insufficient_evidence':'no_matched_signature_entries'}[status]))
     lookup = {a['group']: a for a in assignments}
     projection = [dict(cell_id=c, group=g, candidate=lookup[g]['candidate'], status=lookup[g]['status'],
-                       accepted_identity=None) for c, g in groups]
+                       primary_annotation=lookup[g]['primary_annotation']) for c, g in groups]
     return dict(groups=assignments, cells=projection, candidate_evidence=evidence, signature_coverage=coverage)
 
 
@@ -284,13 +284,13 @@ def annotate_cell_groups(*, matrix: MatrixInput, groups_path: str, groups_sha256
                              (group_path, groups_sha256), (gene_path, gene_resource.sha256), (signature_path, signature_resource.sha256)]:
             checked_file(path, digest)
         (stage / 'rp-genes-by-cells.mtx').unlink()
-        provenance = dict(schema='agent.group-marker-candidates.v1', profile=profile, method=dict(private_input='sparse X>0 float64', rp='MAESTRO Enhanced', decay=10000, normalization='log1p(RP/cell_sum*10000)', markers='Presto 1.1.0 one-versus-rest, nthreads=1', raw_p_lt=.01, abs_logfc_gt=.25, pct_either_gt=.1, adjusted_p_lt=1e-5, score='sum signed matched effects / log2(original signature entry count)', duplicates='preserve list weighting', missing='report; never biological negatives'), matrix=asdict(matrix),
+        provenance = dict(schema='agent.group-marker-annotation.v1', profile=profile, method=dict(private_input='sparse X>0 float64', rp='MAESTRO Enhanced', decay=10000, normalization='log1p(RP/cell_sum*10000)', markers='Presto 1.1.0 one-versus-rest, nthreads=1', raw_p_lt=.01, abs_logfc_gt=.25, pct_either_gt=.1, adjusted_p_lt=1e-5, score='sum signed matched effects / log2(original signature entry count)', duplicates='preserve list weighting', missing='report; never biological negatives'), matrix=asdict(matrix),
                           groups=dict(path=str(group_path), sha256=groups_sha256, provenance=grouping_provenance),
                           gene_resource=asdict(gene_resource), signature_resource=asdict(signature_resource),
                           runtime=asdict(runtime), upstream_revision=REVISION, upstream_license='GPL-3.0-or-later',
                           upstream_sources=SOURCES, adapter_sha256=sha256(__file__), r_adapter_sha256=sha256(script),
                           rscript_sha256=sha256(runtime.rscript), python_versions={k:version(k) for k in ('numpy','scipy','pandas','anndata')},
-                          sidecars={p.name:sha256(p) for p in sorted(stage.iterdir())}, accepted_identity_policy='none')
+                          sidecars={p.name:sha256(p) for p in sorted(stage.iterdir())}, annotation_policy='primary_unique_positive_assignment; validation_optional_non_gating')
         (stage / 'result.json').write_text(json.dumps(provenance, sort_keys=True, allow_nan=False)+'\n')
         if destination.exists():
             raise ValueError('Output appeared during computation')

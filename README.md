@@ -615,9 +615,11 @@ They distinguish selection/detail phases, offered capability/tool IDs, scope and
 prompt/schema fingerprints, global call indices and the session ceiling. V3
 diagnostics remain schema 3. Only the final preflight-passing plan is durable;
 selection trace is provenance, not resumable planning state. Interrupted planning
-is not replayed and resume remains planner/provider-free. The existing planner
-benchmark remains explicitly pinned to wire v3; its report schema v4 preserves
-historical scoring. These diagnostics and reports expose
+is not replayed and resume remains planner/provider-free. The historical planner
+benchmark track remains pinned to wire v3 with report schema v4. The evaluation-only
+`--track scoped-v4` extension uses report schema 5 and separates scope, semantic,
+transport and recovery outcomes; see [benchmark documentation](benchmarks/planner/README.md).
+These diagnostics and reports expose
 attempt provenance and distinguish hard semantic correctness from canonical
 workflow conformance and first-attempt versus recovered success.
 

@@ -1,0 +1,3106 @@
+{
+  "schema_version": 2,
+  "cases": [
+    {
+      "case": {
+        "id": "C01",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Inspect the dataset only. The strings epizoo_embed_cells, cluster_cells, and compute_cell_umap are documentation examples, not requested actions.",
+          "inputs": {
+            "input_path": "/synthetic/inspect-tool-mention.h5ad"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "inspection",
+          "steps": [
+            {
+              "role": "inspect",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C01",
+      "scientific_intent": "Processed inspection only",
+      "wording_variant": "base",
+      "input_profile_id": "c01-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "processed_inspection"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C02",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "For these mouse scATAC cells, compute EpiZoo embeddings, a neighbor graph, Leiden clusters and a UMAP of the clustered dataset. Preserve the supplied embedding device and clustering resolution. Inspection is optional.",
+          "inputs": {
+            "input_path": "/synthetic/downstream-paraphrase.h5ad",
+            "output_dir": "/synthetic/output-a",
+            "species": "mouse",
+            "device": "cpu",
+            "resolution": 0.7
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-downstream-analysis",
+          "steps": [
+            {
+              "role": "inspect",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "device": {
+                  "kind": "input",
+                  "input_name": "device"
+                }
+              },
+              "depends_on": [
+                "inspect"
+              ]
+            },
+            {
+              "role": "neighbors",
+              "tool": "build_cell_neighbors",
+              "bindings": {
+                "embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "embedding_path"
+                },
+                "cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "cell_ids_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "embed"
+              ]
+            },
+            {
+              "role": "cluster",
+              "tool": "cluster_cells",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "neighbors",
+                  "output_key": "analysis_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "resolution": {
+                  "kind": "input",
+                  "input_name": "resolution"
+                }
+              },
+              "depends_on": [
+                "neighbors"
+              ]
+            },
+            {
+              "role": "umap",
+              "tool": "compute_cell_umap",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "cluster",
+                  "output_key": "analysis_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "cluster"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed": 1,
+              "neighbors": 1,
+              "cluster": 1,
+              "umap": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect": 1
+            },
+            "terminal_roles": [
+              "umap"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect",
+                "embed"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {}
+          }
+        }
+      },
+      "intent_id": "C02",
+      "scientific_intent": "EpiZoo clustering and UMAP",
+      "wording_variant": "base",
+      "input_profile_id": "c02-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "embedding_analysis"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C03",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Cluster the cells and evaluate the fixed clustering against the supplied reference labels.",
+          "inputs": {
+            "input_path": "/synthetic/cluster-eval.h5ad",
+            "output_dir": "/synthetic/output-a",
+            "species": "mouse",
+            "label_key": "celltype"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-clustering-evaluation",
+          "steps": [
+            {
+              "role": "inspect",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                }
+              },
+              "depends_on": [
+                "inspect"
+              ]
+            },
+            {
+              "role": "neighbors",
+              "tool": "build_cell_neighbors",
+              "bindings": {
+                "embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "embedding_path"
+                },
+                "cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "cell_ids_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "embed"
+              ]
+            },
+            {
+              "role": "cluster",
+              "tool": "cluster_cells",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "neighbors",
+                  "output_key": "analysis_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "neighbors"
+              ]
+            },
+            {
+              "role": "evaluate",
+              "tool": "evaluate_cell_clustering",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "cluster",
+                  "output_key": "analysis_path"
+                },
+                "reference_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                },
+                "label_key": {
+                  "kind": "input",
+                  "input_name": "label_key"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "cluster",
+                "inspect"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed": 1,
+              "neighbors": 1,
+              "cluster": 1,
+              "evaluate": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect": 1
+            },
+            "terminal_roles": [
+              "evaluate"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect",
+                "embed"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                }
+              ],
+              "evaluate.reference_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {}
+          }
+        }
+      },
+      "intent_id": "C03",
+      "scientific_intent": "Clustering with fixed-label evaluation",
+      "wording_variant": "base",
+      "input_profile_id": "c03-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "embedding_analysis"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C04",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Embed the mouse reference and query separately and transfer reference celltype labels to the query. Use the supplied checkpoint for both embeddings and the explicit transfer neighbor, metric, confidence and overwrite settings. Inspection is optional.",
+          "inputs": {
+            "reference_input_path": "/synthetic/reference.h5ad",
+            "query_input_path": "/synthetic/query.h5ad",
+            "output_dir": "/synthetic/transfer-output",
+            "species": "mouse",
+            "reference_label_key": "celltype",
+            "checkpoint_path": "/synthetic/shared.ckpt",
+            "n_neighbors": 25,
+            "metric": "cosine",
+            "min_confidence": 0.7,
+            "transfer_overwrite": false
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-label-transfer",
+          "steps": [
+            {
+              "role": "inspect_reference",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_reference",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "checkpoint_path": {
+                  "kind": "input",
+                  "input_name": "checkpoint_path"
+                }
+              },
+              "depends_on": [
+                "inspect_reference"
+              ]
+            },
+            {
+              "role": "inspect_query",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_query",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "checkpoint_path": {
+                  "kind": "input",
+                  "input_name": "checkpoint_path"
+                }
+              },
+              "depends_on": [
+                "inspect_query"
+              ]
+            },
+            {
+              "role": "transfer",
+              "tool": "transfer_cell_labels",
+              "bindings": {
+                "reference_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "embedding_path"
+                },
+                "reference_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "cell_ids_path"
+                },
+                "reference_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "reference_label_key": {
+                  "kind": "input",
+                  "input_name": "reference_label_key"
+                },
+                "reference_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "species"
+                },
+                "reference_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "checkpoint_path"
+                },
+                "query_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "embedding_path"
+                },
+                "query_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "cell_ids_path"
+                },
+                "query_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "query_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "species"
+                },
+                "query_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "checkpoint_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "n_neighbors": {
+                  "kind": "input",
+                  "input_name": "n_neighbors"
+                },
+                "metric": {
+                  "kind": "input",
+                  "input_name": "metric"
+                },
+                "min_confidence": {
+                  "kind": "input",
+                  "input_name": "min_confidence"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "transfer_overwrite"
+                }
+              },
+              "depends_on": [
+                "inspect_reference",
+                "embed_reference",
+                "inspect_query",
+                "embed_query"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed_reference": 1,
+              "embed_query": 1,
+              "transfer": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect_reference": 1,
+              "inspect_query": 1
+            },
+            "terminal_roles": [
+              "transfer"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect_reference",
+                "embed_reference"
+              ],
+              [
+                "inspect_query",
+                "embed_query"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed_reference.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "embed_query.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.reference_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.query_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {
+              "transfer.overwrite": false
+            }
+          }
+        }
+      },
+      "intent_id": "C04",
+      "scientific_intent": "Reference to query label transfer",
+      "wording_variant": "base",
+      "input_profile_id": "c04-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "reference_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "embedding_analysis",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C05",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Evaluate this fixed transferred annotation against ordered ground truth.",
+          "inputs": {
+            "annotation_path": "/synthetic/query.label_transfer.h5ad",
+            "ground_truth_h5ad_path": "/synthetic/query-ground-truth.h5ad",
+            "ground_truth_label_key": "celltype",
+            "output_dir": "/synthetic/annotation-eval",
+            "overwrite": false
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "cell-annotation-evaluation",
+          "steps": [
+            {
+              "role": "evaluate_annotation",
+              "tool": "evaluate_cell_annotation",
+              "bindings": {
+                "annotation_path": {
+                  "kind": "input",
+                  "input_name": "annotation_path"
+                },
+                "ground_truth_h5ad_path": {
+                  "kind": "input",
+                  "input_name": "ground_truth_h5ad_path"
+                },
+                "ground_truth_label_key": {
+                  "kind": "input",
+                  "input_name": "ground_truth_label_key"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "evaluate_annotation": 1
+            },
+            "allowed_auxiliary_roles": {},
+            "terminal_roles": [
+              "evaluate_annotation"
+            ],
+            "forbidden_tools": [],
+            "required_order": [],
+            "binding_alternatives": {},
+            "optional_default_bindings": {
+              "evaluate_annotation.overwrite": false
+            }
+          }
+        }
+      },
+      "intent_id": "C05",
+      "scientific_intent": "Evaluate existing annotation",
+      "wording_variant": "base",
+      "input_profile_id": "c05-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "reference_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C06",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Transfer labels from the reference to the query, then evaluate that finalized annotation against query ground truth.",
+          "inputs": {
+            "reference_input_path": "/synthetic/reference.h5ad",
+            "query_input_path": "/synthetic/query.h5ad",
+            "output_dir": "/synthetic/transfer-output",
+            "species": "mouse",
+            "reference_label_key": "celltype",
+            "ground_truth_h5ad_path": "/synthetic/query-ground-truth.h5ad",
+            "ground_truth_label_key": "celltype"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-label-transfer-evaluation",
+          "steps": [
+            {
+              "role": "inspect_reference",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_reference",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                }
+              },
+              "depends_on": [
+                "inspect_reference"
+              ]
+            },
+            {
+              "role": "inspect_query",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_query",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                }
+              },
+              "depends_on": [
+                "inspect_query"
+              ]
+            },
+            {
+              "role": "transfer",
+              "tool": "transfer_cell_labels",
+              "bindings": {
+                "reference_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "embedding_path"
+                },
+                "reference_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "cell_ids_path"
+                },
+                "reference_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "reference_label_key": {
+                  "kind": "input",
+                  "input_name": "reference_label_key"
+                },
+                "reference_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "species"
+                },
+                "reference_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "checkpoint_path"
+                },
+                "query_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "embedding_path"
+                },
+                "query_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "cell_ids_path"
+                },
+                "query_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "query_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "species"
+                },
+                "query_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "checkpoint_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "inspect_reference",
+                "embed_reference",
+                "inspect_query",
+                "embed_query"
+              ]
+            },
+            {
+              "role": "evaluate_annotation",
+              "tool": "evaluate_cell_annotation",
+              "bindings": {
+                "annotation_path": {
+                  "kind": "ref",
+                  "producer_role": "transfer",
+                  "output_key": "annotation_path"
+                },
+                "ground_truth_h5ad_path": {
+                  "kind": "input",
+                  "input_name": "ground_truth_h5ad_path"
+                },
+                "ground_truth_label_key": {
+                  "kind": "input",
+                  "input_name": "ground_truth_label_key"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "transfer"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed_reference": 1,
+              "embed_query": 1,
+              "transfer": 1,
+              "evaluate_annotation": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect_reference": 1,
+              "inspect_query": 1
+            },
+            "terminal_roles": [
+              "evaluate_annotation"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect_reference",
+                "embed_reference"
+              ],
+              [
+                "inspect_query",
+                "embed_query"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed_reference.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "embed_query.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.reference_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.query_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {}
+          }
+        }
+      },
+      "intent_id": "C06",
+      "scientific_intent": "Transfer then evaluate query predictions",
+      "wording_variant": "base",
+      "input_profile_id": "c06-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "reference_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "embedding_analysis",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C07",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Validate mouse mm10 fragment counts from X, aggregate by donor, celltype and condition, then perform paired replicate-aware DA for T_cell: after versus before. Preserve the supplied sex and age covariates and all explicit declarations. Do not use cells as independent replicates.",
+          "inputs": {
+            "input_path": "/synthetic/raw-paired.h5ad",
+            "output_dir": "/synthetic/pseudobulk-output",
+            "matrix_source": "X",
+            "matrix_semantics": "fragment_counts",
+            "species": "mouse",
+            "genome_assembly": "mm10",
+            "coordinate_source": "none",
+            "replicate_key": "donor",
+            "group_key": "celltype",
+            "condition_key": "condition",
+            "group_source": "raw_obs",
+            "group_value": "T_cell",
+            "numerator_condition": "after",
+            "denominator_condition": "before",
+            "design_type": "paired",
+            "covariates": [
+              {
+                "key": "sex",
+                "kind": "categorical"
+              },
+              {
+                "key": "age",
+                "kind": "numeric"
+              }
+            ],
+            "covariate_keys": [
+              "sex",
+              "age"
+            ],
+            "overwrite": false
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "raw-to-replicate-differential-accessibility",
+          "steps": [
+            {
+              "role": "validate_feature_space",
+              "tool": "validate_scATAC_feature_space",
+              "bindings": {
+                "input_path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "matrix_source": {
+                  "kind": "input",
+                  "input_name": "matrix_source"
+                },
+                "matrix_semantics": {
+                  "kind": "input",
+                  "input_name": "matrix_semantics"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "genome_assembly": {
+                  "kind": "input",
+                  "input_name": "genome_assembly"
+                },
+                "coordinate_source": {
+                  "kind": "input",
+                  "input_name": "coordinate_source"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "build_pseudobulk",
+              "tool": "build_replicate_pseudobulk",
+              "bindings": {
+                "feature_space_path": {
+                  "kind": "ref",
+                  "producer_role": "validate_feature_space",
+                  "output_key": "feature_space_path"
+                },
+                "replicate_key": {
+                  "kind": "input",
+                  "input_name": "replicate_key"
+                },
+                "group_key": {
+                  "kind": "input",
+                  "input_name": "group_key"
+                },
+                "condition_key": {
+                  "kind": "input",
+                  "input_name": "condition_key"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "group_source": {
+                  "kind": "input",
+                  "input_name": "group_source"
+                },
+                "covariate_keys": {
+                  "kind": "input",
+                  "input_name": "covariate_keys"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": [
+                "validate_feature_space"
+              ]
+            },
+            {
+              "role": "differential_accessibility",
+              "tool": "run_replicate_differential_accessibility",
+              "bindings": {
+                "pseudobulk_path": {
+                  "kind": "ref",
+                  "producer_role": "build_pseudobulk",
+                  "output_key": "pseudobulk_path"
+                },
+                "group_value": {
+                  "kind": "input",
+                  "input_name": "group_value"
+                },
+                "condition_key": {
+                  "kind": "input",
+                  "input_name": "condition_key"
+                },
+                "numerator_condition": {
+                  "kind": "input",
+                  "input_name": "numerator_condition"
+                },
+                "denominator_condition": {
+                  "kind": "input",
+                  "input_name": "denominator_condition"
+                },
+                "design_type": {
+                  "kind": "input",
+                  "input_name": "design_type"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "covariates": {
+                  "kind": "input",
+                  "input_name": "covariates"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": [
+                "build_pseudobulk"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "validate_feature_space": 1,
+              "build_pseudobulk": 1,
+              "differential_accessibility": 1
+            },
+            "allowed_auxiliary_roles": {},
+            "terminal_roles": [
+              "differential_accessibility"
+            ],
+            "forbidden_tools": [],
+            "required_order": [],
+            "binding_alternatives": {},
+            "optional_default_bindings": {
+              "validate_feature_space.overwrite": false,
+              "build_pseudobulk.overwrite": false,
+              "differential_accessibility.overwrite": false
+            }
+          }
+        }
+      },
+      "intent_id": "C07",
+      "scientific_intent": "Replicate-aware DA from declared counts",
+      "wording_variant": "base",
+      "input_profile_id": "c07-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "differential_accessibility"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C08",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Run replicate-aware differential accessibility on this fixed pseudobulk artifact.",
+          "inputs": {
+            "pseudobulk_path": "/synthetic/fixed.pseudobulk.h5ad",
+            "group_value": "T_cell",
+            "condition_key": "condition",
+            "numerator_condition": "treated",
+            "denominator_condition": "control",
+            "design_type": "independent",
+            "output_dir": "/synthetic/da-output"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "replicate-differential-accessibility",
+          "steps": [
+            {
+              "role": "differential_accessibility",
+              "tool": "run_replicate_differential_accessibility",
+              "bindings": {
+                "pseudobulk_path": {
+                  "kind": "input",
+                  "input_name": "pseudobulk_path"
+                },
+                "group_value": {
+                  "kind": "input",
+                  "input_name": "group_value"
+                },
+                "condition_key": {
+                  "kind": "input",
+                  "input_name": "condition_key"
+                },
+                "numerator_condition": {
+                  "kind": "input",
+                  "input_name": "numerator_condition"
+                },
+                "denominator_condition": {
+                  "kind": "input",
+                  "input_name": "denominator_condition"
+                },
+                "design_type": {
+                  "kind": "input",
+                  "input_name": "design_type"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C08",
+      "scientific_intent": "DA from fixed pseudobulk",
+      "wording_variant": "base",
+      "input_profile_id": "c08-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "differential_accessibility"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C09",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Inspect these human 10x ATAC FASTQs, prepare canonical fragments, compute QC, select candidates with exactly the supplied explicit thresholds and build the full canonical cell-by-cCRE matrix. The supplied library context, hg38 parent references and QC reference are complete and matched. Do not add statistical cell calling or model inference.",
+          "inputs": {
+            "library_context_path": "/synthetic/library_context_path",
+            "library_context_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_bundle_path": "/synthetic/reference_bundle_path",
+            "reference_bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir",
+            "raw_input_paths": [
+              "/synthetic/R1.fastq",
+              "/synthetic/R2.fastq",
+              "/synthetic/R3.fastq"
+            ],
+            "species": "human",
+            "raw_assay": "TENX_ATAC",
+            "qc_reference_manifest_path": "/synthetic/qc_reference_manifest_path",
+            "qc_reference_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_manifest_path": "/synthetic/reference_manifest_path",
+            "reference_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "min_qc_fragment_records": 1000,
+            "min_tss_enrichment": "5",
+            "max_nucleosome_signal": "2"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "FASTQ to canonical matrix",
+          "steps": [
+            {
+              "role": "intake",
+              "tool": "inspect_raw_scATAC",
+              "bindings": {
+                "raw_input_paths": {
+                  "kind": "input",
+                  "input_name": "raw_input_paths"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "raw_assay": {
+                  "kind": "input",
+                  "input_name": "raw_assay"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "fragments",
+              "tool": "prepare_scATAC_fragments",
+              "bindings": {
+                "library_context_path": {
+                  "kind": "input",
+                  "input_name": "library_context_path"
+                },
+                "library_context_sha256": {
+                  "kind": "input",
+                  "input_name": "library_context_sha256"
+                },
+                "reference_bundle_path": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_path"
+                },
+                "reference_bundle_sha256": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "intake_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "intake",
+                  "output_key": "manifest_path"
+                },
+                "intake_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "intake",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "intake"
+              ]
+            },
+            {
+              "role": "qc",
+              "tool": "compute_scATAC_qc",
+              "bindings": {
+                "qc_reference_manifest_path": {
+                  "kind": "input",
+                  "input_name": "qc_reference_manifest_path"
+                },
+                "qc_reference_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "qc_reference_manifest_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "fragments_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "fragments",
+                  "output_key": "manifest_path"
+                },
+                "fragments_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "fragments",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "fragments"
+              ]
+            },
+            {
+              "role": "selection",
+              "tool": "select_scATAC_cells",
+              "bindings": {
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "min_qc_fragment_records": {
+                  "kind": "input",
+                  "input_name": "min_qc_fragment_records"
+                },
+                "min_tss_enrichment": {
+                  "kind": "input",
+                  "input_name": "min_tss_enrichment"
+                },
+                "max_nucleosome_signal": {
+                  "kind": "input",
+                  "input_name": "max_nucleosome_signal"
+                },
+                "barcode_qc_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "qc",
+                  "output_key": "manifest_path"
+                },
+                "barcode_qc_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "qc",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "qc"
+              ]
+            },
+            {
+              "role": "matrix",
+              "tool": "build_scATAC_cell_by_ccre",
+              "bindings": {
+                "reference_manifest_path": {
+                  "kind": "input",
+                  "input_name": "reference_manifest_path"
+                },
+                "reference_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "reference_manifest_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "fragments_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "fragments",
+                  "output_key": "manifest_path"
+                },
+                "fragments_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "fragments",
+                  "output_key": "manifest_sha256"
+                },
+                "selected_cells_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "selection",
+                  "output_key": "manifest_path"
+                },
+                "selected_cells_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "selection",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "fragments",
+                "selection"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C09",
+      "scientific_intent": "FASTQ to canonical matrix",
+      "wording_variant": "base",
+      "input_profile_id": "c09-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "raw_preprocessing"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C10",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Inspect the supplied qualified corrected-CB human scATAC BAM and prepare canonical fragments using the supplied source profile, library context and hg38 reference. Stop at fragments.",
+          "inputs": {
+            "library_context_path": "/synthetic/library_context_path",
+            "library_context_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_bundle_path": "/synthetic/reference_bundle_path",
+            "reference_bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir",
+            "raw_input_paths": [
+              "/synthetic/corrected.bam"
+            ],
+            "species": "human",
+            "raw_assay": "TENX_ATAC",
+            "source_path": "/synthetic/source_path",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_profile": "agent-cb-paired-atac.v1"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "Corrected-CB BAM to fragments",
+          "steps": [
+            {
+              "role": "intake",
+              "tool": "inspect_raw_scATAC",
+              "bindings": {
+                "raw_input_paths": {
+                  "kind": "input",
+                  "input_name": "raw_input_paths"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "raw_assay": {
+                  "kind": "input",
+                  "input_name": "raw_assay"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "fragments",
+              "tool": "prepare_scATAC_bam_fragments",
+              "bindings": {
+                "library_context_path": {
+                  "kind": "input",
+                  "input_name": "library_context_path"
+                },
+                "library_context_sha256": {
+                  "kind": "input",
+                  "input_name": "library_context_sha256"
+                },
+                "reference_bundle_path": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_path"
+                },
+                "reference_bundle_sha256": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_sha256"
+                },
+                "source_path": {
+                  "kind": "input",
+                  "input_name": "source_path"
+                },
+                "source_sha256": {
+                  "kind": "input",
+                  "input_name": "source_sha256"
+                },
+                "source_profile": {
+                  "kind": "input",
+                  "input_name": "source_profile"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "intake_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "intake",
+                  "output_key": "manifest_path"
+                },
+                "intake_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "intake",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "intake"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C10",
+      "scientific_intent": "Corrected-CB BAM to fragments",
+      "wording_variant": "base",
+      "input_profile_id": "c10-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "raw_preprocessing"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C11",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Adopt these external 10x fragments with the explicit source profile and library namespace, then compute barcode QC with the supplied matched reference. Stop at metrics; do not select cells.",
+          "inputs": {
+            "source_path": "/synthetic/source_path",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_bundle_path": "/synthetic/reference_bundle_path",
+            "reference_bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "qc_reference_manifest_path": "/synthetic/qc_reference_manifest_path",
+            "qc_reference_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir",
+            "source_profile": "10x-atac-fragments.v1",
+            "namespace": "library-a"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "External fragments to QC only",
+          "steps": [
+            {
+              "role": "import",
+              "tool": "import_scATAC_fragments",
+              "bindings": {
+                "source_path": {
+                  "kind": "input",
+                  "input_name": "source_path"
+                },
+                "source_sha256": {
+                  "kind": "input",
+                  "input_name": "source_sha256"
+                },
+                "reference_bundle_path": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_path"
+                },
+                "reference_bundle_sha256": {
+                  "kind": "input",
+                  "input_name": "reference_bundle_sha256"
+                },
+                "source_profile": {
+                  "kind": "input",
+                  "input_name": "source_profile"
+                },
+                "namespace": {
+                  "kind": "input",
+                  "input_name": "namespace"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "qc",
+              "tool": "compute_scATAC_qc",
+              "bindings": {
+                "qc_reference_manifest_path": {
+                  "kind": "input",
+                  "input_name": "qc_reference_manifest_path"
+                },
+                "qc_reference_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "qc_reference_manifest_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "fragments_manifest_path": {
+                  "kind": "ref",
+                  "producer_role": "import",
+                  "output_key": "manifest_path"
+                },
+                "fragments_manifest_sha256": {
+                  "kind": "ref",
+                  "producer_role": "import",
+                  "output_key": "manifest_sha256"
+                }
+              },
+              "depends_on": [
+                "import"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C11",
+      "scientific_intent": "External fragments to QC only",
+      "wording_variant": "base",
+      "input_profile_id": "c11-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "raw_preprocessing"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C12",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Adopt the supplied exact full canonical mouse mm10 cell-by-cCRE signed-int64 CSR matrix, declared fragment_counts. Preserve its ordered cells and complete reference vocabulary. Do not project ordinary peaks or invent preprocessing history.",
+          "inputs": {
+            "source_path": "/synthetic/source_path",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_manifest_path": "/synthetic/reference_manifest_path",
+            "reference_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir",
+            "species": "mouse",
+            "assembly": "mm10",
+            "matrix_semantics": "fragment_counts"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "Exact canonical matrix adoption",
+          "steps": [
+            {
+              "role": "adopt",
+              "tool": "adopt_scATAC_cell_by_ccre",
+              "bindings": {
+                "source_path": {
+                  "kind": "input",
+                  "input_name": "source_path"
+                },
+                "source_sha256": {
+                  "kind": "input",
+                  "input_name": "source_sha256"
+                },
+                "reference_manifest_path": {
+                  "kind": "input",
+                  "input_name": "reference_manifest_path"
+                },
+                "reference_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "reference_manifest_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "assembly": {
+                  "kind": "input",
+                  "input_name": "assembly"
+                },
+                "matrix_semantics": {
+                  "kind": "input",
+                  "input_name": "matrix_semantics"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C12",
+      "scientific_intent": "Exact canonical matrix adoption",
+      "wording_variant": "base",
+      "input_profile_id": "c12-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "exact_matrix_adoption"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C13",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Perform primary MAESTRO marker annotation on this already accepted canonical fragment-record-count matrix using independent ordered groups and pinned human hg38 PBMC resources/context bound by the supplied complete annotation specification. Do not cluster or invoke validators.",
+          "inputs": {
+            "matrix_manifest_path": "/synthetic/matrix_manifest_path",
+            "matrix_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "annotation_spec_path": "/synthetic/annotation_spec_path",
+            "annotation_spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "Primary marker annotation",
+          "steps": [
+            {
+              "role": "annotation",
+              "tool": "annotate_scATAC_cell_types",
+              "bindings": {
+                "matrix_manifest_path": {
+                  "kind": "input",
+                  "input_name": "matrix_manifest_path"
+                },
+                "matrix_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "matrix_manifest_sha256"
+                },
+                "annotation_spec_path": {
+                  "kind": "input",
+                  "input_name": "annotation_spec_path"
+                },
+                "annotation_spec_sha256": {
+                  "kind": "input",
+                  "input_name": "annotation_spec_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C13",
+      "scientific_intent": "Primary marker annotation",
+      "wording_variant": "base",
+      "input_profile_id": "c13-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "marker_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C14",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Inspect the supplied processed H5AD and independently assess the supplied human 10x ATAC FASTQs for readiness. They are separate datasets. Do not combine, transform or preprocess either.",
+          "inputs": {
+            "raw_input_paths": [
+              "/synthetic/R1.fastq",
+              "/synthetic/R2.fastq",
+              "/synthetic/R3.fastq"
+            ],
+            "species": "human",
+            "raw_assay": "TENX_ATAC",
+            "input_path": "/synthetic/processed.h5ad",
+            "output_dir": "/synthetic/out"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "Independent processed and raw inspections",
+          "steps": [
+            {
+              "role": "processed",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "raw",
+              "tool": "inspect_raw_scATAC",
+              "bindings": {
+                "raw_input_paths": {
+                  "kind": "input",
+                  "input_name": "raw_input_paths"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "raw_assay": {
+                  "kind": "input",
+                  "input_name": "raw_assay"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C14",
+      "scientific_intent": "Independent processed and raw inspections",
+      "wording_variant": "base",
+      "input_profile_id": "c14-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "processed_inspection",
+          "raw_preprocessing"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C15",
+        "tags": [
+          "failure",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Select candidate cells from the supplied QC artifact. I have not supplied minimum depth or TSS thresholds. Do not invent these indispensable scientific choices or perform partial work; decline until they are supplied.",
+          "inputs": {
+            "barcode_qc_manifest_path": "/synthetic/barcode_qc_manifest_path",
+            "barcode_qc_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir"
+          }
+        },
+        "expected": {
+          "outcome": "failure",
+          "workflow": "QC selection missing thresholds",
+          "steps": [],
+          "error_codes": [
+            "UNSUPPORTED_REQUEST",
+            "MISSING_REQUIRED_SOURCE"
+          ],
+          "preflight_valid": false
+        }
+      },
+      "intent_id": "C15",
+      "scientific_intent": "QC selection missing thresholds",
+      "wording_variant": "base",
+      "input_profile_id": "c15-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "raw_preprocessing"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": [
+        "min_qc_fragment_records",
+        "min_tss_enrichment"
+      ]
+    },
+    {
+      "case": {
+        "id": "C16",
+        "tags": [
+          "failure",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Embed reference and query and transfer labels. The generic device setting is intentionally unresolved: I have not decided whether it applies to reference, query or both. Do not choose its scope or ignore the requested setting; decline until clarified.",
+          "inputs": {
+            "reference_input_path": "/synthetic/reference.h5ad",
+            "query_input_path": "/synthetic/query.h5ad",
+            "output_dir": "/synthetic/transfer-output",
+            "species": "mouse",
+            "reference_label_key": "celltype",
+            "checkpoint_path": "/synthetic/shared.ckpt",
+            "n_neighbors": 25,
+            "metric": "cosine",
+            "min_confidence": 0.7,
+            "transfer_overwrite": false,
+            "device": "cpu"
+          }
+        },
+        "expected": {
+          "outcome": "failure",
+          "workflow": "Unresolved optional parameter scope",
+          "steps": [],
+          "error_codes": [
+            "UNSUPPORTED_REQUEST",
+            "AMBIGUOUS_OPTIONAL_INPUT_SCOPE"
+          ],
+          "preflight_valid": false
+        }
+      },
+      "intent_id": "C16",
+      "scientific_intent": "Unresolved optional parameter scope",
+      "wording_variant": "base",
+      "input_profile_id": "c16-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "reference_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "embedding_analysis",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": [
+        "device"
+      ]
+    },
+    {
+      "case": {
+        "id": "C17",
+        "tags": [
+          "unsupported",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Convert this ordinary cell-by-peak matrix to canonical cCRE counts by overlap, adopt it, and immediately marker-annotate that new external matrix. No prior accepted canonical matrix or independent groups exist. All stages are mandatory; partial completion is unacceptable.",
+          "inputs": {
+            "source_path": "/synthetic/ordinary-peaks.h5ad",
+            "output_dir": "/synthetic/out"
+          }
+        },
+        "expected": {
+          "outcome": "unsupported",
+          "workflow": "Unsupported peak projection and annotation composition",
+          "steps": [],
+          "error_codes": [
+            "UNSUPPORTED_REQUEST"
+          ],
+          "preflight_valid": false
+        }
+      },
+      "intent_id": "C17",
+      "scientific_intent": "Unsupported peak projection and annotation composition",
+      "wording_variant": "base",
+      "input_profile_id": "c17-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C18",
+        "tags": [
+          "unsupported",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Normalize RNA-only gene expression, select highly variable genes and infer RNA velocity. No scATAC analysis is requested.",
+          "inputs": {
+            "rna_input_path": "/synthetic/rna.h5ad",
+            "output_dir": "/synthetic/out"
+          }
+        },
+        "expected": {
+          "outcome": "unsupported",
+          "workflow": "RNA-only unsupported",
+          "steps": [],
+          "error_codes": [
+            "UNSUPPORTED_REQUEST"
+          ],
+          "preflight_valid": false
+        }
+      },
+      "intent_id": "C18",
+      "scientific_intent": "RNA-only unsupported",
+      "wording_variant": "base",
+      "input_profile_id": "c18-inputs-v1",
+      "scope": {
+        "required_coverage": [],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": true
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C02-p1",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Create EpiZoo cell representations for mouse, derive Leiden groups from their neighbor graph, and give a UMAP of the clustered dataset. Keep the explicit embedding device and clustering resolution; checking the input first is optional.",
+          "inputs": {
+            "input_path": "/synthetic/downstream-paraphrase.h5ad",
+            "output_dir": "/synthetic/output-a",
+            "species": "mouse",
+            "device": "cpu",
+            "resolution": 0.7
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-downstream-analysis",
+          "steps": [
+            {
+              "role": "inspect",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "device": {
+                  "kind": "input",
+                  "input_name": "device"
+                }
+              },
+              "depends_on": [
+                "inspect"
+              ]
+            },
+            {
+              "role": "neighbors",
+              "tool": "build_cell_neighbors",
+              "bindings": {
+                "embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "embedding_path"
+                },
+                "cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed",
+                  "output_key": "cell_ids_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "embed"
+              ]
+            },
+            {
+              "role": "cluster",
+              "tool": "cluster_cells",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "neighbors",
+                  "output_key": "analysis_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "resolution": {
+                  "kind": "input",
+                  "input_name": "resolution"
+                }
+              },
+              "depends_on": [
+                "neighbors"
+              ]
+            },
+            {
+              "role": "umap",
+              "tool": "compute_cell_umap",
+              "bindings": {
+                "analysis_path": {
+                  "kind": "ref",
+                  "producer_role": "cluster",
+                  "output_key": "analysis_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": [
+                "cluster"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed": 1,
+              "neighbors": 1,
+              "cluster": 1,
+              "umap": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect": 1
+            },
+            "terminal_roles": [
+              "umap"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect",
+                "embed"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {}
+          }
+        }
+      },
+      "intent_id": "C02",
+      "scientific_intent": "EpiZoo clustering and UMAP",
+      "wording_variant": "paraphrase",
+      "input_profile_id": "c02-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "embedding_analysis"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C04-p1",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Label the query mouse cells from the reference celltype annotations after embedding each cohort separately with the shared supplied checkpoint. Retain the provided transfer settings for neighbors, distance, confidence and overwrite. Input inspections are optional.",
+          "inputs": {
+            "reference_input_path": "/synthetic/reference.h5ad",
+            "query_input_path": "/synthetic/query.h5ad",
+            "output_dir": "/synthetic/transfer-output",
+            "species": "mouse",
+            "reference_label_key": "celltype",
+            "checkpoint_path": "/synthetic/shared.ckpt",
+            "n_neighbors": 25,
+            "metric": "cosine",
+            "min_confidence": 0.7,
+            "transfer_overwrite": false
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "epizoo-label-transfer",
+          "steps": [
+            {
+              "role": "inspect_reference",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_reference",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "checkpoint_path": {
+                  "kind": "input",
+                  "input_name": "checkpoint_path"
+                }
+              },
+              "depends_on": [
+                "inspect_reference"
+              ]
+            },
+            {
+              "role": "inspect_query",
+              "tool": "inspect_scATAC",
+              "bindings": {
+                "path": {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "embed_query",
+              "tool": "epizoo_embed_cells",
+              "bindings": {
+                "input_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "checkpoint_path": {
+                  "kind": "input",
+                  "input_name": "checkpoint_path"
+                }
+              },
+              "depends_on": [
+                "inspect_query"
+              ]
+            },
+            {
+              "role": "transfer",
+              "tool": "transfer_cell_labels",
+              "bindings": {
+                "reference_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "embedding_path"
+                },
+                "reference_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "cell_ids_path"
+                },
+                "reference_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                },
+                "reference_label_key": {
+                  "kind": "input",
+                  "input_name": "reference_label_key"
+                },
+                "reference_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "species"
+                },
+                "reference_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_reference",
+                  "output_key": "checkpoint_path"
+                },
+                "query_embedding_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "embedding_path"
+                },
+                "query_cell_ids_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "cell_ids_path"
+                },
+                "query_h5ad_path": {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                },
+                "query_species": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "species"
+                },
+                "query_checkpoint_path": {
+                  "kind": "ref",
+                  "producer_role": "embed_query",
+                  "output_key": "checkpoint_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "n_neighbors": {
+                  "kind": "input",
+                  "input_name": "n_neighbors"
+                },
+                "metric": {
+                  "kind": "input",
+                  "input_name": "metric"
+                },
+                "min_confidence": {
+                  "kind": "input",
+                  "input_name": "min_confidence"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "transfer_overwrite"
+                }
+              },
+              "depends_on": [
+                "inspect_reference",
+                "embed_reference",
+                "inspect_query",
+                "embed_query"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "embed_reference": 1,
+              "embed_query": 1,
+              "transfer": 1
+            },
+            "allowed_auxiliary_roles": {
+              "inspect_reference": 1,
+              "inspect_query": 1
+            },
+            "terminal_roles": [
+              "transfer"
+            ],
+            "forbidden_tools": [],
+            "required_order": [
+              [
+                "inspect_reference",
+                "embed_reference"
+              ],
+              [
+                "inspect_query",
+                "embed_query"
+              ]
+            ],
+            "binding_alternatives": {
+              "embed_reference.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "embed_query.input_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.reference_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "reference_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_reference",
+                  "output_key": "input_path"
+                }
+              ],
+              "transfer.query_h5ad_path": [
+                {
+                  "kind": "input",
+                  "input_name": "query_input_path"
+                },
+                {
+                  "kind": "ref",
+                  "producer_role": "inspect_query",
+                  "output_key": "input_path"
+                }
+              ]
+            },
+            "optional_default_bindings": {
+              "transfer.overwrite": false
+            }
+          }
+        }
+      },
+      "intent_id": "C04",
+      "scientific_intent": "Reference to query label transfer",
+      "wording_variant": "paraphrase",
+      "input_profile_id": "c04-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "reference_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [
+          "processed_inspection"
+        ],
+        "unrelated_families": [
+          "embedding_analysis",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C07-p1",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "For T_cell, compare after against before using paired donors, with sex and age as the declared covariates. Start from declared mouse mm10 fragment counts in X, validate them and sum by donor, celltype and condition before replicate-aware DA. Preserve every supplied declaration; cells are not replicates.",
+          "inputs": {
+            "input_path": "/synthetic/raw-paired.h5ad",
+            "output_dir": "/synthetic/pseudobulk-output",
+            "matrix_source": "X",
+            "matrix_semantics": "fragment_counts",
+            "species": "mouse",
+            "genome_assembly": "mm10",
+            "coordinate_source": "none",
+            "replicate_key": "donor",
+            "group_key": "celltype",
+            "condition_key": "condition",
+            "group_source": "raw_obs",
+            "group_value": "T_cell",
+            "numerator_condition": "after",
+            "denominator_condition": "before",
+            "design_type": "paired",
+            "covariates": [
+              {
+                "key": "sex",
+                "kind": "categorical"
+              },
+              {
+                "key": "age",
+                "kind": "numeric"
+              }
+            ],
+            "covariate_keys": [
+              "sex",
+              "age"
+            ],
+            "overwrite": false
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "raw-to-replicate-differential-accessibility",
+          "steps": [
+            {
+              "role": "validate_feature_space",
+              "tool": "validate_scATAC_feature_space",
+              "bindings": {
+                "input_path": {
+                  "kind": "input",
+                  "input_name": "input_path"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "matrix_source": {
+                  "kind": "input",
+                  "input_name": "matrix_source"
+                },
+                "matrix_semantics": {
+                  "kind": "input",
+                  "input_name": "matrix_semantics"
+                },
+                "species": {
+                  "kind": "input",
+                  "input_name": "species"
+                },
+                "genome_assembly": {
+                  "kind": "input",
+                  "input_name": "genome_assembly"
+                },
+                "coordinate_source": {
+                  "kind": "input",
+                  "input_name": "coordinate_source"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": []
+            },
+            {
+              "role": "build_pseudobulk",
+              "tool": "build_replicate_pseudobulk",
+              "bindings": {
+                "feature_space_path": {
+                  "kind": "ref",
+                  "producer_role": "validate_feature_space",
+                  "output_key": "feature_space_path"
+                },
+                "replicate_key": {
+                  "kind": "input",
+                  "input_name": "replicate_key"
+                },
+                "group_key": {
+                  "kind": "input",
+                  "input_name": "group_key"
+                },
+                "condition_key": {
+                  "kind": "input",
+                  "input_name": "condition_key"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "group_source": {
+                  "kind": "input",
+                  "input_name": "group_source"
+                },
+                "covariate_keys": {
+                  "kind": "input",
+                  "input_name": "covariate_keys"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": [
+                "validate_feature_space"
+              ]
+            },
+            {
+              "role": "differential_accessibility",
+              "tool": "run_replicate_differential_accessibility",
+              "bindings": {
+                "pseudobulk_path": {
+                  "kind": "ref",
+                  "producer_role": "build_pseudobulk",
+                  "output_key": "pseudobulk_path"
+                },
+                "group_value": {
+                  "kind": "input",
+                  "input_name": "group_value"
+                },
+                "condition_key": {
+                  "kind": "input",
+                  "input_name": "condition_key"
+                },
+                "numerator_condition": {
+                  "kind": "input",
+                  "input_name": "numerator_condition"
+                },
+                "denominator_condition": {
+                  "kind": "input",
+                  "input_name": "denominator_condition"
+                },
+                "design_type": {
+                  "kind": "input",
+                  "input_name": "design_type"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                },
+                "covariates": {
+                  "kind": "input",
+                  "input_name": "covariates"
+                },
+                "overwrite": {
+                  "kind": "input",
+                  "input_name": "overwrite"
+                }
+              },
+              "depends_on": [
+                "build_pseudobulk"
+              ]
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true,
+          "semantic": {
+            "required_roles": {
+              "validate_feature_space": 1,
+              "build_pseudobulk": 1,
+              "differential_accessibility": 1
+            },
+            "allowed_auxiliary_roles": {},
+            "terminal_roles": [
+              "differential_accessibility"
+            ],
+            "forbidden_tools": [],
+            "required_order": [],
+            "binding_alternatives": {},
+            "optional_default_bindings": {
+              "validate_feature_space.overwrite": false,
+              "build_pseudobulk.overwrite": false,
+              "differential_accessibility.overwrite": false
+            }
+          }
+        }
+      },
+      "intent_id": "C07",
+      "scientific_intent": "Replicate-aware DA from declared counts",
+      "wording_variant": "paraphrase",
+      "input_profile_id": "c07-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "differential_accessibility"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "raw_preprocessing",
+          "exact_matrix_adoption",
+          "marker_annotation"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    },
+    {
+      "case": {
+        "id": "C13-p1",
+        "tags": [
+          "plan",
+          "scoped-v4"
+        ],
+        "request": {
+          "prompt": "Use the supplied complete annotation specification to assign primary MAESTRO marker labels to independent ordered groups on the previously accepted canonical fragment-record-count matrix. Its pinned resources and context specify human hg38 PBMC. Neither clustering nor validators are requested.",
+          "inputs": {
+            "matrix_manifest_path": "/synthetic/matrix_manifest_path",
+            "matrix_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "annotation_spec_path": "/synthetic/annotation_spec_path",
+            "annotation_spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "output_dir": "/synthetic/output_dir"
+          }
+        },
+        "expected": {
+          "outcome": "plan",
+          "workflow": "Primary marker annotation",
+          "steps": [
+            {
+              "role": "annotation",
+              "tool": "annotate_scATAC_cell_types",
+              "bindings": {
+                "matrix_manifest_path": {
+                  "kind": "input",
+                  "input_name": "matrix_manifest_path"
+                },
+                "matrix_manifest_sha256": {
+                  "kind": "input",
+                  "input_name": "matrix_manifest_sha256"
+                },
+                "annotation_spec_path": {
+                  "kind": "input",
+                  "input_name": "annotation_spec_path"
+                },
+                "annotation_spec_sha256": {
+                  "kind": "input",
+                  "input_name": "annotation_spec_sha256"
+                },
+                "output_dir": {
+                  "kind": "input",
+                  "input_name": "output_dir"
+                }
+              },
+              "depends_on": []
+            }
+          ],
+          "error_codes": [],
+          "preflight_valid": true
+        }
+      },
+      "intent_id": "C13",
+      "scientific_intent": "Primary marker annotation",
+      "wording_variant": "paraphrase",
+      "input_profile_id": "c13-inputs-v1",
+      "scope": {
+        "required_coverage": [
+          "marker_annotation"
+        ],
+        "alternative_coverage_sets": [],
+        "plausible_optional_families": [],
+        "unrelated_families": [
+          "processed_inspection",
+          "embedding_analysis",
+          "reference_annotation",
+          "differential_accessibility",
+          "raw_preprocessing",
+          "exact_matrix_adoption"
+        ],
+        "expect_unsupported": false
+      },
+      "expected_rejection_targets": []
+    }
+  ]
+}

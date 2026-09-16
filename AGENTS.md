@@ -901,11 +901,13 @@ Persisted diagnostics exclude raw prompts, structured input values/paths, provid
 exception prose, HTTP bodies/headers, request IDs, credentials, and tokens.
 Run-state schema remains v3; v3 diagnostic and recovery behavior is unchanged.
 
-The existing `benchmarks/planner/` harness is explicitly pinned to wire v3,
-including replay, binding scoring, and diagnostics; it is not a v4 benchmark.
-V4 correctness is covered separately by semantic-v4 acceptance tests.
+The historical `benchmarks/planner/` track remains pinned to wire v3, including
+replay, binding scoring and diagnostics. Its evaluation-only `--track scoped-v4`
+extension separately measures Stage A, Stage B, compiler/preflight, transport and
+recovery with report schema 5; see [benchmark documentation](benchmarks/planner/README.md).
+V4 correctness also remains covered by semantic-v4 acceptance tests.
 The deterministic offline harness uses synthetic requests
-and PLAN_ONLY with zero scientific calls. Report schema v4 separates hard
+and PLAN_ONLY with zero scientific calls. Historical report schema v4 separates hard
 semantic correctness from canonical workflow conformance using structural,
 nonpositional matching, and distinguishes first-attempt, transport-recovered,
 repair-recovered, and configured-failover success. Unsafe provenance swaps,

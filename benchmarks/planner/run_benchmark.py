@@ -19,19 +19,17 @@ from benchmarks.planner.benchmark import (
     run_benchmark,
 )
 
-
 _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CASES = _ROOT / "benchmarks" / "planner" / "cases.json"
-_DEFAULT_REPLAYS = (
-    _ROOT / "tests" / "benchmarks" / "fixtures" / "offline_replays.json"
-)
+_DEFAULT_REPLAYS = _ROOT / "tests" / "benchmarks" / "fixtures" / "offline_replays.json"
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the provider-neutral LLM planner robustness benchmark."
     )
-    parser.add_argument("--cases", type=Path, default=_DEFAULT_CASES)
+    parser.add_argument("--track", choices=("v3", "scoped-v4"), default="v3")
+    parser.add_argument("--cases", type=Path)
     parser.add_argument("--replays", type=Path, default=_DEFAULT_REPLAYS)
     parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--repeat", type=int, default=1)
@@ -61,8 +59,52 @@ def _live_model(provider: str | None, model: str | None, timeout: float):
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    cases = load_cases(arguments.cases)
     selected = frozenset(arguments.case_id) if arguments.case_id else None
+    if arguments.track == "scoped-v4":
+        from benchmarks.planner.scoped import (
+            DEFAULT_CASES,
+            LIVE_SMOKE,
+            load_scoped_cases,
+            run_scoped_benchmark,
+        )
+
+        if arguments.replays != _DEFAULT_REPLAYS:
+            raise ValueError(
+                "Scoped-v4 replays use the Python replay_outcomes API, not v3 fixtures."
+            )
+        cases = load_scoped_cases(arguments.cases or DEFAULT_CASES)
+        if arguments.live:
+            if selected is None:
+                selected = frozenset(LIVE_SMOKE)
+            profile, model = _live_model(
+                arguments.provider, arguments.model, arguments.timeout
+            )
+        else:
+            if arguments.provider is not None or arguments.model is not None:
+                raise ValueError(
+                    "--provider and --model require the explicit --live flag."
+                )
+            profile = model = None
+        report = run_scoped_benchmark(
+            cases,
+            model=model,
+            model_profile=profile,
+            repetitions=arguments.repeat,
+            selected_case_ids=selected,
+        )
+    else:
+        report = _run_v3(arguments, selected)
+    rendered = json.dumps(
+        report.to_dict(), ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True
+    )
+    if arguments.output is not None:
+        arguments.output.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
+    return 0
+
+
+def _run_v3(arguments, selected):
+    cases = load_cases(arguments.cases or _DEFAULT_CASES)
     if arguments.live:
         profile, model = _live_model(
             arguments.provider, arguments.model, arguments.timeout
@@ -83,17 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repetitions=arguments.repeat,
             selected_case_ids=selected,
         )
-    rendered = json.dumps(
-        report.to_dict(),
-        ensure_ascii=False,
-        allow_nan=False,
-        indent=2,
-        sort_keys=True,
-    )
-    if arguments.output is not None:
-        arguments.output.write_text(rendered + "\n", encoding="utf-8")
-    print(rendered)
-    return 0
+    return report
 
 
 if __name__ == "__main__":

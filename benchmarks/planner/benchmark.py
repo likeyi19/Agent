@@ -674,7 +674,11 @@ def oracle_response(case: BenchmarkCase) -> str:
 
 
 class ScriptedPlanningModel:
-    """One-response offline PlanningModel with no provider dependency."""
+    """Offline detailed-response fixture; v4 explicitly selects every family.
+
+    ``calls`` counts detailed responses; ``scope_calls`` counts selection responses.
+    Production session accounting is exercised independently by Planner tests.
+    """
 
     model_id = "offline-scripted-m9.1"
 
@@ -683,6 +687,10 @@ class ScriptedPlanningModel:
         self.calls = 0
 
     def complete(self, *, prompt: str, response_schema: Mapping[str, object]) -> str:
+        if "selection_schema_version" in response_schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", 0) + 1
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": list(json.loads(prompt)["capabilities"])}})
         self.calls += 1
         json.loads(prompt)
         json.dumps(response_schema, allow_nan=False)

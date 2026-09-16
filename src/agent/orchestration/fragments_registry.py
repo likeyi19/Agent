@@ -88,7 +88,7 @@ def fragments_tool_spec():
         durable_hooks=DurableToolHooks(execute_fragments,recover_fragments),
         planning=_tool_planning(PlanningToolRole.OPERATION,
             'Prepare verified raw scATAC FASTQ sequencing into canonical fragments using repository-owned preprocessing policy.',
-            'Requires compatible intake, library-processing context, and reference artifacts. FASTQ only; no cell calling, QC, or cCRE matrix construction.'),
+            'Requires compatible intake, library-processing context, and reference artifacts. FASTQ only; no cell calling, QC, or cCRE matrix construction.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('fragments','scatac_fragments.v2',
                 (member('manifest_path'),member('manifest_sha256'))),)))

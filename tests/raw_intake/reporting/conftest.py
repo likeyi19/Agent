@@ -18,6 +18,10 @@ class RawModel:
         self.calls = 0
 
     def complete(self, **kwargs):
+        if "selection_schema_version" in kwargs["response_schema"].get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", 0) + 1
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": ["raw_preprocessing"]}})
         self.calls += 1
         return json.dumps({"schema_version": 4, "decision": {"kind": "plan", "steps": [
             {"step_id": "raw", "tool": "inspect_raw_scATAC", "sources": [

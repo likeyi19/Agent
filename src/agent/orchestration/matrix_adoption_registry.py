@@ -65,7 +65,7 @@ def matrix_adoption_tool_spec():
         durable_hooks=DurableToolHooks(public.execute_matrix,public.recover_matrix),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Adopt exact external canonical cell-by-cCRE H5AD.',
             'Requires full ordered reference vocabulary, unique source cells, canonical int64 CSR and explicit value semantics.',
-            'Conserves external values and identities. No peak projection, fragment/QC/selection lineage or model-readiness claim.'),
+            'Conserves external values and identities. No peak projection, fragment/QC/selection lineage or model-readiness claim.', capability_ids=('exact_matrix_adoption',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_ccre.external.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','matrix_path'),)),)))

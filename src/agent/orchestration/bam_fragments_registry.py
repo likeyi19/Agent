@@ -64,6 +64,6 @@ def bam_fragments_tool_spec():
         durable_hooks=DurableToolHooks(execute_bam_fragments,recover_bam_fragments),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Prepare qualified corrected-CB BAM into independently verified fragments v2.',
             'One source/group/library/namespace; paired inward primary alignments. Both MAPQ>=30 excluding 255 before aggregation; exact +4/-5 once; duplicate-marked pairs retained.',
-            'All exact FAI contigs; no mitochondrial filter, barcode correction, cell calling, QC, matrix or model inference. Agent-defined policy, not Cell Ranger reproduction.'),
+            'All exact FAI contigs; no mitochondrial filter, barcode correction, cell calling, QC, matrix or model inference. Agent-defined policy, not Cell Ranger reproduction.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('fragments','scatac_fragments.v2',(member('manifest_path'),member('manifest_sha256'))),)))

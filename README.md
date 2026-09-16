@@ -408,15 +408,35 @@ The default LLM semantic wire-v4 path is:
 
 ```text
 AgentRequest
-→ registry-driven semantic planning catalog/prompt
-→ provider-neutral PlanningModel
-→ semantic wire v4
-→ strict parser
-→ SemanticPlanCandidate
-→ registry-derived deterministic semantic compiler
+→ LLM scope selection from compact capability descriptions
+→ immutable PlanningScope
+→ scoped detailed semantic catalog + scoped v4 response schema
+→ LLM semantic workflow planning
+→ strict v4 parser and scope admission
+→ existing full-registry semantic compiler
 → AgentPlan
 → whole-plan preflight/runtime
 ```
+
+Capability membership is declarative metadata on registered tools. The LLM
+selects relevant families with high recall; Agent code derives their exact tool
+union. `PlanningScope` controls visibility only, never execution authority or
+compatibility. No keyword routing, workflow recipes, producer completion, or
+canonical DAGs are introduced. The LLM still selects exact tools and composes
+the scientific workflow, owning natural-language intent and ambiguous scientific
+semantic choices. Agent retains compatibility, executable authority, preflight,
+execution, verification and durability. Both calls use the same configured provider-neutral
+`PlanningModel`; adapters remain generic prompt/schema completion adapters.
+
+Guarded real Groq `openai/gpt-oss-120b` PLAN_ONLY acceptance on 2026-09-16
+resolved the original inspection HTTP 413 blocker: S1 produced an `AgentPlan`
+and passed preflight in two calls. Live acceptance remains partial because later
+requests encountered HTTP 429. S2 selected the intended families but proposed an
+invalid source channel; the compiler correctly rejected it. A read-only audit
+matched the live prompt/schema fingerprints and confirmed scoped/full semantic
+parity, classifying S2 as `LLM_SEMANTIC_MISTAKE`; its repair was rate-limited.
+All six cases executed zero scientific tools. Selector recall and overall LLM
+planning quality remain future benchmark work; the entire live suite did not pass.
 
 The compiler deterministically lowers semantic choices into executable plan
 contracts. It derives only unique mappings explicitly authorized by reviewed
@@ -580,15 +600,24 @@ recovery-policy provenance blocks incompatible resume. Unknown error codes and
 verification failures fail closed; raw exception prose is sanitized. The
 downstream M6/M8 tools have no automatically retryable scientific codes.
 
-Planning recovery separately permits one initial provider call, either one
-same-profile transport retry or complete plan repair, and at most one explicitly
-configured final-profile failover: three logical calls maximum, with built-in
-SDK retries disabled. Interrupted planning is not replayed; only the final
-preflight-passing plan is durable. HTTP 413 is terminal
-`PROVIDER_REQUEST_TOO_LARGE`, distinct from retryable HTTP 429.
-Sanitized planning diagnostics use schema v3 for wire v3 and schema v4 for wire
-v4. The existing planner benchmark remains explicitly pinned to wire v3; its
-report schema v4 preserves historical scoring. These diagnostics and reports expose
+Scoped-v4 planning normally makes two provider calls: one scope selection and
+one detailed planning call. Stage A is one-shot and fail-closed: failure or an
+unsupported decision terminates planning without retry, repair, failover, or a
+full-catalog fallback. Stage B retains one mutually exclusive same-profile
+transport retry or complete plan repair, then at most one configured final-profile
+failover. Every Stage-B attempt uses the same frozen scope. One coordinator
+accounts for the complete session under `planning-recovery-scoped-v4-v1`, with
+at most four logical provider calls. Explicit v3 retains its three-call policy;
+built-in SDK retries remain disabled. HTTP 413 is terminal at either stage.
+
+Scoped diagnostics use schema 5 while the scientific planning wire stays v4.
+They distinguish selection/detail phases, offered capability/tool IDs, scope and
+prompt/schema fingerprints, global call indices and the session ceiling. V3
+diagnostics remain schema 3. Only the final preflight-passing plan is durable;
+selection trace is provenance, not resumable planning state. Interrupted planning
+is not replayed and resume remains planner/provider-free. The existing planner
+benchmark remains explicitly pinned to wire v3; its report schema v4 preserves
+historical scoring. These diagnostics and reports expose
 attempt provenance and distinguish hard semantic correctness from canonical
 workflow conformance and first-attempt versus recovered success.
 

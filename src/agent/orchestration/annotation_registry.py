@@ -75,7 +75,7 @@ def annotation_tool_spec():
         durable_hooks=DurableToolHooks(public.execute_annotation,public.recover_annotation),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Annotate scATAC groups.',
             'Accepted canonical fragment-record matrix; scatac-annotation-inputs.v1 pins run/step, exact group TSV, species/assembly, context and genes/signatures.',
-            'MAESTRO annotation; retain unresolved/ambiguous cells. No clustering, inferred biology, external counts, peaks or required validation.'),
+            'MAESTRO annotation; retain unresolved/ambiguous cells. No clustering, inferred biology, external counts, peaks or required validation.', capability_ids=('marker_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('annotation','scatac_cell_type_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','annotated_h5ad_path'),)),)))

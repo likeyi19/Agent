@@ -64,6 +64,11 @@ class Model:
     def __init__(self,payload): self.payload=payload
     def complete(self,*,prompt,response_schema):
         import json
+        # This fixture scripts detailed planning; selection is separately recorded.
+        if "selection_schema_version" in response_schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", []) + [(prompt, response_schema)]
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": list(json.loads(prompt)["capabilities"])}})
         return json.dumps(self.payload)
 
 

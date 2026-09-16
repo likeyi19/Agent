@@ -21,6 +21,7 @@ from .registry import (
 from .semantic_wire_v4 import (
     SEMANTIC_WIRE_SCHEMA_VERSION,
     _planner_visible_tool_names,
+    _visible_tool_names,
 )
 
 if TYPE_CHECKING:
@@ -226,6 +227,7 @@ def _tool_catalog(
 def build_semantic_planning_catalog(
     request: AgentRequest,
     registry: ToolRegistry,
+    *, visible_tool_names: tuple[str, ...] | None = None,
 ) -> Mapping[str, JsonValue]:
     """Project registry semantic authority into request-specific LLM context."""
 
@@ -234,6 +236,7 @@ def build_semantic_planning_catalog(
     if not isinstance(registry, ToolRegistry):
         raise TypeError("`registry` must be a ToolRegistry.")
     tool_names = _planner_visible_tool_names(registry)
+    visible_names = _visible_tool_names(registry, visible_tool_names)
     scoped_selector_destinations: dict[str, set[tuple[str, str]]] = {}
     for name in tool_names:
         semantic = registry.get(name).semantic_planning
@@ -286,7 +289,7 @@ def build_semantic_planning_catalog(
             name: _tool_catalog(
                 registry.get(name), request, deterministic_scoped_selectors
             )
-            for name in tool_names
+            for name in visible_names
         },
     }
 
@@ -295,6 +298,7 @@ def build_semantic_planning_prompt(
     request: AgentRequest,
     registry: ToolRegistry,
     *,
+    visible_tool_names: tuple[str, ...] | None = None,
     repair_context: PlanningRepairContext | None = None,
     failover_context: PlanningRepairContext | None = None,
 ) -> str:
@@ -303,7 +307,7 @@ def build_semantic_planning_prompt(
     if repair_context is not None and failover_context is not None:
         raise ValueError("Semantic prompt cannot contain repair and failover together.")
 
-    catalog = build_semantic_planning_catalog(request, registry)
+    catalog = build_semantic_planning_catalog(request, registry, visible_tool_names=visible_tool_names)
     # Lossless prompt-only labels; the public semantic catalog and compiler
     # retain their full mode names. No scientific guidance is omitted.
     mode_names = {

@@ -674,15 +674,66 @@ behavior remain compatible with the accepted v3 path.
 
 ```text
 AgentRequest
-→ registry-driven semantic planning catalog/prompt
+→ LLM scope selection from compact registered capability descriptions
+→ immutable PlanningScope
+→ scoped detailed semantic catalog + scoped semantic-v4 schema
 → provider-neutral PlanningModel.complete()
-→ semantic wire v4
-→ strict parser
+→ strict v4 parser and scope admission
 → SemanticPlanCandidate
-→ registry-derived deterministic semantic compiler
+→ existing full-registry semantic compiler
 → existing strict AgentPlan
 → whole-plan preflight / AgentRuntime / PlanExecutor / verifier
 ```
+
+### Capability-scoped two-stage planning
+
+Default v4 uses one-shot LLM scope selection followed by existing semantic
+workflow planning. `ToolPlanningSemantics.capability_ids` provides thin declarative
+membership; the active family index is derived from the actual `ToolRegistry`.
+Compact family descriptions are presentation metadata, not a second scientific
+registry. Every planner-visible v4 tool requires known family coverage before
+any provider call. Future tools normally require registration/metadata and their
+normal scientific contracts, not Planner algorithm changes.
+
+Current families are `processed_inspection`, `embedding_analysis`,
+`reference_annotation`, `differential_accessibility`, `raw_preprocessing`,
+`exact_matrix_adoption`, and `marker_annotation`. EpiZoo embedding belongs to both
+embedding analysis and reference annotation. Membership contains no workflow
+recipes, step order, dependencies, preferred producers, scientific defaults, or
+canonical DAGs. No keyword/regex routing or deterministic semantic selection
+enters the LLM path.
+
+Stage A receives only the original natural-language request, safe structured-input
+names/basic types, compact descriptions and selection instructions. Its closed
+`selection_schema_version=1` response is either `select` with unique known
+`capability_ids` or terminal `unsupported`, without reasoning. Multiple families
+are allowed without an arbitrary small limit. Unknown IDs, duplicates, extra
+fields, malformed or contradictory responses terminate planning. There is no
+selector recovery or full-catalog fallback.
+
+`PlanningScope` has only sorted unique capability IDs, the exact sorted union of
+registered visible tools, and an Agent-computed versioned fingerprint binding
+membership and selected metadata. It controls visibility only. The model never
+supplies expansion, fingerprint, execution order, arguments, or bindings. The
+same visibility set constrains catalog, schema, and parser admission; globally
+registered but unoffered tools are rejected before compilation. Every displayed
+tool retains its complete scientific guidance. Request-selector ambiguity is
+computed against the full registry before filtering, so narrowing cannot create
+new implicit bindings. No producers or dependencies are automatically added.
+
+The LLM owns natural-language intent, capability relevance, exact tool selection,
+scientific DAG composition and ambiguous scientific semantic choices. Agent code
+owns visibility validation, compatibility, executable authority, existing exact
+lowering, preflight, execution, verification and durability.
+`build_semantic_compiler_contract(full_registry)` remains authoritative; the
+compiler, AgentPlan, preflight, scientific tools, verification and durability
+semantics are unchanged. In particular, selecting raw preprocessing and marker
+annotation does not authorize a new matrix-to-annotation channel: M13 still
+requires an already accepted matrix, independent groups and explicit resources.
+
+Both stages use the same configured PlanningModel, with no separate routing or
+provider semantics. Stage B remains semantic wire v4, not a new wire version.
+Explicit v3 retains its complete-catalog single-stage behavior.
 
 The semantic catalog/prompt presents tool purpose, consumer/producer ports,
 request-source selectors, accepted upstream semantic types, lineage, scientific
@@ -691,10 +742,12 @@ input values are excluded (including paths, labels, conditions, checkpoints,
 output roots, arrays, and nested values); the natural-language request itself
 is passed to the model. The interface omits raw Python argument inventories,
 execution member/result-field names, binding objects, `StepOutputRef`, and
-reference-induced dependency serialization. The full scientific context is
-retained, including feature-space layer, coordinate, and semantics-metadata
-parameters. This can make the v4 prompt alone larger than v3; focused acceptance
-compares combined prompt/schema size instead. V4 is the default LLM wire.
+reference-induced dependency serialization. The full scientific context of each
+visible tool is retained, including feature-space layer, coordinate, and
+semantics-metadata parameters. Payload
+acceptance measures both scoped prompt/schema and the separately bounded compact
+selection request. Full-catalog generation remains available for projection tests
+and audits; it is not an automatic planning fallback.
 
 Wire v4 contains only a plan/unsupported decision, step identities, selected
 tools, semantic sources, and explicit control-only dependencies. The parser
@@ -703,6 +756,61 @@ step/source safety limits. Names and interface projections are registry- and
 request-derived, with no permanent hard-coded tool set. Semantic candidates do
 not grant execution authority: compiler legality and whole-plan preflight are
 still required.
+
+### Scoped planning payload measurements
+
+Offline measurements at the 20-tool baseline use `Inspect this scATAC dataset`
+and one `input_path` input, compact UTF-8 JSON, and the existing Groq-compatible
+Responses body wrapper. Stage A uses a 1,386-byte prompt, 693-byte schema and
+2,256-byte body. These are measurements, not provider byte limits or
+live-provider acceptance.
+
+| Detailed visibility | Prompt bytes | Schema bytes | Body bytes |
+| --- | ---: | ---: | ---: |
+| Full 20-tool baseline | 18,888 | 11,517 | 32,074 |
+| Processed inspection | 2,421 | 1,768 | 4,524 |
+| Inspection + embedding analysis/evaluation | 5,507 | 4,199 | 10,357 |
+| Raw preprocessing | 8,423 | 4,830 | 13,948 |
+| Marker annotation | 2,603 | 1,808 | 4,746 |
+| Exact external adoption | 3,145 | 1,843 | 5,371 |
+| Differential accessibility | 6,645 | 3,144 | 10,456 |
+| Raw preprocessing + marker annotation | 8,948 | 5,290 | 14,967 |
+
+The last row measures visibility, not support for a new scientific composition.
+Tests require scoped payload reduction and unchanged inspection payloads after
+unrelated tool registration, without encoding speculative provider ceilings.
+Selector recall and overall LLM planning quality remain separate benchmark work;
+the bounded live transport evidence below does not establish general acceptance.
+
+Scoped planning acceptance (2026-09-16, project `agent` Python environment):
+83 focused scope/v4/recovery/provider tests passed; the Planner/orchestration,
+provider, Application and benchmark regression passed 1,161 tests with three
+existing warnings; affected raw/matrix/annotation integration passed 433 tests
+with three guarded skips. The initial full run found 18 legacy scripted
+pseudobulk-fixture failures because their single response was still a Stage-B
+plan. Updating that one test helper to supply a scope response required no
+production changes; all 39 pseudobulk tests then passed. Final complete lightweight
+acceptance passed **3,899 tests, 83 skipped, seven existing warnings in 1,328.24
+seconds (exit 0)**, all `RUN_*` gates disabled and no exclusions. This offline
+acceptance made no live provider calls, production scientific recomputation, or
+accepted-artifact mutation.
+
+Subsequent guarded real Groq `openai/gpt-oss-120b` PLAN_ONLY acceptance resolved
+the original inspection HTTP 413 blocker: S1 selected `processed_inspection`,
+produced an `inspect_scATAC` AgentPlan and passed preflight in exactly two calls.
+Its Stage-B body was 4,600 bytes versus the same Application request's offline
+full-registry baseline of 32,309 bytes; these are not provider size limits.
+S2 selected inspection and embedding families but proposed `dataset` as the
+source channel for the neighbors `embedding` input. The compiler correctly
+rejected `WRONG_SOURCE_PORT`. A read-only audit reproduced the live prompt/schema
+fingerprints, confirmed complete scoped/full semantic parity, and classified this
+as `LLM_SEMANTIC_MISTAKE`, requiring no production correction. Its repair hit
+HTTP 429. S3 and S5 selected the intended raw/multi-family scopes but detailed
+planning was rate-limited; S4 was rate-limited at selection. S6 safely rejected
+RNA-only work. The six cases made 13 provider calls and zero scientific calls,
+with no Stage-A retry or scope expansion. The live suite is partial, not passed
+in full: HTTP 429 leaves LLM-quality evidence incomplete rather than establishing
+an architecture failure. Evaluation artifacts remain separate and untracked.
 
 ### Static target-port projection and Groq compatibility
 
@@ -750,12 +858,21 @@ intent, route, retry, repair, rank models, or execute science. No production
 model is hard-coded, and credentials remain environment/provider concerns,
 never profile, request, diagnostic, or benchmark data.
 
-V3 and v4 use the existing `PlanningRecoveryCoordinator`: one initial call,
-either one same-profile transport retry for explicit transient provider failure
-or one complete same-profile Plan repair for an objectively invalid candidate,
-and at most one explicitly configured secondary-profile failover as the final
-call. Retry and repair are mutually exclusive; failover cannot recover again;
-the ceiling is three logical `PlanningModel.complete()` calls. Built-in SDK
+V3 retains `planning-recovery-v3`: one initial call, either one same-profile
+transport retry for explicit transient provider failure or one complete
+same-profile Plan repair for an objectively invalid candidate, and at most one
+configured secondary-profile failover as the final call (three calls maximum).
+
+Scoped v4 uses `planning-recovery-scoped-v4-v1` in the same coordinator. Stage A
+has exactly one provider call after local validation and no recovery. Following
+accepted selection, Stage B preserves the above recovery sequence within the
+same frozen scope. Normal success uses two calls; the global hard ceiling is
+four calls, including selection. An explicitly supplied legacy policy is adapted
+by adding the one mandatory scope call; a scoped policy can lower its session
+ceiling to two or three. Retry and repair remain mutually exclusive; final
+failover cannot recover again. No independent per-stage recovery budgets exist.
+Actual provider invocation boundaries advance the counter; local projection or
+model-construction failures do not consume provider calls. Built-in SDK
 retries are disabled; custom models are responsible for hidden internal behavior.
 Application-owned LLM construction enables this bounded path automatically.
 Reliable HTTP 413 is terminal `PROVIDER_REQUEST_TOO_LARGE`, not retried or
@@ -768,11 +885,19 @@ interrupted planning is not automatically replayed, and resume after plan
 persistence is planner-free. This is separate from scientific same-step retry:
 `AgentError.recoverable` retains its M5.3 static eligibility meaning.
 
-Planning diagnostics use schema v3 for wire v3 and schema v4 for wire v4.
-Both record sanitized attempt order, profile/provider and safe
-model provenance/digests. V4 parser/compiler diagnostics can identify safe step,
-producer step, target/source port, tool, and input names. Persisted diagnostics
-exclude raw prompts, structured input values/paths, provider responses,
+Scoped planning diagnostics use schema 5 while Stage B remains wire v4. V3
+diagnostics remain schema 3; historical v4 diagnostics remain readable. Scoped
+records distinguish `scope_selection` (selection schema 1) from
+`detailed_planning` (wire 4), offered capability/tool IDs, accepted scope identity,
+prompt/schema digests, global call indices and session ceiling. Both record
+sanitized profile/provider/model provenance. V4 parser/compiler diagnostics can
+identify safe step, producer step, target/source port, tool, and input names.
+Cancellation is checked before and after Stage A and before each Stage-B call;
+accepted scope and call/recovery intent are checkpointed through the existing
+trace sink before proceeding. Checkpoint failure prevents the next call.
+Accepted scope trace is provenance only: interrupted planning never resumes
+selection or detail calls, and accepted-plan resume remains provider-free.
+Persisted diagnostics exclude raw prompts, structured input values/paths, provider responses,
 exception prose, HTTP bodies/headers, request IDs, credentials, and tokens.
 Run-state schema remains v3; v3 diagnostic and recovery behavior is unchanged.
 

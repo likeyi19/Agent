@@ -83,6 +83,6 @@ def external_fragments_tool_spec():
         planning=_tool_planning(PlanningToolRole.OPERATION,
             'Adopt explicitly declared external ATAC fragments into verified canonical fragments v2.',
             'Accept consistent five/six columns, plain/gzip/BGZF and bounded leading comments. Source profile, reference and namespace are explicit.',
-            'Preserve coordinates, read-pair support and strand; reject duplicate keys. No alignment, second shift, correction, filtering, cell calling or matrix construction. Historical processing remains declared.'),
+            'Preserve coordinates, read-pair support and strand; reject duplicate keys. No alignment, second shift, correction, filtering, cell calling or matrix construction. Historical processing remains declared.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             SemanticProducerPortSpec('fragments', 'scatac_fragments.v2', (member('manifest_path'), member('manifest_sha256'))),)))

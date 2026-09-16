@@ -37,6 +37,11 @@ class ScriptedSemanticModel:
         self.calls: list[tuple[str, object]] = []
 
     def complete(self, *, prompt: str, response_schema) -> str:
+        # This fixture scripts detailed planning; selection is separately recorded.
+        if "selection_schema_version" in response_schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", []) + [(prompt, response_schema)]
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": list(json.loads(prompt)["capabilities"])}})
         self.calls.append((prompt, response_schema))
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -236,7 +241,7 @@ def _diagnostics(result) -> list[dict[str, object]]:
     return [
         dict(event.details)
         for event in result.trace
-        if event.details.get("diagnostic_schema_version") == 4
+        if event.details.get("diagnostic_schema_version") == 5 and event.details.get("phase") == "detailed_planning"
     ]
 
 
@@ -334,9 +339,9 @@ def test_parse_failure_repairs_once_with_unchanged_semantic_context() -> None:
     assert diagnostic["required_correction"] == "regenerate_strict_wire_v4_json"
     assert raw not in json.dumps(result.to_dict())
     assert all(
-        item["diagnostic_schema_version"] == 4 for item in _diagnostics(result)
+        item["diagnostic_schema_version"] == 5 for item in _diagnostics(result)
     )
-    assert _diagnostics(result)[-1]["total_provider_call_count"] == 2
+    assert _diagnostics(result)[-1]["total_provider_call_count"] == 3
 
 
 def test_unauthorized_request_source_repairs_with_semantic_identifiers() -> None:
@@ -508,13 +513,13 @@ def test_semantic_failure_repairs_then_fails_over_in_v4() -> None:
     assert secondary_prompt["failover"]["diagnostic"][
         "required_correction"
     ] == "regenerate_strict_wire_v4_json"
-    assert diagnostics[-1]["total_provider_call_count"] == 3
+    assert diagnostics[-1]["total_provider_call_count"] == 4
     assert diagnostics[-1]["failover_used"] is True
     assert result.plan is not None
     assert result.plan.planner_name.endswith(":wire-v4")
 
 
-def test_failover_is_final_and_v4_never_calls_a_fourth_time() -> None:
+def test_failover_is_final_and_scoped_v4_never_calls_a_fifth_time() -> None:
     primary = ScriptedSemanticModel(["bad-1", "bad-2"])
     secondary = ScriptedSemanticModel(
         ["bad-3", _payload(*_inspect_steps())]
@@ -536,7 +541,7 @@ def test_failover_is_final_and_v4_never_calls_a_fourth_time() -> None:
     assert result.status is RunStatus.FAILED
     assert len(primary.calls) == 2
     assert len(secondary.calls) == 1
-    assert diagnostics[-1]["total_provider_call_count"] == 3
+    assert diagnostics[-1]["total_provider_call_count"] == 4
     assert diagnostics[-1]["final_recovery_outcome"] == "failover_failed"
 
 

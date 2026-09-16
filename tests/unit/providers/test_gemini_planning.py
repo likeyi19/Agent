@@ -70,6 +70,11 @@ class FakeInteractions:
         self.calls: list[dict[str, object]] = []
 
     def create(self, **kwargs):
+        schema = kwargs.get("response_format", {}).get("schema") or kwargs.get("text", {}).get("format", {}).get("schema", {})
+        if "selection_schema_version" in schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", []) + [kwargs]
+            return _interaction(output_text=json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": list(json.loads(kwargs["input"])["capabilities"])}}))
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
@@ -205,6 +210,7 @@ def test_semantic_v4_round_trip_uses_generic_interactions_transport() -> None:
         request, registry
     )
 
+    assert len(client.interactions.scope_calls) == 1
     transmitted = client.interactions.calls[0]
     assert transmitted["input"] == build_semantic_planning_prompt(
         request, registry

@@ -22,6 +22,7 @@ from .planning_diagnostics import (
 
 
 PLANNING_RECOVERY_POLICY_VERSION = "planning-recovery-v3"
+SCOPED_PLANNING_RECOVERY_POLICY_VERSION = "planning-recovery-scoped-v4-v1"
 _TRANSIENT_PROVIDER_CODES = frozenset(
     {
         "PROVIDER_RATE_LIMITED",
@@ -61,7 +62,9 @@ class PlanningRecoveryPolicy:
     max_retry_delay_seconds: float = 5.0
 
     def __post_init__(self) -> None:
-        if self.policy_version != PLANNING_RECOVERY_POLICY_VERSION:
+        if self.policy_version not in {
+            PLANNING_RECOVERY_POLICY_VERSION, SCOPED_PLANNING_RECOVERY_POLICY_VERSION,
+        }:
             raise ValueError("Unsupported planning-recovery policy version.")
         if not isinstance(self.retryable_provider_codes, frozenset) or not all(
             isinstance(code, str) and code in _TRANSIENT_PROVIDER_CODES
@@ -79,10 +82,17 @@ class PlanningRecoveryPolicy:
                 self.max_primary_local_recovery_actions,
                 1,
             ),
-            "max_total_provider_calls": (self.max_total_provider_calls, 3),
+            "max_total_provider_calls": (
+                self.max_total_provider_calls,
+                4 if self.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION else 3,
+            ),
         }
         for name, (value, maximum) in bounded_fields.items():
-            minimum = 1 if name == "max_total_provider_calls" else 0
+            minimum = 0
+            if name == "max_total_provider_calls":
+                minimum = (
+                    2 if self.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION else 1
+                )
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
@@ -281,7 +291,7 @@ class PlanningRecoveryCancelled(RuntimeError):
 
 
 PlanningAttempt = Callable[
-    [PlanningAttemptKind, int, int, PlanningRepairContext | None],
+    [PlanningAttemptKind, int, int, PlanningRepairContext | None, Callable[[PlanningDiagnosticContext], None]],
     DiagnosedPlanningAttempt,
 ]
 CandidateValidator = Callable[
@@ -325,9 +335,15 @@ class PlanningRecoveryCoordinator:
         diagnostic_sink: PlanningDiagnosticSink,
         should_cancel: PlanningCancellationCheck | None = None,
         prepare_failover: PlanningFailoverPreparation | None = None,
+        select_scope: Callable[[Callable[[PlanningDiagnosticContext], None]], tuple[PlanningDiagnostic, ...]] | None = None,
     ) -> RecoveredPlanningAttempt:
         """Acquire one Plan with at most one mutually exclusive local action."""
 
+        scoped_policy = self._policy.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION
+        if scoped_policy != (select_scope is not None):
+            raise ValueError("Scoped recovery requires exactly one scope-selection phase.")
+        if select_scope is not None and not callable(select_scope):
+            raise TypeError("Scope selection must be callable.")
         if not callable(attempt) or not callable(validate_candidate):
             raise TypeError("Planning attempt and candidate validator must be callable.")
         if not callable(diagnostic_sink):
@@ -372,6 +388,36 @@ class PlanningRecoveryCoordinator:
                     tuple(diagnostics),
                     provider_calls,
                 )
+
+        def provider_started(context: PlanningDiagnosticContext) -> None:
+            nonlocal provider_calls, last_context
+            check_cancel()
+            if provider_calls >= self._policy.max_total_provider_calls:
+                raise RuntimeError("Planning provider-call ceiling exceeded.")
+            last_context = context
+            # Checkpoint intent before invocation. A failed checkpoint consumes no call.
+            if context.phase is not None:
+                emit((context.diagnostic(PlanningDiagnosticStage.PROVIDER, "PROVIDER_CALL_STARTED", "started"),))
+                check_cancel()
+            provider_calls += 1
+
+        if select_scope is not None:
+            check_cancel()
+            try:
+                scope_diagnostics = select_scope(provider_started)
+            except PlannerError as exc:
+                emit(exc.diagnostics)
+                last_context = _diagnostic_context(exc.diagnostics) or last_context
+                check_cancel()
+                if last_context is not None:
+                    emit((_summary_diagnostic(last_context, provider_calls=provider_calls,
+                        retry_used=False, repair_used=False, failover_used=False,
+                        outcome="scope_selection_failed", policy_fingerprint=self._policy.fingerprint),))
+                raise PlannerError(exc.code, str(exc), category=exc.category,
+                    diagnostics=tuple(diagnostics)) from exc
+            emit(scope_diagnostics)
+            last_context = _diagnostic_context(scope_diagnostics) or last_context
+            check_cancel()
 
         def can_repair(failure: PlanningDiagnostic | None) -> bool:
             return bool(
@@ -590,14 +636,14 @@ class PlanningRecoveryCoordinator:
                 )
             if kind is PlanningAttemptKind.FAILOVER:
                 failovers += 1
-            provider_calls += 1
-            logical_index = provider_calls
+            logical_index = provider_calls + 1
             try:
                 candidate = attempt(
                     kind,
                     logical_index,
-                    provider_calls,
+                    provider_calls + 1,
                     repair_context,
+                    provider_started,
                 )
             except PlannerError as exc:
                 emit(exc.diagnostics)

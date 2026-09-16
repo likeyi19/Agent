@@ -156,11 +156,18 @@ def _v4_feature_arguments(source: Path, output: Path, extra: dict[str, object]):
             "sources": [], "control_dependencies": [],
         }]},
     })
+    model.complete.side_effect = [
+        json.dumps({"selection_schema_version": 1, "decision": {
+            "kind": "select", "capability_ids": ["differential_accessibility"],
+        }}),
+        model.complete.return_value,
+    ]
     registry = build_default_tool_registry()
     plan = LLMPlanner(model, wire_mode=PlanningWireMode.V4).plan(
         AgentRequest("feature-contract", "Validate the supplied feature space.", inputs,
                      mode=RunMode.PLAN_ONLY), registry,
     )
+    assert model.complete.call_count == 2
     assert PlanExecutor(registry).preflight(plan).passed
     assert dict(plan.steps[0].arguments) == inputs
     return dict(plan.steps[0].arguments)

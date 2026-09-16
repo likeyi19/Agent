@@ -61,6 +61,6 @@ def barcode_qc_tool_spec():
         planning=_tool_planning(PlanningToolRole.OPERATION,'Compute verified QC for every observed namespace/barcode.',
             'Fixed record depth, QC-contig depth, TSS incidence, nucleosome counts; no support weights.',
             'Fragments and QC reference must have identical parent identity and manifest hash.',
-            'No calling, selection, FRiP, cCRE matrix or EpiZoo. Resource and backend are qualified at execution.'),
+            'No calling, selection, FRiP, cCRE matrix or EpiZoo. Resource and backend are qualified at execution.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('barcode_qc','scatac_barcode_qc.v1',(member('manifest_path'),member('manifest_sha256'))),)))

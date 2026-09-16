@@ -62,6 +62,12 @@ class _QueueEndpoint:
         self.calls: list[dict[str, object]] = []
 
     def create(self, **kwargs):
+        schema = kwargs.get("response_format", {}).get("schema") or kwargs.get("text", {}).get("format", {}).get("schema", {})
+        if "selection_schema_version" in schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", []) + [kwargs]
+            response = json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": ["processed_inspection"]}})
+            return _completed(response)
         self.calls.append(kwargs)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -125,6 +131,7 @@ def test_openai_malformed_semantic_response_repairs_through_transport() -> None:
     )
 
     assert result.status is RunStatus.PLANNED
+    assert len(client.responses.scope_calls) == 1
     assert len(client.responses.calls) == 2
     assert "repair" in json.loads(client.responses.calls[1]["input"])
     assert client.responses.calls[0]["text"]["format"]["schema"] == (
@@ -152,6 +159,7 @@ def test_groq_semantic_compiler_failure_repairs_through_transport() -> None:
     )
 
     assert result.status is RunStatus.PLANNED
+    assert len(client.responses.scope_calls) == 1
     assert len(client.responses.calls) == 2
     diagnostic = json.loads(client.responses.calls[1]["input"])["repair"][
         "diagnostic"
@@ -177,6 +185,7 @@ def test_gemini_transient_error_retries_same_v4_transport_request() -> None:
     )
 
     assert result.status is RunStatus.PLANNED
+    assert len(client.interactions.scope_calls) == 1
     assert len(client.interactions.calls) == 2
     assert client.interactions.calls[0] == client.interactions.calls[1]
 
@@ -211,6 +220,7 @@ def test_openai_primary_fails_over_to_groq_v4_at_global_three_call_ceiling() -> 
     )
 
     assert result.status is RunStatus.PLANNED
+    assert len(primary_client.responses.scope_calls) == 1
     assert len(primary_client.responses.calls) == 2
     assert len(secondary_client.responses.calls) == 1
     assert result.plan is not None

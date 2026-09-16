@@ -78,6 +78,6 @@ def cell_selection_tool_spec():
         planning=_tool_planning(PlanningToolRole.OPERATION,'Select candidate cells using explicit QC thresholds.',
             'Required minimum QC-record depth and TSS enrichment; no inferred thresholds. Optional minimum L+R, maximum QC depth and nucleosome signal.',
             'Inclusive exact comparisons; undefined TSS fails; undefined nucleosome fails only with enabled maximum. Retain all failures; empty selection succeeds.',
-            'Statistical cell calling not assessed. No doublets, FRiP, matrix or inference. Metrics-only QC remains valid.'),
+            'Statistical cell calling not assessed. No doublets, FRiP, matrix or inference. Metrics-only QC remains valid.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('selected_cells','scatac_cell_selection.v1',(member('manifest_path'),member('manifest_sha256'))),)))

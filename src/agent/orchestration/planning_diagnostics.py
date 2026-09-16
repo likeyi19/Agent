@@ -14,6 +14,7 @@ from agent.schemas import AgentPlan, JsonValue
 
 PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 3
 _SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 4
+_SCOPED_PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 5
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
 
@@ -21,6 +22,8 @@ _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
 class PlanningDiagnosticStage(str, Enum):
     """Logical, non-semantic stages of structured LLM planning."""
 
+    CATALOG = "catalog"
+    SCOPE = "scope"
     PROVIDER = "provider"
     PARSE = "parse"
     SCHEMA = "schema"
@@ -64,8 +67,27 @@ class PlanningDiagnosticContext:
     attempt_kind: PlanningAttemptKind = PlanningAttemptKind.INITIAL
     logical_attempt_index: int = 1
     provider_call_index: int = 1
+    phase: str | None = None
+    offered_capability_ids: tuple[str, ...] = ()
+    scope_fingerprint: str | None = None
+    session_call_ceiling: int | None = None
+    prompt_fingerprint: str | None = None
+    schema_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
+        if self.phase not in {None, "scope_selection", "detailed_planning"}:
+            raise ValueError("Invalid planning phase.")
+        if not isinstance(self.offered_capability_ids, tuple) or any(
+            safe_diagnostic_identifier(c) != c for c in self.offered_capability_ids
+        ):
+            raise ValueError("Invalid diagnostic capability IDs.")
+        for digest in (self.scope_fingerprint, self.prompt_fingerprint, self.schema_fingerprint):
+            if digest is not None and not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("Invalid planning identity digest.")
+        if self.session_call_ceiling is not None and (
+            type(self.session_call_ceiling) is not int or not 1 <= self.session_call_ceiling <= 4
+        ):
+            raise ValueError("Invalid planning session ceiling.")
         if safe_diagnostic_identifier(self.profile_id) != self.profile_id:
             raise ValueError("Diagnostic profile identity is not safe.")
         if safe_diagnostic_identifier(self.provider_id) != self.provider_id:
@@ -266,9 +288,11 @@ class PlanningDiagnostic:
     def to_details(self) -> Mapping[str, JsonValue]:
         details: dict[str, JsonValue] = {
             "diagnostic_schema_version": (
-                PLANNING_DIAGNOSTIC_SCHEMA_VERSION
-                if self.context.planning_wire_schema_version != 4
-                else _SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION
+                _SCOPED_PLANNING_DIAGNOSTIC_SCHEMA_VERSION if self.context.phase is not None else (
+                    PLANNING_DIAGNOSTIC_SCHEMA_VERSION
+                    if self.context.planning_wire_schema_version != 4
+                    else _SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION
+                )
             ),
             "stage": self.stage.value,
             "code": self.code,
@@ -303,6 +327,12 @@ class PlanningDiagnostic:
             ),
         }
         optional = {
+            "phase": self.context.phase,
+            "offered_capability_ids": self.context.offered_capability_ids if self.context.phase else None,
+            "scope_fingerprint": self.context.scope_fingerprint,
+            "session_call_ceiling": self.context.session_call_ceiling,
+            "prompt_fingerprint": self.context.prompt_fingerprint,
+            "schema_fingerprint": self.context.schema_fingerprint,
             "response_byte_count": self.response_byte_count,
             "step_index": self.step_index,
             "step_id": self.step_id,

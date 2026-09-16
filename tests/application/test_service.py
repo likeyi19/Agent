@@ -126,6 +126,11 @@ class _ScriptedPlanningModel:
         self.calls = 0
 
     def complete(self, *, prompt: str, response_schema: object) -> str:
+        # This fixture scripts detailed planning; selection is separately recorded.
+        if "selection_schema_version" in response_schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", []) + [(prompt, response_schema)]
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": list(json.loads(prompt)["capabilities"])}})
         del prompt, response_schema
         response = self.responses[self.calls]
         self.calls += 1
@@ -171,7 +176,7 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
     assert isinstance(application.runtime.planner, LLMPlanner)
     assert application.runtime.planner.wire_mode is PlanningWireMode.V4
     assert application.runtime.planner.recovery_policy.policy_version == (
-        "planning-recovery-v3"
+        "planning-recovery-scoped-v4-v1"
     )
     assert result.status is ApplicationStatus.PLANNED
     assert result.run_status is RunStatus.PLANNED

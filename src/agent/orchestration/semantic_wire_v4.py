@@ -75,15 +75,27 @@ def _planner_visible_tool_names(registry: ToolRegistry) -> tuple[str, ...]:
     return tool_names
 
 
+def _visible_tool_names(registry: ToolRegistry, names: tuple[str, ...] | None) -> tuple[str, ...]:
+    offered = _planner_visible_tool_names(registry)
+    if names is None:
+        return offered
+    if (not isinstance(names, tuple) or not names
+            or any(not isinstance(name, str) or name not in offered for name in names)
+            or len(set(names)) != len(names)):
+        raise PlannerError("INVALID_PLANNING_SCOPE", "Invalid offered tool visibility.")
+    return tuple(sorted(names))
+
+
 def build_semantic_wire_v4_schema(
     registry: ToolRegistry,
     request: AgentRequest,
+    *, visible_tool_names: tuple[str, ...] | None = None,
 ) -> Mapping[str, JsonValue]:
     """Build one deterministic provider-compatible schema without input values."""
 
     if not isinstance(request, AgentRequest):
         raise TypeError("`request` must be an AgentRequest.")
-    tool_names = _planner_visible_tool_names(registry)
+    tool_names = _visible_tool_names(registry, visible_tool_names)
     input_names = tuple(sorted(request.inputs))
 
     definitions: dict[str, JsonValue] = {
@@ -286,6 +298,7 @@ def _parse_steps(
     *,
     request: AgentRequest,
     registry: ToolRegistry,
+    visible_tool_names: tuple[str, ...] | None = None,
 ) -> SemanticPlanCandidate:
     if not isinstance(raw_steps, list):
         raise _invalid_output("Wire-v4 plan `steps` must be an array.")
@@ -296,7 +309,7 @@ def _parse_steps(
             f"Wire-v4 plan exceeds the {_MAX_STEPS}-step limit."
         )
 
-    offered_tools = frozenset(_planner_visible_tool_names(registry))
+    offered_tools = frozenset(_visible_tool_names(registry, visible_tool_names))
     steps: list[SemanticPlanStep] = []
     for step_index, raw_step in enumerate(raw_steps):
         context = f"Wire-v4 step {step_index}"
@@ -435,6 +448,7 @@ def parse_semantic_wire_v4(
     response: object,
     request: AgentRequest,
     registry: ToolRegistry,
+    visible_tool_names: tuple[str, ...] | None = None,
 ) -> SemanticPlanCandidate:
     """Parse strict wire-v4 JSON into the accepted semantic candidate model."""
 
@@ -485,7 +499,7 @@ def parse_semantic_wire_v4(
         context="Wire-v4 plan decision",
     )
     return _parse_steps(
-        decision["steps"], request=request, registry=registry
+        decision["steps"], request=request, registry=registry, visible_tool_names=visible_tool_names
     )
 
 

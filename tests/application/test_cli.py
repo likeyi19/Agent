@@ -56,6 +56,11 @@ class _FixedPlanningModel:
         self._response = _planning_response() if response is None else response
 
     def complete(self, *, prompt: str, response_schema: object) -> str:
+        # Count the selector separately from this detailed-response fixture.
+        if "selection_schema_version" in response_schema.get("properties", {}):
+            self.scope_calls = getattr(self, "scope_calls", 0) + 1
+            return json.dumps({"selection_schema_version": 1, "decision": {
+                "kind": "select", "capability_ids": ["processed_inspection"]}})
         del prompt
         self.calls += 1
         self.response_schemas.append(response_schema)
@@ -341,6 +346,11 @@ def test_cli_optional_secondary_profile_uses_existing_final_failover(
             self.calls = 0
 
         def complete(self, *, prompt: str, response_schema: object) -> str:
+            # Count the selector separately from this detailed-response fixture.
+            if "selection_schema_version" in response_schema.get("properties", {}):
+                self.scope_calls = getattr(self, "scope_calls", 0) + 1
+                return json.dumps({"selection_schema_version": 1, "decision": {
+                    "kind": "select", "capability_ids": ["processed_inspection"]}})
             del prompt, response_schema
             self.calls += 1
             raise PlanningModelError(

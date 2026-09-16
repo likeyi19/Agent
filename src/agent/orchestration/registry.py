@@ -231,6 +231,7 @@ class ToolPlanningSemantics:
     role: PlanningToolRole
     description: str
     conditional_notes: tuple[str, ...] = ()
+    capability_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, PlanningToolRole):
@@ -242,6 +243,10 @@ class ToolPlanningSemantics:
         )
         if not isinstance(self.conditional_notes, tuple):
             raise TypeError("`conditional_notes` must be a tuple.")
+        if (not isinstance(self.capability_ids, tuple)
+                or any(not isinstance(value, str) or not value for value in self.capability_ids)
+                or len(set(self.capability_ids)) != len(self.capability_ids)):
+            raise ValueError("Capability membership must contain unique nonempty IDs.")
         for note in self.conditional_notes:
             _planning_text(note, "conditional_note", _MAX_PLANNING_NOTE_LENGTH)
 
@@ -1567,8 +1572,9 @@ def _tool_planning(
     role: PlanningToolRole,
     description: str,
     *conditional_notes: str,
+    capability_ids: tuple[str, ...] = (),
 ) -> ToolPlanningSemantics:
-    return ToolPlanningSemantics(role, description, tuple(conditional_notes))
+    return ToolPlanningSemantics(role, description, tuple(conditional_notes), capability_ids)
 
 
 def _semantic_member(name: str, field_name: str | None = None) -> SemanticPortMember:
@@ -1660,6 +1666,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.INSPECTION,
             "Inspect one raw scATAC dataset without producing embeddings or analysis.",
+            capability_ids=('processed_inspection',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -1798,6 +1805,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Produce aligned EpiZoo embeddings and ordered cell IDs from raw scATAC.",
+            capability_ids=('embedding_analysis', 'reference_annotation'),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -1940,6 +1948,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Build a neighbors-analysis artifact from an aligned embedding and cell IDs.",
+            capability_ids=('embedding_analysis',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2057,6 +2066,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Produce fixed Leiden clusters from a neighbors-analysis artifact.",
+            capability_ids=('embedding_analysis',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2176,6 +2186,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Add fixed two-dimensional UMAP coordinates to a clustered analysis.",
+            capability_ids=('embedding_analysis',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2300,6 +2311,7 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.EVALUATION,
             "Evaluate already-fixed clusters against ordered ground-truth labels.",
             "Ground-truth labels are evaluation-only and must not influence clustering.",
+            capability_ids=('embedding_analysis',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2540,6 +2552,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "species, and checkpoint provenance; branch order is irrelevant.",
             "Reference and query species must match and checkpoint paths must resolve "
             "to the same checkpoint.",
+            capability_ids=('reference_annotation',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2743,6 +2756,7 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.EVALUATION,
             "Evaluate a fixed query annotation against ordered ground-truth labels.",
             "Ground truth is evaluation-only and must not influence label transfer.",
+            capability_ids=('reference_annotation',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -2949,6 +2963,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "Species and genome assembly must be compatible: human with hg38 or mouse with mm10.",
             "Only fragment_counts, insertion_counts, or binary_accessibility are "
             "eligible for replicate pseudobulk.",
+            capability_ids=('differential_accessibility',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=tuple(
@@ -3081,6 +3096,7 @@ def build_default_tool_registry() -> ToolRegistry:
             PlanningToolRole.OPERATION,
             "Build replicate-aware sparse SUM pseudobulks from a verified feature space.",
             "group_annotation_path is used only with group_source verified_annotation.",
+            capability_ids=('differential_accessibility',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -3249,6 +3265,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "under condition_key for the selected group.",
             "A paired design requires compatible paired-replicate structure in the "
             "pseudobulk artifact.",
+            capability_ids=('differential_accessibility',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -3330,6 +3347,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "Inspect raw scATAC sequencing inputs for preprocessing readiness through bounded read-only observation; publish an authoritative intake manifest.",
             "Agent owns format dispatch, barcode interpretation, targets and readiness. Successful inspection may report scientifically non-ready or invalid inputs. No preprocessing is performed.",
             "The manifest cannot be consumed as a processed H5AD or EpiZoo input. Application composes verified evidence and a figureless report after execution.",
+            capability_ids=('raw_preprocessing',),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(

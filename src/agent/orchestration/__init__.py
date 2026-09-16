@@ -35,6 +35,7 @@ from .executor import (
     RecoveryPolicy,
 )
 from .llm_planner import DEFAULT_PLANNING_WIRE_MODE, LLMPlanner, PlanningWireMode
+from .planning_scope import PlanningScope
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .planning_model import (
     PlanningModel,
@@ -160,6 +161,7 @@ __all__ = [
     "PlanningSourceEligibility",
     "PlanningToolRole",
     "PlanningWireMode",
+    "PlanningScope",
     "PlanningModel",
     "PlanningModelError",
     "PlanningModelProfile",

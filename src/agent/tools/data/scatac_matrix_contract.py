@@ -304,9 +304,9 @@ def load_manifest_bytes(raw):
     try:
         value = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs,
                            parse_constant=lambda _: fail('MATRIX_JSON_INVALID'))
-        if isinstance(value, dict) and value.get('contract_version') == 'scatac-cell-by-ccre.external.v1':
-            from .external_matrix_contract import load
-            return load(raw)
+        from .external_matrix_contract import is_external, contract_for
+        if isinstance(value, dict) and is_external(value):
+            return contract_for(value).load(raw)
         validate_manifest(value)
         if canonical(value) != raw:
             fail('MATRIX_JSON_INVALID')

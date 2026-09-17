@@ -427,6 +427,23 @@ full-suite pass on the corrected final revision remains the bounded closeout
 follow-up; Milestone 13 is not yet unconditionally closed. Exact records and the
 unchanged catalog ceilings are documented in the linked integration record.
 
+## Milestone 14.1 — Neutral regulatory-feature reference and external adoption
+
+[M14.1](docs/m14.1-regulatory-feature-adoption.md) adds data-layer
+`regulatory-feature-reference.v1` and `scatac-cell-by-features.external.v1`.
+Explicit scientific-name/NCBI-taxonomy identity, assembly, verified FASTA/FAI,
+ordered coordinate vocabulary and declared feature category remain distinct
+from curated-cCRE or model-readiness claims. Exact external adoption reuses the
+existing matrix owner, sparse conservation verifier and publication lifecycle.
+Legacy human/mouse schemas and science are unchanged. No ToolRegistry entry,
+Planner/Application integration, raw-species generalization or EpiZoo execution
+is added. Schema-2 issuance requires an existing owner proof; parsed records
+alone confer no authority. Cross-run admission awaits registered integration.
+Acceptance: 63 dedicated tests; combined compatibility regression 555 passed,
+2 skipped; final full lightweight suite 4,008 passed, 83 skipped, 7 existing
+warnings (1,312.48 seconds), all `RUN_*` gates disabled.
+See the linked record for APIs, validation and deferred scientific questions.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation

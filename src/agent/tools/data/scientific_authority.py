@@ -14,12 +14,15 @@ from agent.schemas.verification_authority import AuthorityError, digest, Verifie
 from agent.schemas.orchestration import _serialize
 from . import scatac_fragments_v2 as v2
 from .fragments_authority_contract import CONTRACTS
+from .external_matrix_contract import is_external, contract_for
 
 TOOLS = {
     **{c.tool_name: k for k, c in CONTRACTS.items()},
     'compute_scATAC_qc': 'qc', 'select_scATAC_cells': 'selection',
     'build_scATAC_cell_by_ccre': 'matrix', 'adopt_scATAC_cell_by_ccre': 'matrix',
     'annotate_scATAC_cell_types': 'annotation',
+    # Data-layer owner identity only; not an executable ToolRegistry entry.
+    'adopt_cell_by_features': 'matrix',
 }
 MODULES = {
     'annotation': 'agent.tools.analysis.scatac_annotation',
@@ -47,9 +50,14 @@ def _resource_paths(value):
             yield from _resource_paths(item)
 
 
-def _reference(path, sha):
+def _reference(path, sha, *, neutral=False):
     from .scatac_reference import load_scatac_reference_bundle
-    _, reference, _ = load_scatac_reference_bundle(path, expected_sha256=sha)
+    if neutral:
+        from .regulatory_feature_reference import load_regulatory_feature_reference
+        loader = load_regulatory_feature_reference
+    else:
+        loader = load_scatac_reference_bundle
+    _, reference, _ = loader(path, expected_sha256=sha)
     return [str(path), *_resource_paths(asdict(reference))]
 
 
@@ -196,14 +204,16 @@ def describe(kind, path, sha, context):
         owned.extend(root / value[k]['path'] for k in ('decisions', 'selected'))
         profile = PROFILE_SHA256
         verifier = dict(id='agent.cell-selection-independent', compatibility_version='1')
-    elif kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-ccre.external.v1':
-        from .external_matrix_contract import PROFILE_SHA256
+    elif kind == 'matrix' and is_external(value):
+        contract = contract_for(value)
+        neutral = contract.CONTRACT != 'scatac-cell-by-ccre.external.v1'
         rp = value['reference']
-        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256']))
+        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256'], neutral=neutral))
         owned.append(root / value['matrix']['path'])
         sources.append(dict(value['source']))
-        profile = PROFILE_SHA256
-        verifier = dict(id='agent.cell-by-ccre-independent', compatibility_version='external-1')
+        profile = contract.PROFILE_SHA256
+        verifier = dict(id='agent.cell-by-ccre-independent',
+                        compatibility_version='external-features-1' if neutral else 'external-1')
     else:
         from .scatac_matrix_contract import PROFILE_SHA256
         fp, sp, rp = (value['upstream'][k] for k in ('fragments', 'selection', 'reference'))
@@ -260,7 +270,7 @@ def runtime_compatibility(kind, description, kwargs):
         _, bundle, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'], expected_sha256=args['qc_reference_manifest_sha256'])
         if backend_runtime()[1] != value['backend_identity'] or resource_qualification(bundle) != value['resource_qualification']:
             raise AuthorityError('QC runtime/resource qualification changed.')
-    if kind == 'matrix' and description['manifest']['contract_version'] != 'scatac-cell-by-ccre.external.v1':
+    if kind == 'matrix' and not is_external(description['manifest']):
         from . import _matrix_bedtools as bed
         if bed.qualify_runtime(kwargs['bedtools_path']) != description['manifest']['backend']:
             raise AuthorityError('Matrix runtime qualification changed.')
@@ -303,7 +313,9 @@ def issue(context, tool_name, arguments, result, execution_identity):
 def _publication_record(context, tool_name, arguments, result, execution_identity, result_metadata):
     """Pure provenance description, not a trust-issuing entry point."""
     kind = TOOLS[tool_name]
-    module = _module('scatac_matrix_adoption' if tool_name == 'adopt_scATAC_cell_by_ccre' else MODULES[kind])
+    adoption_modules = {'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
+                        'adopt_cell_by_features': 'regulatory_matrix_adoption'}
+    module = _module(adoption_modules.get(tool_name, MODULES[kind]))
     publication = module._publication(arguments, execution_identity)
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]

@@ -475,6 +475,16 @@ def publish_scatac_reference_bundle(value: object, path: str | Path, *, overwrit
     artifact; it never makes partial bytes an accepted result. Trusted local FS.
     """
     bundle = validate_scatac_reference_bundle(value)
+    resources = [bundle.genome.fasta, bundle.genome.fai, bundle.ccre.bed]
+    if bundle.annotation:
+        resources.append(bundle.annotation.resource)
+    return _publish_reference_manifest(
+        path, overwrite=overwrite, resources=resources,
+        payload=canonical_reference_bundle_bytes(bundle), loader=load_scatac_reference_bundle)
+
+
+def _publish_reference_manifest(path, *, overwrite, resources, payload, loader):
+    """Shared atomic no-clobber serialization; callers own scientific validation."""
     if type(overwrite) is not bool:
         _fail("Overwrite must be boolean.")
     temporary = None
@@ -488,16 +498,12 @@ def publish_scatac_reference_bundle(value: object, path: str | Path, *, overwrit
         if destination.is_symlink() or (destination.exists() and not destination.is_file()):
             _fail("Invalid reference output destination.", "REFERENCE_OUTPUT_CONFLICT")
         destination = destination.resolve()
-        resources = [bundle.genome.fasta, bundle.genome.fai, bundle.ccre.bed]
-        if bundle.annotation:
-            resources.append(bundle.annotation.resource)
         for resource in resources:
             source = Path(resource.path)
             if destination == source or (destination.exists() and source.exists() and destination.samefile(source)):
                 _fail("Output cannot replace a reference source.", "REFERENCE_OUTPUT_CONFLICT")
         if destination.exists() and not overwrite:
             _fail("Reference output already exists.", "REFERENCE_OUTPUT_CONFLICT")
-        payload = canonical_reference_bundle_bytes(bundle)
         digest = hashlib.sha256(payload).hexdigest()
         fd, name = tempfile.mkstemp(dir=destination.parent, prefix=".scatac-reference-", suffix=".tmp")
         temporary = Path(name)
@@ -505,7 +511,7 @@ def publish_scatac_reference_bundle(value: object, path: str | Path, *, overwrit
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        load_scatac_reference_bundle(temporary, expected_sha256=digest)
+        loader(temporary, expected_sha256=digest)
         directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             if overwrite:
@@ -518,7 +524,7 @@ def publish_scatac_reference_bundle(value: object, path: str | Path, *, overwrit
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-        load_scatac_reference_bundle(destination, expected_sha256=digest)
+        loader(destination, expected_sha256=digest)
         return {"manifest_path": str(destination), "manifest_sha256": digest,
                 "artifact_schema_version": REFERENCE_SCHEMA_VERSION}
     except ScATACReferenceError:

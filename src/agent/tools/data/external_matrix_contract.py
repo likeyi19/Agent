@@ -1,9 +1,14 @@
 """Closed external variant of the matrix family; no fragment-derived claims."""
 import hashlib
 import json
+import sys
 from . import scatac_matrix_contract as m
 
+ARTIFACT = m.ARTIFACT
+REFERENCE_CONTRACT = 'scatac-reference-bundle.v1'
+
 CONTRACT = 'scatac-cell-by-ccre.external.v1'
+RECOVERY_POLICY = 'adopt-scatac-cell-by-ccre-v1'
 PROFILE = 'exact-external-cell-by-ccre-adoption.v1'
 PROFILE_SPEC = dict(profile_id=PROFILE, operation='external_adoption',
     input='H5AD-X-canonical-CSR-signed-int64;no-explicit-zeros;no-duplicate-entries',
@@ -55,19 +60,23 @@ def logical_identity(n, p, rows, semantics):
                 total_count=total, zero_row_count=zeros)
 
 
-def validate(value):
+def validate(value, *, _profile=None):
+    c = _profile or sys.modules[__name__]
     m.shape(value, FIELDS)
-    if (value['artifact_type'] != m.ARTIFACT or type(value['schema_version']) is not int
-            or value['schema_version'] != 1 or value['contract_version'] != CONTRACT
-            or value['operation'] != 'external_adoption' or value['profile'] != PROFILE
-            or value['profile_sha256'] != PROFILE_SHA256 or value['matrix_semantics'] not in SEMANTICS
-            or (value['species'], value['assembly']) not in (('human', 'hg38'), ('mouse', 'mm10'))): m.fail()
+    if c is sys.modules[__name__]:
+        if (value['species'], value['assembly']) not in (('human', 'hg38'), ('mouse', 'mm10')): m.fail()
+    else:
+        c.validate_binding(value['species'], value['assembly'])
+    if (value['artifact_type'] != c.ARTIFACT or type(value['schema_version']) is not int
+            or value['schema_version'] != 1 or value['contract_version'] != c.CONTRACT
+            or value['operation'] != 'external_adoption' or value['profile'] != c.PROFILE
+            or value['profile_sha256'] != c.PROFILE_SHA256 or value['matrix_semantics'] not in SEMANTICS): m.fail()
     m.shape(value['source'], ('path', 'sha256', 'size_bytes'))
     m.absolute_path(value['source']['path']); m.sha(value['source']['sha256']); m.integer(value['source']['size_bytes'], 1)
     r = value['reference']
     m.shape(r, ('manifest_path', 'manifest_sha256', 'identity_sha256', 'contract_version'))
     m.absolute_path(r['manifest_path']); m.sha(r['manifest_sha256']); m.sha(r['identity_sha256'])
-    if r['contract_version'] != 'scatac-reference-bundle.v1': m.fail()
+    if r['contract_version'] != c.REFERENCE_CONTRACT: m.fail()
     for k in ('ordered_cells_sha256', 'ordered_feature_sha256', 'logical_matrix_sha256',
               'source_logical_matrix_sha256', 'identity_sha256'): m.sha(value[k])
     dims = value['shape']
@@ -81,18 +90,41 @@ def validate(value):
     m.sha(value['matrix']['sha256']); m.integer(value['matrix']['size_bytes'], 1)
     if (value['readiness'] != ('matrix_available' if n else 'no_source_cells')
             or value['source_logical_matrix_sha256'] != value['logical_matrix_sha256']
-            or value['identity_sha256'] != identity(value)): m.fail('MATRIX_IDENTITY_MISMATCH')
+            or value['identity_sha256'] != c.identity(value)): m.fail('MATRIX_IDENTITY_MISMATCH')
     return value
 
 
-def load(raw):
+def load(raw, *, _profile=None):
     if len(raw) > m.MAX_MANIFEST_BYTES: m.fail()
     from .scatac_fragments_v2 import _pairs
     try:
         value = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
                            parse_constant=lambda _: m.fail('MATRIX_JSON_INVALID'))
-        validate(value)
+        validate(value, _profile=_profile)
         if m.canonical(value) != raw: m.fail('MATRIX_JSON_INVALID')
         return value
     except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise m.ScATACMatrixError('MATRIX_CONTRACT_INVALID') from exc
+
+
+def validate_binding(species, assembly):
+    if (species, assembly) not in (('human', 'hg38'), ('mouse', 'mm10')):
+        m.fail('MATRIX_SEMANTICS_INVALID')
+
+
+from .scatac_reference import (load_scatac_reference_bundle as load_reference,
+                              reinspect_scatac_reference_bundle_sources as reinspect_reference)
+
+
+def contract_for(value):
+    """Closed matrix-owner dispatch; never infer a profile from species or shape."""
+    if value['contract_version'] == CONTRACT:
+        return sys.modules[__name__]
+    from . import regulatory_matrix_contract as neutral
+    if value['contract_version'] == neutral.CONTRACT:
+        return neutral
+    m.fail('MATRIX_CONTRACT_INVALID')
+
+
+def is_external(value):
+    return value.get('contract_version') in (CONTRACT, 'scatac-cell-by-features.external.v1')

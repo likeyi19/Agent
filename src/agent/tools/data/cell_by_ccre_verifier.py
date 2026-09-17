@@ -142,7 +142,8 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
     with path.open('rb') as f: raw = f.read(m.MAX_MANIFEST_BYTES+1)
     if hashlib.sha256(raw).hexdigest() != expected_sha256: m.fail('MATRIX_MANIFEST_MISMATCH')
     value = m.load_manifest_bytes(raw)
-    if value['contract_version'] == 'scatac-cell-by-ccre.external.v1':
+    from .external_matrix_contract import is_external
+    if is_external(value):
         result = _verify_external(path, value, expected_sha256, limits, scratch_parent)
         check_snapshots(before)
         return result
@@ -193,12 +194,13 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
 def _verify_external(path, value, expected_sha256, limits, scratch_parent):
     """Matrix-owner conservation proof; does not invoke the adoption writer."""
     from . import external_matrix_contract as e, _external_matrix_io as external
+    contract = e.contract_for(value)
     started = time.monotonic()
     source = Path(value['source']['path']); payload = path.parent/'matrix.h5ad'
     rp = value['reference']
     args = dict(reference_manifest_path=rp['manifest_path'],reference_manifest_sha256=rp['manifest_sha256'],
                 species=value['species'],assembly=value['assembly'],matrix_semantics=value['matrix_semantics'])
-    ref, reference_snapshots = external.reference(args, limits)
+    ref, reference_snapshots = external.reference(args, limits, contract=contract)
     before = tuple(sorted(set(reference_snapshots + take_snapshots([path,source,payload]))))
     if (ref.reference_identity_sha256 != rp['identity_sha256']
             or ref.ccre.ordered_feature_sha256 != value['ordered_feature_sha256']): m.fail('MATRIX_REFERENCE_MISMATCH')

@@ -8,20 +8,19 @@ import numpy as np
 
 from . import scatac_matrix_contract as m, external_matrix_contract as e
 from . import _cell_by_ccre_io as io, _matrix_bedtools as bed
-from .scatac_reference import load_scatac_reference_bundle, reinspect_scatac_reference_bundle_sources
 from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots
 from .scatac_qc_reference import _fsync_dir
 
 
-def reference(args, limits):
+def reference(args, limits, *, contract=e):
     snapshots = take_snapshots([args['reference_manifest_path']])
-    _, ref, _ = load_scatac_reference_bundle(args['reference_manifest_path'], expected_sha256=args['reference_manifest_sha256'])
+    _, ref, _ = contract.load_reference(args['reference_manifest_path'], expected_sha256=args['reference_manifest_sha256'])
     if ((ref.species, ref.target_assembly) != (args['species'], args['assembly'])
             or ref.ccre.feature_count > limits.max_features): m.fail('MATRIX_REFERENCE_MISMATCH')
     resources = [ref.genome.fasta.path, ref.genome.fai.path, ref.ccre.bed.path]
     if ref.annotation is not None: resources.append(ref.annotation.resource.path)
     snapshots = tuple(sorted(set(snapshots + take_snapshots(resources))))
-    reinspect_scatac_reference_bundle_sources(ref)
+    contract.reinspect_reference(ref)
     check_snapshots(snapshots)
     return ref, snapshots
 
@@ -101,7 +100,7 @@ def inspect_axes(f, ref, args, db, budget, *, published=False):
                 feature_digest.update((name+'\n').encode()); count += 1
             budget.check()
         if stream.read(1) or count != p or feature_digest.hexdigest() != ref.ccre.ordered_feature_sha256: m.fail('MATRIX_REFERENCE_MISMATCH')
-    expected = dict(species=args['species'], assembly=args['assembly'], matrix_semantics=args['matrix_semantics'],
+    expected = dict(species=species_metadata(args['species']), assembly=args['assembly'], matrix_semantics=args['matrix_semantics'],
                     reference_identity_sha256=ref.reference_identity_sha256)
     if 'uns' in f:
         if not isinstance(f['uns'], h5py.Group) or not set(f['uns']) <= set(expected): m.fail('MATRIX_H5AD_INVALID')
@@ -117,10 +116,10 @@ def inspect_axes(f, ref, args, db, budget, *, published=False):
     return n, p, digest.hexdigest()
 
 
-def build(args, output_dir, limits=io.MatrixLimits()):
+def build(args, output_dir, limits=io.MatrixLimits(), *, contract=e):
     """Private-stage writer. Final publication uses the existing matrix envelope."""
     source = Path(args['source_path']); root = Path(output_dir); root.mkdir()
-    ref, reference_snapshots = reference(args, limits)
+    ref, reference_snapshots = reference(args, limits, contract=contract)
     before = tuple(sorted(set(reference_snapshots + take_snapshots([source]))))
     if source.stat().st_size > limits.max_scratch_bytes: m.fail('MATRIX_RESOURCE_LIMIT')
     if bed.file_sha(source) != args['source_sha256']: m.fail('MATRIX_SOURCE_MISMATCH')
@@ -146,18 +145,18 @@ def build(args, output_dir, limits=io.MatrixLimits()):
                     source_ds = src['X'][key]
                     ds = x.create_dataset(key,shape=source_ds.shape,dtype='int64',chunks=True,compression='gzip')
                     for left in range(0,len(ds),io.CHUNK): ds[left:left+io.CHUNK] = source_ds[left:left+io.CHUNK]; budget.check()
-                for key,value in dict(species=args['species'],assembly=args['assembly'],matrix_semantics=args['matrix_semantics'],reference_identity_sha256=ref.reference_identity_sha256).items():
+                for key,value in dict(species=species_metadata(args['species']),assembly=args['assembly'],matrix_semantics=args['matrix_semantics'],reference_identity_sha256=ref.reference_identity_sha256).items():
                     ds = out['uns'].create_dataset(key,data=value,dtype=h5py.string_dtype()); ds.attrs.update({'encoding-type':'string','encoding-version':'0.2.0'})
         payload = root/'matrix.h5ad'
-        value = dict(artifact_type=m.ARTIFACT,schema_version=1,contract_version=e.CONTRACT,operation='external_adoption',
-            profile=e.PROFILE,profile_sha256=e.PROFILE_SHA256,species=args['species'],assembly=args['assembly'],
+        value = dict(artifact_type=contract.ARTIFACT,schema_version=1,contract_version=contract.CONTRACT,operation='external_adoption',
+            profile=contract.PROFILE,profile_sha256=contract.PROFILE_SHA256,species=args['species'],assembly=args['assembly'],
             source=dict(path=str(source),sha256=args['source_sha256'],size_bytes=source.stat().st_size),
-            reference=dict(manifest_path=args['reference_manifest_path'],manifest_sha256=args['reference_manifest_sha256'],identity_sha256=ref.reference_identity_sha256,contract_version='scatac-reference-bundle.v1'),
+            reference=dict(manifest_path=args['reference_manifest_path'],manifest_sha256=args['reference_manifest_sha256'],identity_sha256=ref.reference_identity_sha256,contract_version=contract.REFERENCE_CONTRACT),
             matrix_semantics=args['matrix_semantics'],shape=[n,p],**summary,ordered_cells_sha256=cells,
             ordered_feature_sha256=ref.ccre.ordered_feature_sha256,source_logical_matrix_sha256=summary['logical_matrix_sha256'],
             matrix=dict(path='matrix.h5ad',sha256=bed.file_sha(payload),size_bytes=payload.stat().st_size,format='csr',dtype='int64'),readiness='matrix_available' if n else 'no_source_cells')
-        value['identity_sha256'] = e.identity(value)
-        raw = m.canonical(e.validate(value)); sha = hashlib.sha256(raw).hexdigest()
+        value['identity_sha256'] = contract.identity(value)
+        raw = m.canonical(contract.validate(value)); sha = hashlib.sha256(raw).hexdigest()
         (root/'manifest.json').write_bytes(raw)
         from .cell_by_ccre_verifier import verify_cell_by_ccre
         verify_cell_by_ccre(root/'manifest.json',expected_sha256=sha,limits=limits,scratch_parent=root.parent)
@@ -166,3 +165,8 @@ def build(args, output_dir, limits=io.MatrixLimits()):
             with path.open('rb') as f: os.fsync(f.fileno())
         _fsync_dir(root)
     return dict(manifest_path=str(root/'manifest.json'),manifest_sha256=sha)
+
+
+def species_metadata(species):
+    # Legacy scalar is unchanged; neutral species identity is exact canonical JSON.
+    return m.canonical(species).decode('utf-8') if type(species) is dict else species

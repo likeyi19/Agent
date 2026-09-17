@@ -23,6 +23,7 @@ TOOLS = {
     'annotate_scATAC_cell_types': 'annotation',
     # Data-layer owner identity only; not an executable ToolRegistry entry.
     'adopt_cell_by_features': 'matrix',
+    'adopt_scATAC_cell_by_features': 'matrix',
     'adapt_epizoo_species': 'epizoo_adaptation',
 }
 MODULES = {
@@ -342,8 +343,11 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     """Pure provenance description, not a trust-issuing entry point."""
     kind = TOOLS[tool_name]
     adoption_modules = {'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
-                        'adopt_cell_by_features': 'regulatory_matrix_adoption'}
+                        'adopt_cell_by_features': 'regulatory_matrix_adoption',
+                        'adopt_scATAC_cell_by_features': 'neutral_matrix_tool'}
     module = _module(adoption_modules.get(tool_name, MODULES[kind]))
+    if tool_name == 'adapt_epizoo_species' and 'adaptation_spec_path' in arguments:
+        from agent.tools.models import species_adaptation as module
     publication = module._publication(arguments, execution_identity)
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]

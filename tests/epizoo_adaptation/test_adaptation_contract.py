@@ -52,6 +52,8 @@ def test_missing_seam_fails(tmp_path):
         config_dir=tmp_path/'missing',source_url=resources.SEAM_URL,output_path=tmp_path/'bundle.json')
 
 
-def test_no_registry_exposure():
-    from agent.orchestration.registry import build_default_tool_registry,UnknownToolError
-    with pytest.raises(UnknownToolError):build_default_tool_registry().get('adapt_epizoo_species')
+def test_public_registry_integration_retains_backend_profile():
+    from agent.orchestration.registry import build_default_tool_registry
+    spec=build_default_tool_registry().get('adapt_epizoo_species')
+    assert spec.recovery_policy_version==c.POLICY
+    assert 'profile' not in spec.required_arguments

@@ -1921,7 +1921,23 @@ def verify_step(
     artifact_authority = None
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name == "annotate_scATAC_cell_types":
+        if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species'):
+            try:
+                if step.tool_name == 'adapt_epizoo_species':
+                    from agent.tools.models.species_adaptation import verify_public_result
+                else:
+                    from agent.tools.data.neutral_matrix_tool import verify_public_result
+                verify_public_result(resolved_arguments, plain_result)
+                for key, binding in step.arguments.items():
+                    if isinstance(binding, StepOutputRef) and dependency_results[binding.step_id][binding.output_key] != resolved_arguments[key]:
+                        raise ValueError('Dependency binding differs.')
+            except Exception as exc:
+                checks.add('species_adaptation_owner', False, 'Exact owner proof, resources and lineage.',
+                    'Species adaptation verification failed.', getattr(exc,'code','SPECIES_ADAPTATION_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
+                    'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
+        elif step.tool_name == "annotate_scATAC_cell_types":
             try:
                 from agent.tools.analysis.scatac_annotation import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)

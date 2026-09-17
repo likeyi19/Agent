@@ -114,7 +114,7 @@ def test_missing_explicit_choices_fail_closed(source_factory, missing):
 def test_registry_contract_and_no_hidden_result_io(source_factory, monkeypatch):
     args = source_factory(); result = public.import_scATAC_fragments(**args)
     registry = build_default_tool_registry(); spec = registry.get('import_scATAC_fragments')
-    assert len(registry.names()) == 20
+    assert len(registry.names()) == 22
     assert spec.recovery_policy_version == public.RECOVERY_POLICY
     assert not spec.retryable_error_codes
     assert spec.semantic_planning.producer_ports[0].semantic_type == 'scatac_fragments.v2'
@@ -218,7 +218,7 @@ def test_v4_complete_catalog_size_and_explicit_null_index(source_factory):
     prompt = build_semantic_planning_prompt(query, registry)
     schema = build_semantic_wire_v4_schema(registry, query)
     size = len(prompt.encode()) + len(json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode())
-    assert size <= 30_500  # M11.4c: complete 17-tool catalog is 30,480 bytes; budget unchanged.
+    assert size <= 33_000  # M14.3: full 22-tool audit catalog; scoped production payloads tested separately.
     import sys
     sys.path.insert(0,str(Path(__file__).parents[1]/'unit/orchestration'))
     from catalog_expansion import expand_catalog

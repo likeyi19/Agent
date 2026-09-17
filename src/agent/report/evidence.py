@@ -388,7 +388,22 @@ _RAW_INTAKE_FIELDS = frozenset(
 )
 
 
+from agent.tools.models.species_adaptation import RESULT_FIELDS as _ADAPT_FIELDS, FACT_FIELDS as _ADAPT_FACTS
+
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "adopt_scATAC_cell_by_features": _ToolProjection(
+        _ADOPTED_MATRIX_FIELDS, _ADOPTED_MATRIX_FACT_FIELDS, "adopt-scatac-cell-by-features-v1",
+        (_ArtifactProjection("manifest_path", "neutral_matrix_manifest_json",
+            ("independent_source_output_conservation", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("matrix_path", "neutral_matrix_h5ad",
+            ("exact_sparse_logical_identity", "full_artifact_sha256"), digest_field="matrix_sha256"))),
+    "adapt_epizoo_species": _ToolProjection(
+        frozenset(_ADAPT_FIELDS), (*_ADAPT_FACTS, "completed_step", "purpose", "n_cells", "n_features", "checkpoint_sha256", "contract_version"),
+        "adapt-epizoo-species-v1",
+        (_ArtifactProjection("manifest_path", "epizoo_target_model_manifest_json",
+            ("accepted_backend_structural_proof", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("checkpoint_path", "epizoo_target_checkpoint",
+            ("strict_checkpoint_compatibility", "full_artifact_sha256"), digest_field="checkpoint_sha256"))),
     "annotate_scATAC_cell_types": _ToolProjection(
         _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "annotate-scatac-cell-types-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_type_annotation_manifest_json",

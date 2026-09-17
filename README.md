@@ -501,6 +501,8 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
+| Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
+| Species adaptation | `adapt_epizoo_species`: qualified neutral fragment counts, explicit strategy and pinned EpiZoo/SEAM/profile specification; publishes a target model |
 | Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
 | Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
 | Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
@@ -736,3 +738,9 @@ reporting-stage cancellation, transferred-label UMAP, richer figures/exports,
 LLM scientific interpretation, retrieval/RAG, multi-agent architecture, and
 browser or multi-turn UI. The detailed acceptance gates, environment warnings,
 and nonblocking engineering follow-ups are preserved in [AGENTS.md](AGENTS.md).
+
+Species adaptation now composes exact neutral matrix adoption with the qualified
+EpiZoo backend through AgentApplication. See the [M14.3 input specification,
+profiles and acceptance record](docs/m14.3-species-adaptation-integration.md).
+This produces a target model; public target-model inference and biological
+performance validation remain deferred.

@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All twenty currently registered tools
+`src/agent/orchestration/registry.py`. All twenty-two currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -79,6 +79,8 @@ derived from the registry.
 | `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
 | `adopt_scATAC_cell_by_ccre` | Exact external canonical int64 CSR H5AD adoption; declared value semantics, source/output conservation, matrix-owner authority, truthful external provenance |
 | `annotate_scATAC_cell_types` | Primary MAESTRO marker annotation of exact canonical groups; explicit resources/context, annotation authority and immutable-source annotated H5AD |
+| `adopt_scATAC_cell_by_features` | Exact neutral external regulatory-feature matrix adoption with declared species/assembly/reference and value semantics |
+| `adapt_epizoo_species` | Qualified EpiZoo species post-training with explicit strategy and pinned resource/profile specification |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
@@ -481,6 +483,33 @@ unchanged; one Agent initializer EOF blank line was removed, with fresh artifact
 generated against its final code hash. The public 500,000-attempt production candidate is not redefined;
 biological attempted-versus-applied schedule qualification remains deferred.
 
+## Milestone 14.3 — Public species-adaptation integration
+
+[M14.3](docs/m14.3-species-adaptation-integration.md) exposes
+`adopt_scATAC_cell_by_features` and `adapt_epizoo_species`; registry count is 22.
+The new capability is metadata only. Neutral matrix ports remain distinct from
+legacy canonical matrix/H5AD routes. The public adaptation specification binds
+exact target reference/species/assembly, real source/SEAM bundles, explicit mapping
+when requested, and a named qualification or production-candidate profile.
+M14.1/M14.2 science and committed EpiZoo remain unchanged. No fallback, model-readiness
+inference, target-model inference routing or arbitrary-species raw processing exists.
+
+Application reuses existing schema-2 authority, receipts, cancellation and recovery.
+Matrix conservation and adaptation structural proofs are reused for figureless
+verified evidence/reporting without repeated production. PLAN_ONLY performs no
+scientific IO. Interrupted training is not exact-resumable. Public integration
+currently accepts one target matrix; backend joint-corpus support remains intact.
+The linked record explicitly documents catalog growth and adjusted full-catalog
+regression-test ceilings; scoped planning algorithms and guidance are unchanged.
+
+Bounded public-path technical acceptance used the complete four-cell/32-feature
+M14.2 fixture and real qualified weights: ten trainer attempts, seven applied
+updates and three AMP skips. Matrix owner, SEAM, training and adaptation owner
+each ran once; fresh-process recovery repeated none. This is not biological
+performance acceptance. Final full lightweight regression passed 4,093 tests,
+with 83 skipped and seven existing warnings (1,391.66 seconds), all RUN_* gates
+unset. M14.3 is ready for review; commit/push await user closeout review.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation
@@ -751,7 +780,7 @@ normal scientific contracts, not Planner algorithm changes.
 
 Current families are `processed_inspection`, `embedding_analysis`,
 `reference_annotation`, `differential_accessibility`, `raw_preprocessing`,
-`exact_matrix_adoption`, and `marker_annotation`. EpiZoo embedding belongs to both
+`exact_matrix_adoption`, `marker_annotation`, and `species_adaptation`. EpiZoo embedding belongs to both
 embedding analysis and reference annotation. Membership contains no workflow
 recipes, step order, dependencies, preferred producers, scientific defaults, or
 canonical DAGs. No keyword/regex routing or deterministic semantic selection

@@ -333,7 +333,7 @@ def resume_annotation_authorities(function):
         state = store.load(run_id)
         if (state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
                 RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}
-                or not any(s.tool_name == 'annotate_scATAC_cell_types' for s in state.steps)):
+                or not any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species') for s in state.steps)):
             return function(runtime, run_id)
         with accepted_authorities(store, run_id):
             return function(runtime, run_id)

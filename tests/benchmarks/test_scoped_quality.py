@@ -62,7 +62,11 @@ def test_complete_corpus_and_no_science(cases, registry):
     assert len(cases) == 22
     assert len({c.intent_id for c in cases.values()}) == 18
     covered = {s["tool"] for c in cases.values() for s in c.case.expected_steps}
-    assert covered == set(registry.names())
+    # This preserved corpus covers the original twenty tools. M14.3 planning
+    # coverage lives in tests/species_adaptation_integration.
+    assert covered == set(registry.names()) - {
+        "adopt_scATAC_cell_by_features", "adapt_epizoo_species"
+    }
     report = q.run_scoped_benchmark(tuple(cases.values())).to_dict()
     assert report["schema_version"] == 5
     assert report["metrics"]["final_hard_semantic_success"] == dict(

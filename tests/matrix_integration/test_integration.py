@@ -71,7 +71,7 @@ def test_mechanical_preflight_no_io(tmp_path,change):
 
 def test_registry_and_wires(matrix_case,monkeypatch):
     args=matrix_case(); registry=build_default_tool_registry()
-    assert len(registry.names())==20 and registry.names().count(TOOL)==1
+    assert len(registry.names())==22 and registry.names().count(TOOL)==1
     spec=registry.get(TOOL)
     assert set(spec.required_arguments)==set(public.ARGUMENTS) and not spec.optional_arguments
     assert tuple(p.name for p in spec.semantic_planning.consumer_ports)==('fragments','selected_cells','reference','output_dir')

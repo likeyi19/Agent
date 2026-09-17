@@ -444,6 +444,43 @@ Acceptance: 63 dedicated tests; combined compatibility regression 555 passed,
 warnings (1,312.48 seconds), all `RUN_*` gates disabled.
 See the linked record for APIs, validation and deferred scientific questions.
 
+## Milestone 14.2 — EpiZoo species-adaptation backend qualification
+
+[M14.2](docs/m14.2-epizoo-species-adaptation.md) adds the data-layer
+`adapt_epizoo_species` adapter and `epizoo-target-model.v1`. The initial profile
+accepts M14.1 exact neutral `fragment_counts` only. Public EpiZoo owns target-corpus
+DF/TF-IDF, sentences, SEAM, transfer and SR/CCA post-training. Compatible datasets
+form one explicitly ordered sparse training corpus. Human/mouse embedding science
+is unchanged. The real supplied EpiZoo/SEAM bundles, exact retained source rows,
+local custom code, strategy, profile and runtime are bound without Planner exposure.
+
+Final technical acceptance uses four artificial cells and all 32 artificial
+features, the unchanged 30-layer model and ten public trainer attempts: seven
+optimizer steps applied and three were skipped by public AMP. Strict reload,
+finite forward, atomic publication, schema-2 authority and operation-local reuse
+passed; peak allocated GPU memory was 4.756 GiB on the RTX 4090. This is neither
+biological adaptation nor full-vocabulary capacity acceptance. Mapped transfer
+has deterministic fixture/tool coverage; real mapped/macaque resources remain
+incomplete. Only completed publications recover; exact interrupted-training
+resume, cross-run registered authority admission, public inference routing and
+Registry/Planner/Application integration remain deferred. The registry stays at
+twenty. See the linked record for precise scientific/resource contracts and tests.
+
+Final acceptance: 21 focused EpiZoo tests and 62 dedicated Agent tests passed.
+The full lightweight Agent suite passed 4,070 tests, with 83 skipped and seven
+existing warnings in 1,360.65 seconds, all `RUN_*` gates unset. Fresh-process
+completed-publication recovery passed with zero training and SEAM-production
+calls. No real mapped-species or biological performance acceptance is implied.
+
+Provenance closeout freezes EpiZoo at
+`029cd631d0f9806a646c4a3b42ce10b958f2b67f`. The final
+`qualification-final` acceptance regenerated resource bundles and repeated
+the unchanged real bounded path against that revision; 21 EpiZoo and 62 Agent
+focused tests passed again. EpiZoo/resource hashes and scientific settings remain
+unchanged; one Agent initializer EOF blank line was removed, with fresh artifacts
+generated against its final code hash. The public 500,000-attempt production candidate is not redefined;
+biological attempted-versus-applied schedule qualification remains deferred.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation

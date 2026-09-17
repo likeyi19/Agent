@@ -134,7 +134,7 @@ class VerificationContext:
             metadata = dict(contigs=result.contigs)
         elif kind in ('bam_fragment_production', 'external_fragment_adoption'):
             metadata = dict(contigs=result.fragments.contigs)
-        elif kind in ('matrix', 'annotation'):
+        elif kind in ('matrix', 'annotation', 'epizoo_adaptation'):
             metadata = result
         else:
             metadata = {}

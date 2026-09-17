@@ -23,8 +23,10 @@ TOOLS = {
     'annotate_scATAC_cell_types': 'annotation',
     # Data-layer owner identity only; not an executable ToolRegistry entry.
     'adopt_cell_by_features': 'matrix',
+    'adapt_epizoo_species': 'epizoo_adaptation',
 }
 MODULES = {
+    'epizoo_adaptation': 'agent.tools.models.epizoo_adaptation.publication',
     'annotation': 'agent.tools.analysis.scatac_annotation',
     'fastq_fragment_production': 'scatac_fragments',
     'bam_fragment_production': 'scatac_bam_fragments',
@@ -77,6 +79,9 @@ def _load(kind, path, sha):
     elif kind == 'selection':
         from ._cell_selection_contract import load_manifest
         value = load_manifest(path, actual).to_dict()
+    elif kind == 'epizoo_adaptation':
+        from agent.tools.models.epizoo_adaptation.publication import load_manifest
+        value = load_manifest(path, actual)
     elif kind == 'annotation':
         from agent.tools.analysis.annotation_contract import load_manifest
         value = load_manifest(path, actual)
@@ -110,7 +115,23 @@ def describe(kind, path, sha, context):
         resources.extend(f['path'] for f in described['files'])
         sources.extend(described['historical_sources'])
 
-    if kind == 'annotation':
+    if kind == 'epizoo_adaptation':
+        from agent.tools.models.epizoo_adaptation import contract as adaptation
+        args = value['arguments']
+        for index, binding in enumerate(args['matrices']):
+            dependency(str(index), 'matrix', binding['manifest_path'], binding['manifest_sha256'])
+        owned.extend(root / name for name in value['files'])
+        for key in ('source_bundle', 'seam_bundle'):
+            bundle = adaptation.read_json(args[key]['path'], args[key]['sha256'])
+            resources.append(args[key]['path'])
+            resources.extend(f['path'] for f in bundle['files'] + bundle['code']['files'])
+        if args['mapping']:
+            resources.extend(_resource_paths(args['mapping']))
+            ref = args['mapping']['source_reference']
+            resources.extend(_reference(ref['path'], ref['sha256']))
+        profile = adaptation.PROFILE_SHA256
+        verifier = dict(id='epizoo.species-adaptation-structural', compatibility_version='1')
+    elif kind == 'annotation':
         from agent.tools.analysis import annotation_contract as annotation, marker_annotation
         from agent.orchestration.verification_authority import bind_annotation_matrix
         args = value['arguments']
@@ -247,6 +268,10 @@ def describe(kind, path, sha, context):
 
 
 def runtime_compatibility(kind, description, kwargs):
+    if kind == 'epizoo_adaptation':
+        from agent.tools.models.epizoo_adaptation.resources import runtime
+        if description['manifest']['runtime'] != runtime():
+            raise AuthorityError('EpiZoo runtime changed.')
     if kind in CONTRACTS or kind == 'generic_fragments':
         if kind == 'fastq_fragment_production':
             from .fastq_fragments_verifier import verify_packaging
@@ -278,6 +303,9 @@ def runtime_compatibility(kind, description, kwargs):
 
 def reuse_result(kind, description, proof, kwargs):
     path = Path(description['manifest_path']); sha = description['manifest_sha256']
+    if kind == 'epizoo_adaptation':
+        from agent.tools.models.epizoo_adaptation.publication import _summary
+        return _summary(description['manifest'], path, sha)
     if kind == 'fastq_fragment_production':
         return deepcopy(description['manifest'])
     if kind in ('generic_fragments', 'bam_fragment_production', 'external_fragment_adoption'):
@@ -319,7 +347,7 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     publication = module._publication(arguments, execution_identity)
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]
-    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'annotation') else ''
+    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'annotation', 'epizoo_adaptation') else ''
     path = destination / directory / 'manifest.json'
     if str(path) != result['manifest_path']:
         raise AuthorityError('Publication belongs to a different execution.')

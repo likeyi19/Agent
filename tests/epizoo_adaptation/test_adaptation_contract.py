@@ -57,3 +57,28 @@ def test_public_registry_integration_retains_backend_profile():
     spec=build_default_tool_registry().get('adapt_epizoo_species')
     assert spec.recovery_policy_version==c.POLICY
     assert 'profile' not in spec.required_arguments
+
+
+def test_binary_profile_is_distinct_and_preserves_fragment_profile(profile):
+    assert c.PROFILE_SHA256=='a99300277b315218afeb4812d6a51ba31eb36ea43dca28711344c4ccbaa483e0'
+    binary=c.execution_profile(purpose='qualification',seed=0,batch_size=1,sequence_batch_size=1,
+        max_steps=2,save_steps=2,log_steps=1,matrix_semantics='binary_accessibility')
+    assert c.profile_sha256(binary)==c.BINARY_PROFILE_SHA256!=c.PROFILE_SHA256
+    assert {k:v for k,v in binary.items() if k not in ('id','matrix_semantics')} == {
+        k:v for k,v in profile.items() if k not in ('id','matrix_semantics')}
+    c.validate_strategy(binary,'de_novo')
+    with pytest.raises(ValueError,match='de_novo only'):c.validate_strategy(binary,'mapped_reference')
+    binary['matrix_semantics']='fragment_counts'
+    with pytest.raises(ValueError):c.validate_execution(binary)
+
+
+@pytest.mark.parametrize('semantics',['insertion_counts','binary','unknown'])
+def test_unsupported_profile_semantics(semantics):
+    with pytest.raises(ValueError):c.execution_profile(purpose='qualification',seed=0,batch_size=1,
+        sequence_batch_size=1,max_steps=2,save_steps=2,log_steps=1,matrix_semantics=semantics)
+
+
+def test_binary_production_not_qualified():
+    with pytest.raises(ValueError,match='bounded qualification'):
+        c.execution_profile(purpose='production',seed=0,batch_size=4,sequence_batch_size=128,
+            max_steps=500000,save_steps=4000,log_steps=500,matrix_semantics='binary_accessibility')

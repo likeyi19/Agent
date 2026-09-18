@@ -532,6 +532,33 @@ remains 22. This is bounded technical acceptance, not biological performance,
 convergence, production-scale sufficiency or public target-model inference.
 Closeout awaits user review; resources/checkpoints remain outside Git.
 
+## Milestone 14.5 — Binary de-novo species-adaptation qualification
+
+[M14.5](docs/m14.5-real-zebrafish-de-novo-acceptance.md) adds the distinct
+`epizoo-species-posttraining-binary-de-novo.v1` profile. Public execution requires
+explicit `binary-de-novo-qualification.v1`, an exact neutral `binary_accessibility`
+matrix and `de_novo` with null mapping. Binary mapped-reference/production and
+all insertion-count adaptation remain unsupported. Original fragment-count
+profiles and their scientific hash remain unchanged; binary/count equivalence
+is not claimed. Matrix conservation, EpiZoo preprocessing and training science,
+model architecture, Planner algorithms, catalog ceilings and 22-tool membership
+are unchanged. Publication, receipt and authority bind the selected profile.
+
+The operator-approved real Danio rerio/danRer11 corpus preserves all 2,000 cells,
+466,307 ordered features and 2,970,369 binary nonzeros. Full supplied FASTA/FAI
+validation passed without regenerating the index. Exact int64 CSR preparation
+preserves all values and axes, without fragment/QC/selection lineage. Same real
+EpiZoo/SEAM weights and unchanged EpiZoo revision are newly qualified against the
+updated Agent adapter hashes. The real target SEAM and de-novo initialization
+passed; ten trainer attempts applied ten updates with zero AMP skips and finite
+losses. Strict reload, finite full-decoder forward, atomic publication and
+figureless reporting passed. Fresh-process recovery repeated no science; DF
+artifact mutation rejected reuse and exact restoration recovered success. Focused
+Agent tests passed 180, catalog/benchmark checks 118, and EpiZoo qualification
+tests 21. The single full lightweight run passed 4,125 tests with 83 skipped and
+seven existing warnings (966.07 seconds), exit 0; all RUN_* gates unset. This is bounded technical qualification, not biological
+convergence/performance or production-scale sufficiency. Commit/push await review.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation

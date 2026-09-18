@@ -7,10 +7,15 @@ import anndata as ad
 from agent.tools.data.cell_by_ccre_verifier import verify_cell_by_ccre
 from agent.tools.data import scatac_matrix_contract as matrix, regulatory_matrix_contract as neutral
 from agent.tools.data.regulatory_feature_reference import load_regulatory_feature_reference,reinspect_regulatory_feature_reference
-from .contract import PROFILE,file_record,write_json
+from .contract import PROFILE,file_record,write_json,validate_strategy
 
 
-def corpus(matrix_bindings):
+def corpus(matrix_bindings, *, profile=None, strategy='de_novo'):
+    # Defaults retain the original fragment-only data-layer contract.
+    semantics = PROFILE['matrix_semantics']
+    if profile is not None:
+        validate_strategy(profile, strategy)
+        semantics = profile['matrix_semantics']
     if not matrix_bindings or len(matrix_bindings)>64:
         raise ValueError('One to 64 explicitly ordered matrices required.')
     arrays=[]; cells=[]; manifests=[]; identity=None; vocabulary=None; seen=set();sparse_bytes=0
@@ -21,8 +26,8 @@ def corpus(matrix_bindings):
         seen.add(key)
         verify_cell_by_ccre(binding['manifest_path'],expected_sha256=binding['manifest_sha256'])
         value=matrix.load_manifest_bytes(Path(binding['manifest_path']).read_bytes())
-        if value['contract_version']!=neutral.CONTRACT or value['matrix_semantics']!=PROFILE['matrix_semantics']:
-            raise ValueError('Initial adaptation qualifies exact neutral fragment_counts only.')
+        if value['contract_version']!=neutral.CONTRACT or value['matrix_semantics']!=semantics:
+            raise ValueError(f'Adaptation requires exact neutral {semantics} for the selected profile.')
         sparse_bytes+=16*value['nnz']+8*(value['shape'][0]+1)
         if sparse_bytes>8*1024**3: raise ValueError('Joint sparse corpus exceeds the 8 GiB composition bound.')
         common=(value['species'],value['assembly'],value['reference'],value['ordered_feature_sha256'],value['matrix_semantics'])

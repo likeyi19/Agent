@@ -50,9 +50,12 @@ def validate_adaptation(value):
     try:
         c.checks.shape(value, adaptation.RESULT_FIELDS)
         if (value['status']!='success' or value['artifact_type']!=c.ARTIFACT or
-            value['contract_version']!=c.CONTRACT or value['profile_sha256']!=c.PROFILE_SHA256 or
+            value['contract_version']!=c.CONTRACT or value['profile_sha256'] not in (c.PROFILE_SHA256,c.BINARY_PROFILE_SHA256) or
             value['purpose'] not in ('qualification','production') or
             value['strategy'] not in ('de_novo','mapped_reference')): raise ValueError()
+        if value['profile_sha256']==c.BINARY_PROFILE_SHA256 and (
+                value['strategy']!='de_novo' or value['purpose']!='qualification'):
+            raise ValueError('Binary adaptation requires bounded de_novo qualification.')
         from agent.tools.data.regulatory_matrix_contract import validate_binding
         validate_binding(value['species'],value['assembly'])
         for key,val in value.items():
@@ -106,7 +109,7 @@ def tool_specs():
             planning=_tool_planning(PlanningToolRole.OPERATION,
                 'Adopt exact new-species cell-by-regulatory-feature H5AD.' if is_adoption else 'Post-train pretrained EpiZoo for an explicit target species.',
                 'Complete ordered neutral reference/genome; int64 CSR; declared value semantics. Peaks are exact features, never projected to canonical cCREs.' if is_adoption else
-                'Qualified neutral fragment_counts matrix; epizoo-adaptation-inputs.v1 pins exact reference, source/SEAM bundles and qualification or production-candidate profile.',
+                'Qualified neutral matrix: fragment_counts, or binary_accessibility with explicit binary-de-novo-qualification.v1; specification pins reference and source/SEAM bundles.',
                 'No inferred raw/QC lineage, curated-cCRE or model-readiness claim.' if is_adoption else
                 'Explicit de_novo or mapped_reference; mapped requires supplied chain/reference resources. No fallback, biological quality claim or target-model inference.',
                 capability_ids=('species_adaptation',)),

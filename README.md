@@ -749,3 +749,9 @@ performance validation remain deferred.
 exercises mapped-reference adaptation on all 331 supplied cells and 615,873 target
 features, including real SEAM, bounded optimizer updates and fresh-process recovery.
 It does not establish biological convergence or embedding quality.
+
+[M14.5 binary de-novo qualification](docs/m14.5-real-zebrafish-de-novo-acceptance.md)
+adds the explicit `binary-de-novo-qualification.v1` adaptation profile for neutral
+`binary_accessibility` matrices. It preserves the existing fragment-count profiles
+and excludes binary mapped-reference/production execution and insertion counts.
+The real zebrafish acceptance retains all 2,000 demo cells and 466,307 features.

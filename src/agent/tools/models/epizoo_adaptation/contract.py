@@ -31,13 +31,36 @@ PROFILE = dict(id='epizoo-species-posttraining.v1', matrix_semantics='fragment_c
     training_resume='completed-publication-only;no-optimizer-scheduler-RNG-checkpoint',
     production_schedule_status='public-default-candidate;biological-convergence-not-qualified')
 PROFILE_SHA256 = digest(PROFILE)
+# M14.5 qualifies binary input separately; the original fragment profile is immutable.
+BINARY_PROFILE = dict(deepcopy(PROFILE), id='epizoo-species-posttraining-binary-de-novo.v1',
+                      matrix_semantics='binary_accessibility')
+BINARY_PROFILE_SHA256 = digest(BINARY_PROFILE)
 
 
-def execution_profile(*, purpose, seed, batch_size, sequence_batch_size, max_steps, save_steps, log_steps):
+def scientific_profile(matrix_semantics='fragment_counts'):
+    if matrix_semantics == 'fragment_counts': return PROFILE
+    if matrix_semantics == 'binary_accessibility': return BINARY_PROFILE
+    raise ValueError('Unqualified adaptation matrix semantics.')
+
+
+def profile_sha256(profile):
+    validate_execution(profile)
+    return digest(scientific_profile(profile['matrix_semantics']))
+
+
+def validate_strategy(profile, strategy):
+    validate_execution(profile)
+    if strategy not in ('de_novo', 'mapped_reference'):
+        raise ValueError('Unknown adaptation strategy.')
+    if profile['matrix_semantics'] == 'binary_accessibility' and strategy != 'de_novo':
+        raise ValueError('Binary accessibility is qualified for de_novo only.')
+
+
+def execution_profile(*, purpose, seed, batch_size, sequence_batch_size, max_steps, save_steps, log_steps, matrix_semantics='fragment_counts'):
     if purpose not in ('qualification','production'):
         raise ValueError('Explicit execution purpose required.')
     for name,value in locals().copy().items():
-        if name not in ('purpose',) and (type(value) is not int or value < (0 if name=='seed' else 1)):
+        if name not in ('purpose','matrix_semantics') and (type(value) is not int or value < (0 if name=='seed' else 1)):
             raise ValueError(f'Invalid execution setting: {name}')
     if seed >= 2**32 or batch_size > 4 or sequence_batch_size > 128:
         raise ValueError('Execution exceeds the qualified batch/seed bounds.')
@@ -47,7 +70,9 @@ def execution_profile(*, purpose, seed, batch_size, sequence_batch_size, max_ste
         raise ValueError('Production profile settings differ.')
     if save_steps > max_steps or log_steps > max_steps:
         raise ValueError('Intervals exceed execution length.')
-    value=deepcopy(PROFILE)
+    if matrix_semantics == 'binary_accessibility' and purpose != 'qualification':
+        raise ValueError('Binary de_novo is qualified only for bounded qualification.')
+    value=deepcopy(scientific_profile(matrix_semantics))
     value.update(purpose=purpose,seed=seed,batch_size=batch_size,sequence_batch_size=sequence_batch_size)
     value['trainer'].update(max_steps=max_steps,save_steps=save_steps,log_steps=log_steps)
     return value
@@ -91,7 +116,7 @@ def read_json(path,sha=None):
 
 
 def validate_execution(value):
-    expected=execution_profile(purpose=value['purpose'],seed=value['seed'],batch_size=value['batch_size'],
+    expected=execution_profile(matrix_semantics=value['matrix_semantics'],purpose=value['purpose'],seed=value['seed'],batch_size=value['batch_size'],
         sequence_batch_size=value['sequence_batch_size'],**{k:value['trainer'][k] for k in ('max_steps','save_steps','log_steps')})
     if value!=expected: raise ValueError('Unqualified scientific profile.')
     return value

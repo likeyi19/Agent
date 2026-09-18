@@ -85,6 +85,7 @@ def test_registry_scope():
     assert 'adapt_epizoo_species' not in index['embedding_analysis']
 
 
+@pytest.mark.parametrize('integration',['fragment_counts','binary_accessibility'],indirect=True)
 def test_adaptation_application(integration,tmp_path,monkeypatch):
     from agent.tools.data import cell_by_ccre_verifier as owner
     inputs,counts,resource=integration
@@ -147,6 +148,7 @@ def test_wrong_upstream_port(case,tmp_path):
     assert result.status.value=='FAILED'
 
 
+@pytest.mark.parametrize('integration',['fragment_counts','binary_accessibility'],indirect=True)
 def test_recover_publication_after_crash(integration,tmp_path,monkeypatch):
     from agent.orchestration import AgentRuntime,FileRunStore,StepStatus
     from agent.tools.models.epizoo_adaptation import publication as backend
@@ -236,3 +238,51 @@ def test_backend_revision_change_invalidates_accepted_reuse(integration,tmp_path
     monkeypatch.setattr(resources,'code_bundle',lambda:dict(files=[],revision='different'))
     assert app.resume(result.run_id).status.value=='FAILED'
     assert counts==dict(production=1,owner=1)
+
+
+@pytest.mark.parametrize('integration',['binary_accessibility'],indirect=True)
+@pytest.mark.parametrize('change',['fragment_profile','fragment_declaration','insertion_declaration','mapped','unknown_profile'])
+def test_binary_public_mismatches_fail_before_adaptation(integration,tmp_path,change):
+    from agent.tools.models.epizoo_adaptation import contract as c
+    inputs,counts,_=integration
+    path=Path(inputs['adaptation_spec_path']);spec=c.read_json(path)
+    if change=='fragment_profile':spec['execution_profile']='qualification.v1'
+    elif change=='unknown_profile':spec['execution_profile']='binary-production-candidate.v1'
+    elif change=='fragment_declaration':inputs['matrix_semantics']='fragment_counts'
+    elif change=='insertion_declaration':inputs['matrix_semantics']='insertion_counts'
+    elif change=='mapped':inputs['strategy']='mapped_reference'
+    path.write_bytes(c.canonical(spec));inputs['adaptation_spec_sha256']=c.file_record(path)['sha256']
+    result=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(Model(wire()))).run(
+        AgentRequest('binary-mismatch','Adapt this explicitly bound binary matrix.',inputs))
+    assert result.status.value=='FAILED'
+    assert counts==dict(production=0,owner=0)
+
+
+@pytest.mark.parametrize('integration',['binary_accessibility'],indirect=True)
+def test_binary_profile_binds_receipt_authority_and_result(integration,tmp_path):
+    from copy import deepcopy
+    from agent.tools.models.epizoo_adaptation import contract as c,publication
+    from agent.orchestration.species_adaptation_registry import validate_adaptation
+    from agent.orchestration.registry import ToolResultContractError
+    inputs,_,_=integration
+    result=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(Model(wire()))).run(
+        AgentRequest('binary-binding','Adapt.',inputs))
+    assert result.status.value=='SUCCEEDED'
+    step=result.run_result.steps[-1];value=dict(step.result)
+    assert value['profile_sha256']==c.BINARY_PROFILE_SHA256
+    manifest=publication.load_manifest(value['manifest_path'],value['manifest_sha256'])
+    assert manifest['arguments']['profile']['matrix_semantics']=='binary_accessibility'
+    receipt=c.read_json(Path(value['manifest_path']).parent.parent/'receipt.json')
+    assert receipt['profile_sha256']==c.BINARY_PROFILE_SHA256
+    authority=step.verification.artifact_authority
+    assert authority['science_profile']==c.BINARY_PROFILE_SHA256
+    for change in ('mapped','production','hash'):
+        forged=dict(value)
+        if change=='mapped':forged.update(strategy='mapped_reference',mapping_identity_sha256='f'*64)
+        elif change=='production':forged['purpose']='production'
+        else:forged['profile_sha256']='f'*64
+        with pytest.raises(ToolResultContractError):validate_adaptation(forged)
+    forged=deepcopy(manifest);forged['profile_sha256']=c.PROFILE_SHA256
+    bad=c.write_json(tmp_path/'forged-profile.json',forged)
+    with pytest.raises(ValueError,match='Unsupported target-model contract'):
+        publication.load_manifest(bad['path'],bad['sha256'])

@@ -17,7 +17,7 @@ def arguments(value):
     args=deepcopy(value)
     if set(args)!={'matrices','source_bundle','seam_bundle','strategy','mapping','profile','device','output_dir'}:
         raise ValueError('Invalid adaptation arguments.')
-    c.validate_execution(args['profile'])
+    c.validate_strategy(args['profile'], args['strategy'])
     if args['device']!='cuda:0': raise ValueError('Initial execution profile requires explicit cuda:0; no fallback.')
     if args['strategy'] not in ('de_novo','mapped_reference'):
         raise ValueError('Unknown adaptation strategy.')
@@ -38,13 +38,13 @@ def arguments(value):
 def _publication(args,execution_identity):
     args=arguments(args)
     c.checks.sha(execution_identity)
-    token=c.digest(dict(arguments=args,execution_identity=execution_identity,policy=c.POLICY,profile=c.PROFILE_SHA256))
+    token=c.digest(dict(arguments=args,execution_identity=execution_identity,policy=c.POLICY,profile=c.profile_sha256(args['profile'])))
     return args,Path(args['output_dir'])/('epizoo-adaptation-'+token),token
 
 
 def _make_receipt(args,token,sha):
     return dict(artifact_type='agent.epizoo-adaptation-receipt',schema_version=1,policy=c.POLICY,
-        execution_identity=token,arguments_sha256=c.digest(args),manifest_sha256=sha,profile_sha256=c.PROFILE_SHA256)
+        execution_identity=token,arguments_sha256=c.digest(args),manifest_sha256=sha,profile_sha256=c.profile_sha256(args['profile']))
 
 
 def _receipt(destination,args,token=None):
@@ -61,9 +61,9 @@ def load_manifest(path,sha):
     value=c.read_json(path,sha)
     c.checks.shape(value,('artifact_type','contract_version','schema_version','profile_sha256','arguments',
         'reference','source_identity','seam_identity','preprocessing','execution','files','runtime'))
-    if (value['artifact_type'],value['contract_version'],value['schema_version'],value['profile_sha256'])!=(c.ARTIFACT,c.CONTRACT,1,c.PROFILE_SHA256):
+    args=arguments(value['arguments'])
+    if (value['artifact_type'],value['contract_version'],value['schema_version'],value['profile_sha256'])!=(c.ARTIFACT,c.CONTRACT,1,c.profile_sha256(args['profile'])):
         raise ValueError('Unsupported target-model contract.')
-    arguments(value['arguments'])
     required={'checkpoint.pth','sequence_embeddings.npy','sequences.txt','document_frequency.npy','sentence_tokens.npy',
               'sentence_indptr.npy','cells.jsonl','features.txt','preprocessing.json','execution.json','training/training_log.csv'}
     if value['arguments']['strategy']=='mapped_reference':
@@ -89,7 +89,7 @@ def _build(args,root):
     if source['contract_version']!='epizoo-source-bundle.v1' or seam['contract_version']!='epizoo-seam-bundle.v1':
         raise ValueError('Wrong source/SEAM bundle type.')
     if not torch.cuda.is_available(): raise ValueError('Requested CUDA unavailable.')
-    joint,cells,manifests,reference=preprocessing.corpus(args['matrices'])
+    joint,cells,manifests,reference=preprocessing.corpus(args['matrices'], profile=args['profile'], strategy=args['strategy'])
     torch.cuda.reset_peak_memory_stats(args['device'])
     with backend.seeded(args['profile']['seed']):
         df,sentences=preprocessing.preprocess(joint)
@@ -100,7 +100,7 @@ def _build(args,root):
             args['mapping']['source_species'] if args['mapping'] else None,root,args['device'])
     files={str(p.relative_to(root)):{k:v for k,v in c.file_record(p).items() if k!='path'}
            for p in sorted(root.rglob('*')) if p.is_file()}
-    value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.PROFILE_SHA256,
+    value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.profile_sha256(args['profile']),
         arguments=args,reference=reference.to_dict(),source_identity=source['identity_sha256'],
         seam_identity=seam['identity_sha256'],preprocessing=metadata,execution=execution,files=files,runtime=resources.runtime())
     record=c.write_json(root/'manifest.json',value)
@@ -121,7 +121,7 @@ def verify_target(path,*,expected_sha256):
     source=resources.load_bundle(**args['source_bundle']);seam=resources.load_bundle(**args['seam_bundle'])
     if (value['source_identity'],value['seam_identity'])!=(source['identity_sha256'],seam['identity_sha256']):
         raise ValueError('Target model resource lineage differs.')
-    joint,cells,manifests,reference=preprocessing.corpus(args['matrices'])
+    joint,cells,manifests,reference=preprocessing.corpus(args['matrices'], profile=args['profile'], strategy=args['strategy'])
     if reference.to_dict()!=value['reference']: raise ValueError('Target reference changed.')
     if args['mapping']:
         import tempfile
@@ -198,7 +198,7 @@ def adapt_epizoo_species(*,execution_identity,**kwargs):
     with operation as context:
         context.register_execution('epizoo_adaptation',args['output_dir'],execution_identity)
         result=publication._execute_publication(args,destination,token,lambda root:_build(args,root),
-            _summary,c.POLICY,c.PROFILE_SHA256,load_manifest=load_manifest,receipt_factory=_make_receipt)
+            _summary,c.POLICY,c.profile_sha256(args['profile']),load_manifest=load_manifest,receipt_factory=_make_receipt)
         from agent.tools.data.scientific_authority import issue
         # A record is provenance. Trusted context/accepted execution anchors reuse.
         authority=issue(context,'adapt_epizoo_species',args,result,execution_identity)

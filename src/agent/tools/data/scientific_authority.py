@@ -130,7 +130,7 @@ def describe(kind, path, sha, context):
             resources.extend(_resource_paths(args['mapping']))
             ref = args['mapping']['source_reference']
             resources.extend(_reference(ref['path'], ref['sha256']))
-        profile = adaptation.PROFILE_SHA256
+        profile = adaptation.profile_sha256(args['profile'])
         verifier = dict(id='epizoo.species-adaptation-structural', compatibility_version='1')
     elif kind == 'annotation':
         from agent.tools.analysis import annotation_contract as annotation, marker_annotation

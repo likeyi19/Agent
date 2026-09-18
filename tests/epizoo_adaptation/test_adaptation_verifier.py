@@ -9,9 +9,14 @@ import pytest
 from agent.tools.models.epizoo_adaptation import publication as p,preprocessing,contract as c
 
 
-@pytest.fixture
-def artifact(tmp_path,matrix_factory,profile,monkeypatch):
-    binding=matrix_factory();joint,cells,manifests,ref=preprocessing.corpus([binding])
+@pytest.fixture(params=['fragment_counts','binary_accessibility'])
+def artifact(tmp_path,matrix_factory,profile,monkeypatch,request):
+    if request.param=='binary_accessibility':
+        profile=c.execution_profile(purpose='qualification',seed=0,batch_size=1,sequence_batch_size=1,
+            max_steps=2,save_steps=2,log_steps=1,matrix_semantics=request.param)
+        binding=matrix_factory([[1,1,0],[0,1,1]],request.param)
+    else: binding=matrix_factory()
+    joint,cells,manifests,ref=preprocessing.corpus([binding],profile=profile)
     root=tmp_path/'artifact';root.mkdir();(root/'training').mkdir()
     df,sentences=preprocessing.preprocess(joint)
     metadata=preprocessing.save_preprocessing(root,joint,cells,manifests,df,sentences)
@@ -27,7 +32,7 @@ def artifact(tmp_path,matrix_factory,profile,monkeypatch):
     args=dict(matrices=[binding],source_bundle=dict(path=str(tmp_path/'source.json'),sha256='a'*64),
         seam_bundle=dict(path=str(tmp_path/'seam.json'),sha256='b'*64),strategy='de_novo',mapping=None,
         profile=profile,device='cuda:0',output_dir=str(tmp_path/'out'))
-    value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.PROFILE_SHA256,
+    value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.profile_sha256(profile),
         arguments=args,reference=ref.to_dict(),source_identity='a'*64,seam_identity='a'*64,
         preprocessing=metadata,execution=execution,files={},runtime={})
     monkeypatch.setattr(p.resources,'load_bundle',lambda **kw:dict(identity_sha256='a'*64))

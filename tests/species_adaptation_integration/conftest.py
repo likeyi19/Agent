@@ -33,7 +33,7 @@ def case(resources, tmp_path):
 
 
 @pytest.fixture
-def integration(case,tmp_path,monkeypatch):
+def integration(case,tmp_path,monkeypatch,request):
     """Mock backend science only; real publication/authority/Application path."""
     from agent.tools.models.epizoo_adaptation import publication as p,contract as c
     from agent.tools.data.authority_context import owned_verification
@@ -46,9 +46,16 @@ def integration(case,tmp_path,monkeypatch):
         record=c.write_json(tmp_path/(name+'.json'),dict(files=[c.file_record(resource)],code=dict(files=[])))
         bundles.append({k:record[k] for k in ('path','sha256')})
     ref=json.loads(Path(case['reference_manifest_path']).read_text())
+    binary = getattr(request, 'param', 'fragment_counts') == 'binary_accessibility'
+    if binary:
+        data=ad.read_h5ad(case['source_path'])
+        data.X=csr_matrix(np.array([[1,1,0],[1,0,0],[0,0,1]],dtype=np.int64))
+        data.write_h5ad(case['source_path'])
+        case['source_sha256']=c.file_record(case['source_path'])['sha256']
+        case['matrix_semantics']='binary_accessibility'
     spec=dict(contract_version='epizoo-adaptation-inputs.v1',reference_identity_sha256=ref['reference_identity_sha256'],
         species=case['species'],assembly=case['assembly'],source_bundle=bundles[0],seam_bundle=bundles[1],
-        mapping=None,execution_profile='qualification.v1')
+        mapping=None,execution_profile='binary-de-novo-qualification.v1' if binary else 'qualification.v1')
     record=c.write_json(tmp_path/'spec.json',spec)
     inputs={k:v for k,v in case.items() if k not in ('species','assembly','output_dir')}
     inputs.update(adaptation_spec_path=record['path'],adaptation_spec_sha256=record['sha256'],strategy='de_novo')
@@ -67,7 +74,7 @@ def integration(case,tmp_path,monkeypatch):
         names=('checkpoint.pth','sequence_embeddings.npy','sequences.txt','document_frequency.npy','sentence_tokens.npy',
             'sentence_indptr.npy','cells.jsonl','features.txt','preprocessing.json','execution.json','training/training_log.csv')
         for name in names:(root/name).write_text('explicit mocked science payload')
-        value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.PROFILE_SHA256,
+        value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.profile_sha256(args['profile']),
             arguments=args,reference=ref,source_identity='a'*64,seam_identity='b'*64,
             preprocessing=dict(n_cells=source['shape'][0],n_features=source['shape'][1]),
             execution=dict(completed_step=10,optimizer_steps=7,amp_skipped_steps=3),

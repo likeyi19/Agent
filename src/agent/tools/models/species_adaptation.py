@@ -31,7 +31,7 @@ def expand(args):
     from agent.tools.data.regulatory_matrix_contract import validate_binding
     validate_binding(spec['species'],spec['assembly'])
     matrix.sha(spec['reference_identity_sha256'])
-    if spec['execution_profile'] not in ('qualification.v1','production-candidate.v1'):
+    if spec['execution_profile'] not in ('qualification.v1','production-candidate.v1','binary-de-novo-qualification.v1'):
         raise ValueError('Explicit qualified execution profile required.')
     current_code = resources.code_bundle()
     for key in ('source_bundle','seam_bundle'):
@@ -50,8 +50,10 @@ def expand(args):
                 mapping['target_reference_identity']!=spec['reference_identity_sha256']):
             raise ValueError('Mapping direction/source/target reference mismatch.')
         for key in ('chain','liftover','bedtools','source_reference'): c.check_file(mapping[key])
-    qualification = spec['execution_profile'] == 'qualification.v1'
+    binary = spec['execution_profile'] == 'binary-de-novo-qualification.v1'
+    qualification = spec['execution_profile'] != 'production-candidate.v1'
     profile = c.execution_profile(purpose='qualification' if qualification else 'production',
+        matrix_semantics='binary_accessibility' if binary else 'fragment_counts',
         seed=0,batch_size=1 if qualification else 4,sequence_batch_size=4 if qualification else 128,
         max_steps=10 if qualification else 500000,save_steps=10 if qualification else 4000,
         log_steps=1 if qualification else 500)
@@ -64,7 +66,7 @@ def expand(args):
     value = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
     from agent.tools.data import regulatory_matrix_contract as neutral
     if (c.file_record(args['matrix_manifest_path'])['sha256'] != args['matrix_manifest_sha256'] or
-        value['contract_version'] != neutral.CONTRACT or value['matrix_semantics'] != 'fragment_counts' or
+        value['contract_version'] != neutral.CONTRACT or value['matrix_semantics'] != profile['matrix_semantics'] or
         value['species'] != spec['species'] or value['assembly'] != spec['assembly'] or
         value['reference']['identity_sha256'] != spec['reference_identity_sha256']):
         raise ValueError('Adaptation matrix/reference/species/assembly/semantics mismatch.')

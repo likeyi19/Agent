@@ -905,7 +905,7 @@ class AgentRuntime:
             spec = self._registry.get(step.tool_name)
             self._registry.validate_arguments(step.tool_name, args)
             authority_options = {}
-            if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species'):
+            if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features'):
                 from agent.tools.data.authority_context import current
                 identity = execution_identity(state.run_id, state.plan, step, spec)
                 from agent.tools.data.scientific_authority import TOOLS
@@ -917,7 +917,7 @@ class AgentRuntime:
                 value = spec.durable_hooks.recover(args, execution_identity(state.run_id, state.plan, step, spec))
             else:
                 value = old.result
-            if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species'):
+            if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features'):
                 from agent.schemas.orchestration import _serialize
                 value = _serialize(value)
             self._registry.validate_result(step.tool_name, value)

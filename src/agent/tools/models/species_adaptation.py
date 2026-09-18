@@ -2,6 +2,7 @@
 from pathlib import Path
 from .epizoo_adaptation import contract as c, publication as backend, resources
 from agent.tools.data import scatac_matrix_contract as matrix
+from agent.tools.data.neutral_matrix_binding import reference_binding, matrix_semantics
 
 ARGUMENTS = ('matrix_manifest_path','matrix_manifest_sha256','adaptation_spec_path',
              'adaptation_spec_sha256','strategy','output_dir')
@@ -62,13 +63,12 @@ def expand(args):
         seam_bundle=spec['seam_bundle'],strategy=args['strategy'],mapping=spec['mapping'],
         profile=profile,device='cuda:0',output_dir=str(args['output_dir'])))
     # Metadata-only checks precede all model loading/SEAM/training. The owner
-    # subsequently verifies conservation and complete scientific compatibility.
+    # subsequently verifies the matrix owner scope and scientific compatibility.
     value = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
-    from agent.tools.data import regulatory_matrix_contract as neutral
     if (c.file_record(args['matrix_manifest_path'])['sha256'] != args['matrix_manifest_sha256'] or
-        value['contract_version'] != neutral.CONTRACT or value['matrix_semantics'] != profile['matrix_semantics'] or
+        matrix_semantics(value) != profile['matrix_semantics'] or
         value['species'] != spec['species'] or value['assembly'] != spec['assembly'] or
-        value['reference']['identity_sha256'] != spec['reference_identity_sha256']):
+        reference_binding(value)['identity_sha256'] != spec['reference_identity_sha256']):
         raise ValueError('Adaptation matrix/reference/species/assembly/semantics mismatch.')
     return expanded
 
@@ -84,7 +84,7 @@ def _summary(args, base):
     value = backend.load_manifest(base['manifest_path'],base['manifest_sha256'])
     source = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
     return dict(base,species=source['species'],assembly=source['assembly'],
-        reference_identity_sha256=source['reference']['identity_sha256'],
+        reference_identity_sha256=reference_binding(source)['identity_sha256'],
         ordered_feature_sha256=source['ordered_feature_sha256'],source_matrix_identity_sha256=source['identity_sha256'],
         source_model_identity_sha256=value['source_identity'],seam_bundle_identity_sha256=value['seam_identity'],
         strategy=value['arguments']['strategy'],profile_sha256=value['profile_sha256'],

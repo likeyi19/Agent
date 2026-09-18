@@ -65,7 +65,7 @@ def test_complete_corpus_and_no_science(cases, registry):
     # This preserved corpus covers the original twenty tools. M14.3 planning
     # coverage lives in tests/species_adaptation_integration.
     assert covered == set(registry.names()) - {
-        "adopt_scATAC_cell_by_features", "adapt_epizoo_species"
+        "adopt_scATAC_cell_by_features", "adapt_epizoo_species", "build_scATAC_cell_by_features"
     }
     report = q.run_scoped_benchmark(tuple(cases.values())).to_dict()
     assert report["schema_version"] == 5

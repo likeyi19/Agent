@@ -52,7 +52,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All twenty-two currently registered tools
+`src/agent/orchestration/registry.py`. All twenty-three currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -81,6 +81,7 @@ derived from the registry.
 | `annotate_scATAC_cell_types` | Primary MAESTRO marker annotation of exact canonical groups; explicit resources/context, annotation authority and immutable-source annotated H5AD |
 | `adopt_scATAC_cell_by_features` | Exact neutral external regulatory-feature matrix adoption with declared species/assembly/reference and value semantics |
 | `adapt_epizoo_species` | Qualified EpiZoo species post-training with explicit strategy and pinned resource/profile specification |
+| `build_scATAC_cell_by_features` | Exact caller-ordered neutral fragment-derived regulatory-feature counts with independent reconstruction and authority |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.
@@ -597,6 +598,38 @@ CUDA-dependent preprocessing module was excluded after an initial collection
 failure. No M14.6 test failed and no EpiZoo code/environment was changed. Exact
 results, the preserved synthetic fixture and the full-suite limitation are in
 the linked M14.6 record.
+
+## Milestone 14.7 — Public neutral fragment-derived matrix integration
+
+[M14.7](docs/m14.7-public-fragment-feature-matrix.md) registers
+`build_scATAC_cell_by_features`; the registry now contains 23 tools. It consumes
+pre-provisioned neutral external fragments, `scatac-explicit-cells.v1` and an exact
+`regulatory-feature-reference.v1` through grouped request bindings. Existing
+M14.6 counting, axes, publication and independent reconstruction remain unchanged.
+No explicit-cell provisioning or neutral raw-import tool is added.
+
+The `species_adaptation` capability includes matrix build, external adoption and
+adaptation as independent choices. Output `matrix: scatac_cell_by_features.v1`
+composes with adaptation through a closed lineage-aware binding; external
+`scatac_cell_by_features.external.v1` remains distinct. Legacy human/mouse ports,
+QC/calling and model science are unchanged. PLAN_ONLY remains scientific-IO-free;
+manifest content compatibility is verified at execution. Zero-overlap rows remain
+valid matrix rows but fail unchanged adaptation training eligibility.
+
+Existing Application execution, schema-2 authority, evidence/reporting and recovery
+are reused. The durable tiny public acceptance preserves B/A/Z and the M14.6
+matrix, with each owner proving once and fresh-process recovery executing zero
+science. Figureless reporting makes no QC/cell-validity or model-readiness claim.
+Exact acceptance, catalog measurements, validation and limits are in the linked
+record. Focused public integration passes 35 tests. Relevant regression reports
+1,696 passed and one stale benchmark inventory failure; the corrected benchmark
+module passes 30 tests. The initial full run reported 4,233 passed, 83 skipped,
+one collected stale inventory failure and seven warnings. The subsequently
+user-authorized full regression on the exact corrected tree passed **4,234 tests,
+83 skipped, 7 existing warnings in 1,511.09 seconds**, exit 0. All RUN_* gates
+were disabled, with no exclusions, CUDA failures or further source/test changes.
+The clean run resolves the final validation item. M14.7 is accepted and authorized
+for commit/push; the next milestone has not begun.
 
 ## Current scientific runtime and verification contracts
 

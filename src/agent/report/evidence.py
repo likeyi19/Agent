@@ -391,6 +391,12 @@ _RAW_INTAKE_FIELDS = frozenset(
 from agent.tools.models.species_adaptation import RESULT_FIELDS as _ADAPT_FIELDS, FACT_FIELDS as _ADAPT_FACTS
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    "build_scATAC_cell_by_features": _ToolProjection(
+        _MATRIX_FIELDS, _MATRIX_FACT_FIELDS, "build-scatac-cell-by-features-v1",
+        (_ArtifactProjection("manifest_path", "fragment_feature_matrix_manifest_json",
+            ("independent_fragment_overlap_reconstruction", "exact_execution_receipt"), digest_field="manifest_sha256"),
+         _ArtifactProjection("matrix_path", "fragment_feature_matrix_h5ad",
+            ("exact_sparse_logical_identity", "full_artifact_sha256"), digest_field="matrix_sha256"))),
     "adopt_scATAC_cell_by_features": _ToolProjection(
         _ADOPTED_MATRIX_FIELDS, _ADOPTED_MATRIX_FACT_FIELDS, "adopt-scatac-cell-by-features-v1",
         (_ArtifactProjection("manifest_path", "neutral_matrix_manifest_json",
@@ -1287,6 +1293,16 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
+        if step.tool_name == "build_scATAC_cell_by_features":
+            from .fragment_features import project
+            try:
+                from agent.orchestration.durable_tool_recovery import execution_identity
+                identity = execution_identity(run_result.run_id, run_result.plan, step, registry.get(step.tool_name))
+                derived, fragments_artifacts = project(step_result.resolved_arguments, step_result.result, identity)
+                facts.update(derived)
+            except Exception as exc:
+                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
+                    "Verified fragment-derived matrix could not be projected.") from exc
         if step.tool_name == "build_scATAC_cell_by_ccre":
             try:
                 derived, fragments_artifacts = project_matrix(

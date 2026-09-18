@@ -3373,6 +3373,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .matrix_adoption_registry import matrix_adoption_tool_spec
     from .annotation_registry import annotation_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
+    from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3395,6 +3396,7 @@ def build_default_tool_registry() -> ToolRegistry:
         matrix_adoption_tool_spec(),
         annotation_tool_spec(),
         *species_tool_specs(),
+        fragment_feature_tool_spec(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

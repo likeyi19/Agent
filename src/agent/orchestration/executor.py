@@ -678,7 +678,7 @@ class PlanExecutor:
                     for dependency in step.depends_on
                 }
                 authority_options = {}
-                if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species') and durable_run_id is not None:
+                if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features') and durable_run_id is not None:
                     from .durable_tool_recovery import execution_identity
                     authority_options['authority_execution_identity'] = execution_identity(
                         durable_run_id, plan, step, self._registry.get(step.tool_name))

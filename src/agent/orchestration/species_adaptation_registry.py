@@ -82,7 +82,7 @@ def tool_specs():
          (('source','source',()),('reference','reference_manifest',())),
          {'matrix_semantics':('fragment_counts','insertion_counts','binary_accessibility')}),
         ('adapt_epizoo_species',adaptation,adaptation.RESULT_FIELDS,validate_adaptation,
-         (('matrix','matrix_manifest',('scatac_cell_by_features.external.v1',)),('specification','adaptation_spec',())),
+         (('matrix','matrix_manifest',('scatac_cell_by_features.external.v1','scatac_cell_by_features.v1')),('specification','adaptation_spec',())),
          {'strategy':('de_novo','mapped_reference')})):
         required={};ports=[]
         for key in public.ARGUMENTS:
@@ -109,7 +109,7 @@ def tool_specs():
             planning=_tool_planning(PlanningToolRole.OPERATION,
                 'Adopt exact new-species cell-by-regulatory-feature H5AD.' if is_adoption else 'Post-train pretrained EpiZoo for an explicit target species.',
                 'Complete ordered neutral reference/genome; int64 CSR; declared value semantics. Peaks are exact features, never projected to canonical cCREs.' if is_adoption else
-                'Qualified neutral matrix: fragment_counts, or binary_accessibility with explicit binary-de-novo-qualification.v1; specification pins reference and source/SEAM bundles.',
+                'Qualified neutral matrix: external or fragment-derived fragment_counts, or binary_accessibility with explicit binary-de-novo-qualification.v1; specification pins reference and source/SEAM bundles.',
                 'No inferred raw/QC lineage, curated-cCRE or model-readiness claim.' if is_adoption else
                 'Explicit de_novo or mapped_reference; mapped requires supplied chain/reference resources. No fallback, biological quality claim or target-model inference.',
                 capability_ids=('species_adaptation',)),

@@ -563,7 +563,10 @@ from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELD
 from agent.tools.models.species_adaptation import FACT_FIELDS as _ADAPTATION_REPORT_FACTS
 _ADAPTATION_REPORT_FIELDS = (*_ADAPTATION_REPORT_FACTS, "completed_step", "purpose", "n_cells", "n_features", "checkpoint_sha256", "contract_version")
 
+from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
+
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
     "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
@@ -776,6 +779,7 @@ _TOOL_TITLES: Mapping[str, str] = {
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
     "adopt_scATAC_cell_by_ccre": "External cell-by-cCRE adoption",
+    "build_scATAC_cell_by_features": "Fragment-derived regulatory-feature matrix",
     "adopt_scATAC_cell_by_features": "Neutral regulatory-feature matrix adoption",
     "adapt_epizoo_species": "EpiZoo species adaptation",
     "annotate_scATAC_cell_types": "Primary cell-type annotation",
@@ -1011,6 +1015,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
@@ -1069,6 +1074,7 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "adopt_scATAC_cell_by_features": ("matrix_semantics", "reference_identity_sha256"),
     "adopt_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","source_sha256","reference_identity_sha256"),
+    "build_scATAC_cell_by_features": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","upstream_identities"),
     "build_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","upstream_identities"),
     "select_scATAC_cells": ("selection_method","cell_call_method","cell_call_state","resource_qualification","qc_identity_sha256","selection_profile_sha256"),
     "compute_scATAC_qc": ("tss_method","science_profile_sha256","qc_resource_identity_sha256","resource_qualification","contract_version"),
@@ -1379,6 +1385,17 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == 'build_scATAC_cell_by_features':
+        lines = [f"### Fragment-derived regulatory-feature matrix {occurrence}", "",
+            "Independent matrix-owner reconstruction verified canonical fragment-record overlap counts. "
+            "Caller-declared cells and the full declared feature vocabulary retain their exact order.", ""]
+        for fact in step.facts:
+            label = 'Artifact contract' if fact.field == 'contract_version' else fact.field.replace('_',' ').capitalize()
+            lines.append(f"- {label}: {_inline_code(fact.value)}")
+        lines.extend(("", "Explicit cells establish no QC, statistical cell calling or biological validity. "
+            "A declared peak set is not a curated cCRE set. Matrix availability does not establish downstream model readiness.",
+            "", _fact_ids_line(step.facts), ""))
+        return lines
     if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species'):
         adopting = step.tool_name == 'adopt_scATAC_cell_by_features'
         lines=[f"### {'Neutral matrix adoption' if adopting else 'EpiZoo species adaptation'} {occurrence}", "",
@@ -1622,6 +1639,7 @@ def _render_summary(
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
         "build_scATAC_cell_by_ccre": "Full ordered canonical fragment-record matrix generated",
         "adopt_scATAC_cell_by_ccre": "External canonical matrix adopted with exact conservation",
+        "build_scATAC_cell_by_features": "Fragment-derived neutral matrix independently verified",
         "adopt_scATAC_cell_by_features": "Neutral matrix adopted with exact conservation",
         "adapt_epizoo_species": "Target EpiZoo model published; biological performance not assessed",
         "select_scATAC_cells": "Explicit QC selection succeeded; statistical cell calling was not assessed",

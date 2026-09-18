@@ -802,13 +802,13 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M14.3 adds two public tools; retain full semantic guidance and record
+    # M14.7 adds the public fragment-derived matrix tool; retain full semantic guidance and record
     # the bounded full-v3 audit growth separately from scoped v4 payloads.
     assert len(serialized_schema.encode("utf-8")) <= 15_500
-    assert len(prompt.encode("utf-8")) <= 24_000
+    assert len(prompt.encode("utf-8")) <= 25_000
     assert len(serialized_schema.encode("utf-8")) + len(
         prompt.encode("utf-8")
-    ) <= 39_500
+    ) <= 40_500
     assert count_key(schema, "anyOf") <= 5
     assert count_objects(schema) <= 2 * len(registry.names()) + 3
     assert count_key(schema, "$ref") >= 80

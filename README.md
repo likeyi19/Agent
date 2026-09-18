@@ -502,6 +502,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
+| Neutral fragment-derived matrix | `build_scATAC_cell_by_features`: verified external fragments, exact caller-ordered cells and neutral features; independent fragment-count authority |
 | Species adaptation | `adapt_epizoo_species`: qualified neutral fragment counts, explicit strategy and pinned EpiZoo/SEAM/profile specification; publishes a target model |
 | Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
 | Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
@@ -761,4 +762,12 @@ adds a data-layer path for an explicit species/reference, ordered caller-supplie
 barcodes, and an exact cCRE/peak/region vocabulary. It reuses verified fragments,
 unit fragment-overlap counting, the independent matrix owner and durable
 publication. It introduces no QC or cell-calling claim. Public Agent integration
-and real-fragment biological acceptance remain deferred; registry count stays 22.
+was deferred at that data-layer checkpoint (22 tools). M14.7 below adds public
+integration; real-fragment biological acceptance remains deferred.
+
+[M14.7 public fragment-derived matrices](docs/m14.7-public-fragment-feature-matrix.md)
+exposes `build_scATAC_cell_by_features` for verified external fragments, exact
+caller-declared cells and a neutral regulatory-feature reference. It preserves
+fragment-derived authority separately from external H5AD adoption and composes
+with compatible species adaptation. Registry count is 23; QC, automatic calling
+and biological-fragments qualification are not implied.

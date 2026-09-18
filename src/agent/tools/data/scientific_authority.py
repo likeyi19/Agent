@@ -24,6 +24,7 @@ TOOLS = {
     # Data-layer owner identity only; not an executable ToolRegistry entry.
     'adopt_cell_by_features': 'matrix',
     'build_cell_by_features': 'matrix',
+    'build_scATAC_cell_by_features': 'matrix',
     'import_external_fragments': 'external_fragment_adoption',
     'adopt_scATAC_cell_by_features': 'matrix',
     'adapt_epizoo_species': 'epizoo_adaptation',
@@ -369,7 +370,8 @@ def issue(context, tool_name, arguments, result, execution_identity):
 def _publication_record(context, tool_name, arguments, result, execution_identity, result_metadata):
     """Pure provenance description, not a trust-issuing entry point."""
     kind = TOOLS[tool_name]
-    adoption_modules = {'build_cell_by_features': 'fragment_feature_matrix',
+    adoption_modules = {'build_scATAC_cell_by_features': 'fragment_feature_tool',
+                        'build_cell_by_features': 'fragment_feature_matrix',
                         'import_external_fragments': 'neutral_fragment_import',
                         'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
                         'adopt_cell_by_features': 'regulatory_matrix_adoption',

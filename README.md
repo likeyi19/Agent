@@ -744,3 +744,8 @@ EpiZoo backend through AgentApplication. See the [M14.3 input specification,
 profiles and acceptance record](docs/m14.3-species-adaptation-integration.md).
 This produces a target model; public target-model inference and biological
 performance validation remain deferred.
+
+[M14.4 real macaque technical acceptance](docs/m14.4-real-macaque-mapped-acceptance.md)
+exercises mapped-reference adaptation on all 331 supplied cells and 615,873 target
+features, including real SEAM, bounded optimizer updates and fresh-process recovery.
+It does not establish biological convergence or embedding quality.

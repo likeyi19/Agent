@@ -510,6 +510,28 @@ performance acceptance. Final full lightweight regression passed 4,093 tests,
 with 83 skipped and seven existing warnings (1,391.66 seconds), all RUN_* gates
 unset. M14.3 is ready for review; commit/push await user closeout review.
 
+## Milestone 14.4 — Real macaque mapped-reference technical acceptance
+
+[M14.4](docs/m14.4-real-macaque-mapped-acceptance.md) passes the public mapped
+path on all 331 supplied Macaca fascicularis cells and all 615,873 macFas5
+features. Explicit operator-declared `fragment_counts` and exhaustive external
+BED/H5AD representation preparation preserve the original data and feature order;
+historical fragment production is not independently reconstructed. The exact
+supplied chain maps 339,396 targets to 320,317 retained human checkpoint rows;
+276,477 targets remain unmapped. Real target SEAM, mapped/shared inheritance and
+unchanged native unmapped initialization passed before training.
+
+The unchanged batch-1 qualification profile completed ten attempts and ten applied
+updates with zero AMP skips. Peak allocated/reserved GPU memory was 18.210/20.693
+GiB. Strict reload, finite full-decoder forward, atomic publication and figureless
+Application reporting passed. Matrix/adaptation owners each proved their scope
+once; fresh-process recovery repeated no scientific execution, and chain-copy
+mutation rejected reuse. Agent focused tests passed 148; EpiZoo qualification
+tests passed 21. No production code changed and no full suite was rerun. Registry
+remains 22. This is bounded technical acceptance, not biological performance,
+convergence, production-scale sufficiency or public target-model inference.
+Closeout awaits user review; resources/checkpoints remain outside Git.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation

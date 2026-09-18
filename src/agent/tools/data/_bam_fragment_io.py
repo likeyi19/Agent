@@ -56,6 +56,9 @@ def runtime_identity():
 
 def bind(arguments):
     a = m.validate_arguments(arguments)
+    if a['source_profile'] == m.NEUTRAL_PROFILE_ID:
+        from .neutral_bam import bind
+        return bind(a)
     _, intake, _ = raw.load_raw_intake_manifest(a['intake_manifest_path'], expected_sha256=a['intake_manifest_sha256'])
     _, context, _ = lc.load_scatac_library_processing_context(a['library_context_path'], expected_sha256=a['library_context_sha256'])
     # M11.1 explicitly permits an identical intake at another manifest locator.
@@ -107,7 +110,7 @@ def bind(arguments):
         context=resource(a['library_context_path'], a['library_context_sha256']), snapshots=snapshots)
 
 
-def project(path, target):
+def project(path, target, *, neutral_reference=None):
     """Raw decoder fields only, including CIGAR and sequence length for checking.
 
     Exact QNAME is hex encoded solely for collision-free sort framing. Header and
@@ -115,9 +118,15 @@ def project(path, target):
     """
     ps = _raw_bam._backend(); stream = hashlib.sha256(); count = 0
     try:
-        with ps.AlignmentFile(path, 'rb', require_index=False, threads=1) as bam, target.open('xb') as output:
+        with Path(path).open('rb') as source, ps.AlignmentFile(source, 'rb', require_index=False, threads=1) as bam, target.open('xb') as output:
             if not bam.is_bam: m.fail('BAM_FRAGMENTS_FORMAT_UNSUPPORTED')
             bam.check_truncation()
+            if neutral_reference is not None:
+                try:
+                    _, notices = _raw_bam._header(bam, _neutral_reference=neutral_reference)
+                except (_raw_bam._HeaderLimit, _raw_bam._HeaderInvalid):
+                    m.fail('BAM_FRAGMENTS_HEADER_INVALID')
+                if notices: m.fail('BAM_FRAGMENTS_HEADER_INVALID')
             header = bam.header.to_dict()
             if len(canonical(header)) > _raw_bam.MAX_HEADER_BYTES: m.fail('BAM_FRAGMENTS_HEADER_INVALID')
             dictionary = list(zip(bam.references, bam.lengths))

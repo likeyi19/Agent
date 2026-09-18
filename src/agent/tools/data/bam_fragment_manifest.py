@@ -35,6 +35,31 @@ PROFILE = dict(artifact_type='agent.bam-fragment-profile', schema_version=1, pro
     runtime_versions={'pysam': '0.24.1', 'htslib': '1.24', 'samtools': '1.24'},
     runtime_qualification_sha256=RUNTIME_QUALIFICATION['identity_sha256'])
 PROFILE_BYTES = canonical(PROFILE)
+NEUTRAL_PROFILE_ID = 'agent-cb-paired-atac.primary-neutral.v1'
+NEUTRAL_PRODUCTION_CONTRACT = 'bam-fragment-production.neutral.v1'
+NEUTRAL_SUPPORT = dict(SUPPORT, definition=SUPPORT['definition'].replace(PROFILE_ID, NEUTRAL_PROFILE_ID))
+NEUTRAL_PROFILE = dict(PROFILE, profile_id=NEUTRAL_PROFILE_ID, support=NEUTRAL_SUPPORT,
+    source='one-explicit-BAM/library/namespace;exact-neutral-reference;no-index-required',
+    contigs='primary-nuclear-contigs.v1;complete-exact-FAI-header-compatibility;no-aliases',
+    source_binding='neutral-bam-inputs.v1;explicit-species-taxonomy-assembly-reference;optional-bound-index',
+    exclusion_order=[*EXCLUSIONS, 'non_primary'])
+NEUTRAL_PROFILE_BYTES = canonical(NEUTRAL_PROFILE)
+
+
+def profile_bytes(profile_id):
+    if profile_id == PROFILE_ID: return PROFILE_BYTES
+    if profile_id == NEUTRAL_PROFILE_ID: return NEUTRAL_PROFILE_BYTES
+    fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
+
+
+def binding_keys(arguments):
+    return (('source', 'input_binding', 'reference', 'namespace') if arguments['source_profile'] == NEUTRAL_PROFILE_ID
+            else ('source', 'intake', 'context', 'reference', 'namespace', 'group_id', 'context_identity_sha256'))
+
+
+def exclusions(binding):
+    return (*EXCLUSIONS, 'non_primary') if 'primary_contigs' in binding else EXCLUSIONS
+
 ARGUMENTS = ('intake_manifest_path', 'intake_manifest_sha256', 'library_context_path',
     'library_context_sha256', 'reference_bundle_path', 'reference_bundle_sha256',
     'source_path', 'source_sha256', 'source_profile', 'output_dir')
@@ -56,14 +81,16 @@ def sha_bytes(value):
 
 def validate_arguments(arguments):
     try:
-        value = dict(arguments); v2.shape(value, ARGUMENTS)
-        for key in ARGUMENTS:
+        value = dict(arguments)
+        keys = ('input_spec_path', 'input_spec_sha256', 'source_profile', 'output_dir') if value.get('source_profile') == NEUTRAL_PROFILE_ID else ARGUMENTS
+        v2.shape(value, keys)
+        for key in keys:
             if key.endswith('_path') or key == 'output_dir':
                 if isinstance(value[key], Path): value[key] = str(value[key])
                 v2.absolute_path(value[key])
             elif key.endswith('_sha256'):
                 v2.sha(value[key])
-        if value['source_profile'] != PROFILE_ID:
+        if value['source_profile'] not in (PROFILE_ID, NEUTRAL_PROFILE_ID):
             fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
         return value
     except BamFragmentsError:
@@ -74,20 +101,20 @@ def validate_arguments(arguments):
 
 def validate_record(value):
     try:
+        args = validate_arguments(value['arguments'])
+        neutral = args['source_profile'] == NEUTRAL_PROFILE_ID
         v2.shape(value, ('artifact_type', 'schema_version', 'contract_version', 'profile_sha256',
-            'arguments', 'source', 'intake', 'context', 'reference', 'namespace', 'group_id',
-            'context_identity_sha256', 'source_history', 'runtime', 'qualification', 'canonical', 'outputs'))
+            'arguments', *binding_keys(args), 'source_history', 'runtime', 'qualification', 'canonical', 'outputs'))
         if (value['artifact_type'] != 'agent.bam-fragment-production' or type(value['schema_version']) is not int
-                or value['schema_version'] != 1 or value['contract_version'] != PRODUCTION_CONTRACT
-                or value['profile_sha256'] != sha_bytes(PROFILE_BYTES) or value['source_history'] != HISTORY): fail()
-        validate_arguments(value['arguments']); v2.token(value['namespace']); v2.text(value['group_id'])
-        v2.sha(value['context_identity_sha256'])
-        for k in ('source', 'intake', 'context'): v2.resource(value[k])
-        r = value['reference']
-        v2.shape(r, ('manifest_path', 'manifest_sha256', 'reference_identity_sha256', 'species', 'assembly', 'ordered_contig_sha256'))
-        v2.absolute_path(r['manifest_path'])
-        for k in ('manifest_sha256', 'reference_identity_sha256', 'ordered_contig_sha256'): v2.sha(r[k])
-        if r['species'] not in ('human', 'mouse') or r['assembly'] != {'human':'hg38','mouse':'mm10'}[r['species']]: fail()
+                or value['schema_version'] != 1 or value['contract_version'] != (NEUTRAL_PRODUCTION_CONTRACT if neutral else PRODUCTION_CONTRACT)
+                or value['profile_sha256'] != sha_bytes(profile_bytes(args['source_profile'])) or value['source_history'] != HISTORY): fail()
+        v2.token(value['namespace'])
+        for k in (('source', 'input_binding') if neutral else ('source', 'intake', 'context')): v2.resource(value[k])
+        if not neutral:
+            v2.text(value['group_id']); v2.sha(value['context_identity_sha256'])
+        from ._fragment_reference import validate as validate_reference
+        validate_reference(value['reference'])
+        if (type(value['reference']['species']) is dict) != neutral: fail()
         runtime = value['runtime']; v2.shape(runtime, ('versions', 'files', 'identity_sha256'))
         if runtime != RUNTIME_QUALIFICATION: fail('BAM_FRAGMENTS_RUNTIME_MISMATCH')
         if runtime['versions'] != PROFILE['runtime_versions']: fail('BAM_FRAGMENTS_RUNTIME_MISMATCH')
@@ -100,7 +127,7 @@ def validate_record(value):
         for k in ('header_sha256', 'sq_sha256', 'stream_sha256'): v2.sha(q[k])
         for k in ('n_records','n_templates','n_primary_pairs','n_secondary','n_supplementary','eligible_pairs'):
             v2.number(q[k], low=0)
-        v2.shape(q['exclusions'], EXCLUSIONS)
+        v2.shape(q['exclusions'], (*EXCLUSIONS, 'non_primary') if neutral else EXCLUSIONS)
         for count in q['exclusions'].values(): v2.number(count, low=0)
         if q['n_primary_pairs'] != q['n_templates'] or q['n_templates'] != q['eligible_pairs'] + sum(q['exclusions'].values()): fail()
         summary = value['canonical']; v2.shape(summary, v2.SUMMARY_KEYS)
@@ -127,10 +154,11 @@ def load_record(path, expected_sha256):
 
 def provenance(record, profile_resource, record_resource):
     sources = [{'role':role, 'resource':record[key]} for role,key in
-               (('bam','source'), ('intake_manifest','intake'), ('library_context','context'))]
+               ((('bam','source'), ('bam_input_binding','input_binding')) if record['arguments']['source_profile'] == NEUTRAL_PROFILE_ID
+                else (('bam','source'), ('intake_manifest','intake'), ('library_context','context')))]
     return dict(kind='bam_fragment_production', contract_version='fragment-producer-provenance.v1',
-        profile={'id':PROFILE_ID,'resource':profile_resource}, sources=sources,
-        producer_record=record_resource, support=deepcopy(SUPPORT),
+        profile={'id':record['arguments']['source_profile'],'resource':profile_resource}, sources=sources,
+        producer_record=record_resource, support=deepcopy(NEUTRAL_SUPPORT if record['arguments']['source_profile'] == NEUTRAL_PROFILE_ID else SUPPORT),
         processing={
             'tn5': {'status':'declared','description':'Source declared unshifted; Agent +4/-5 transformation independently recomputed.'},
             'deduplication': {'status':'declared','description':'Source declares duplicates retained; exact Agent key and individually passing pair support independently recomputed.'},

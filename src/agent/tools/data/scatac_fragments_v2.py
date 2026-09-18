@@ -115,10 +115,12 @@ def _provenance(value):
         'bam_fragment_production': {'bam', 'intake_manifest', 'library_context'},
         'fastq_fragment_production': {'fastq', 'intake_manifest', 'library_context'},
     }[kind]
+    neutral_bam = kind == 'bam_fragment_production' and value['profile']['id'] == 'agent-cb-paired-atac.primary-neutral.v1'
+    if neutral_bam: allowed = {'bam', 'bam_input_binding'}
     if (set(roles) != allowed or identities != sorted(set(identities))
             or len({p for _, _, p in identities}) != len(identities)):
         fail('FRAGMENTS_V2_PROVENANCE_INVALID')
-    if kind != 'external_fragment_adoption' and any(roles.count(r) != 1 for r in ('intake_manifest', 'library_context')):
+    if not neutral_bam and kind != 'external_fragment_adoption' and any(roles.count(r) != 1 for r in ('intake_manifest', 'library_context')):
         fail('FRAGMENTS_V2_PROVENANCE_INVALID')
     # FASTQ publication requires its rich, separately verified producer record.
     # Rich backend/index/whitelist/decoded-source lineage belongs in a bound,
@@ -209,7 +211,9 @@ def validate_fragments_manifest_v2(value):
             else:
                 fail()
             _provenance(entry['provenance'])
-            if type(r['species']) is dict and entry['provenance']['kind'] != 'external_fragment_adoption':
+            if type(r['species']) is dict and not (entry['provenance']['kind'] == 'external_fragment_adoption'
+                    or (entry['provenance']['kind'] == 'bam_fragment_production'
+                        and entry['provenance']['profile']['id'] == 'agent-cb-paired-atac.primary-neutral.v1')):
                 fail('FRAGMENTS_V2_REFERENCE_MISMATCH')
             source_count += len(entry['provenance']['sources'])
             if source_count > MAX_SOURCES:

@@ -780,3 +780,11 @@ matrix through the public fragment-derived owner. Historical external matrix
 authority remains distinct. New neutral fragment preparation uses
 `prepare_primary_fragments` followed by `import_primary_fragments`; legacy
 human/mouse contracts and previously accepted unscoped artifacts are unchanged.
+
+[M14.9 neutral BAM production](docs/m14.9-neutral-bam-fragments.md) adds the
+data-layer `prepare_neutral_bam_fragments` entry point. An explicit neutral
+source/reference/library declaration and shared primary-nuclear scope feed the
+existing paired-ATAC producer and independent verifier. Output is normal
+`scatac-fragments.v2`, directly consumed by `build_scATAC_cell_by_features` with
+explicit cells. Registry remains 23; neutral BAM public production wiring and
+real-BAM biological acceptance remain deferred.

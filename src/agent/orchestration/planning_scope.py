@@ -18,7 +18,7 @@ SCOPE_VERSION = "planning-scope-v1"
 SELECTION_SCHEMA_VERSION = 1
 # Descriptions only. Membership and scientific contracts belong to ToolRegistry.
 CAPABILITY_DESCRIPTIONS = MappingProxyType({
-    "species_adaptation": "Neutral target-species matrix construction from verified external fragments, explicit barcodes and regulatory features; exact external matrix adoption; EpiZoo species post-training with explicit resources. No cell calling or target-model inference.",
+    "species_adaptation": "Neutral target-species matrix construction from producer-qualified fragments, explicit barcodes and regulatory features; exact external matrix adoption; EpiZoo species post-training with explicit resources. No cell calling or target-model inference.",
     "processed_inspection": "Inspect supplied processed scATAC H5AD datasets.",
     "embedding_analysis": (
         "EpiZoo cell embeddings, neighbor graphs, clustering, UMAP and fixed clustering evaluation."

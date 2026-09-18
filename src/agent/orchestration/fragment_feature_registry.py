@@ -59,8 +59,8 @@ def tool_spec():
         exception_classifier=classify, retryable_error_codes=frozenset(),
         recovery_policy_version=public.RECOVERY_POLICY, durable_hooks=DurableToolHooks(public.execute,public.recover),
         planning=_tool_planning(PlanningToolRole.OPERATION,
-            'Build a target-species cell-by-regulatory-feature matrix from verified external fragments.',
-            'Requires neutral-reference external fragments v2, scatac-explicit-cells.v1 caller-ordered barcodes and regulatory-feature-reference.v1; peak sets remain declared peaks.',
+            'Build a target-species cell-by-regulatory-feature matrix from producer-qualified fragments.',
+            'Requires neutral-reference fragments v2 (external or primary-neutral BAM), scatac-explicit-cells.v1 caller-ordered barcodes and regulatory-feature-reference.v1; peak sets remain declared peaks.',
             'Fragment-derived counts independently reconstructed, distinct from external H5AD adoption. Preserve exact cells/features and zero-overlap rows; absent barcodes fail. No cell discovery, QC, calling or model-readiness claim.',
             capability_ids=('species_adaptation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(

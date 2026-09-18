@@ -13,7 +13,7 @@ import os
 from agent.schemas.verification_authority import AuthorityError, digest, VerifiedArtifactAuthority
 from agent.schemas.orchestration import _serialize
 from . import scatac_fragments_v2 as v2
-from .fragments_authority_contract import CONTRACTS
+from .fragments_authority_contract import CONTRACTS, contract_for_manifest
 from .external_matrix_contract import is_external, contract_for
 
 TOOLS = {
@@ -26,6 +26,7 @@ TOOLS = {
     'build_cell_by_features': 'matrix',
     'build_scATAC_cell_by_features': 'matrix',
     'import_external_fragments': 'external_fragment_adoption',
+    'prepare_neutral_bam_fragments': 'bam_fragment_production',
     'adopt_scATAC_cell_by_features': 'matrix',
     'adapt_epizoo_species': 'epizoo_adaptation',
 }
@@ -165,7 +166,7 @@ def describe(kind, path, sha, context):
         producer_kind = next(iter(kinds))
         if kind != 'generic_fragments' and producer_kind != kind:
             raise AuthorityError('Cross-producer scientific authority substitution.')
-        contract = CONTRACTS[producer_kind]
+        contract = contract_for_manifest(value)
         qualification = contract.qualification if kind != 'generic_fragments' else {}
         profile = contract.profile_sha256
         rp = value['reference']
@@ -202,7 +203,15 @@ def describe(kind, path, sha, context):
             sources.extend(s for library in record['libraries'] for s in library['sources'])
         elif producer_kind == 'bam_fragment_production':
             sources.append(record['source'])
-            resources.extend(record[k]['path'] for k in ('intake', 'context'))
+            if 'input_binding' in record:
+                from .neutral_bam import load, dependencies as bam_dependencies
+                pointer = record['input_binding']
+                spec = load(pointer['path'], pointer['sha256'])
+                resources.extend([pointer['path'], *[r['path'] for r in bam_dependencies(spec)]])
+                # Neutral reuse requires current source/index freshness, like M14.6.
+                sources.clear()
+            else:
+                resources.extend(record[k]['path'] for k in ('intake', 'context'))
         else:
             sources.append(record['source']['resource'])
             if 'primary_preparation' in record:
@@ -255,7 +264,8 @@ def describe(kind, path, sha, context):
     elif kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-features.v1':
         from .fragment_feature_matrix_contract import PROFILE_SHA256
         fp, cp, rp = (value['upstream'][k] for k in ('fragments', 'cells', 'reference'))
-        dependency('fragments', 'external_fragment_adoption', fp['manifest_path'], fp['manifest_sha256'])
+        fragments, _ = _load('generic_fragments', Path(fp['manifest_path']), fp['manifest_sha256'])
+        dependency('fragments', fragments['libraries'][0]['provenance']['kind'], fp['manifest_path'], fp['manifest_sha256'])
         dependency('cells', 'explicit_cells', cp['manifest_path'], cp['manifest_sha256'])
         resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256'], neutral=True))
         owned.append(root / value['matrix']['path'])
@@ -304,6 +314,9 @@ def runtime_compatibility(kind, description, kwargs):
         if description['manifest']['runtime'] != runtime():
             raise AuthorityError('EpiZoo runtime changed.')
     if kind in CONTRACTS or kind == 'generic_fragments':
+        if kind == 'bam_fragment_production' and description['profile'] != CONTRACTS[kind].profile_sha256:
+            from ._bam_fragment_io import runtime_identity
+            runtime_identity()
         if kind == 'fastq_fragment_production':
             from .fastq_fragments_verifier import verify_packaging
         elif kind == 'generic_fragments':

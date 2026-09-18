@@ -10,6 +10,9 @@ from ._fragments_common import canonical, digest, MAX_SUPPORT, MAX_TOTAL, PACKAG
 
 
 def header_check(header, dictionary, binding):
+    if 'primary_contigs' in binding:
+        from .neutral_bam import check_header_declarations
+        check_header_declarations(header, binding)
     sq = header.get('SQ', [])
     if not sq or len(sq) > 4096 or [(s.get('SN'),s.get('LN')) for s in sq] != dictionary:
         m.fail('BAM_FRAGMENTS_HEADER_INVALID')
@@ -96,12 +99,13 @@ def pair(first, second, split, dictionary):
 
 def generate(binding, directory, runtime):
     projected = directory/'reads.tmp'; ordered = directory/'names.tmp'; ranked = directory/'ranked.tmp'
-    header, dictionary, stream, n = io.project(binding['source']['path'], projected)
+    header, dictionary, stream, n = io.project(binding['source']['path'], projected,
+        **({'neutral_reference':binding['reference']} if 'primary_contigs' in binding else {}))
     rgs = header_check(header,dictionary,binding)
     io.sort_templates(projected,ordered,directory,runtime)
     q = dict(header_sha256=digest(header),sq_sha256=digest(dictionary),stream_sha256=stream,
         n_records=n,n_templates=0,n_primary_pairs=0,n_secondary=0,n_supplementary=0,
-        eligible_pairs=0,exclusions=dict.fromkeys(m.EXCLUSIONS,0))
+        eligible_pairs=0,exclusions=dict.fromkeys(m.exclusions(binding),0))
     ranks = {name:i for i,(name,_) in enumerate(binding['contigs'])}
     with ranked.open('xb') as target:
         for _, group in groupby(io.records(ordered), key=lambda x:x[0]):
@@ -118,6 +122,8 @@ def generate(binding, directory, runtime):
             if set(primary) != {1,2}: m.fail('BAM_FRAGMENTS_TEMPLATE_INVALID')
             q['n_templates'] += 1; q['n_primary_pairs'] += 1
             fragment,reason = pair(primary[1],primary[2],split,dictionary)
+            if reason is None and 'primary_contigs' in binding and fragment[0] not in binding['primary_contigs']:
+                fragment,reason = None,'non_primary'
             if reason: q['exclusions'][reason] += 1
             else:
                 name,start,end,barcode = fragment; q['eligible_pairs'] += 1
@@ -162,13 +168,14 @@ def prepare_in_stage(arguments, stage, runtime):
     run_stage([runtime.tabix,'-p','bed',bgzf],cwd=directory,code='BAM_FRAGMENTS_PACKAGING_FAILED')
     outputs={k:io.resource(p) for k,p in (('bgzf',bgzf),('tabix',Path(str(bgzf)+'.tbi')))}
     record=m.validate_record(dict(artifact_type='agent.bam-fragment-production',schema_version=1,
-        contract_version=m.PRODUCTION_CONTRACT,profile_sha256=m.sha_bytes(m.PROFILE_BYTES),arguments=arguments,
-        **{k:binding[k] for k in ('source','intake','context','reference','namespace','group_id','context_identity_sha256')},
+        contract_version=m.NEUTRAL_PRODUCTION_CONTRACT if arguments['source_profile'] == m.NEUTRAL_PROFILE_ID else m.PRODUCTION_CONTRACT,
+        profile_sha256=m.sha_bytes(m.profile_bytes(arguments['source_profile'])),arguments=arguments,
+        **{k:binding[k] for k in m.binding_keys(arguments)},
         source_history=m.HISTORY,runtime=backend,qualification=qualification,canonical=summary,
         outputs={k:{f:v[f] for f in ('sha256','size_bytes')} for k,v in outputs.items()}))
     for p in directory.iterdir():
         if p not in (bgzf,Path(str(bgzf)+'.tbi')): p.unlink()
-    profile=stage/'profile.json'; profile.write_bytes(m.PROFILE_BYTES)
+    profile=stage/'profile.json'; profile.write_bytes(m.profile_bytes(arguments['source_profile']))
     producer=stage/'production.json'; producer.write_bytes(canonical(record))
     entry=dict(namespace=binding['namespace'],**summary,strand={'mode':'absent','definition':None},
         provenance=m.provenance(record,io.resource(profile),io.resource(producer)))
@@ -177,6 +184,6 @@ def prepare_in_stage(arguments, stage, runtime):
         reference=binding['reference'],semantics=v2.SEMANTICS,libraries=[entry])
     value['fragments_identity_sha256']=v2.fragments_identity(value)
     (stage/'manifest.json').write_bytes(v2.canonical_fragments_manifest_v2_bytes(value))
-    if io.resource(arguments['source_path']) != binding['source']: m.fail('BAM_FRAGMENTS_SOURCE_CHANGED')
+    if io.resource(binding['source']['path']) != binding['source']: m.fail('BAM_FRAGMENTS_SOURCE_CHANGED')
     io.check_snapshots(binding['snapshots'])
     return value,binding['snapshots']

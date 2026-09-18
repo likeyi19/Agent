@@ -363,7 +363,7 @@ class _HeaderInvalid(Exception):
     pass
 
 
-def _header(bam):
+def _header(bam, *, _neutral_reference=None):
     # htslib has already decoded the header. These are projection/iteration
     # bounds, not a pre-allocation promise. UR and PG CL are never projected.
     text = str(bam.header)
@@ -400,7 +400,13 @@ def _header(bam):
         complete = bool(sq) and len(supplied) == len(sq) and all(v is not None for v in normalized)
         return tuple((v, complete) for v in values)
 
-    species, assemblies = metadata('SP', _species), metadata('AS', _assembly)
+    if _neutral_reference is None:
+        species, assemblies = metadata('SP', _species), metadata('AS', _assembly)
+    else:
+        # Private producer binding: retain all M10 header guards, but resolve
+        # neutral declarations by exact reference identity rather than aliases.
+        species = metadata('SP', lambda value: value if value == _neutral_reference['species']['scientific_name'] else None)
+        assemblies = metadata('AS', lambda value: value if value == _neutral_reference['assembly'] else None)
     ids, libs, samples = [], [], []
     for record in rg:
         if not _header_label(record.get('ID')):

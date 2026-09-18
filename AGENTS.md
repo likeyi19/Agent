@@ -68,8 +68,43 @@ Accepted legacy human/mouse public contracts and unscoped historical neutral
 artifacts retain their exact identities and semantics; they are not silently
 migrated or reclassified. Historical full-FAI fragment admission is not a claim
 of primary-nuclear filtering. Future neutral raw producers should reuse this
-scope; arbitrary-species FASTQ/BAM/QC remain deferred. See the
+scope; M14.9 adds data-layer neutral BAM production. Arbitrary-species FASTQ/QC
+and neutral BAM public production wiring remain deferred. See the
 [M14.8 implementation and acceptance record](docs/m14.8-real-macaque-fragment-matrix.md).
+
+## Milestone 14.9 — Neutral BAM fragment producer
+
+[M14.9](docs/m14.9-neutral-bam-fragments.md) introduces data-layer
+`neutral_bam.prepare_neutral_bam_fragments` with exact `neutral-bam-inputs.v1`
+source/species/taxonomy/assembly/reference/library declarations and mandatory
+`primary-nuclear-contigs.v1`. It reuses the accepted BAM decoder, paired-record
+producer and independent reconstruction. The distinct profile
+`agent-cb-paired-atac.primary-neutral.v1` preserves legacy human/mouse profile
+bytes and behavior. No second BAM science engine or M10 public target-readiness
+change is introduced.
+
+Normal `scatac-fragments.v2` output composes with public
+`build_scATAC_cell_by_features`, exact explicit cells and neutral features through
+producer qualification dispatch; counting is unchanged. Malformed records fail
+before primary-scope exclusion. No index/sorting is required; an optional supplied
+index is bound and checked against sequential decoding. Neutral source/reference/
+scope/index mutation invalidates authority reuse. Existing operation-local proof,
+schema-2 authority and publication/recovery mechanisms are reused; standalone
+recovery without accepted authority remains deep.
+
+Registry stays 23. Neutral BAM producer public wiring, real large BAM biological
+acceptance, arbitrary-species FASTQ/QC/TSS/calling and new barcode chemistries
+remain deferred. See the linked contract for the exact declaration, bounded
+acceptance and validation record. M14.9 is accepted; closeout review authorizes
+commit and push. No next milestone has begun.
+
+Final acceptance: 65 neutral tests plus 121 existing raw-BAM tests pass; the
+pre-header-hardening domain run passes 1,342 with 27 skipped. The final full
+lightweight suite passes **4,311 tests, 83 skipped, 7 warnings in 1,516.40 s**
+(exit 0), with all RUN_* gates disabled, no test exclusions, and all 331 frozen
+source/test Python files unchanged. Preserved tiny acceptance passes two checks;
+fresh-process public matrix recovery executes zero science and preserves the
+RunStore. This qualifies software/synthetic behavior, not real-BAM biology.
 
 ## Current scientific tool inventory
 

@@ -26,7 +26,7 @@ class BamFragmentsResult(TypedDict):
     source_profile: str
     eligible_pairs: int
     n_templates: int
-    species: str
+    species: str | dict
     assembly: str
     namespace: str
     n_libraries: int
@@ -50,7 +50,7 @@ def _fsync_directory(directory):
 def _publication(arguments, execution_identity):
     args = m.validate_arguments(arguments)
     token = digest({'arguments': args, 'policy': RECOVERY_POLICY,
-                    'producer_profile_sha256': m.sha_bytes(m.PROFILE_BYTES),
+                    'producer_profile_sha256': m.sha_bytes(m.profile_bytes(args['source_profile'])),
                     'durable_execution_identity': execution_identity})
     return args, Path(args['output_dir']) / ('bam-fragments-' + token), token
 
@@ -60,7 +60,7 @@ def _summary(value, path, sha):
     record = m.load_record(entry['provenance']['producer_record']['path'], entry['provenance']['producer_record']['sha256'])
     return BamFragmentsResult(status='success', manifest_path=str(path), manifest_sha256=sha,
         artifact_type=v2.ARTIFACT_TYPE, artifact_schema_version=2, contract_version=v2.CONTRACT_VERSION,
-        source_profile=m.PROFILE_ID, eligible_pairs=record['qualification']['eligible_pairs'], n_templates=record['qualification']['n_templates'],
+        source_profile=record['arguments']['source_profile'], eligible_pairs=record['qualification']['eligible_pairs'], n_templates=record['qualification']['n_templates'],
         species=value['reference']['species'], assembly=value['reference']['assembly'], namespace=entry['namespace'],
         n_libraries=1, n_fragment_records=entry['n_fragment_records'], total_support=entry['sum_support'], strand_mode=entry['strand']['mode'])
 
@@ -171,4 +171,5 @@ def prepare_scATAC_bam_fragments(intake_manifest_path, intake_manifest_sha256,
         library_context_path, library_context_sha256, reference_bundle_path,
         reference_bundle_sha256, source_path, source_sha256, source_profile, output_dir) -> BamFragmentsResult:
     """Prepare one explicitly declared unshifted, duplicate-retained corrected-CB BAM."""
+    if source_profile != m.PROFILE_ID: m.fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
     return execute_bam_fragments(locals())

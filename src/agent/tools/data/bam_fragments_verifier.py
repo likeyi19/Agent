@@ -22,6 +22,9 @@ class BamProductionVerification:
 
 
 def _reference(header, names, bound):
+    if 'primary_contigs' in bound:
+        from .neutral_bam import check_header_declarations
+        check_header_declarations(header, bound)
     entries = header.get('SQ')
     if not isinstance(entries,list) or not 1 <= len(entries) <= 4096 or len(entries) != len(names): m.fail('BAM_FRAGMENTS_HEADER_INVALID')
     lengths = dict(bound['contigs']); seen = set(); checks=[]
@@ -118,11 +121,12 @@ def _template(primaries, has_supplement, references):
 
 def reconstruct(bound, directory, runtime):
     raw=directory/'verify.reads'; ordered=directory/'verify.names'; fragments=directory/'verify.fragments'
-    header,refs,stream,n=io.project(bound['source']['path'],raw)
+    header,refs,stream,n=io.project(bound['source']['path'],raw,
+        **({'neutral_reference':bound['reference']} if 'primary_contigs' in bound else {}))
     groups=_reference(header,refs,bound); io.sort_templates(raw,ordered,directory,runtime)
     counts=dict(header_sha256=digest(header),sq_sha256=digest(refs),stream_sha256=stream,n_records=n,
         n_templates=0,n_primary_pairs=0,n_secondary=0,n_supplementary=0,eligible_pairs=0,
-        exclusions={k:0 for k in m.EXCLUSIONS})
+        exclusions={k:0 for k in m.exclusions(bound)})
     ranks={name:i for i,(name,_) in enumerate(bound['contigs'])}
     with fragments.open('xb') as out:
         for _, records in groupby(io.records(ordered),lambda x:x[0]):
@@ -137,6 +141,9 @@ def reconstruct(bound, directory, runtime):
                 pair[label]=validated
             fragment,reason=_template(pair,supplement,refs)
             counts['n_templates']+=1; counts['n_primary_pairs']+=1
+            if fragment is not None and 'primary_contigs' in bound:
+                if fragment[0] not in bound['primary_contigs']:
+                    fragment,reason=None,'non_primary'
             if reason: counts['exclusions'][reason]+=1
             else:
                 name,left,right,barcode=fragment; counts['eligible_pairs']+=1
@@ -174,17 +181,17 @@ def verify_bam_fragments(manifest_path, *, expected_sha256, runtime, temporary_r
         initial=io.take_snapshots([manifest_path]); manifest=v2.load_fragments_manifest_v2(manifest_path,expected_sha256=expected_sha256)
         if len(manifest['libraries'])!=1: m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')
         root=Path(manifest_path).parent; entry=manifest['libraries'][0]; p=entry['provenance']
-        if (p['kind']!='bam_fragment_production' or p['profile']['id']!=m.PROFILE_ID
+        if (p['kind']!='bam_fragment_production' or p['profile']['id'] not in (m.PROFILE_ID,m.NEUTRAL_PROFILE_ID)
                 or p['profile']['resource']['path']!=str(root/'profile.json')
                 or p['producer_record'] is None or p['producer_record']['path']!=str(root/'production.json')): m.fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
         snapshots=io.take_snapshots([root/'profile.json',root/'production.json'])
-        if io.resource(root/'profile.json')!=p['profile']['resource'] or p['profile']['resource']['sha256']!=m.sha_bytes(m.PROFILE_BYTES): m.fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
+        if io.resource(root/'profile.json')!=p['profile']['resource'] or p['profile']['resource']['sha256']!=m.sha_bytes(m.profile_bytes(p['profile']['id'])): m.fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
         record=m.load_record(root/'production.json',p['producer_record']['sha256'])
         # Binding freshly reinspects M10 BAM observations, so qualify the decoder
         # before binding as well as before the complete reconstruction pass.
         if record['runtime']!=io.runtime_identity(): m.fail('BAM_FRAGMENTS_RUNTIME_MISMATCH')
         bound=io.bind(record['arguments'])
-        if any(record[k]!=bound[k] for k in ('source','intake','context','reference','namespace','group_id','context_identity_sha256')): m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')
+        if any(record[k]!=bound[k] for k in m.binding_keys(record['arguments'])): m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')
         if (record['reference']!=manifest['reference'] or entry['namespace']!=record['namespace']
                 or entry['strand']!={'mode':'absent','definition':None}
                 or p!=m.provenance(record,p['profile']['resource'],p['producer_record'])): m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')

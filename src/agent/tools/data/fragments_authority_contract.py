@@ -82,6 +82,21 @@ CONTRACTS = MappingProxyType({c.producer_kind: c for c in (
 )})
 
 
+NEUTRAL_BAM = FragmentsAuthorityContract('bam_fragment_production', 'prepare_neutral_bam_fragments',
+    'agent.bam-fragments-independent', 'bam_primary_neutral_read_pair_transformation.v1',
+    bam.NEUTRAL_PROFILE_ID, hashlib.sha256(bam.NEUTRAL_PROFILE_BYTES).hexdigest())
+
+
+def contract_for_manifest(value):
+    entries = value['libraries']
+    if (len(entries) == 1 and entries[0]['provenance']['kind'] == 'bam_fragment_production'
+            and entries[0]['provenance']['profile']['id'] == bam.NEUTRAL_PROFILE_ID):
+        if type(value['reference']['species']) is not dict:
+            raise AuthorityError('Neutral BAM requires a neutral reference.')
+        return NEUTRAL_BAM
+    return CONTRACTS[entries[0]['provenance']['kind']]
+
+
 def contract_for_tool(tool_name):
     matches = [c for c in CONTRACTS.values() if c.tool_name == tool_name]
     if len(matches) != 1:

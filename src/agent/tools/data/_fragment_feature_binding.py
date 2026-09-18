@@ -39,26 +39,49 @@ def bind(upstream, limits):
     from .external_fragments_verifier import verify_external_fragments
     from .external_fragment_manifest import load_adoption_record
     from ._external_fragment_io import resource
-    verified = verify_external_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
-                                         runtime=FragmentVerificationRuntime())
-    record_pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
-    record = load_adoption_record(record_pointer['path'], record_pointer['sha256'])
-    if 'primary_preparation' in record:
-        from .primary_fragment_preparation import verify_preparation, dependencies
-        pointer = record['primary_preparation']
-        prep = verify_preparation(pointer['path'], pointer['sha256'],
-            reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'], deep=False)
-        snapshots += take_snapshots([pointer['path'], *[r['path'] for r in dependencies(prep)]])
-    for source in (record['source']['resource'], record['source_index']):
-        if source is not None:
-            snapshots += take_snapshots([source['path']])
+    from .scatac_fragments_v2 import load_fragments_manifest_v2
+    manifest = load_fragments_manifest_v2(fp['manifest_path'], expected_sha256=fp['manifest_sha256'])
+    kinds = {e['provenance']['kind'] for e in manifest['libraries']}
+    if kinds == {'external_fragment_adoption'}:
+        verified = verify_external_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
+                                             runtime=FragmentVerificationRuntime())
+        record_pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
+        record = load_adoption_record(record_pointer['path'], record_pointer['sha256'])
+        if 'primary_preparation' in record:
+            from .primary_fragment_preparation import verify_preparation, dependencies
+            pointer = record['primary_preparation']
+            prep = verify_preparation(pointer['path'], pointer['sha256'],
+                reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'], deep=False)
+            snapshots += take_snapshots([pointer['path'], *[r['path'] for r in dependencies(prep)]])
+        for source in (record['source']['resource'], record['source_index']):
+            if source is not None:
+                snapshots += take_snapshots([source['path']])
+                if resource(source['path']) != source: m.fail('MATRIX_LINEAGE_INVALID')
+    elif kinds == {'bam_fragment_production'}:
+        from .bam_fragments_verifier import verify_bam_fragments
+        from .bam_fragment_manifest import NEUTRAL_PROFILE_ID, load_record
+        from .neutral_bam import load, dependencies
+        from .primary_contigs import verify_scope
+        if any(e['provenance']['profile']['id'] != NEUTRAL_PROFILE_ID for e in manifest['libraries']):
+            m.fail('MATRIX_REFERENCE_MISMATCH')
+        verified = verify_bam_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
+                                       runtime=FragmentVerificationRuntime())
+        pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
+        record = load_record(pointer['path'], pointer['sha256'])
+        pointer = record['input_binding']; spec = load(pointer['path'], pointer['sha256'])
+        verify_scope(spec['primary_scope']['path'], spec['primary_scope']['sha256'],
+            reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'])
+        resources = dependencies(spec)
+        snapshots += take_snapshots([pointer['path'], *[r['path'] for r in resources]])
+        for source in resources:
             if resource(source['path']) != source: m.fail('MATRIX_LINEAGE_INVALID')
+    else:
+        m.fail('MATRIX_REFERENCE_MISMATCH')
     fragments = open_verified_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
                                         runtime=FragmentVerificationRuntime())
     fr = fragments.manifest['reference']
     if (type(fr['species']) is not dict or fr['species'] != ref.species
-            or fr['assembly'] != ref.target_assembly
-            or any(e['provenance']['kind'] != 'external_fragment_adoption' for e in fragments.manifest['libraries'])):
+            or fr['assembly'] != ref.target_assembly):
         m.fail('MATRIX_REFERENCE_MISMATCH')
     _, source_ref, _ = reference.load_reference(fr['manifest_path'], expected_sha256=fr['manifest_sha256'])
     # Feature vocabularies may differ; the exact genome/assembly may not.

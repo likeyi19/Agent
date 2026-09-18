@@ -49,6 +49,28 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Primary nuclear analysis scope
+
+The project default target is the declared species/assembly's canonical primary
+nuclear chromosomes, including primary sex chromosomes where present. Mitochondrial,
+unplaced/unlocalized, alternate/random and other scaffold contigs are excluded.
+Never infer classification from names alone or repair chromosome aliases.
+
+M14.8 introduces the shared neutral `primary-nuclear-contigs.v1` reference-layer
+scope, using the existing QC owner's complete ordered classification model. New
+neutral fragment workflows explicitly prepare and admit this scope through
+`prepare_primary_fragments` and `import_primary_fragments`. Retained records are
+byte-preserved, source-to-prepared conservation is verified, and preparation
+lineage remains bound through fragment/matrix authority and recovery. Target
+features must all lie within the same scope; counting and feature order are unchanged.
+
+Accepted legacy human/mouse public contracts and unscoped historical neutral
+artifacts retain their exact identities and semantics; they are not silently
+migrated or reclassified. Historical full-FAI fragment admission is not a claim
+of primary-nuclear filtering. Future neutral raw producers should reuse this
+scope; arbitrary-species FASTQ/BAM/QC remain deferred. See the
+[M14.8 implementation and acceptance record](docs/m14.8-real-macaque-fragment-matrix.md).
+
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
@@ -630,6 +652,36 @@ user-authorized full regression on the exact corrected tree passed **4,234 tests
 were disabled, with no exclusions, CUDA failures or further source/test changes.
 The clean run resolves the final validation item. M14.7 is accepted and authorized
 for commit/push; the next milestone has not begun.
+
+## Milestone 14.8 — Real macaque primary-nuclear fragment matrix
+
+[M14.8](docs/m14.8-real-macaque-fragment-matrix.md) passes real fragment-to-matrix
+acceptance using the shared explicit primary-nuclear scope above. Assembly metadata
+qualifies macFas5 chr1–chr20 and chrX (female assembly; no assembled Y). All 615,873
+M14.4 AllcCRE features remain unchanged. Exact filtering retains 18,107,459 records
+and excludes 2,529,160 chrMT records, without aliasing or retained-record changes.
+The original fragments and historical incompatible index remain immutable; the
+prepared source has a newly qualified BED TBI and normal v2 fragment publication.
+
+All 331 original cells remain present, with 1,565,102 retained records. Public
+Application execution independently verifies the complete 331 × 615,873 int64 CSR:
+747,060 nonzeros and total 912,907, exactly equal to every M14.4 external matrix
+value after proving the exact declared barcode/feature axes. Historical external
+authority is not upgraded. Production and each owner ran once; fresh-process
+recovery repeats zero science. Classification-review mutation rejects reuse and
+exact restoration restores success. Application runtime was 456.93 seconds.
+
+The new scoped snapshot-union ordering bug exposed by real resource paths was
+fixed with a focused reproducer; counting and legacy contracts did not change.
+Domain regression: 972 passed, 2 skipped before that correction. Final directly
+affected regression: 372 passed, including all 12 policy tests. The user-authorized
+final full lightweight suite on the exact final tree passed **4,246 tests,
+83 skipped, 7 existing warnings in 1,505.18 seconds**, exit 0, with all RUN_* gates
+unset and no exclusions. All 332 frozen Python files remained unchanged. The real
+acceptance was not repeated; no EpiZoo training or live-provider benchmark ran.
+Registry remains 23; scientific/architectural acceptance and final review are
+complete, with commit/push authorized. EpiZoo remains clean at its pinned commit;
+pre-existing `evals/` is untouched and excluded. No next milestone has begun.
 
 ## Current scientific runtime and verification contracts
 

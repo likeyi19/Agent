@@ -43,6 +43,12 @@ def bind(upstream, limits):
                                          runtime=FragmentVerificationRuntime())
     record_pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
     record = load_adoption_record(record_pointer['path'], record_pointer['sha256'])
+    if 'primary_preparation' in record:
+        from .primary_fragment_preparation import verify_preparation, dependencies
+        pointer = record['primary_preparation']
+        prep = verify_preparation(pointer['path'], pointer['sha256'],
+            reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'], deep=False)
+        snapshots += take_snapshots([pointer['path'], *[r['path'] for r in dependencies(prep)]])
     for source in (record['source']['resource'], record['source_index']):
         if source is not None:
             snapshots += take_snapshots([source['path']])

@@ -20,3 +20,23 @@ def import_external_fragments(*, source_path, source_sha256, source_profile,
         execution_identity=None):
     args = dict(locals()); args.pop('execution_identity')
     return execute_external_fragments(args, execution_identity)
+
+
+def import_primary_fragments(*, preparation_path, preparation_sha256, reference_bundle_path,
+                            reference_bundle_sha256, namespace, output_dir, execution_identity=None):
+    """Preferred neutral admission: mandatory explicit primary-nuclear preparation.
+
+    Historical import_external_fragments remains the explicit unscoped contract;
+    its artifacts and receipts are never reinterpreted as primary-scoped.
+    """
+    from .primary_fragment_preparation import load
+    from ._external_fragment_io import resource
+    preparation = load(preparation_path, preparation_sha256)
+    source, index = preparation['prepared'], preparation['prepared_index']
+    args = dict(source_path=source['path'], source_sha256=source['sha256'],
+        source_profile='10x-atac-fragments.v1', source_selection='subset_export',
+        source_index_path=index['path'], source_index_sha256=index['sha256'],
+        reference_bundle_path=reference_bundle_path, reference_bundle_sha256=reference_bundle_sha256,
+        namespace=namespace, output_dir=str(output_dir),
+        primary_preparation=resource(preparation_path, preparation_sha256))
+    return execute_external_fragments(args, execution_identity)

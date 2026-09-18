@@ -56,9 +56,11 @@ def validate_arguments(arguments):
                 'reference_bundle_sha256', 'namespace', 'output_dir')
     defaults = dict(source_selection='unknown', source_index_path=None, source_index_sha256=None)
     try:
-        if not set(required) <= set(arguments) or set(arguments) - set(required) - set(defaults):
+        if not set(required) <= set(arguments) or set(arguments) - set(required) - set(defaults) - {'primary_preparation'}:
             fail()
         value = {**defaults, **dict(arguments)}
+        if 'primary_preparation' in value:
+            v2.resource(value['primary_preparation'])
         for key in ('source_path', 'reference_bundle_path', 'output_dir'):
             value[key] = str(value[key]) if isinstance(value[key], Path) else value[key]
             v2.absolute_path(value[key])
@@ -88,7 +90,10 @@ def validate_adoption_record(value):
     try:
         v2.shape(value, ('artifact_type', 'schema_version', 'contract_version', 'profile_sha256',
                          'source', 'source_index', 'reference', 'namespace', 'source_selection',
-                         'transformation_policy', 'canonical'))
+                         'transformation_policy', 'canonical', *(['primary_preparation'] if 'primary_preparation' in value else [])))
+        if 'primary_preparation' in value:
+            v2.resource(value['primary_preparation'])
+            if type(value['reference']['species']) is not dict: fail()
         if (value['artifact_type'] != 'agent.external-fragment-adoption'
                 or type(value['schema_version']) is not int or value['schema_version'] != 1
                 or value['contract_version'] != ADOPTION_CONTRACT

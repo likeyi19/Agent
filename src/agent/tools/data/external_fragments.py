@@ -91,6 +91,16 @@ def prepare_in_stage(arguments, stage, runtime):
     """Build a private bundle. Caller owns final publication and receipt."""
     io.verify_packaging(runtime)
     reference, contigs, reference_paths = io.reference(arguments['reference_bundle_path'], arguments['reference_bundle_sha256'])
+    preparation = None
+    if 'primary_preparation' in arguments:
+        from .primary_fragment_preparation import verify_preparation, dependencies
+        pointer = arguments['primary_preparation']
+        preparation = verify_preparation(pointer['path'], pointer['sha256'],
+            reference_path=arguments['reference_bundle_path'], reference_sha256=arguments['reference_bundle_sha256'])
+        if (preparation['prepared'] != io.resource(arguments['source_path'], arguments['source_sha256'])
+                or preparation['prepared_index'] != io.resource(arguments['source_index_path'], arguments['source_index_sha256'])):
+            m.fail('EXTERNAL_FRAGMENTS_SOURCE_MISMATCH')
+        reference_paths += [pointer['path'], *[r['path'] for r in dependencies(preparation)]]
     paths = reference_paths + [arguments['source_path']]
     if arguments['source_index_path'] is not None:
         paths.append(arguments['source_index_path'])
@@ -104,7 +114,8 @@ def prepare_in_stage(arguments, stage, runtime):
     record = m.validate_adoption_record(dict(artifact_type='agent.external-fragment-adoption', schema_version=1,
         contract_version=m.ADOPTION_CONTRACT, profile_sha256=m.sha_bytes(m.PROFILE_BYTES), source=source,
         source_index=index, reference=reference, namespace=arguments['namespace'],
-        source_selection=arguments['source_selection'], transformation_policy=m.TRANSFORMATION, canonical=summary))
+        source_selection=arguments['source_selection'], transformation_policy=m.TRANSFORMATION, canonical=summary,
+        **({'primary_preparation': arguments['primary_preparation']} if preparation else {})))
     bgzf = directory / 'fragments.tsv.gz'
     with bgzf.open('xb') as output:
         run_stage([runtime.bgzip, *PACKAGING_POLICY['bgzip'], plain], cwd=directory,

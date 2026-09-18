@@ -205,6 +205,11 @@ def describe(kind, path, sha, context):
             resources.extend(record[k]['path'] for k in ('intake', 'context'))
         else:
             sources.append(record['source']['resource'])
+            if 'primary_preparation' in record:
+                from .primary_fragment_preparation import load, dependencies as preparation_dependencies
+                pointer = record['primary_preparation']
+                prepared = load(pointer['path'], pointer['sha256'])
+                resources.extend([pointer['path'], *[r['path'] for r in preparation_dependencies(prepared)]])
             if record['source_index'] is not None:
                 sources.append(record['source_index'])
         verifier = contract.verifier if kind != 'generic_fragments' else dict(id='agent.canonical-fragments', compatibility_version='1')

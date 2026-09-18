@@ -97,7 +97,8 @@ def verify_public_result(arguments, result):
     value = verified.fragments.manifest; entry = value['libraries'][0]
     record = m.load_adoption_record(entry['provenance']['producer_record']['path'], entry['provenance']['producer_record']['sha256'])
     source = record['source']['resource']; index = record['source_index']; reference = record['reference']
-    if (source['path'] != args['source_path'] or source['sha256'] != args['source_sha256']
+    if (record.get('primary_preparation') != args.get('primary_preparation')
+            or source['path'] != args['source_path'] or source['sha256'] != args['source_sha256']
             or reference['manifest_path'] != args['reference_bundle_path'] or reference['manifest_sha256'] != args['reference_bundle_sha256']
             or record['namespace'] != args['namespace'] or record['source_selection'] != args['source_selection']
             or (None if index is None else index['path']) != args['source_index_path']
@@ -110,6 +111,8 @@ def verify_public_result(arguments, result):
 
 def recover_external_fragments(arguments, execution_identity, *, _neutral_reference=False):
     args, destination, token = _publication(arguments, execution_identity)
+    if 'primary_preparation' in args and not _neutral_reference:
+        m.fail('EXTERNAL_FRAGMENTS_PROFILE_UNSUPPORTED')
     from ._fragment_reference import load
     load(args['reference_bundle_path'], args['reference_bundle_sha256'], neutral_reference=_neutral_reference)
     if not destination.is_dir() or destination.is_symlink():
@@ -124,6 +127,8 @@ def recover_external_fragments(arguments, execution_identity, *, _neutral_refere
 def execute_external_fragments(arguments, execution_identity=None, *, _neutral_reference=False):
     from .external_fragments import prepare_in_stage
     args, destination, token = _publication(arguments, execution_identity)
+    if 'primary_preparation' in args and not _neutral_reference:
+        m.fail('EXTERNAL_FRAGMENTS_PROFILE_UNSUPPORTED')
     from ._fragment_reference import load
     load(args['reference_bundle_path'], args['reference_bundle_sha256'], neutral_reference=_neutral_reference)
     output = Path(args['output_dir'])

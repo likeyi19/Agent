@@ -113,6 +113,15 @@ def verify_external_fragments(manifest_path, *, expected_sha256, runtime, tempor
         if (record['reference'] != manifest['reference'] or record['namespace'] != entry['namespace']
                 or p != m.provenance(record, p['profile']['resource'], p['producer_record'])):
             m.fail('EXTERNAL_FRAGMENTS_RECORD_MISMATCH')
+        if 'primary_preparation' in record:
+            from .primary_fragment_preparation import verify_preparation, dependencies
+            pointer = record['primary_preparation']
+            prep = verify_preparation(pointer['path'], pointer['sha256'],
+                reference_path=record['reference']['manifest_path'], reference_sha256=record['reference']['manifest_sha256'])
+            if prep['prepared'] != record['source']['resource'] or prep['prepared_index'] != record['source_index']:
+                m.fail('EXTERNAL_FRAGMENTS_SOURCE_MISMATCH')
+            snapshots += io.take_snapshots([pointer['path'], *[r['path'] for r in dependencies(prep)]])
+            snapshots = tuple(sorted(set(snapshots)))
         paths = [record['source']['resource']['path']]
         if record['source_index'] is not None:
             paths.append(record['source_index']['path'])

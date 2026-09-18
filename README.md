@@ -771,3 +771,12 @@ caller-declared cells and a neutral regulatory-feature reference. It preserves
 fragment-derived authority separately from external H5AD adoption and composes
 with compatible species adaptation. Registry count is 23; QC, automatic calling
 and biological-fragments qualification are not implied.
+
+
+[M14.8 real macaque fragment acceptance](docs/m14.8-real-macaque-fragment-matrix.md)
+uses an explicit reference-bound primary-nuclear scope, preserves retained fragment
+records exactly, and reproduces every count in the 331-cell complete AllcCRE
+matrix through the public fragment-derived owner. Historical external matrix
+authority remains distinct. New neutral fragment preparation uses
+`prepare_primary_fragments` followed by `import_primary_fragments`; legacy
+human/mouse contracts and previously accepted unscoped artifacts are unchanged.

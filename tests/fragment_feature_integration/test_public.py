@@ -81,9 +81,10 @@ def test_plan_only_no_scientific_io(tmp_path,monkeypatch,adapt):
 def test_registry():
     registry=build_default_tool_registry();assert len(registry.names())==23
     spec=registry.get(TOOL)
-    assert set(spec.required_arguments)==set(public.ARGUMENTS)
-    assert not spec.optional_arguments
-    assert [p.name for p in spec.semantic_planning.consumer_ports]==['fragments','explicit_cells','reference','output_dir']
+    cell_fields = {'explicit_cells_manifest_path','explicit_cells_manifest_sha256'}
+    assert set(spec.required_arguments)==set(public.ARGUMENTS)-cell_fields
+    assert set(spec.optional_arguments)==cell_fields | {'selected_cells_manifest_path','selected_cells_manifest_sha256'}
+    assert [p.name for p in spec.semantic_planning.consumer_ports]==['fragments','explicit_cells','selected_cells','reference','output_dir']
     assert spec.semantic_planning.producer_ports[0].semantic_type=='scatac_cell_by_features.v1'
 
 
@@ -233,7 +234,8 @@ def test_v3_static_bindings(tmp_path):
     class V3:
         model_id='v3-fragments'
         def complete(self,**kw):return json.dumps(dict(schema_version=3,status='plan',reason=None,steps=[
-            dict(step_id='matrix',tool_name=TOOL,arguments={k:dict(binding_type='input',input_name=k) for k in args},depends_on=[],description='Build.')]))
+            dict(step_id='matrix',tool_name=TOOL,arguments={k:dict(binding_type='input',input_name=k) for k in args} |
+                {'selected_cells_manifest_path':None,'selected_cells_manifest_sha256':None},depends_on=[],description='Build.')]))
     plan=LLMPlanner(V3(),wire_mode=PlanningWireMode.V3).plan(AgentRequest('v3','Build.',args,RunMode.PLAN_ONLY),build_default_tool_registry())
     assert dict(plan.steps[0].arguments)==args
 

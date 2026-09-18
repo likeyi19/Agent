@@ -474,15 +474,25 @@ def load_scatac_qc_reference_bundle(path, *, expected_sha256=None):
     """Bounded manifest-only IO; no declared resource access."""
     try:
         p = parent._source_path(path)
+        from . import neutral_qc_reference as neutral
         with p.open('rb') as f:
-            raw = f.read(MAX_MANIFEST_BYTES + 1)
-        if len(raw) > MAX_MANIFEST_BYTES:
+            raw = f.read(neutral.MAX_BYTES + 1)
+        if len(raw) > neutral.MAX_BYTES:
             fail('QC_MANIFEST_LIMIT')
         sha = hashlib.sha256(raw).hexdigest()
         if expected_sha256 is not None and sha != expected_sha256:
             fail('QC_MANIFEST_MISMATCH')
-        d = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
-                       parse_constant=lambda _: fail('QC_JSON_INVALID'))
+        try:
+            d = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
+                           parse_constant=lambda _: fail('QC_JSON_INVALID'))
+        except (ValueError, TypeError, RecursionError):
+            if len(raw) > MAX_MANIFEST_BYTES:
+                fail('QC_MANIFEST_LIMIT')
+            raise
+        if type(d) is dict and d.get('contract_version') == neutral.CONTRACT:
+            if canonical(d) != raw:
+                fail('QC_JSON_INVALID')
+            return p, neutral.validate(d), sha
         return p, validate_scatac_qc_reference_bundle(d), sha
     except ScATACQCError:
         raise

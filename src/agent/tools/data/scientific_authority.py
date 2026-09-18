@@ -15,6 +15,7 @@ from agent.schemas.orchestration import _serialize
 from . import scatac_fragments_v2 as v2
 from .fragments_authority_contract import CONTRACTS, contract_for_manifest
 from .external_matrix_contract import is_external, contract_for
+from .fragment_feature_matrix_contract import is_fragment_features
 
 TOOLS = {
     **{c.tool_name: k for k, c in CONTRACTS.items()},
@@ -239,7 +240,9 @@ def describe(kind, path, sha, context):
         qr = args['qc_reference_manifest_path']
         _, bundle, _ = load_scatac_qc_reference_bundle(qr, expected_sha256=args['qc_reference_manifest_sha256'])
         resources.extend([qr, *_resource_paths(asdict(bundle))])
-        resources.extend(_reference(bundle.parent_manifest.path, bundle.parent_manifest.sha256))
+        from .neutral_qc_reference import NeutralQCReference
+        resources.extend(_reference(bundle.parent_manifest.path, bundle.parent_manifest.sha256,
+                                    neutral=type(bundle) is NeutralQCReference))
         if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
             resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
         profile = PROFILE_SHA256
@@ -261,15 +264,17 @@ def describe(kind, path, sha, context):
         profile = contract.PROFILE_SHA256
         verifier = dict(id='agent.cell-by-ccre-independent',
                         compatibility_version='external-features-1' if neutral else 'external-1')
-    elif kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-features.v1':
-        from .fragment_feature_matrix_contract import PROFILE_SHA256
+    elif kind == 'matrix' and is_fragment_features(value):
+        from .fragment_feature_matrix_contract import contract_for as fragment_contract
+        selected_contract = fragment_contract(value)
         fp, cp, rp = (value['upstream'][k] for k in ('fragments', 'cells', 'reference'))
         fragments, _ = _load('generic_fragments', Path(fp['manifest_path']), fp['manifest_sha256'])
         dependency('fragments', fragments['libraries'][0]['provenance']['kind'], fp['manifest_path'], fp['manifest_sha256'])
-        dependency('cells', 'explicit_cells', cp['manifest_path'], cp['manifest_sha256'])
+        dependency('cells', 'explicit_cells' if selected_contract.CELL_CONTRACT == 'scatac-explicit-cells.v1' else 'selection',
+                   cp['manifest_path'], cp['manifest_sha256'])
         resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256'], neutral=True))
         owned.append(root / value['matrix']['path'])
-        profile = PROFILE_SHA256
+        profile = selected_contract.PROFILE_SHA256
         verifier = dict(id='agent.cell-by-ccre-independent', compatibility_version='fragment-features-1')
     else:
         from .scatac_matrix_contract import PROFILE_SHA256
@@ -286,7 +291,7 @@ def describe(kind, path, sha, context):
     resources = [p for p in resources if str(p) not in historical]
     # M14.6 explicitly binds current external source/index integrity for reuse.
     # Preserve the historical-only policy of all existing routes.
-    if kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-features.v1':
+    if kind == 'matrix' and is_fragment_features(value):
         resources.extend(historical)
         historical = {}  # current required inputs here; historical record remains in the producer dependency
     files = context.files([*owned, *resources])

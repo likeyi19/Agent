@@ -1,6 +1,7 @@
 """Neutral dependency binding for the shared matrix engines; no counting code."""
 from dataclasses import dataclass
 from pathlib import Path
+import json
 
 from . import explicit_cells as cells, regulatory_matrix_contract as reference
 from . import fragment_feature_matrix_contract as contract, scatac_matrix_contract as m
@@ -16,10 +17,32 @@ class BoundFeatures:
     upstream: dict
     snapshots: tuple
     contract: object = contract
+    qc_reference: object = None
+    qualification: object = None
 
     def unchanged(self):
         check_snapshots(self.snapshots)
         self.fragments.verification.check_unchanged()
+        if self.qc_reference is not None:
+            from ._barcode_qc_binding import resource_qualification
+            if resource_qualification(self.qc_reference) != self.qualification:
+                m.fail('MATRIX_LINEAGE_INVALID')
+
+
+def cell_input(pointer):
+    """Dispatch only explicit closed artifact contracts, never filenames or order."""
+    from . import _cell_selection_contract as selection
+    from . import selected_feature_matrix_contract as selected_contract
+    from .scatac_fragments_v2 import _pairs
+    with open(pointer['manifest_path'], 'rb') as stream:
+        raw = stream.read(selection.qc.MAX_MANIFEST + 1)
+    if len(raw) > selection.qc.MAX_MANIFEST: m.fail('MATRIX_RESOURCE_LIMIT')
+    value = json.loads(raw, object_pairs_hook=_pairs)
+    if value.get('contract_version') == cells.CONTRACT:
+        return cells.load_manifest(pointer['manifest_path'], pointer['manifest_sha256']), contract
+    if value.get('contract_version') == selection.CONTRACT:
+        return selection.load_manifest(pointer['manifest_path'], pointer['manifest_sha256']).to_dict(), selected_contract
+    m.fail('MATRIX_LINEAGE_INVALID')
 
 
 def bind(upstream, limits):
@@ -29,13 +52,36 @@ def bind(upstream, limits):
     fp, cp, rp = (upstream[k] for k in ('fragments', 'cells', 'reference'))
     snapshots = take_snapshots(p['manifest_path'] for p in upstream.values())
     _, ref, _ = reference.load_reference(rp['manifest_path'], expected_sha256=rp['manifest_sha256'])
-    declared = cells.load_manifest(cp['manifest_path'], cp['manifest_sha256'])
+    declared, selected_contract = cell_input(cp)
+    explicit = selected_contract is contract
     if ref.ccre.feature_count > limits.max_features or declared['selected_count'] > limits.max_selected:
         m.fail('MATRIX_RESOURCE_LIMIT')
     snapshots += take_snapshots([ref.genome.fasta.path, ref.genome.fai.path, ref.ccre.bed.path,
-                                Path(cp['manifest_path']).parent / 'cells.tsv.gz'])
+                                Path(cp['manifest_path']).parent / ('cells.tsv.gz' if explicit else 'selected.tsv.gz')])
     reference.reinspect_reference(ref)
-    selected = cells.verify_explicit_cells(cp['manifest_path'], expected_sha256=cp['manifest_sha256'])
+    qc_reference = qualification = None
+    if explicit:
+        selected = cells.verify_explicit_cells(cp['manifest_path'], expected_sha256=cp['manifest_sha256'])
+    else:
+        from .cell_selection_verifier import verify_cell_selection
+        from ._barcode_qc_contract import load_manifest as load_qc
+        from .scatac_qc_reference import load_scatac_qc_reference_bundle
+        from .neutral_qc_reference import NeutralQCReference, resources as qc_resources
+        from ._barcode_qc_binding import resource_qualification
+        selected = verify_cell_selection(cp['manifest_path'], expected_sha256=cp['manifest_sha256']).to_dict()
+        args = selected['qc_lineage']['arguments']
+        if (args['fragments_manifest_path'] != fp['manifest_path']
+                or args['fragments_manifest_sha256'] != fp['manifest_sha256']): m.fail('MATRIX_LINEAGE_INVALID')
+        _, qc_reference, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'],
+            expected_sha256=args['qc_reference_manifest_sha256'])
+        if type(qc_reference) is not NeutralQCReference: m.fail('MATRIX_REFERENCE_MISMATCH')
+        qualification = resource_qualification(qc_reference)
+        qa = selected['arguments']; qp = Path(qa['barcode_qc_manifest_path'])
+        qvalue = load_qc(qp, qa['barcode_qc_manifest_sha256']).to_dict()
+        snapshots += take_snapshots([qp, args['qc_reference_manifest_path'],
+            *[r.path for r in qc_resources(qc_reference)],
+            *[qp.parent / qvalue[k]['path'] for k in ('table', 'histogram')],
+            Path(cp['manifest_path']).parent / 'decisions.tsv.gz'])
     from .external_fragments_verifier import verify_external_fragments
     from .external_fragment_manifest import load_adoption_record
     from ._external_fragment_io import resource
@@ -90,13 +136,14 @@ def bind(upstream, limits):
                 r.genome.ordered_contig_sha256, r.genome.contig_count)
     if genome(source_ref) != genome(ref): m.fail('MATRIX_REFERENCE_MISMATCH')
     namespaces = {library.namespace for library in fragments.libraries}
-    for _, namespace, _, _ in cells.iter_rows(Path(cp['manifest_path']).parent / 'cells.tsv.gz'):
+    for _, namespace, _, _ in cells.iter_rows(Path(cp['manifest_path']).parent / ('cells.tsv.gz' if explicit else 'selected.tsv.gz')):
         if namespace not in namespaces: m.fail('MATRIX_NAMESPACE_MISMATCH')
     ids = (fragments.manifest['fragments_identity_sha256'], selected['identity_sha256'], ref.reference_identity_sha256)
-    contracts = ('scatac-fragments.v2', cells.CONTRACT, reference.REFERENCE_CONTRACT)
+    contracts = ('scatac-fragments.v2', selected_contract.CELL_CONTRACT, reference.REFERENCE_CONTRACT)
     pointers = {k: dict(manifest_path=upstream[k]['manifest_path'], manifest_sha256=upstream[k]['manifest_sha256'],
                         identity_sha256=i, contract_version=c)
                 for k, i, c in zip(('fragments', 'cells', 'reference'), ids, contracts)}
-    result = BoundFeatures(fragments, selected, ref, pointers, tuple(sorted(set(snapshots))))
+    result = BoundFeatures(fragments, selected, ref, pointers, tuple(sorted(set(snapshots))),
+                           selected_contract, qc_reference, qualification)
     result.unchanged()
     return result

@@ -26,9 +26,9 @@ def corpus(matrix_bindings, *, profile=None, strategy='de_novo'):
         if key in seen: raise ValueError('A matrix cannot be included twice.')
         seen.add(key)
         value=matrix.load_manifest_bytes(Path(binding['manifest_path']).read_bytes())
-        from agent.tools.data.fragment_feature_matrix_contract import CONTRACT as fragment_contract
+        from agent.tools.data.fragment_feature_matrix_contract import is_fragment_features
         options = {}
-        if value['contract_version'] == fragment_contract:
+        if is_fragment_features(value):
             from agent.tools.data.scatac_matrix import executable
             options['bedtools_path'] = executable()
         verify_cell_by_ccre(binding['manifest_path'],expected_sha256=binding['manifest_sha256'], **options)

@@ -152,7 +152,7 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
         m.fail('MATRIX_PAYLOAD_MISMATCH')
     if bed.qualify_runtime(bedtools_path) != value['backend']: m.fail('MATRIX_BACKEND_INVALID')
     from . import fragment_feature_matrix_contract as neutral
-    if value['contract_version'] == neutral.CONTRACT:
+    if neutral.is_fragment_features(value):
         from ._fragment_feature_binding import bind
     else:
         bind = io.bind
@@ -168,7 +168,7 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
         with io.database(Path(directory)/'verify.sqlite',budget) as db:
             io.load_axes(db,bound,budget)
             diagnostic = reconstruct(db,bound,budget)
-            if value['contract_version'] == neutral.CONTRACT: diagnostic = neutral.diagnostic(diagnostic)
+            if neutral.is_fragment_features(value): diagnostic = neutral.diagnostic(diagnostic)
             with h5py.File(payload,'r') as f:
                 verify_axes(f,db,bound,budget)
                 expected_uns = io.annotations(bound,value['logical_matrix_sha256'])

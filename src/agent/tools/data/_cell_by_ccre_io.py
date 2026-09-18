@@ -146,7 +146,9 @@ def bind(upstream, limits):
 
 def load_axes(db, bound, budget):
     neutral = 'cells' in bound.upstream
-    sp = Path(bound.upstream['cells' if neutral else 'selection']['manifest_path']).parent / ('cells.tsv.gz' if neutral else 'selected.tsv.gz')
+    pointer = bound.upstream['cells' if neutral else 'selection']
+    explicit = pointer['contract_version'] == 'scatac-explicit-cells.v1'
+    sp = Path(pointer['manifest_path']).parent / ('cells.tsv.gz' if explicit else 'selected.tsv.gz')
     lines = gzip_lines(sp, MAX_BARCODES + 1)
     if next(lines, None) != SELECTED_HEADER:
         m.fail('MATRIX_ROW_IDENTITY_INVALID')

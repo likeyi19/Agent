@@ -13,6 +13,7 @@ from . import scatac_fragments_v2 as v2
 from .scatac_fragment_reader import open_verified_fragments
 from .scatac_fragments_v2_verifier import FragmentVerificationRuntime, take_snapshots, check_snapshots
 from .scatac_qc_profile import fail
+from . import neutral_qc_reference as neutral
 from ._qc_bedtools import verify_qc_bedtools
 from agent.tools._cancellation import cancellation_checkpoint
 
@@ -122,15 +123,27 @@ def bind(arguments, *, fragments_authority=None):
     snapshots=take_snapshots([args['fragments_manifest_path'],args['qc_reference_manifest_path']])
     executable,backend=backend_runtime()
     _,bundle,_=qr.load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'],expected_sha256=args['qc_reference_manifest_sha256'])
-    snapshots=tuple(sorted(snapshots+take_snapshots([r.path for r in (bundle.parent_manifest,bundle.annotation.resource,bundle.tss,bundle.lineage)])))
+    generic = type(bundle) is neutral.NeutralQCReference
+    resources = neutral.resources(bundle) if generic else (bundle.parent_manifest,bundle.annotation.resource,bundle.tss,bundle.lineage)
+    snapshots=tuple(sorted(snapshots+take_snapshots([r.path for r in resources])))
     qualification=resource_qualification(bundle)
-    qr.reinspect_scatac_qc_reference_bundle_sources(bundle)
+    if generic:
+        neutral.verify_integrity(bundle)
+        if qualification['mode'] == 'synthetic_only':
+            neutral.verify_normalized(bundle)
+    else:
+        qr.reinspect_scatac_qc_reference_bundle_sources(bundle)
     view,producer=qualified_fragments(args['fragments_manifest_path'],args['fragments_manifest_sha256'],
                                     fragments_authority=fragments_authority)
     reference=view.manifest['reference']
     if (reference['reference_identity_sha256']!=bundle.parent_reference_identity_sha256
         or reference['manifest_sha256']!=bundle.parent_manifest.sha256
         or tuple(view.contigs)!=tuple((c.name,c.length) for c in bundle.contigs)): fail('QC_REFERENCE_MISMATCH')
+    if generic:
+        from dataclasses import asdict
+        if reference['species'] != asdict(bundle.species) or reference['assembly'] != bundle.assembly:
+            fail('QC_REFERENCE_MISMATCH')
+        neutral.check_fragment_scope(bundle, view.manifest)
     if qualification['mode']=='synthetic_only' and sum(x.n_fragment_records for x in view.libraries)>10000: fail('QC_RESOURCE_LIMIT')
     bound=BoundQC(view,bundle,producer,qualification,executable,backend,snapshots,fragments_authority)
     bound.unchanged();cancellation_checkpoint()

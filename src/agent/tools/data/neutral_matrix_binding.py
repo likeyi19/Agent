@@ -6,8 +6,8 @@ def reference_binding(value):
     if value['contract_version'] == external.CONTRACT:
         external.validate(value)
         return value['reference']
-    if value['contract_version'] == fragment.CONTRACT:
-        fragment.validate_manifest(value)
+    if fragment.is_fragment_features(value):
+        fragment.contract_for(value).validate_manifest(value)
         return value['upstream']['reference']
     raise ValueError('A qualified neutral matrix contract is required.')
 

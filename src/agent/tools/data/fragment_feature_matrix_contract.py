@@ -9,6 +9,7 @@ from .regulatory_matrix_contract import validate_binding
 ARTIFACT = 'agent.scatac-cell-by-features'
 CONTRACT = 'scatac-cell-by-features.v1'
 RECOVERY_POLICY = 'build-scatac-cell-by-features-v1'
+CELL_CONTRACT = 'scatac-explicit-cells.v1'
 PROFILE = replace(m.PROFILE, profile_id='canonical-fragment-record-feature-overlap-counts.v1',
     overlap='same-contig;max(fragment_start,feature_start)<min(fragment_end,feature_end)',
     contribution='one-per-record-per-distinct-feature;no-fractional-weighting',
@@ -32,3 +33,17 @@ def manifest_identity(value):
 
 def validate_manifest(value):
     return m.validate_manifest(value, _contract=sys.modules[__name__])
+
+
+def contract_for(value):
+    from . import selected_feature_matrix_contract as selected
+    if value['contract_version'] == CONTRACT:
+        return sys.modules[__name__]
+    if value['contract_version'] == selected.CONTRACT:
+        return selected
+    m.fail('MATRIX_CONTRACT_INVALID')
+
+
+def is_fragment_features(value):
+    from .selected_feature_matrix_contract import CONTRACT as selected
+    return value.get('contract_version') in (CONTRACT, selected)

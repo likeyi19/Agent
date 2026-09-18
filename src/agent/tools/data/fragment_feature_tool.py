@@ -14,6 +14,7 @@ def execute(arguments, execution_identity=None):
 
 
 def build_scATAC_cell_by_features(*, fragments_manifest_path, fragments_manifest_sha256,
-        explicit_cells_manifest_path, explicit_cells_manifest_sha256,
-        reference_manifest_path, reference_manifest_sha256, output_dir):
-    return execute(locals())
+        reference_manifest_path, reference_manifest_sha256, output_dir,
+        explicit_cells_manifest_path=None, explicit_cells_manifest_sha256=None,
+        selected_cells_manifest_path=None, selected_cells_manifest_sha256=None):
+    return execute({k:v for k,v in locals().items() if v is not None})

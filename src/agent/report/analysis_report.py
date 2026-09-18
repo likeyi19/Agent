@@ -1386,13 +1386,17 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
     if step.tool_name == 'build_scATAC_cell_by_features':
+        selected = any(f.field == 'contract_version' and f.value == 'scatac-cell-by-features.qc-selected.v1'
+                       for f in step.facts)
         lines = [f"### Fragment-derived regulatory-feature matrix {occurrence}", "",
             "Independent matrix-owner reconstruction verified canonical fragment-record overlap counts. "
-            "Caller-declared cells and the full declared feature vocabulary retain their exact order.", ""]
+            + ("QC-selected candidates and the full declared feature vocabulary retain their exact order."
+               if selected else "Caller-declared cells and the full declared feature vocabulary retain their exact order."), ""]
         for fact in step.facts:
             label = 'Artifact contract' if fact.field == 'contract_version' else fact.field.replace('_',' ').capitalize()
             lines.append(f"- {label}: {_inline_code(fact.value)}")
-        lines.extend(("", "Explicit cells establish no QC, statistical cell calling or biological validity. "
+        lines.extend(("", ("Explicit QC thresholds retain candidate cells; statistical cell calling remains not assessed. "
+            if selected else "Explicit cells establish no QC, statistical cell calling or biological validity. ") +
             "A declared peak set is not a curated cCRE set. Matrix availability does not establish downstream model readiness.",
             "", _fact_ids_line(step.facts), ""))
         return lines

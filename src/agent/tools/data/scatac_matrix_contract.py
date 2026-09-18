@@ -252,7 +252,7 @@ def validate_manifest(value, *, _contract=None):
     cell_key = 'cells' if neutral else 'selection'
     shape(value['upstream'], ('fragments', cell_key, 'reference'))
     contracts = ('scatac-fragments.v2', 'scatac-cell-selection.v1', 'scatac-reference-bundle.v1')
-    if neutral: contracts = ('scatac-fragments.v2', 'scatac-explicit-cells.v1', 'regulatory-feature-reference.v1')
+    if neutral: contracts = ('scatac-fragments.v2', c.CELL_CONTRACT, 'regulatory-feature-reference.v1')
     for key, contract in zip(('fragments', cell_key, 'reference'), contracts):
         pointer = value['upstream'][key]
         shape(pointer, ('manifest_path', 'manifest_sha256', 'identity_sha256', 'contract_version'))
@@ -314,8 +314,8 @@ def load_manifest_bytes(raw):
         if isinstance(value, dict) and is_external(value):
             return contract_for(value).load(raw)
         from . import fragment_feature_matrix_contract as neutral
-        if isinstance(value, dict) and value.get('contract_version') == neutral.CONTRACT:
-            neutral.validate_manifest(value)
+        if isinstance(value, dict) and neutral.is_fragment_features(value):
+            neutral.contract_for(value).validate_manifest(value)
         else:
             validate_manifest(value)
         if canonical(value) != raw:

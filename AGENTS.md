@@ -68,9 +68,30 @@ Accepted legacy human/mouse public contracts and unscoped historical neutral
 artifacts retain their exact identities and semantics; they are not silently
 migrated or reclassified. Historical full-FAI fragment admission is not a claim
 of primary-nuclear filtering. Future neutral raw producers should reuse this
-scope; M14.9 adds data-layer neutral BAM production. Arbitrary-species FASTQ/QC
-and neutral BAM public production wiring remain deferred. See the
+scope; M14.9 adds data-layer neutral BAM production. M14.10 adds qualified
+generic QC/TSS resource admission to shared QC/selection. Arbitrary-species
+FASTQ and neutral BAM public production wiring remain deferred. See the
 [M14.8 implementation and acceptance record](docs/m14.8-real-macaque-fragment-matrix.md).
+
+## Milestone 14.10 — Generic QC reference and shared QC integration
+
+[M14.10](docs/m14.10-generic-qc.md) adds qualified normalized
+generic TSS-reference admission to the existing QC/selection owners and shared
+QC-selected neutral matrix construction. Legacy reference/artifact/profile
+identities remain unchanged; Registry stays 23. Production normalized resources
+require independent source/semantics qualification and operator catalog
+admission. No generic raw annotation parser, threshold calibration or new
+scientific engine is introduced. Real arbitrary-species QC acceptance remains
+pending suitable qualified resources; software validation is recorded in the
+linked milestone.
+
+Final software acceptance passes **4,335 tests, 83 skipped, 7 warnings in
+1,564.61 s** (exit 0), with all `RUN_*` gates disabled, no exclusions, and all
+334 source/test Python files unchanged during execution. The final focused
+suite passes 179 tests. Baseline/current human and mouse checks each preserve
+all 30 generated files and public results byte-for-byte. Real arbitrary-species
+QC biology remains unqualified pending the exact reviewed resources above.
+M14.10 changes are uncommitted; commit and push await separate authorization.
 
 ## Milestone 14.9 — Neutral BAM fragment producer
 
@@ -138,7 +159,7 @@ derived from the registry.
 | `annotate_scATAC_cell_types` | Primary MAESTRO marker annotation of exact canonical groups; explicit resources/context, annotation authority and immutable-source annotated H5AD |
 | `adopt_scATAC_cell_by_features` | Exact neutral external regulatory-feature matrix adoption with declared species/assembly/reference and value semantics |
 | `adapt_epizoo_species` | Qualified EpiZoo species post-training with explicit strategy and pinned resource/profile specification |
-| `build_scATAC_cell_by_features` | Exact caller-ordered neutral fragment-derived regulatory-feature counts with independent reconstruction and authority |
+| `build_scATAC_cell_by_features` | Exact QC-selected or explicitly caller-ordered neutral fragment-derived regulatory-feature counts with independent reconstruction and authority |
 
 Detailed scientific contracts, recovery identities, artifact formats, public
 APIs, and accepted scientific results remain in the milestone references below.

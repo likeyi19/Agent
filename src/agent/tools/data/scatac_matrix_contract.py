@@ -236,18 +236,24 @@ MANIFEST_FIELDS = ('artifact_type', 'schema_version', 'contract_version', 'profi
     'logical_matrix_sha256', 'matrix', 'backend', 'diagnostic', 'readiness', 'identity_sha256')
 
 
-def validate_manifest(value):
+def validate_manifest(value, *, _contract=None):
     """Closed, IO-free outer schema; does not confer a verified claim."""
+    import sys
+    c = _contract or sys.modules[__name__]
+    neutral = _contract is not None
     shape(value, MANIFEST_FIELDS)
-    if (len(canonical(value)) > MAX_MANIFEST_BYTES or value['artifact_type'] != ARTIFACT
+    if (len(canonical(value)) > MAX_MANIFEST_BYTES or value['artifact_type'] != c.ARTIFACT
             or type(value['schema_version']) is not int or value['schema_version'] != 1
-            or value['contract_version'] != CONTRACT or value['profile'] != asdict(PROFILE)
-            or value['profile_sha256'] != PROFILE_SHA256
-            or (value['species'], value['assembly']) not in (('human', 'hg38'), ('mouse', 'mm10'))):
+            or value['contract_version'] != c.CONTRACT or value['profile'] != asdict(c.PROFILE)
+            or value['profile_sha256'] != c.PROFILE_SHA256
+            or not neutral and (value['species'], value['assembly']) not in (('human', 'hg38'), ('mouse', 'mm10'))):
         fail()
-    shape(value['upstream'], ('fragments', 'selection', 'reference'))
+    if neutral: c.validate_binding(value['species'], value['assembly'])
+    cell_key = 'cells' if neutral else 'selection'
+    shape(value['upstream'], ('fragments', cell_key, 'reference'))
     contracts = ('scatac-fragments.v2', 'scatac-cell-selection.v1', 'scatac-reference-bundle.v1')
-    for key, contract in zip(('fragments', 'selection', 'reference'), contracts):
+    if neutral: contracts = ('scatac-fragments.v2', 'scatac-explicit-cells.v1', 'regulatory-feature-reference.v1')
+    for key, contract in zip(('fragments', cell_key, 'reference'), contracts):
         pointer = value['upstream'][key]
         shape(pointer, ('manifest_path', 'manifest_sha256', 'identity_sha256', 'contract_version'))
         absolute_path(pointer['manifest_path'])
@@ -272,13 +278,13 @@ def validate_manifest(value):
         fail('MATRIX_BACKEND_INVALID')
     sha(value['backend']['runtime_sha256'])
     diagnostic = value['diagnostic']
-    shape(diagnostic, overlap_diagnostic(0, 0))
-    expected = overlap_diagnostic(diagnostic['n_selected_fragment_records_total'],
-                                  diagnostic['n_selected_fragment_records_overlapping_any_ccre'])
+    shape(diagnostic, c.overlap_diagnostic(0, 0))
+    hit_key = 'n_selected_fragment_records_overlapping_any_feature' if neutral else 'n_selected_fragment_records_overlapping_any_ccre'
+    expected = c.overlap_diagnostic(diagnostic['n_selected_fragment_records_total'], diagnostic[hit_key])
     if canonical(expected) != canonical(diagnostic):
         fail('MATRIX_DIAGNOSTIC_INVALID')
     records = diagnostic['n_selected_fragment_records_total']
-    hits = diagnostic['n_selected_fragment_records_overlapping_any_ccre']
+    hits = diagnostic[hit_key]
     if (records < n or (n == 0 and records != 0) or not hits <= total <= hits * m
             or hits < n - zeros or (hits == 0) != (total == 0)):
         fail('MATRIX_DIAGNOSTIC_INVALID')
@@ -286,7 +292,7 @@ def validate_manifest(value):
             or value['logical_matrix_sha256'] != logical_matrix_identity(0, m, [])['logical_matrix_sha256']):
         fail('MATRIX_IDENTITY_MISMATCH')
     expected_readiness = 'no_selected_cells' if n == 0 else 'matrix_available'
-    if value['readiness'] != expected_readiness or value['identity_sha256'] != manifest_identity(value):
+    if value['readiness'] != expected_readiness or value['identity_sha256'] != c.manifest_identity(value):
         fail('MATRIX_IDENTITY_MISMATCH')
     return value
 
@@ -307,7 +313,11 @@ def load_manifest_bytes(raw):
         from .external_matrix_contract import is_external, contract_for
         if isinstance(value, dict) and is_external(value):
             return contract_for(value).load(raw)
-        validate_manifest(value)
+        from . import fragment_feature_matrix_contract as neutral
+        if isinstance(value, dict) and value.get('contract_version') == neutral.CONTRACT:
+            neutral.validate_manifest(value)
+        else:
+            validate_manifest(value)
         if canonical(value) != raw:
             fail('MATRIX_JSON_INVALID')
         return value

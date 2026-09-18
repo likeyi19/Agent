@@ -559,6 +559,45 @@ tests 21. The single full lightweight run passed 4,125 tests with 83 skipped and
 seven existing warnings (966.07 seconds), exit 0; all RUN_* gates unset. This is bounded technical qualification, not biological
 convergence/performance or production-scale sufficiency. Commit/push await review.
 
+## Milestone 14.6 — External fragments to neutral regulatory-feature matrices
+
+[M14.6](docs/m14.6-fragment-feature-matrix.md) adds the data-layer
+`neutral_fragment_import.import_external_fragments`, `scatac-explicit-cells.v1`,
+and `fragment_feature_matrix.build_cell_by_features`. Output contract
+`scatac-cell-by-features.v1` proves canonical fragment-record overlap counts,
+distinct from M14.1 external matrix conservation. The new neutral counting
+profile preserves M11 counting algorithms while explicitly naming features and
+caller-ordered cells rather than cCREs and QC selection.
+
+External adoption retains the exact 10x source profile and `scatac-fragments.v2`,
+with a closed neutral reference-binding variant. Registered human/mouse import,
+FASTQ/BAM, QC/selection, cell-by-cCRE, EpiZoo and Planner scopes are unchanged.
+The shared BEDTools production engine and independent interval-tree matrix owner
+preserve unit-per-record counting, complete ordered axes and canonical int64 CSR.
+Absent requested barcodes fail; present zero-overlap cells and zero columns remain.
+Reference compatibility requires exact species/assembly and genome/contig identity.
+
+Existing atomic publication, receipts and schema-2 owner proofs are reused.
+Compatible operation-local verification/recovery avoids owner reconstruction;
+standalone recovery remains deep. M14.6 matrix reuse additionally binds current
+external source/index integrity without changing existing historical-source
+policies. Public RunStore admission/integration and biological acceptance remain
+deferred. Registry stays at 22; no arbitrary-species QC, FASTQ/BAM or calling is
+introduced. Validation and bounded synthetic acceptance are recorded in the linked
+milestone document. M14.6 is scientifically and architecturally accepted; the
+unchanged bounded acceptance passed again under
+`/home/likeyi/program/agent-acceptance/m14.6/bounded-final/`, completing durable
+provenance closeout. Commit/push are authorized; the next milestone has not begun.
+
+M14.6 focused acceptance passes 74 tests; relevant M11/M14.1 compatibility passes
+801 tests with 3 guarded skips. The broader run passes 4,174 tests with 83 skips
+and 7 warnings, but is not green: one failure and nine setup errors all arise
+from unchanged EpiZoo imports requiring an unavailable CUDA device. Its one
+CUDA-dependent preprocessing module was excluded after an initial collection
+failure. No M14.6 test failed and no EpiZoo code/environment was changed. Exact
+results, the preserved synthetic fixture and the full-suite limitation are in
+the linked M14.6 record.
+
 ## Current scientific runtime and verification contracts
 
 ### Post-M11.7b.1 verification authority foundation

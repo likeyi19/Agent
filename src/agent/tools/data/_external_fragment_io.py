@@ -26,14 +26,17 @@ def resource(path, expected_sha256=None):
 
 
 def reference(path, expected_sha256):
-    _, bundle, _ = ref.load_scatac_reference_bundle(path, expected_sha256=expected_sha256)
-    ref.reinspect_scatac_reference_bundle_sources(bundle)
+    from . import _fragment_reference as binding
+    bundle = binding.load(path, expected_sha256)
+    binding.reinspect(bundle)
     dictionary, _, _ = ref._inspect_fai(Path(bundle.genome.fai.path), Path(bundle.genome.fasta.path).stat().st_size)
     if any(n > TBI_LIMIT for n in dictionary.values()):
         m.fail('EXTERNAL_FRAGMENTS_INDEX_POLICY_UNSUPPORTED')
     identity = dict(manifest_path=str(path), manifest_sha256=expected_sha256,
         reference_identity_sha256=bundle.reference_identity_sha256, species=bundle.species,
         assembly=bundle.target_assembly, ordered_contig_sha256=bundle.genome.ordered_contig_sha256)
+    if type(bundle.species) is dict:
+        identity['contract_version'] = 'regulatory-feature-reference.v1'
     paths = [path, bundle.genome.fasta.path, bundle.genome.fai.path, bundle.ccre.bed.path]
     if bundle.annotation:
         paths.append(bundle.annotation.resource.path)

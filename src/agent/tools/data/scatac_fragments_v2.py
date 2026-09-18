@@ -191,13 +191,8 @@ def validate_fragments_manifest_v2(value):
                 or canonical(value['semantics']) != canonical(SEMANTICS)):
             fail()
         r = value['reference']
-        shape(r, ('manifest_path', 'manifest_sha256', 'reference_identity_sha256',
-                  'species', 'assembly', 'ordered_contig_sha256'))
-        absolute_path(r['manifest_path'])
-        for key in ('manifest_sha256', 'reference_identity_sha256', 'ordered_contig_sha256'):
-            sha(r[key])
-        if r['species'] not in ('human', 'mouse') or r['assembly'] != {'human': 'hg38', 'mouse': 'mm10'}[r['species']]:
-            fail()
+        from ._fragment_reference import validate as validate_reference
+        validate_reference(r)
         libraries = value['libraries']
         if type(libraries) is not list or not 1 <= len(libraries) <= MAX_LIBRARIES:
             fail()
@@ -214,6 +209,8 @@ def validate_fragments_manifest_v2(value):
             else:
                 fail()
             _provenance(entry['provenance'])
+            if type(r['species']) is dict and entry['provenance']['kind'] != 'external_fragment_adoption':
+                fail('FRAGMENTS_V2_REFERENCE_MISMATCH')
             source_count += len(entry['provenance']['sources'])
             if source_count > MAX_SOURCES:
                 fail()

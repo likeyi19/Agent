@@ -114,12 +114,8 @@ def validate_adoption_record(value):
             if src['encoding'] != 'bgzf':
                 fail('EXTERNAL_FRAGMENTS_INDEX_BINDING_INVALID')
         r = value['reference']
-        v2.shape(r, ('manifest_path', 'manifest_sha256', 'reference_identity_sha256', 'species', 'assembly', 'ordered_contig_sha256'))
-        v2.absolute_path(r['manifest_path'])
-        for key in ('manifest_sha256', 'reference_identity_sha256', 'ordered_contig_sha256'):
-            v2.sha(r[key])
-        if r['species'] not in ('human', 'mouse') or r['assembly'] != {'human': 'hg38', 'mouse': 'mm10'}[r['species']]:
-            fail()
+        from ._fragment_reference import validate as validate_reference
+        validate_reference(r)
         summary = value['canonical']; v2.shape(summary, v2.SUMMARY_KEYS)
         v2.sha(summary['canonical_record_stream_sha256'])
         for key in v2.SUMMARY_KEYS[1:]:

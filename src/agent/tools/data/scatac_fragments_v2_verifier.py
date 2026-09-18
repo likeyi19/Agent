@@ -135,7 +135,8 @@ def _verify(manifest_path, expected_sha256, runtime):
     value = m.validate_fragments_manifest_v2(value)
     r = value['reference']
     reference_snapshot = take_snapshots([r['manifest_path']])
-    _, bundle, _ = reference.load_scatac_reference_bundle(r['manifest_path'], expected_sha256=r['manifest_sha256'])
+    from . import _fragment_reference as binding
+    bundle = binding.load(r['manifest_path'], r['manifest_sha256'], neutral_reference=type(r['species']) is dict)
     if (bundle.reference_identity_sha256 != r['reference_identity_sha256']
             or bundle.genome.ordered_contig_sha256 != r['ordered_contig_sha256']
             or bundle.species != r['species'] or bundle.target_assembly != r['assembly']):
@@ -150,7 +151,7 @@ def _verify(manifest_path, expected_sha256, runtime):
         paths.append(bundle.annotation.resource.path)
     before = take_snapshots(paths)
     check_snapshots(initial); check_snapshots(reference_snapshot)
-    reference.reinspect_scatac_reference_bundle_sources(bundle)
+    binding.reinspect(bundle)
     # The M11.1 FAI parser is the reference dictionary authority. Do not import
     # the Chromap index gate, which imposes a separate FASTA scan/order policy.
     dictionary, fai_sha, ordered = reference._inspect_fai(Path(bundle.genome.fai.path),

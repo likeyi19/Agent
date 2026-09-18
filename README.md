@@ -755,3 +755,10 @@ adds the explicit `binary-de-novo-qualification.v1` adaptation profile for neutr
 `binary_accessibility` matrices. It preserves the existing fragment-count profiles
 and excludes binary mapped-reference/production execution and insertion counts.
 The real zebrafish acceptance retains all 2,000 demo cells and 466,307 features.
+
+[M14.6 external fragments to regulatory-feature matrices](docs/m14.6-fragment-feature-matrix.md)
+adds a data-layer path for an explicit species/reference, ordered caller-supplied
+barcodes, and an exact cCRE/peak/region vocabulary. It reuses verified fragments,
+unit fragment-overlap counting, the independent matrix owner and durable
+publication. It introduces no QC or cell-calling claim. Public Agent integration
+and real-fragment biological acceptance remain deferred; registry count stays 22.

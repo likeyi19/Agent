@@ -108,8 +108,10 @@ def verify_public_result(arguments, result):
     return verified
 
 
-def recover_external_fragments(arguments, execution_identity):
+def recover_external_fragments(arguments, execution_identity, *, _neutral_reference=False):
     args, destination, token = _publication(arguments, execution_identity)
+    from ._fragment_reference import load
+    load(args['reference_bundle_path'], args['reference_bundle_sha256'], neutral_reference=_neutral_reference)
     if not destination.is_dir() or destination.is_symlink():
         m.fail('EXTERNAL_FRAGMENTS_RECOVERY_UNAVAILABLE')
     receipt = _receipt(destination, args, token); path = destination / 'fragments' / 'manifest.json'
@@ -119,9 +121,11 @@ def recover_external_fragments(arguments, execution_identity):
     return result
 
 
-def execute_external_fragments(arguments, execution_identity=None):
+def execute_external_fragments(arguments, execution_identity=None, *, _neutral_reference=False):
     from .external_fragments import prepare_in_stage
     args, destination, token = _publication(arguments, execution_identity)
+    from ._fragment_reference import load
+    load(args['reference_bundle_path'], args['reference_bundle_sha256'], neutral_reference=_neutral_reference)
     output = Path(args['output_dir'])
     if output != output.resolve() or destination.exists() or destination.is_symlink():
         m.fail('EXTERNAL_FRAGMENTS_ARTIFACT_CONFLICT')

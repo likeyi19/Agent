@@ -145,7 +145,8 @@ def bind(upstream, limits):
 
 
 def load_axes(db, bound, budget):
-    sp = Path(bound.upstream['selection']['manifest_path']).parent / 'selected.tsv.gz'
+    neutral = 'cells' in bound.upstream
+    sp = Path(bound.upstream['cells' if neutral else 'selection']['manifest_path']).parent / ('cells.tsv.gz' if neutral else 'selected.tsv.gz')
     lines = gzip_lines(sp, MAX_BARCODES + 1)
     if next(lines, None) != SELECTED_HEADER:
         m.fail('MATRIX_ROW_IDENTITY_INVALID')
@@ -185,8 +186,11 @@ def load_axes(db, bound, budget):
 
 
 def annotations(bound, logical):
-    return dict(matrix_semantics='fragment_counts', matrix_profile_id=m.PROFILE.profile_id,
-                matrix_profile_sha256=m.PROFILE_SHA256, species=bound.reference.species,
+    contract = getattr(bound, 'contract', m)
+    species = bound.reference.species
+    if type(species) is dict: species = m.canonical(species).decode('utf-8')
+    return dict(matrix_semantics='fragment_counts', matrix_profile_id=contract.PROFILE.profile_id,
+                matrix_profile_sha256=contract.PROFILE_SHA256, species=species,
                 assembly=bound.reference.target_assembly, coordinate_system='zero-based-half-open',
                 ordered_selected_sha256=bound.selection['ordered_selected_sha256'],
                 ordered_feature_sha256=bound.reference.ccre.ordered_feature_sha256, logical_matrix_sha256=logical)

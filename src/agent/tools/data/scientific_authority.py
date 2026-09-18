@@ -23,6 +23,8 @@ TOOLS = {
     'annotate_scATAC_cell_types': 'annotation',
     # Data-layer owner identity only; not an executable ToolRegistry entry.
     'adopt_cell_by_features': 'matrix',
+    'build_cell_by_features': 'matrix',
+    'import_external_fragments': 'external_fragment_adoption',
     'adopt_scATAC_cell_by_features': 'matrix',
     'adapt_epizoo_species': 'epizoo_adaptation',
 }
@@ -74,6 +76,9 @@ def _load(kind, path, sha):
         raise AuthorityError('Manifest differs from the requested artifact identity.')
     if kind in CONTRACTS or kind == 'generic_fragments':
         value = v2.load_fragments_manifest_v2(path, expected_sha256=actual)
+    elif kind == 'explicit_cells':
+        from .explicit_cells import load_manifest
+        value = load_manifest(path, actual)
     elif kind == 'qc':
         from ._barcode_qc_contract import load_manifest
         value = load_manifest(path, actual).to_dict()
@@ -163,7 +168,7 @@ def describe(kind, path, sha, context):
         qualification = contract.qualification if kind != 'generic_fragments' else {}
         profile = contract.profile_sha256
         rp = value['reference']
-        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256']))
+        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256'], neutral=type(rp['species']) is dict))
         for entry, normalized in zip(value['libraries'], normal['libraries'], strict=True):
             p = entry['provenance']
             for key in ('bgzf', 'tabix'):
@@ -202,6 +207,11 @@ def describe(kind, path, sha, context):
             if record['source_index'] is not None:
                 sources.append(record['source_index'])
         verifier = contract.verifier if kind != 'generic_fragments' else dict(id='agent.canonical-fragments', compatibility_version='1')
+    elif kind == 'explicit_cells':
+        from .explicit_cells import PROFILE_SHA256
+        owned.append(root / value['table']['path'])
+        profile = PROFILE_SHA256
+        verifier = dict(id='agent.explicit-cell-declaration', compatibility_version='1')
     elif kind == 'qc':
         from .scatac_qc_reference import load_scatac_qc_reference_bundle
         from .scatac_qc_profile import PROFILE_SHA256
@@ -236,6 +246,15 @@ def describe(kind, path, sha, context):
         profile = contract.PROFILE_SHA256
         verifier = dict(id='agent.cell-by-ccre-independent',
                         compatibility_version='external-features-1' if neutral else 'external-1')
+    elif kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-features.v1':
+        from .fragment_feature_matrix_contract import PROFILE_SHA256
+        fp, cp, rp = (value['upstream'][k] for k in ('fragments', 'cells', 'reference'))
+        dependency('fragments', 'external_fragment_adoption', fp['manifest_path'], fp['manifest_sha256'])
+        dependency('cells', 'explicit_cells', cp['manifest_path'], cp['manifest_sha256'])
+        resources.extend(_reference(rp['manifest_path'], rp['manifest_sha256'], neutral=True))
+        owned.append(root / value['matrix']['path'])
+        profile = PROFILE_SHA256
+        verifier = dict(id='agent.cell-by-ccre-independent', compatibility_version='fragment-features-1')
     else:
         from .scatac_matrix_contract import PROFILE_SHA256
         fp, sp, rp = (value['upstream'][k] for k in ('fragments', 'selection', 'reference'))
@@ -247,8 +266,13 @@ def describe(kind, path, sha, context):
         profile = PROFILE_SHA256
         verifier = dict(id='agent.cell-by-ccre-independent', compatibility_version='1')
     historical = {f['path']: dict(f) for f in sources}
-    # Historical raw identities must never leak into ordinary resource validation.
+    # Existing owners retain their historical-only raw-source policy.
     resources = [p for p in resources if str(p) not in historical]
+    # M14.6 explicitly binds current external source/index integrity for reuse.
+    # Preserve the historical-only policy of all existing routes.
+    if kind == 'matrix' and value['contract_version'] == 'scatac-cell-by-features.v1':
+        resources.extend(historical)
+        historical = {}  # current required inputs here; historical record remains in the producer dependency
     files = context.files([*owned, *resources])
     relative = []
     for entry in files:
@@ -323,6 +347,9 @@ def reuse_result(kind, description, proof, kwargs):
     if kind == 'annotation':
         from agent.tools.analysis.scatac_annotation import _summary
         return _summary(description['manifest'], path, sha)
+    if kind == 'explicit_cells':
+        from .explicit_cells import load_manifest
+        return load_manifest(path, sha)
     if kind in ('qc', 'selection'):
         module = _module('_barcode_qc_contract' if kind == 'qc' else '_cell_selection_contract')
         return module.load_manifest(path, sha)
@@ -342,7 +369,9 @@ def issue(context, tool_name, arguments, result, execution_identity):
 def _publication_record(context, tool_name, arguments, result, execution_identity, result_metadata):
     """Pure provenance description, not a trust-issuing entry point."""
     kind = TOOLS[tool_name]
-    adoption_modules = {'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
+    adoption_modules = {'build_cell_by_features': 'fragment_feature_matrix',
+                        'import_external_fragments': 'neutral_fragment_import',
+                        'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
                         'adopt_cell_by_features': 'regulatory_matrix_adoption',
                         'adopt_scATAC_cell_by_features': 'neutral_matrix_tool'}
     module = _module(adoption_modules.get(tool_name, MODULES[kind]))

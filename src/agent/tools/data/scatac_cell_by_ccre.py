@@ -23,16 +23,21 @@ def build_cell_by_ccre(*, fragments_manifest_path, fragments_manifest_sha256,
     Explicit qualified executable and runtime/QC resource configuration are
     operator inputs, not planner parameters. Existing destinations fail closed.
     """
-    started = time.monotonic()
-    destination = Path(output_dir); m.absolute_path(str(destination))
-    if destination != destination.resolve() or destination.exists() or destination.is_symlink(): m.fail('MATRIX_OUTPUT_CONFLICT')
-    destination.parent.mkdir(parents=True,exist_ok=True)
     pointers = {name:dict(manifest_path=str(path),manifest_sha256=digest) for name,path,digest in (
         ('fragments',fragments_manifest_path,fragments_manifest_sha256),
         ('selection',selection_manifest_path,selection_manifest_sha256),
         ('reference',reference_manifest_path,reference_manifest_sha256))}
+    return _build_matrix(pointers, output_dir, bedtools_path, limits, binder=io.bind)
+
+
+def _build_matrix(pointers, output_dir, bedtools_path, limits, *, contract=m, binder=io.bind):
+    """Shared publication/writer; contracts and dependency binding are explicit."""
+    started = time.monotonic()
+    destination = Path(output_dir); m.absolute_path(str(destination))
+    if destination != destination.resolve() or destination.exists() or destination.is_symlink(): m.fail('MATRIX_OUTPUT_CONFLICT')
+    destination.parent.mkdir(parents=True,exist_ok=True)
     backend = bed.qualify_runtime(bedtools_path)
-    bound = io.bind(pointers,limits)
+    bound = binder(pointers,limits)
     # An exclusive sibling lock protects cooperating publishers. No overwrite.
     lock = destination.parent/('.'+destination.name+'.matrix-lock')
     try: fd = os.open(lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
@@ -45,11 +50,12 @@ def build_cell_by_ccre(*, fragments_manifest_path, fragments_manifest_sha256,
             with io.database(root/'production.sqlite',budget) as db:
                 io.load_axes(db,bound,budget)
                 diagnostic = production.construct_counts(db,bound,bedtools_path,root,budget)
+                if contract is not m: diagnostic = contract.diagnostic(diagnostic)
                 summary = io.write_h5(publication/'matrix.h5ad',db,bound,
                                       production.rows(db,bound.selection['selected_count']),budget)
             matrix = publication/'matrix.h5ad'
-            value = dict(artifact_type=m.ARTIFACT,schema_version=1,contract_version=m.CONTRACT,
-                         profile=asdict(m.PROFILE),profile_sha256=m.PROFILE_SHA256,
+            value = dict(artifact_type=contract.ARTIFACT,schema_version=1,contract_version=contract.CONTRACT,
+                         profile=asdict(contract.PROFILE),profile_sha256=contract.PROFILE_SHA256,
                          species=bound.reference.species,assembly=bound.reference.target_assembly,
                          upstream=bound.upstream,ordered_selected_sha256=bound.selection['ordered_selected_sha256'],
                          ordered_feature_sha256=bound.reference.ccre.ordered_feature_sha256,
@@ -57,8 +63,8 @@ def build_cell_by_ccre(*, fragments_manifest_path, fragments_manifest_sha256,
                          matrix=dict(path='matrix.h5ad',sha256=bed.file_sha(matrix),size_bytes=matrix.stat().st_size,format='csr',dtype='int64'),
                          backend=backend,diagnostic=diagnostic,
                          readiness='matrix_available' if bound.selection['selected_count'] else 'no_selected_cells')
-            value['identity_sha256'] = m.manifest_identity(value)
-            raw = m.canonical(m.validate_manifest(value)); digest = hashlib.sha256(raw).hexdigest()
+            value['identity_sha256'] = contract.manifest_identity(value)
+            raw = m.canonical(contract.validate_manifest(value)); digest = hashlib.sha256(raw).hexdigest()
             (publication/'manifest.json').write_bytes(raw)
             construction_seconds = time.monotonic()-started
             budget.check()

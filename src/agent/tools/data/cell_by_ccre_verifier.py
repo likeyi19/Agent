@@ -151,7 +151,12 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
     if payload.stat().st_size != value['matrix']['size_bytes'] or bed.file_sha(payload) != value['matrix']['sha256']:
         m.fail('MATRIX_PAYLOAD_MISMATCH')
     if bed.qualify_runtime(bedtools_path) != value['backend']: m.fail('MATRIX_BACKEND_INVALID')
-    bound = io.bind(value['upstream'],limits)
+    from . import fragment_feature_matrix_contract as neutral
+    if value['contract_version'] == neutral.CONTRACT:
+        from ._fragment_feature_binding import bind
+    else:
+        bind = io.bind
+    bound = bind(value['upstream'],limits)
     if (bound.upstream != value['upstream'] or bound.reference.species != value['species']
             or bound.reference.target_assembly != value['assembly']
             or bound.selection['ordered_selected_sha256'] != value['ordered_selected_sha256']
@@ -163,6 +168,7 @@ def verify_cell_by_ccre(manifest_path, *, expected_sha256, bedtools_path=None, l
         with io.database(Path(directory)/'verify.sqlite',budget) as db:
             io.load_axes(db,bound,budget)
             diagnostic = reconstruct(db,bound,budget)
+            if value['contract_version'] == neutral.CONTRACT: diagnostic = neutral.diagnostic(diagnostic)
             with h5py.File(payload,'r') as f:
                 verify_axes(f,db,bound,budget)
                 expected_uns = io.annotations(bound,value['logical_matrix_sha256'])

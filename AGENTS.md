@@ -73,6 +73,28 @@ generic QC/TSS resource admission to shared QC/selection. Arbitrary-species
 FASTQ and neutral BAM public production wiring remain deferred. See the
 [M14.8 implementation and acceptance record](docs/m14.8-real-macaque-fragment-matrix.md).
 
+## Milestone 14.11 — Real macaque unified preprocessing acceptance
+
+[M14.11](docs/m14.11-real-macaque-qc.md) successfully executes the existing
+public QC → selection → neutral matrix path on preserved Macaca fascicularis
+(taxonomy 9541), macFas5 primary fragments. Official Ensembl release 100 source
+provenance, the already-qualified M14.8 alias table and independent complete
+transcript reconstruction qualify 37,316 TSS sites under the unchanged M14.10
+resource boundary. The 3,220 observed barcodes have median QC depth 2,589 and
+median TSS enrichment 9.42. Frozen permissive acceptance-only criteria (depth
+≥1 and defined TSS enrichment ≥1) retain all 3,220; these are not calibrated
+quality thresholds or species defaults. Calling stays `none/not_assessed`.
+
+The shared engine publishes a verified 3,220 × 615,873 int64 CSR with 6,913,545
+nonzeros. All 331 shared historical cells match every sparse value exactly;
+the other 2,889 rows are covered by the existing independent matrix verifier.
+Fresh-process terminal recovery executes zero instrumented science and preserves
+all 15 persisted application files. No production source, contracts, tests or
+EpiZoo files change; Registry remains 23. The unchanged M14.10 regression remains
+applicable. This establishes bounded real macaque unified preprocessing, not
+cell-purity, threshold calibration, arbitrary-species FASTQ or universal biological
+generalization. Acceptance evidence is ready for review; no M14.11 commit/push.
+
 ## Milestone 14.10 — Generic QC reference and shared QC integration
 
 [M14.10](docs/m14.10-generic-qc.md) adds qualified normalized
@@ -91,7 +113,9 @@ Final software acceptance passes **4,335 tests, 83 skipped, 7 warnings in
 suite passes 179 tests. Baseline/current human and mouse checks each preserve
 all 30 generated files and public results byte-for-byte. Real arbitrary-species
 QC biology remains unqualified pending the exact reviewed resources above.
-M14.10 changes are uncommitted; commit and push await separate authorization.
+M14.10 was accepted, committed and pushed at
+`6e8b575b3a17e5c0469030ddca6d1a4e980b7a6b`. M14.11 above supplies the bounded
+real macaque acceptance that remained deferred at this software checkpoint.
 
 ## Milestone 14.9 — Neutral BAM fragment producer
 

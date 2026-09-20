@@ -11,9 +11,11 @@ embedding backend.
 qualified normalized transcript-TSS resources through the existing QC and
 explicit cell-selection tools. QC-selected neutral matrices use the existing
 fragment-to-feature matrix owner; caller-declared cells remain an explicit
-override. Legacy human/mouse science and identities are preserved. Real macaque
-and zebrafish QC acceptance still requires qualified TSS resources; no default
-thresholds or statistical cell calling are supplied.
+override. Legacy human/mouse science and identities are preserved.
+[M14.11 real macaque acceptance](docs/m14.11-real-macaque-qc.md) exercises the
+shared QC → explicit selection → matrix path with qualified macFas5 resources.
+Other species still require their own qualified resources; no default thresholds
+or statistical cell calling are supplied.
 
 Milestones 1–9 and Post-M9 Planner Interface Hardening are complete, including
 static target-port/Groq compatibility, feature-space semantic-v4 parity, and

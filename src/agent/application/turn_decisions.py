@@ -39,7 +39,24 @@ class Clarify:
     value_required: bool = False
 
 
-TurnDecision = Execute | Navigate | Clarify
+ANSWER_INTENTS = ('version', 'matrix', 'selection', 'thresholds', 'changes',
+                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported')
+
+
+@dataclass(frozen=True)
+class Answer:
+    intent: str
+    relation: str = 'current'
+    technical: bool = False
+
+    def __post_init__(self):
+        if self.intent not in ANSWER_INTENTS or self.relation not in RELATIONS or type(self.technical) is not bool:
+            raise ValueError('Invalid bounded answer request.')
+        if self.intent == 'comparison' and self.relation == 'current':
+            raise ValueError('Comparison requires a historical relation.')
+
+
+TurnDecision = Execute | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
@@ -79,6 +96,9 @@ def parse_decision(raw):
             _shape(value, ('kind', 'reason'))
             if value['reason'] not in REASONS: raise IntentError('invalid_decision')
             return Clarify(value['reason'], value_required=value['reason'] == 'missing_parameter_value')
+        if kind == 'answer':
+            _shape(value, ('kind', 'intent', 'relation', 'technical'))
+            return Answer(value['intent'], value['relation'], value['technical'])
         if kind == 'navigate':
             _shape(value, ('kind', 'relation'))
             if value['relation'] not in RELATIONS: raise IntentError('invalid_decision')
@@ -108,7 +128,8 @@ def decision_schema(public):
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
-    variants = [_object(dict(kind=enum(('clarify',)), reason=enum(REASONS))),
+    variants = [_object(dict(kind=enum(('answer',)), intent=enum(ANSWER_INTENTS),
+        relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(REASONS))),
         _object(dict(kind=enum(('navigate',)), relation=enum(public['relations'])))]
     if offered:
         variants.append(_object(dict(kind=enum(('execute',)), base=enum(public['relations']),
@@ -120,7 +141,11 @@ def decision_schema(public):
 def interpret(model, utterance, public):
     prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **public,
         'instructions': [
-            'Choose execute, navigate, or clarify. No Q&A or scientific interpretation.',
+            'Choose execute, navigate, clarify, or answer. Answer only bounded persisted state questions.',
+            'Answer intents: version, matrix, selection, thresholds, changes (originating revision versus parent), execution, reuse, comparison, provenance, verification, unsupported.',
+            'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
+            'Biological interpretation, quality judgments and marker explanations use answer unsupported; do not assert that a label exists.',
+            'technical=true only for an explicit request for technical provenance, IDs or hashes.',
             'Select only offered operation, parameter and revision relations. Never emit internal IDs.',
             'For one parameter change, quote the exact complete user command clause as evidence and its numeric literal verbatim.',
             'set requires assignment; add requires increase by; subtract requires decrease by. Never invent an amount.',
@@ -142,7 +167,7 @@ def clauses(utterance):
 def relation_from_language(utterance):
     """Admit a small relation vocabulary; do not resolve arbitrary history prose."""
     text = utterance.lower()
-    if re.search(r'\bparent version\b', text): return 'parent'
+    if re.search(r'\bparent(?: version)?\b', text): return 'parent'
     if re.search(r'\b(?:previously active|previous.active)\b|version i was using before', text): return 'previous_active'
     if re.search(r'\b(?:previous|earlier) version\b|\bgo back one version\b', text): return 'previous'
     return 'current'

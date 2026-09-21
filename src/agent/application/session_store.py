@@ -102,7 +102,7 @@ class FileSessionStore:
                     raise SessionConflictError('Captured interaction cannot change.')
                 if old.admitted is not None and old.admitted != new.admitted:
                     raise SessionConflictError('Admitted intent cannot change.')
-                if old.status in {'clarification', 'navigated', 'failed'} and old != new:
+                if old.status in {'clarification', 'navigated', 'answered', 'failed'} and old != new:
                     raise SessionConflictError('Terminal interaction cannot change.')
             for old, new in zip(before.turns, after.turns):
                 if (old.turn_id, old.base_revision_id, old.base_generation, old.request_id,

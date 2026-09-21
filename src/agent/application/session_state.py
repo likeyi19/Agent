@@ -190,7 +190,7 @@ class Interaction:
     def __post_init__(self):
         for v in (self.turn_id, self.utterance, self.base_revision_id): text(v)
         natural(self.base_generation)
-        if self.status not in {'interpreting', 'admitted', 'submitted', 'clarification', 'navigated', 'failed'}:
+        if self.status not in {'interpreting', 'admitted', 'submitted', 'clarification', 'navigated', 'answered', 'failed'}:
             raise SessionError('Invalid interaction state.')
         object.__setattr__(self, 'snapshot', freeze_json_mapping(self.snapshot, 'interaction.snapshot'))
         if self.admitted is not None:

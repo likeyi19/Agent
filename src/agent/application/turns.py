@@ -1,5 +1,7 @@
 """Small interaction adapter above the existing Planner, sessions and executor."""
+from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
+from .response_facts import TurnResponseFacts
 import re
 
 from agent.schemas import AgentRequest, PriorOutputRef, StepOutputRef
@@ -9,7 +11,7 @@ from agent.orchestration.prior_outputs import binding_for_locator, validate_bind
 from agent.orchestration.planner import PlannerError
 from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
-from .turn_decisions import (Execute, Navigate, Clarify, IntentDelta, IntentError, interpret, clauses,
+from .turn_decisions import (Execute, Navigate, Clarify, Answer, IntentDelta, IntentError, interpret, clauses,
                              resolve_relation, admit_delta)
 
 
@@ -18,6 +20,8 @@ class TurnOutcome:
     kind: str
     status: str
     clarification: Clarify | None = None
+    text: str = ""
+    facts: "TurnResponseFacts | None" = None
 
 
 def _update(sessions, turn_id, **changes):
@@ -39,6 +43,11 @@ def _terminal(sessions, interaction, clarification):
     elif clarification.reason in {'ambiguous_parameter', 'missing_parameter_value'}:
         base = captured['bases'][interaction.base_revision_id]
         choices = tuple(dict.fromkeys(k for o in base['operations'] for k in o['parameters']))
+    if clarification.reason == 'missing_parameter_value':
+        from .turn_decisions import ALIASES
+        mentioned = tuple(k for k in choices if any(re.search(r'\b' + re.escape(a) + r'\b',
+            interaction.utterance, re.I) for a in ALIASES.get(k, ())))
+        if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
                             value_required=clarification.reason == 'missing_parameter_value')
     admitted = dict(kind='clarify', **asdict(clarification))
@@ -56,6 +65,9 @@ def _terminal(sessions, interaction, clarification):
 
 def _outcome(sessions, interaction):
     admitted = {} if interaction.admitted is None else _serialize(interaction.admitted)
+    if admitted.get('kind') == 'answer':
+        from .responses import admitted_answer
+        return admitted_answer(sessions, sessions_id(sessions), admitted)
     if interaction.status == 'clarification':
         return TurnOutcome('clarify', 'clarification', Clarify(admitted['reason'],
             tuple(admitted.get('choices', ())), admitted.get('value_required', False)))
@@ -258,7 +270,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     sessions._interaction_session_id = session_id
     if type(utterance) is not str or not utterance.strip() or len(utterance) > 4096:
         raise ValueError('A bounded nonempty utterance is required.')
-    state = sessions.load(session_id)
+    try:
+        state = sessions.load(session_id)
+    except (ValueError, RuntimeError, OSError):
+        from .responses import UNAVAILABLE
+        return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
     existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
     if existing is not None:
         if existing.utterance != utterance: raise SessionConflictError('Interaction identity changed.')
@@ -266,7 +282,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     if any(t.turn_id == turn_id for t in state.turns): raise SessionConflictError('Turn identity already used.')
     generation = state.generation if expected_generation is None else expected_generation
     if generation != state.generation: raise SessionConflictError('Session generation changed.')
-    captured = snapshot(sessions, state)
+    try:
+        captured = snapshot(sessions, state)
+    except (ValueError, RuntimeError, OSError, KeyError):
+        from .responses import UNAVAILABLE
+        return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
     interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured)
     def capture(current):
         if current.generation != generation or any(i.turn_id == turn_id for i in current.interactions):
@@ -276,12 +296,21 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     try:
         decision = interpret(interpreter, utterance, public_context(captured))
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
-        admitted = admit(sessions, interaction, decision)
+        if isinstance(decision, Answer):
+            from .responses import admit_answer
+            admitted = admit_answer(interaction, decision)
+        else:
+            admitted = admit(sessions, interaction, decision)
     except Exception as exc:
         reason = exc.reason if isinstance(exc, IntentError) else 'invalid_decision'
         return _terminal(sessions, interaction, Clarify(reason))
     _update(sessions, turn_id, admitted=admitted, status='admitted')
     try:
+        if isinstance(decision, Answer):
+            from .responses import admitted_answer
+            result = admitted_answer(sessions, session_id, admitted)
+            _update(sessions, turn_id, status='answered')
+            return result
         if isinstance(decision, Navigate):
             sessions.switch(session_id, turn_id, admitted['revision_id'], expected_generation=generation)
             _update(sessions, turn_id, status='navigated')

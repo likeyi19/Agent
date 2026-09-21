@@ -41,8 +41,15 @@ class AnalysisSessions:
     def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
-        return respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
+        outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation)
+        from .responses import summarize
+        return summarize(self, session_id, turn_id, outcome)
+
+    def answer(self, session_id, request):
+        """Read-only structured answer; no interpreter, Planner, or scientific calls."""
+        from .responses import answer_outcome
+        return answer_outcome(self, session_id, request)
 
     def record_no_run_turn(self, session_id, turn_id, *, outcome, expected_generation):
         """Record an explicit non-execution outcome; no linguistic interpretation."""

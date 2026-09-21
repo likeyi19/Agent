@@ -18,11 +18,12 @@ from .session_state import (
     Navigation, SessionError, SessionConflictError,
 )
 from .sessions import AnalysisSessions
-from .turn_decisions import Execute, Navigate, Clarify, IntentDelta, TurnDecision
+from .turn_decisions import Execute, Navigate, Clarify, Answer, IntentDelta, TurnDecision
 from .turns import TurnOutcome
+from .response_facts import TurnResponseFacts
 
 __all__ = [
-    "Execute", "Navigate", "Clarify", "IntentDelta", "TurnDecision", "TurnOutcome",
+    "Execute", "Navigate", "Clarify", "Answer", "TurnResponseFacts", "IntentDelta", "TurnDecision", "TurnOutcome",
     "AnalysisSession", "AnalysisRevision", "AnalysisSessions", "SessionTurn",
     "OutputSelection", "OutputLocator", "Navigation", "SessionError", "SessionConflictError",
     "ApplicationError",

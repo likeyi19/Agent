@@ -49,6 +49,25 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 15.5 — Evidence-grounded conversational responses
+
+[M15.5](docs/m15.5-conversational-responses.md) adds a bounded `Answer` decision,
+read-only `sessions.answer`, reviewed `TurnResponseFacts`, and deterministic text
+on the high-level interaction interface. Facts come from exact session revisions,
+accepted run/step anchors, resolved arguments, prior-output bindings and traces.
+Verification answers additionally check pinned evidence-file digests. No prose
+becomes authority; no transcript or arbitrary artifact content supplies facts.
+
+The initial response profile covers canonical fragments/QC/selection/matrix state,
+parameters, exact revision comparison, execution/reuse and bounded provenance.
+Parent and previously active remain distinct. Selection-only revisions have no
+active matrix. Answers/navigation/clarification invoke no scientific production
+or owner reconstruction. Historical owner-call totals are explicitly unknown;
+absence of an upstream production step is not proof of avoided reconstruction.
+Rendering uses no additional LLM. Broader biology/marker interpretation and M15.6
+remain deferred. Scientific contracts, authority schemas and Registry (23) are
+unchanged. Implementation and acceptance evidence remain uncommitted for review.
+
 ## Milestone 15.2 — Durable analysis session foundation
 
 [M15.2](docs/m15.2-analysis-sessions.md) adds an explicit, application-level
@@ -92,8 +111,8 @@ Parent and previous-active remain distinct; ambiguous previous/earlier navigatio
 clarifies. Navigation/clarification perform no science, integrity or presentation.
 Explicit retention excludes stale descendants, and M15.2 generation checks retain
 stale children without replacing newer state. One-shot APIs, all 23 scientific
-tools, authority schemas and EpiZoo are unchanged. M15.5 interpretation/Q&A remains
-deferred; no commit/push is included.
+tools, authority schemas and EpiZoo are unchanged. M15.5 above now adds bounded
+state/result responses; broad biological interpretation remains deferred.
 
 ## Primary nuclear analysis scope
 

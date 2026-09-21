@@ -407,7 +407,8 @@ class ArgumentSpec:
             )
 
     def validate(self, name: str, value: object) -> None:
-        if isinstance(value, StepOutputRef):
+        from agent.schemas.prior_output import PriorOutputRef
+        if isinstance(value, (StepOutputRef, PriorOutputRef)):
             if self.allow_step_output_ref:
                 return
             raise ToolArgumentError(
@@ -886,7 +887,21 @@ class ToolRegistry:
             )
             if argument_spec is None:  # pragma: no cover - checked above
                 raise ToolArgumentError(f"Unknown argument {argument_name!r}.")
-            argument_spec.validate(argument_name, value)
+            from agent.schemas.prior_output import PriorOutputRef
+            if isinstance(value, PriorOutputRef):
+                semantic = spec.semantic_planning
+                allowed = semantic is not None and any(
+                    port.accepted_upstream_types and any(
+                        member.field_name == argument_name for member in port.members
+                    ) for port in semantic.consumer_ports
+                )
+                if not allowed:
+                    raise ToolArgumentError("Historical reference requires an artifact input port.")
+                # Literal validators run after exact reference resolution. Full
+                # publication/member compatibility is checked during preflight.
+                ArgumentSpec.validate(argument_spec, argument_name, value)
+            else:
+                argument_spec.validate(argument_name, value)
         return MappingProxyType(dict(arguments))
 
     def validate_result(self, name: str, result: object) -> None:

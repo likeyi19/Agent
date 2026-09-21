@@ -1,5 +1,7 @@
 """Public typed contracts for Agent orchestration."""
 
+from .prior_output import PriorOutputBinding, PriorOutputRef
+
 from .orchestration import (
     AgentError,
     AgentPlan,
@@ -48,6 +50,8 @@ __all__ = [
     "JsonValue",
     "LEGACY_RUN_STATE_SCHEMA_VERSIONS",
     "PlanStep",
+    "PriorOutputBinding",
+    "PriorOutputRef",
     "RecoveryDisposition",
     "PersistedRunState",
     "RecoveryPolicySnapshot",

@@ -136,6 +136,10 @@ def selection_request(
         },
         "capabilities": {c: CAPABILITY_DESCRIPTIONS[c] for c in index},
     }
+    from .active_context import current_context
+    active = current_context()
+    if active is not None and active.items:
+        payload['active_artifact_types'] = tuple(sorted({i.binding.semantic_type for i in active.items}))
     schema = _closed_object_schema({
         "selection_schema_version": {
             "type": "integer", "enum": (SELECTION_SCHEMA_VERSION,),

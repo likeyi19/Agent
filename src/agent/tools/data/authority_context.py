@@ -180,6 +180,17 @@ def publication_moved(source, destination):
 def execution_authorities(function):
     @wraps(function)
     def execute(*args, **kwargs):
+        from agent.orchestration.prior_outputs import references, required_store
+        plan = args[1] if len(args) > 1 else kwargs.get('plan')
+        if references(plan):
+            from agent.orchestration.verification_authority import _load_context
+            run_id = kwargs.get('durable_run_id')
+            if run_id is None:
+                raise AuthorityError('Historical execution requires durable run persistence.')
+            context = _load_context(required_store(), run_id, 'historical_verified_sources.v1')
+            context.defer_hash_cancellation = True
+            with authority_operation(context):
+                return function(*args, **kwargs)
         if kwargs.get('durable_run_id') is None or kwargs.get('completed_steps'):
             return function(*args, **kwargs)
         context = VerificationContext()

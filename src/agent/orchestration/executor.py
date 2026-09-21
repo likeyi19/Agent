@@ -264,6 +264,13 @@ class PlanExecutor:
             )
 
         steps_by_id = {step.step_id: step for step in plan.steps}
+        from .prior_outputs import validate_step_references
+        for step in plan.steps:
+            try:
+                validate_step_references(step, self._registry)
+            except (ValueError, OSError, RuntimeError):
+                return _preflight_failure(plan, [("PRIOR_OUTPUT_INVALID", step.step_id,
+                    "Historical output identity or compatibility validation failed.")], checks)
         for step in plan.steps:
             try:
                 self._registry.validate_arguments(step.tool_name, step.arguments)
@@ -351,6 +358,17 @@ class PlanExecutor:
     ) -> dict[str, object]:
         resolved: dict[str, object] = {}
         for argument_name, argument in step.arguments.items():
+            from agent.schemas.prior_output import PriorOutputRef
+            if isinstance(argument, PriorOutputRef):
+                from .prior_outputs import resolve
+                try:
+                    resolved[argument_name] = _copy_json_value(resolve(argument), argument_name)
+                except (ValueError, OSError, RuntimeError) as exc:
+                    raise _ReferenceResolutionError("PRIOR_OUTPUT_INVALID", "Historical output changed.") from exc
+                trace.add(TraceEventType.STEP_EXECUTION, "Resolved exact accepted historical output.",
+                          step_id=step.step_id, details={"argument_name": argument_name,
+                          "prior_output": argument.to_dict()})
+                continue
             if not isinstance(argument, StepOutputRef):
                 resolved[argument_name] = argument
                 continue
@@ -678,7 +696,12 @@ class PlanExecutor:
                     for dependency in step.depends_on
                 }
                 authority_options = {}
-                if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features') and durable_run_id is not None:
+                from .prior_outputs import references
+                from agent.tools.data.scientific_authority import TOOLS
+                if durable_run_id is not None and (
+                    step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+                    or (references(plan) and step.tool_name in TOOLS)
+                ):
                     from .durable_tool_recovery import execution_identity
                     authority_options['authority_execution_identity'] = execution_identity(
                         durable_run_id, plan, step, self._registry.get(step.tool_name))

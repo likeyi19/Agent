@@ -13,8 +13,15 @@ from .service import (
     ResearchAgentApplication,
 )
 from .workspace import ApplicationWorkspaceError, ManagedWorkspace, RunWorkspace
+from .session_state import (
+    AnalysisSession, AnalysisRevision, SessionTurn, OutputSelection, OutputLocator,
+    Navigation, SessionError, SessionConflictError,
+)
+from .sessions import AnalysisSessions
 
 __all__ = [
+    "AnalysisSession", "AnalysisRevision", "AnalysisSessions", "SessionTurn",
+    "OutputSelection", "OutputLocator", "Navigation", "SessionError", "SessionConflictError",
     "ApplicationError",
     "ApplicationResult",
     "ApplicationServiceError",

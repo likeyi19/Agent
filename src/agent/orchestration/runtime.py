@@ -50,6 +50,7 @@ from .planning_recovery import (
 )
 from .planner import DeterministicPlanner, Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
+from .prior_outputs import references as prior_references, runtime_store
 from .run_store import (
     CancellationRequestedError,
     RecoveryPolicyIncompatibleError,
@@ -123,6 +124,7 @@ class AgentRuntime:
             raise TypeError("RunStore returned an invalid cancellation receipt.")
         return receipt
 
+    @runtime_store
     def run(self, request: AgentRequest) -> AgentRunResult:
         """Plan and optionally execute one request without hidden global state."""
 
@@ -730,6 +732,7 @@ class AgentRuntime:
             )
         return self._persist_terminal(state, result)
 
+    @runtime_store
     def resume(self, run_id: str) -> AgentRunResult:
         """Resume one nonterminal durable run without invoking its planner."""
 
@@ -905,10 +908,11 @@ class AgentRuntime:
             spec = self._registry.get(step.tool_name)
             self._registry.validate_arguments(step.tool_name, args)
             authority_options = {}
-            if step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features'):
+            from agent.tools.data.scientific_authority import TOOLS
+            if (step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+                    or (prior_references(state.plan) and step.tool_name in TOOLS)):
                 from agent.tools.data.authority_context import current
                 identity = execution_identity(state.run_id, state.plan, step, spec)
-                from agent.tools.data.scientific_authority import TOOLS
                 current().register_execution(TOOLS[step.tool_name], args['output_dir'], identity)
                 authority_options['authority_execution_identity'] = identity
             if old.status is StepStatus.RUNNING:
@@ -1236,8 +1240,9 @@ class AgentRuntime:
                 completed_steps=completed_steps,
                 checkpoint=checkpoint,
                 should_cancel=should_cancel,
-                **({'durable_run_id': run_id} if checkpoint is not None and any(
-                    self._registry.get(step.tool_name).durable_hooks is not None for step in plan.steps) else {}),
+                **({'durable_run_id': run_id} if checkpoint is not None and (any(
+                    self._registry.get(step.tool_name).durable_hooks is not None for step in plan.steps)
+                    or prior_references(plan)) else {}),
             )
         except RunStoreError:
             raise

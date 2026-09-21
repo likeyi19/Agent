@@ -368,6 +368,12 @@ def build_semantic_planning_prompt(
             },
         },
     }
+    from .active_context import current_context
+    active = current_context()
+    if active is not None and active.items:
+        payload['active_outputs'] = active.public_items()
+        payload['wire_v4']['source_kinds']['context'] = ('kind', 'handle')
+        payload['instructions'] += ('Select historical artifacts only through offered context handles; each handle selects the whole semantic artifact. Do not infer numeric parameters.',)
     regeneration_context = (
         repair_context if repair_context is not None else failover_context
     )

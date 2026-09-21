@@ -49,6 +49,34 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 15.2 — Durable analysis session foundation
+
+[M15.2](docs/m15.2-analysis-sessions.md) adds an explicit, application-level
+`ResearchAgentApplication.sessions` API for durable session identity, immutable
+analysis revisions, turn/run linkage, generation-checked activation and navigation.
+These are navigation records, never scientific authority or executable prior-run
+inputs. One-shot calls do not create session state. Session recovery/navigation
+perform no production or owner reconstruction; unfinished presentation completion
+is a separate explicit operation using the existing application contracts.
+Planner, AgentRequest, scientific RunStore, tools, owners and EpiZoo are unchanged.
+Implementation and focused acceptance are ready for review; no M15.2 commit/push.
+The originating-run-only limitation is extended explicitly by M15.3 below.
+
+## Milestone 15.3 — Exact prior outputs and structured active context
+
+[M15.3](docs/m15.3-prior-output-binding.md) adds opt-in scoped-v4 active context,
+fingerprinted `PriorOutputRef` inputs, and import of exact accepted schema-2
+scientific authority into execution/recovery. Logical handles expose no historical
+paths, run IDs, hashes or authority payloads to providers. Compatibility and
+integrity remain owned by existing semantic/scientific contracts. Weak authority
+and unsupported role lineage fail closed. `StepOutputRef` stays intra-plan.
+
+Revisions may explicitly select new outputs plus retained captured-base outputs
+across runs; stale downstream lineage is rejected before activation. No implicit
+inheritance or downstream completion is introduced. Navigation stays zero-science;
+generation-checked activation and one-shot APIs remain. Scientific algorithms,
+public tool contracts and EpiZoo are unchanged. No commit/push or M15.4 work.
+
 ## Primary nuclear analysis scope
 
 The project default target is the declared species/assembly's canonical primary

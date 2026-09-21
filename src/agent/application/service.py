@@ -339,6 +339,13 @@ class ResearchAgentApplication:
     def run_store(self) -> FileRunStore:
         return self._run_store
 
+    @property
+    def sessions(self):
+        """Explicit durable navigation API; one-shot calls create no session state."""
+        from .sessions import AnalysisSessions
+        root = self._workspace._ensure_directory(self.workspace_root / "sessions")
+        return AnalysisSessions(self, root)
+
     def run(self, request: AgentRequest) -> ApplicationResult:
         """Plan, execute, and compose verified reporting for one request."""
 

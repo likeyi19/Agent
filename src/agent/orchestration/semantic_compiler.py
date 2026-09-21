@@ -84,8 +84,18 @@ class SemanticStepOutputSource:
             _nonempty(self.source_port, "source_port")
 
 
+@dataclass(frozen=True)
+class SemanticContextSource:
+    target_port: str
+    handle: str
+
+    def __post_init__(self):
+        _nonempty(self.target_port, 'target_port')
+        _nonempty(self.handle, 'handle')
+
+
 SemanticSourceSelection: TypeAlias = (
-    SemanticRequestInputSource | SemanticStepOutputSource
+    SemanticRequestInputSource | SemanticStepOutputSource | SemanticContextSource
 )
 
 
@@ -104,7 +114,7 @@ class SemanticPlanStep:
         if not isinstance(self.sources, tuple) or not all(
             isinstance(
                 source,
-                (SemanticRequestInputSource, SemanticStepOutputSource),
+                (SemanticRequestInputSource, SemanticStepOutputSource, SemanticContextSource),
             )
             for source in self.sources
         ):
@@ -668,6 +678,25 @@ def compile_semantic_plan(
                         "target_port": source.target_port,
                     },
                 )
+            if isinstance(source, SemanticContextSource):
+                from .active_context import current_context
+                from .prior_outputs import channel_for
+                from agent.schemas.prior_output import PriorOutputRef
+                context = current_context()
+                try:
+                    if context is None:
+                        raise ValueError('No active context was offered.')
+                    binding = context.binding(source.handle)
+                    channel = channel_for(binding, step.tool_name, source.target_port, registry)
+                except ValueError as exc:
+                    raise SemanticPlanCompileError('PRIOR_OUTPUT_INVALID',
+                        'Unknown or incompatible historical source.') from exc
+                for member in channel.members:
+                    if member.argument_name in state.arguments:
+                        raise SemanticPlanCompileError('OVERLAPPING_SOURCE_MEMBERS', 'Overlapping historical source.')
+                    state.arguments[member.argument_name] = PriorOutputRef(binding, member.output_key)
+                state.target_ports.add(source.target_port)
+                continue
             if isinstance(source, SemanticRequestInputSource):
                 if source.input_name not in request.inputs:
                     _raise_compile(

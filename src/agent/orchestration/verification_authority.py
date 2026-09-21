@@ -88,6 +88,9 @@ def load_fragment_authority(store, run_id, step_id, *, source_policy=None):
     return handle
 
 
+from .prior_outputs import source_load_guard
+
+@source_load_guard
 def _load_context(store, run_id, source_policy):
     from agent.tools.data.authority_context import VerificationContext, ScientificProof
     from agent.tools.data.scientific_authority import TOOLS, _publication_record
@@ -97,6 +100,8 @@ def _load_context(store, run_id, source_policy):
         raise AuthorityError('Unsupported source freshness policy.')
     state = store.load(run_id)
     context = VerificationContext()
+    from .prior_outputs import import_plan_sources
+    import_plan_sources(state.plan, context, store)
     selected = []
     qualified = _qualified_records(store, run_id)
     if not set(qualified) <= {step.step_id for step in state.steps}:
@@ -140,7 +145,9 @@ def _load_context(store, run_id, source_policy):
                 freeze_json_mapping(generic, 'proof'), record['resources']['result_metadata'])
             context.locations['generic_fragments', record['publication_path']] = (generic_key, record['manifest_sha256'])
     anchors = {step.step_id: anchor for step, _, _, anchor in selected}
+    previous_anchors = context.validate_anchors
     def validate_anchors():
+        previous_anchors()
         if any(_accepted(store, run_id, step_id)[3] != anchor for step_id, anchor in anchors.items()):
             raise AuthorityError('Accepted execution authority changed during consumption.')
         if source_policy == 'current_source_freshness.v1':
@@ -179,7 +186,8 @@ def accepted_authorities(store, run_id, *, source_policy='historical_verified_so
     """Explicit scientific operation, never implicitly applied to presentation."""
     from agent.tools.data.authority_context import authority_operation
     context = _load_context(store, run_id, source_policy)
-    with authority_operation(context):
+    from .prior_outputs import prior_output_store
+    with prior_output_store(store), authority_operation(context):
         yield context
     context.validate_anchors()
 
@@ -331,6 +339,10 @@ def resume_annotation_authorities(function):
         from agent.schemas.run_state import RunLifecycleStatus
         store = runtime._required_run_store()
         state = store.load(run_id)
+        from .prior_outputs import references
+        if references(state.plan):
+            with accepted_authorities(store, run_id):
+                return function(runtime, run_id)
         if (state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
                 RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}
                 or not any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features') for s in state.steps)):

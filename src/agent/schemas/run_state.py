@@ -9,6 +9,8 @@ import hashlib
 import json
 from typing import Mapping, Sequence, cast
 
+from .prior_output import PriorOutputRef
+
 from .orchestration import (
     AgentError,
     AgentPlan,
@@ -981,7 +983,9 @@ def _decode_request(value: object) -> AgentRequest:
     )
 
 
-def _decode_reference(value: object) -> StepOutputRef | None:
+def _decode_reference(value: object) -> StepOutputRef | PriorOutputRef | None:
+    if isinstance(value, Mapping) and "$prior_output" in value:
+        return PriorOutputRef.from_dict(value)
     if not isinstance(value, Mapping) or set(value) != {"$ref"}:
         return None
     reference = _mapping(value["$ref"], "step reference")

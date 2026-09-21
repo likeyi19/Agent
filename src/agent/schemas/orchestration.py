@@ -8,6 +8,7 @@ import math
 from types import MappingProxyType
 from typing import Any, Mapping, TypeAlias, cast
 
+from .prior_output import PriorOutputRef
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | tuple["JsonValue", ...] | Mapping[str, "JsonValue"]
@@ -111,6 +112,8 @@ def freeze_json_mapping(value: Mapping[str, object], field_name: str) -> Mapping
 
 
 def _serialize(value: object) -> Any:
+    if isinstance(value, PriorOutputRef):
+        return value.to_dict()
     if isinstance(value, StepOutputRef):
         return {
             "$ref": {
@@ -156,7 +159,7 @@ class StepOutputRef(_JsonModel):
         _require_non_empty_string(self.output_key, "output_key")
 
 
-PlanArgument: TypeAlias = JsonValue | StepOutputRef
+PlanArgument: TypeAlias = JsonValue | StepOutputRef | PriorOutputRef
 
 
 def _freeze_plan_arguments(
@@ -169,7 +172,7 @@ def _freeze_plan_arguments(
         _require_non_empty_string(key, "argument name")
         frozen[key] = (
             argument
-            if isinstance(argument, StepOutputRef)
+            if isinstance(argument, (StepOutputRef, PriorOutputRef))
             else _freeze_json_value(argument, f"arguments.{key}")
         )
     return MappingProxyType(frozen)

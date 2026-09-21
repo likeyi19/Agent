@@ -22,6 +22,7 @@ from .planner import PlannerError
 from .planning_diagnostics import PlanningDiagnosticStage
 from .registry import ToolRegistry
 from .semantic_compiler import (
+    SemanticContextSource,
     SemanticPlanCandidate,
     SemanticPlanStep,
     SemanticRequestInputSource,
@@ -123,6 +124,14 @@ def build_semantic_wire_v4_schema(
             }
         )
         source_variants.append({"$ref": "#/$defs/input_source"})
+    from .active_context import current_context
+    active = current_context()
+    if active is not None and active.items:
+        definitions['context_source'] = _closed_object_schema({
+            'kind': {'type': 'string', 'enum': ('context',)},
+            'handle': {'type': 'string', 'enum': tuple(i.handle for i in active.items)},
+        })
+        source_variants.append({'$ref': '#/$defs/context_source'})
     source_variants.extend(
         (
             {"$ref": "#/$defs/step_source"},
@@ -212,7 +221,7 @@ def _parse_source(
     context: str,
     step_index: int,
     step_id: str,
-) -> SemanticRequestInputSource | SemanticStepOutputSource:
+) -> SemanticRequestInputSource | SemanticStepOutputSource | SemanticContextSource:
     if not isinstance(raw_source, dict):
         raise _invalid_output(f"{context} must be an object.")
     if "source" in raw_source:
@@ -228,6 +237,14 @@ def _parse_source(
         # flat v4 payloads. Both representations pass the same strict validation.
         raw_source = {"target": raw_source["target"], **source_value}
     kind = raw_source.get("kind")
+    if kind == 'context':
+        _require_fields(raw_source, required=frozenset({'kind', 'target', 'handle'}), context=context)
+        from .active_context import current_context
+        active = current_context()
+        handle = _bounded_string(raw_source['handle'], field_name=f'{context}.handle')
+        if active is None or handle not in {i.handle for i in active.items}:
+            raise _invalid_output('Unknown or unoffered historical context handle.')
+        return SemanticContextSource(_bounded_string(raw_source['target'], field_name=f'{context}.target'), handle)
     if kind == "input":
         _require_fields(
             raw_source,

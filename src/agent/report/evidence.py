@@ -938,7 +938,11 @@ def _resolved_arguments_match(
     if not isinstance(arguments, Mapping) or set(arguments) != set(resolved_arguments):
         return False
     for name, planned in arguments.items():
-        if isinstance(planned, StepOutputRef):
+        from agent.schemas.prior_output import PriorOutputRef
+        if isinstance(planned, PriorOutputRef):
+            from agent.orchestration.prior_outputs import resolve
+            expected = resolve(planned)
+        elif isinstance(planned, StepOutputRef):
             producer = verified_results.get(planned.step_id)
             if producer is None or planned.output_key not in producer:
                 return False
@@ -1424,6 +1428,10 @@ def _prepare_evidence(
             "scientific_tools_invoked_during_evidence_processing": False,
         },
     }
+    from agent.orchestration.prior_outputs import references
+    prior = tuple(dict.fromkeys(references(plan)))
+    if prior:
+        content['provenance']['prior_outputs'] = tuple(ref.to_dict() for ref in prior)
     # Force the complete projection through the strict JSON boundary now.
     _canonical_json_bytes(content)
     return content, tuple(step.tool_name for step in ordered)

@@ -49,6 +49,28 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 15.6 — Real multi-turn scientific acceptance
+
+[M15.6](docs/m15.6-real-multiturn-closeout.md) exercises the preserved accepted
+human PBMC canonical fragments/QC/selection/matrix chain through normal session
+turns: clarification, TSS 4→5 selection/matrix update, fresh-process questions,
+rollback, TSS 4→6 selection-only branch, matrix-only continuation and provenance.
+All four revisions survive independent processes with exact explicit bindings.
+Covered upstream production/reconstruction is zero; each new selection/matrix
+runs its normal production and independent verification once. Answers/navigation
+run zero science, and selection-only state exposes no historical matrix.
+
+Bounded failed-turn, stale-completion and corrupt-copy checks pass. All 853
+pre-existing source files (19,787,638,077 bytes), 352 source/test Python files and
+127 historical eval files remain unchanged. No production fix or new architecture
+is needed. Scripted interpreter/Planner responses isolate application/scientific
+acceptance; live-provider language quality is not qualified. Full lightweight
+regression passes **4,480 tests, 83 skipped, 7 warnings in 2,849.54 seconds**,
+exit 0, all `RUN_*` gates disabled, no exclusions, with all 352 source/test Python
+files unchanged. M15 is ready to close within this bounded acceptance scope.
+Registry remains 23, EpiZoo and scientific contracts are unchanged. Acceptance
+is ready for review; nothing is staged, committed or pushed.
+
 ## Milestone 15.5 — Evidence-grounded conversational responses
 
 [M15.5](docs/m15.5-conversational-responses.md) adds a bounded `Answer` decision,
@@ -64,9 +86,10 @@ Parent and previously active remain distinct. Selection-only revisions have no
 active matrix. Answers/navigation/clarification invoke no scientific production
 or owner reconstruction. Historical owner-call totals are explicitly unknown;
 absence of an upstream production step is not proof of avoided reconstruction.
-Rendering uses no additional LLM. Broader biology/marker interpretation and M15.6
-remain deferred. Scientific contracts, authority schemas and Registry (23) are
-unchanged. Implementation and acceptance evidence remain uncommitted for review.
+Rendering uses no additional LLM. Broader biology/marker interpretation remains
+deferred. Scientific contracts, authority schemas and Registry (23) are unchanged.
+M15.5 is accepted at `b82515d0fac5f778f8360f766a72241df654f502`; M15.6 above
+records the subsequent real multi-turn acceptance.
 
 ## Milestone 15.2 — Durable analysis session foundation
 

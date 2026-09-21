@@ -94,6 +94,16 @@ class FileSessionStore:
                     or after.navigation[:len(before.navigation)] != before.navigation
                     or len(after.turns) < len(before.turns)):
                 raise SessionConflictError('Historical session records are immutable.')
+            if len(after.interactions) < len(before.interactions):
+                raise SessionConflictError('Interaction history cannot shrink.')
+            for old, new in zip(before.interactions, after.interactions):
+                if (old.turn_id, old.utterance, old.base_revision_id, old.base_generation, old.snapshot) != (
+                    new.turn_id, new.utterance, new.base_revision_id, new.base_generation, new.snapshot):
+                    raise SessionConflictError('Captured interaction cannot change.')
+                if old.admitted is not None and old.admitted != new.admitted:
+                    raise SessionConflictError('Admitted intent cannot change.')
+                if old.status in {'clarification', 'navigated', 'failed'} and old != new:
+                    raise SessionConflictError('Terminal interaction cannot change.')
             for old, new in zip(before.turns, after.turns):
                 if (old.turn_id, old.base_revision_id, old.base_generation, old.request_id,
                     old.request_sha256, old.selections, old.retained_outputs) != (

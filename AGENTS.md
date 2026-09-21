@@ -77,6 +77,24 @@ inheritance or downstream completion is introduced. Navigation stays zero-scienc
 generation-checked activation and one-shot APIs remain. Scientific algorithms,
 public tool contracts and EpiZoo are unchanged. No commit/push or M15.4 work.
 
+## Milestone 15.4 — Typed intent deltas and bounded navigation
+
+[M15.4](docs/m15.4-intent-deltas.md) adds opt-in `sessions.respond` with typed
+Execute/Navigate/Clarify decisions. Initial editable science is the accepted
+QC-selection path, optionally rebuilding its canonical matrix. New numeric
+operands require exact current-utterance command evidence; unchanged parameters
+come from persisted accepted arguments and existing registry contracts validate
+results. The existing scoped Planner and M15.3 binding/authority path execute
+all science. No numerical guesses, graph diff, or implicit matrix maintenance.
+
+Captured metadata and admitted intent are immutable session interaction records.
+Parent and previous-active remain distinct; ambiguous previous/earlier navigation
+clarifies. Navigation/clarification perform no science, integrity or presentation.
+Explicit retention excludes stale descendants, and M15.2 generation checks retain
+stale children without replacing newer state. One-shot APIs, all 23 scientific
+tools, authority schemas and EpiZoo are unchanged. M15.5 interpretation/Q&A remains
+deferred; no commit/push is included.
+
 ## Primary nuclear analysis scope
 
 The project default target is the declared species/assembly's canonical primary

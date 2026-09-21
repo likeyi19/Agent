@@ -38,6 +38,12 @@ class AnalysisSessions:
     def load(self, session_id):
         return self._store.load(session_id)
 
+    def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None):
+        """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
+        from .turns import respond
+        return respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
+                       expected_generation=expected_generation)
+
     def record_no_run_turn(self, session_id, turn_id, *, outcome, expected_generation):
         """Record an explicit non-execution outcome; no linguistic interpretation."""
         text(turn_id)

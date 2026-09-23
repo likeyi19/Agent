@@ -40,7 +40,31 @@ class Clarify:
 
 
 ANSWER_INTENTS = ('version', 'matrix', 'selection', 'thresholds', 'changes',
-                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported')
+                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported', 'scientific')
+
+
+@dataclass(frozen=True)
+class ScientificTarget:
+    output: str
+    subject: str | None = None
+
+    def __post_init__(self):
+        if (type(self.output) is not str or not 0 < len(self.output) <= 128
+                or self.subject is not None and (type(self.subject) is not str or not 0 < len(self.subject) <= 128)):
+            raise ValueError('Invalid scientific target.')
+
+
+@dataclass(frozen=True)
+class ScientificQuestion:
+    target: ScientificTarget
+    comparison: ScientificTarget | None = None
+    focus: str = 'question'
+
+    def __post_init__(self):
+        if (not isinstance(self.target, ScientificTarget)
+                or self.comparison is not None and not isinstance(self.comparison, ScientificTarget)
+                or self.focus not in ('question', 'continue')):
+            raise ValueError('Invalid scientific question.')
 
 
 @dataclass(frozen=True)
@@ -48,19 +72,23 @@ class Answer:
     intent: str
     relation: str = 'current'
     technical: bool = False
+    scientific: ScientificQuestion | None = None
 
     def __post_init__(self):
         if self.intent not in ANSWER_INTENTS or self.relation not in RELATIONS or type(self.technical) is not bool:
             raise ValueError('Invalid bounded answer request.')
         if self.intent == 'comparison' and self.relation == 'current':
             raise ValueError('Comparison requires a historical relation.')
+        if (self.intent == 'scientific') != isinstance(self.scientific, ScientificQuestion):
+            raise ValueError('Scientific answers require a structured question.')
 
 
 TurnDecision = Execute | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
-           'unavailable_context', 'invalid_decision', 'planning_failed')
+           'unavailable_context', 'invalid_decision', 'planning_failed', 'ambiguous_subject',
+           'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution')
 # These are language aliases, not scientific types/ranges/defaults. Those stay
 # exclusively in the registered ArgumentSpecs. Initial interaction scope is QC selection.
 ALIASES = {
@@ -92,11 +120,28 @@ def parse_decision(raw):
             raise IntentError('invalid_decision')
         value = envelope['decision']
         kind = value.get('kind')
+        # Distinct wire tags let strict providers discriminate the union. They
+        # normalize to the existing decisions; admission/storage are unchanged.
+        if kind == 'answer_scientific':
+            if value.get('intent') != 'scientific': raise IntentError('invalid_decision')
+            value = dict(value, kind='answer')
+            kind = 'answer'
+        elif kind == 'execute_plan':
+            if value.get('operation') != 'plan': raise IntentError('invalid_decision')
+            value = dict(value, kind='execute')
+            kind = 'execute'
         if kind == 'clarify':
             _shape(value, ('kind', 'reason'))
             if value['reason'] not in REASONS: raise IntentError('invalid_decision')
             return Clarify(value['reason'], value_required=value['reason'] == 'missing_parameter_value')
         if kind == 'answer':
+            if value.get('intent') == 'scientific':
+                _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus'))
+                def target(v):
+                    _shape(v, ('output', 'subject'))
+                    return ScientificTarget(**v)
+                return Answer('scientific', scientific=ScientificQuestion(target(value['target']),
+                    None if value['comparison'] is None else target(value['comparison']), value['focus']))
             _shape(value, ('kind', 'intent', 'relation', 'technical'))
             return Answer(value['intent'], value['relation'], value['technical'])
         if kind == 'navigate':
@@ -105,7 +150,8 @@ def parse_decision(raw):
             return Navigate(value['relation'])
         _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
         if (kind != 'execute' or value['base'] not in RELATIONS
-                or value['target'] not in ('selection', 'matrix') or type(value['operation']) is not str):
+                or type(value['target']) is not str or type(value['operation']) is not str
+                or value['operation'] != 'plan' and value['target'] not in ('selection', 'matrix')):
             raise IntentError('invalid_decision')
         delta = value['delta']
         if delta is not None:
@@ -128,23 +174,43 @@ def decision_schema(public):
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
-    variants = [_object(dict(kind=enum(('answer',)), intent=enum(ANSWER_INTENTS),
+    variants = [_object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i != 'scientific'),
         relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(REASONS))),
         _object(dict(kind=enum(('navigate',)), relation=enum(public['relations'])))]
     if offered:
         variants.append(_object(dict(kind=enum(('execute',)), base=enum(public['relations']),
             operation=enum(o['handle'] for o in offered), target=enum(('selection','matrix')),
             delta={'anyOf':[delta, {'type':'null'}]})))
+    if 'dialogue' in public:
+        target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']] + ['@focus', '@previous']),
+                             subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
+        variants.append(_object(dict(kind=enum(('answer_scientific',)), intent=enum(('scientific',)), target=target,
+            comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))))
+        variants.append(_object(dict(kind=enum(('execute_plan',)), base=enum(('current',)), operation=enum(('plan',)),
+            target=enum(public['dialogue']['tools']), delta={'type':'null'})))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
 def interpret(model, utterance, public):
     prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **public,
         'instructions': [
-            'Choose execute, navigate, clarify, or answer. Answer only bounded persisted state questions.',
+            'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
+            'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
+            'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',
+            'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
+            'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
+            'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no implicit scientific discussion; clarify unresolved short references instead of inventing a topic.',
+            'Use unavailable_context only when the requested target is missing or its evidence unavailable. Missing rationale or scientific certainty within an available summary is for the scientific answer stage to explain as insufficient evidence, not a reason to reject the target.',
+            'You select intent and exact references, not the scientific conclusion. You need not see factual values to select answer_scientific for an available result. Detailed accepted evidence is loaded after admission.',
+            'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',
             'Answer intents: version, matrix, selection, thresholds, changes (originating revision versus parent), execution, reuse, comparison, provenance, verification, unsupported.',
             'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
-            'Biological interpretation, quality judgments and marker explanations use answer unsupported; do not assert that a label exists.',
+            'For questions about scientific results, use kind=answer_scientific, intent=scientific with offered output handles. It can return insufficient evidence.',
+            'For a new scientific command outside the offered threshold operations use kind=execute_plan, operation=plan, target=the registered tool, base=current, delta=null. Never answer a computation request as if it was already computed.',
+            'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
+            'Subject is null for the whole result, @focus to retain the subject, @other only for an unambiguous other subject, or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
+            'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',
+            'Scientific comparison uses two explicit targets; do not infer correspondence between clusters from different results. Ambiguous other/previous requires clarification.',
             'technical=true only for an explicit request for technical provenance, IDs or hashes.',
             'Select only offered operation, parameter and revision relations. Never emit internal IDs.',
             'For one parameter change, quote the exact complete user command clause as evidence and its numeric literal verbatim.',

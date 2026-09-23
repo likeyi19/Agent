@@ -262,12 +262,12 @@ class AnalysisSession:
                     or (t.status == 'activated') != (t.turn_id in activated)
                     or (t.revision_id is not None and t.revision_id not in revisions)):
                 raise SessionError('Invalid turn base or outcome.')
-        for interaction in self.interactions:
+        for interaction_index, interaction in enumerate(self.interactions):
             if (interaction.base_generation > self.generation
                     or history[interaction.base_generation] != interaction.base_revision_id):
                 raise SessionError('Invalid captured interaction base.')
             captured = _serialize(interaction.snapshot)
-            if set(captured) != {'relations', 'bases'}:
+            if set(captured) not in ({'relations', 'bases'}, {'relations', 'bases', 'dialogue'}):
                 raise SessionError('Invalid interaction snapshot.')
             expected = {'current': interaction.base_revision_id}
             parent = revisions[interaction.base_revision_id].parent_revision_id
@@ -280,6 +280,9 @@ class AnalysisSession:
             for rid, base in captured['bases'].items():
                 if base.get('revision_id') != rid or base.get('outputs') != [asdict(o) for o in revisions[rid].outputs]:
                     raise SessionError('Interaction outputs differ from captured revisions.')
+            if 'dialogue' in captured:
+                from .scientific_dialogue import validate_capture
+                validate_capture(self, interaction, self.interactions[:interaction_index])
 
     def to_dict(self):
         # MappingProxyType in frozen interaction payloads is not deepcopyable.

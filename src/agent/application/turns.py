@@ -22,6 +22,7 @@ class TurnOutcome:
     clarification: Clarify | None = None
     text: str = ""
     facts: "TurnResponseFacts | None" = None
+    scientific: object = None
 
 
 def _update(sessions, turn_id, **changes):
@@ -63,9 +64,17 @@ def _terminal(sessions, interaction, clarification):
     return TurnOutcome('clarify', 'clarification', clarification)
 
 
-def _outcome(sessions, interaction):
+def _outcome(sessions, interaction, answerer=None):
     admitted = {} if interaction.admitted is None else _serialize(interaction.admitted)
     if admitted.get('kind') == 'answer':
+        if admitted.get('intent') == 'scientific':
+            from .scientific_dialogue import answer
+            if interaction.status == 'failed':
+                return TurnOutcome('answer', 'unavailable', text='The previous response could not be grounded in accepted evidence.')
+            result = answer(sessions, sessions_id(sessions), interaction, answerer)
+            if interaction.status == 'admitted':
+                _update(sessions, interaction.turn_id, status='answered' if result.status == 'answered' else 'failed')
+            return result
         from .responses import admitted_answer
         return admitted_answer(sessions, sessions_id(sessions), admitted)
     if interaction.status == 'clarification':
@@ -265,9 +274,11 @@ def execute(sessions, interaction, admitted):
     return TurnOutcome('execute', 'failed')
 
 
-def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None):
+def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
+            answerer=None, predecessor_turn_id=None, execution_inputs=None):
     # Each property access returns its own facade; no process-global turn context.
     sessions._interaction_session_id = session_id
+    answerer = interpreter if answerer is None else answerer
     if type(utterance) is not str or not utterance.strip() or len(utterance) > 4096:
         raise ValueError('A bounded nonempty utterance is required.')
     try:
@@ -278,27 +289,49 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
     if existing is not None:
         if existing.utterance != utterance: raise SessionConflictError('Interaction identity changed.')
-        return _outcome(sessions, existing)
+        if predecessor_turn_id is not None and existing.snapshot.get('dialogue', {}).get('predecessor') != predecessor_turn_id:
+            raise SessionConflictError('Interaction predecessor changed.')
+        if (execution_inputs is not None and existing.admitted is not None
+                and existing.admitted.get('operation') == 'plan'
+                and _serialize(execution_inputs) != _serialize(existing.admitted['inputs'])):
+            raise SessionConflictError('Execution inputs changed on retry.')
+        return _outcome(sessions, existing, answerer)
     if any(t.turn_id == turn_id for t in state.turns): raise SessionConflictError('Turn identity already used.')
     generation = state.generation if expected_generation is None else expected_generation
     if generation != state.generation: raise SessionConflictError('Session generation changed.')
     try:
-        captured = snapshot(sessions, state)
+        tool_names = {}
+        captured = snapshot(sessions, state, tool_names=tool_names)
+        from .scientific_dialogue import capture as dialogue_capture
+        captured['dialogue'] = dialogue_capture(sessions, state, captured, predecessor_turn_id, tool_names=tool_names)
+    except SessionConflictError:
+        raise
     except (ValueError, RuntimeError, OSError, KeyError):
         from .responses import UNAVAILABLE
         return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
     interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured)
     def capture(current):
-        if current.generation != generation or any(i.turn_id == turn_id for i in current.interactions):
+        if current.generation != generation or current.interactions != state.interactions:
             raise SessionConflictError('Interaction capture raced with another turn.')
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
     try:
-        decision = interpret(interpreter, utterance, public_context(captured))
+        visible = public_context(captured)
+        from .scientific_dialogue import public as dialogue_public
+        visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
+                                              sessions=sessions, utterance=utterance)
+        decision = interpret(interpreter, utterance, visible)
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
         if isinstance(decision, Answer):
-            from .responses import admit_answer
-            admitted = admit_answer(interaction, decision)
+            if decision.intent == 'scientific':
+                from .scientific_dialogue import admit as admit_scientific
+                admitted = admit_scientific(sessions, interaction, decision.scientific)
+            else:
+                from .responses import admit_answer
+                admitted = admit_answer(interaction, decision)
+        elif isinstance(decision, Execute) and decision.operation == 'plan':
+            from .dialogue_execution import admit as admit_execution
+            admitted = admit_execution(sessions, interaction, decision, execution_inputs)
         else:
             admitted = admit(sessions, interaction, decision)
     except Exception as exc:
@@ -307,14 +340,21 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     _update(sessions, turn_id, admitted=admitted, status='admitted')
     try:
         if isinstance(decision, Answer):
-            from .responses import admitted_answer
-            result = admitted_answer(sessions, session_id, admitted)
-            _update(sessions, turn_id, status='answered')
+            if decision.intent == 'scientific':
+                from .scientific_dialogue import answer
+                result = answer(sessions, session_id, replace(interaction, admitted=admitted), answerer)
+            else:
+                from .responses import admitted_answer
+                result = admitted_answer(sessions, session_id, admitted)
+            _update(sessions, turn_id, status='answered' if result.status in {'answered','unsupported'} else 'failed')
             return result
         if isinstance(decision, Navigate):
             sessions.switch(session_id, turn_id, admitted['revision_id'], expected_generation=generation)
             _update(sessions, turn_id, status='navigated')
             return TurnOutcome('navigate', 'activated')
+        if admitted.get('operation') == 'plan':
+            from .dialogue_execution import execute as execute_request
+            return execute_request(sessions, interaction, admitted, interpreter)
         return execute(sessions, interaction, admitted)
     except Exception:
         _update(sessions, turn_id, status='failed')

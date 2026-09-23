@@ -38,11 +38,13 @@ class AnalysisSessions:
     def load(self, session_id):
         return self._store.load(session_id)
 
-    def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None):
+    def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
+                answerer=None, predecessor_turn_id=None, execution_inputs=None):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
         outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
-                       expected_generation=expected_generation)
+                       expected_generation=expected_generation, answerer=answerer,
+                       predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs)
         from .responses import summarize
         return summarize(self, session_id, turn_id, outcome)
 
@@ -50,6 +52,11 @@ class AnalysisSessions:
         """Read-only structured answer; no interpreter, Planner, or scientific calls."""
         from .responses import answer_outcome
         return answer_outcome(self, session_id, request)
+
+    def evidence(self, session_id, revision_id, output_name, *, fields=None):
+        """Read bounded accepted evidence for an exact revision/output; no science."""
+        from .dialogue_evidence import read_evidence
+        return read_evidence(self, session_id, revision_id, output_name, fields=fields)
 
     def record_no_run_turn(self, session_id, turn_id, *, outcome, expected_generation):
         """Record an explicit non-execution outcome; no linguistic interpretation."""

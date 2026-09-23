@@ -81,6 +81,14 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if clarification.reason == 'requires_execution':
+        return 'This request requires the scientific execution path and its required inputs; it cannot be answered as an existing result.'
+    if clarification.reason == 'ambiguous_subject':
+        return 'Which result or subject do you mean? Please name it explicitly.'
+    if clarification.reason == 'ambiguous_predecessor':
+        return 'There are multiple or unfinished discussions. Please identify the discussion to continue.'
+    if clarification.reason == 'incompatible_comparison':
+        return 'The requested subjects do not have an established compatible comparison.'
     if clarification.reason == 'ambiguous_revision':
         if not clarification.choices: return UNAVAILABLE
         names = {'parent':'parent version', 'previous_active':'previously active version'}

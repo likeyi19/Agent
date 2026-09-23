@@ -21,7 +21,7 @@ def stored_step(sessions, locator):
     return next(s for s in state.steps if s.step_id == locator.step_id)
 
 
-def snapshot(sessions, state):
+def snapshot(sessions, state, *, tool_names=None):
     revisions = {r.revision_id:r for r in state.revisions}
     current = revisions.get(state.active_revision_id)
     if current is None: raise IntentError('unavailable_context')
@@ -38,6 +38,8 @@ def snapshot(sessions, state):
         matrix_source = None
         for locator in revision.outputs:
             step = stored_step(sessions, locator)
+            if tool_names is not None:
+                tool_names[rid, locator.name] = step.tool_name
             if step.tool_name == MATRIX:
                 if matrix_source is not None: raise IntentError('unavailable_context')
                 matrix_source = asdict(locator)

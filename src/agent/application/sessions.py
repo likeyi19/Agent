@@ -53,10 +53,10 @@ class AnalysisSessions:
         from .responses import answer_outcome
         return answer_outcome(self, session_id, request)
 
-    def evidence(self, session_id, revision_id, output_name, *, fields=None):
+    def evidence(self, session_id, revision_id, output_name, *, fields=None, detail=None):
         """Read bounded accepted evidence for an exact revision/output; no science."""
         from .dialogue_evidence import read_evidence
-        return read_evidence(self, session_id, revision_id, output_name, fields=fields)
+        return read_evidence(self, session_id, revision_id, output_name, fields=fields, detail=detail)
 
     def record_no_run_turn(self, session_id, turn_id, *, outcome, expected_generation):
         """Record an explicit non-execution outcome; no linguistic interpretation."""

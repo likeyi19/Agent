@@ -211,6 +211,7 @@ def interpret(model, utterance, public):
             'Subject is null for the whole result, @focus to retain the subject, @other only for an unambiguous other subject, or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
             'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',
             'Scientific comparison uses two explicit targets; do not infer correspondence between clusters from different results. Ambiguous other/previous requires clarification.',
+            'A biggest/most important difference needs an explicit comparison dimension or reviewed criterion. Clarify when it is missing; do not invent a ranking. New markers, significance tests or reannotation require scientific execution, not interpretation.',
             'technical=true only for an explicit request for technical provenance, IDs or hashes.',
             'Select only offered operation, parameter and revision relations. Never emit internal IDs.',
             'For one parameter change, quote the exact complete user command clause as evidence and its numeric literal verbatim.',

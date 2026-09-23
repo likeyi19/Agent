@@ -2,12 +2,14 @@
 
 This is a trusted-local, ephemeral view, not authority or a provider prompt. The
 accepted session completion pins the evidence bytes; the accepted RunStore pins
-their source. No artifact discovery, sidecar reading, or scientific fallback is
-permitted. In particular, do not call build/verify_analysis_evidence here.
+their source. Optional reviewed sidecars are resolved only through that accepted
+result's pinned publication. No discovery or scientific fallback is permitted.
+In particular, do not call build/verify_analysis_evidence here.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
+from pathlib import Path
 from typing import Literal, Mapping
 
 from agent.report.evidence import (
@@ -24,6 +26,23 @@ MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
 MAX_FACT_BYTES = 16 * 1024
 MAX_VIEW_BYTES = 64 * 1024
 MAX_FIELDS = 128
+MAX_DETAIL_BYTES = 8 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class DetailRequest:
+    """Exact reviewed section, optional subject, and owner-order record bound."""
+    section: str
+    subject: str | None = None
+    limit: int = 8
+    candidate: str | None = None
+
+    def __post_init__(self):
+        if (type(self.section) is not str or not 0 < len(self.section) <= 128
+                or self.subject is not None and (type(self.subject) is not str or not 0 < len(self.subject) <= 128)
+                or self.candidate is not None and (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128)
+                or type(self.limit) is not int or not 1 <= self.limit <= 32):
+            raise ValueError('Invalid bounded detail request.')
 
 
 @dataclass(frozen=True)
@@ -34,6 +53,8 @@ class EvidenceFact(_JsonModel):
     value: object = None
     source_pointer: str | None = None
     reason: str | None = None
+    artifact_sha256: str | None = None
+    artifact_name: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, 'value', freeze_json_mapping({'value': self.value}, 'fact')['value'])
@@ -75,6 +96,7 @@ class DialogueEvidence(_JsonModel):
     coverage: tuple[EvidenceFact, ...] = ()
     unselected_fields: tuple[str, ...] = ()
     evidence_scope: str = 'accepted_persisted_summary'
+    detail: tuple[EvidenceFact, ...] = ()
     limitations: tuple[str, ...] = (
         'This view is not scientific authority or fresh artifact verification.',
         'Facts describe the accepted source result, not current artifact validity.',
@@ -151,7 +173,7 @@ def _accepted(sessions, state, revision, output):
     return run, step, planned, value, completion.sha256
 
 
-def _project(sessions, state, revision, output, fields):
+def _project(sessions, state, revision, output, fields, detail):
     run, step, planned, value, evidence_sha = _accepted(sessions, state, revision, output)
     projection = _TOOL_PROJECTIONS.get(step.tool_name)
     if projection is None or step.tool_name not in sessions._application.registry.names():
@@ -219,12 +241,151 @@ def _project(sessions, state, revision, output, fields):
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
         unselected_fields=tuple(sorted(set(facts) - set(selected))))
+    if detail is not None:
+        result = replace(result, detail=_detail(sessions, step, detail),
+            evidence_scope='accepted_summary_and_published_detail',
+            limitations=tuple(x for x in result.limitations if x != 'Detailed sidecars and raw artifacts are not read.') + (
+                'Detail is a bounded owner-order subset, not a ranking; omissions are not scientific absence.',))
     if len(_bytes(result)) > MAX_VIEW_BYTES:
         raise _Unavailable('evidence_view_size_limit')
     return result
 
 
-def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None):
+def detail_request(view, subject):
+    """Reviewed result shapes only; no language/intent routing or scientific work."""
+    if view.source.tool_name == 'annotate_scATAC_cell_types' and subject is not None:
+        rows = next((f.value for f in view.facts if f.field == 'group_summary' and f.status == 'available'), ())
+        labels = [row.get('primary_annotation') for row in rows if row['group'] == subject]
+        return DetailRequest('annotation_rationale', subject, candidate=labels[0] if len(labels) == 1 else None)
+    if view.source.tool_name == 'compute_scATAC_qc' and subject is None:
+        return DetailRequest('length_histogram')
+    return None
+
+
+def _detail(sessions, step, request):
+    expected = {'annotate_scATAC_cell_types': 'annotation_rationale',
+                'compute_scATAC_qc': 'length_histogram'}
+    if expected.get(step.tool_name) != request.section:
+        raise _Unsupported('unsupported_detail_section')
+    if (request.section == 'annotation_rationale') != (request.subject is not None):
+        raise _Unsupported('unsupported_detail_subject')
+    if request.section != 'annotation_rationale' and request.candidate is not None:
+        raise _Unsupported('unsupported_detail_candidate')
+    result = step.result
+
+    def read(path, sha, size=None):
+        path = Path(path)
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise _Unavailable('unsafe_detail_path')
+        import stat
+        if not stat.S_ISREG(path.stat().st_mode):
+            raise _Unavailable('unsafe_detail_path')
+        # Read at most the declared bound, including corrupt/enlarged files.
+        with path.open('rb') as stream:
+            raw = stream.read(MAX_DETAIL_BYTES + 1)
+        if len(raw) > MAX_DETAIL_BYTES:
+            raise _Unsupported('detail_artifact_size_limit')
+        if (size is not None and len(raw) != size) or hashlib.sha256(raw).hexdigest() != sha:
+            raise _Unavailable('detail_digest_mismatch')
+        return raw
+
+    def parse(raw):
+        return json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
+
+    path = Path(result['manifest_path'])
+    authority = step.verification.artifact_authority
+    if authority is not None:
+        authority = VerifiedArtifactAuthority(authority).record
+        if (authority['publication_path'] != str(path)
+                or authority['manifest_sha256'] != result['manifest_sha256']
+                or authority['artifact_contract'] != result['contract_version']):
+            raise _Unavailable('detail_authority_binding_mismatch')
+    manifest = parse(read(path, result['manifest_sha256']))
+    if (type(manifest['schema_version']) is not int
+            or manifest['contract_version'] != result['contract_version']
+            or manifest['artifact_type'] != result['artifact_type']
+            or manifest['schema_version'] != result['artifact_schema_version']):
+        raise _Unavailable('detail_result_binding_mismatch')
+    facts = []
+
+    def sidecar(name, binding):
+        # Names come only from reviewed contracts below, never filesystem discovery.
+        if authority is not None:
+            entry = _one([f for f in authority['files'] if f['path'] == str(path.parent / name)])
+            if entry['sha256'] != binding['sha256'] or entry['size_bytes'] != binding['size_bytes']:
+                raise _Unavailable('detail_authority_binding_mismatch')
+        raw = read(path.parent / name, binding['sha256'], binding['size_bytes'])
+        return raw
+
+    def emit(field, value, name, sha, pointer):
+        if len(_bytes(value)) > MAX_FACT_BYTES:
+            facts.append(EvidenceFact(field, 'omitted', source_pointer=pointer,
+                reason='field_size_limit', artifact_sha256=sha, artifact_name=name))
+        else:
+            facts.append(EvidenceFact(field, 'available', value, pointer,
+                artifact_sha256=sha, artifact_name=name))
+
+    def records(name, predicate, field):
+        binding = manifest['sidecars'][name]
+        rows = parse(sidecar(name, binding))
+        if type(rows) is not list or any(type(row) is not dict for row in rows):
+            raise _Unavailable('invalid_detail_records')
+        selected = [(i, row) for i, row in enumerate(rows) if predicate(row)]
+        for n, (i, row) in enumerate(selected[:request.limit]):
+            emit(f'{field}.{n}', row, name, binding['sha256'], f'/{i}')
+        facts.append(EvidenceFact(field + '.records_omitted', 'available', max(0, len(selected)-request.limit),
+            reason='presentation_coverage_count', artifact_name=name, artifact_sha256=binding['sha256']))
+        return selected
+
+    if request.section == 'annotation_rationale':
+        from agent.tools.analysis.annotation_contract import CONTRACT, PROFILE_SHA256
+        if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != PROFILE_SHA256:
+            raise _Unsupported('unsupported_detail_profile')
+        groups = records('primary/groups.json', lambda row: row['group'] == request.subject, 'assignment')
+        if len(groups) != 1:
+            raise _Unavailable('unknown_or_ambiguous_detail_subject')
+        candidates = records('primary/candidate_evidence.json', lambda row: row['group'] == request.subject
+            and (request.candidate is None or row['candidate'] == request.candidate), 'candidate')
+        if request.candidate is not None and len(candidates) != 1:
+            raise _Unavailable('unknown_or_ambiguous_detail_candidate')
+        coverage = records('primary/signature_coverage.json', lambda row: request.candidate is None
+            or row['candidate'] == request.candidate, 'signature_coverage')
+        if request.candidate is not None and len(coverage) != 1:
+            raise _Unavailable('unknown_or_ambiguous_detail_candidate')
+        if request.candidate is not None:
+            facts.append(EvidenceFact('candidate.selection', 'available', request.candidate,
+                reason='presentation_selection'))
+    else:
+        from agent.tools.data._barcode_qc_contract import CONTRACT
+        from agent.tools.data.scatac_qc_profile import PROFILE_SHA256
+        if manifest['contract_version'] != CONTRACT or manifest['science_profile_sha256'] != PROFILE_SHA256:
+            raise _Unsupported('unsupported_detail_profile')
+        import gzip
+        import io
+        name = 'lengths.tsv.gz'
+        binding = manifest['histogram']
+        if binding['path'] != name:
+            raise _Unavailable('detail_result_binding_mismatch')
+        with gzip.GzipFile(fileobj=io.BytesIO(sidecar(name, binding))) as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            raise _Unsupported('detail_decoded_size_limit')
+        rows = raw.decode('ascii').splitlines()
+        if len(rows) != 1001:
+            raise _Unavailable('invalid_detail_records')
+        for i, row in enumerate(rows):
+            key, count = row.split('\t')
+            if key != str(i+1) or not count.isascii() or not count.isdecimal():
+                raise _Unavailable('invalid_detail_records')
+            if i < request.limit:
+                emit(f'length_histogram.{key}', dict(length_bin=key, fragment_records=int(count)),
+                     name, binding['sha256'], f'line:{i+1}')
+        facts.append(EvidenceFact('length_histogram.records_omitted', 'available', len(rows)-request.limit,
+            reason='presentation_coverage_count', artifact_name=name, artifact_sha256=binding['sha256']))
+    return tuple(facts)
+
+
+def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None, detail=None):
     """Resolve an exact revision/output name; never search for a replacement.
 
     `fields` optionally selects whole top-level evidence fields. Missing fields
@@ -233,6 +394,8 @@ def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None
     """
     for value in (session_id, revision_id, output_name):
         text(value)
+    if detail is not None and not isinstance(detail, DetailRequest):
+        raise ValueError('detail must be a DetailRequest.')
     if fields is not None:
         if (not isinstance(fields, (tuple, list)) or len(fields) > MAX_FIELDS
                 or any(type(k) is not str or not k or len(k) > 256 for k in fields)
@@ -243,7 +406,7 @@ def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None
         state = sessions.load(session_id)
         revision = _one([r for r in state.revisions if r.revision_id == revision_id])
         output = _one([o for o in revision.outputs if o.name == output_name])
-        return _project(sessions, state, revision, output, fields)
+        return _project(sessions, state, revision, output, fields, detail)
     except _Unsupported as exc:
         return DialogueEvidence(session_id, revision_id, output_name, 'unsupported', str(exc))
     except _Unavailable as exc:

@@ -4,6 +4,7 @@ There is no scientific implementation or implicit workflow/output completion
 here. Structured inputs come from the caller; output selection is explicit and
 validated against the actual plan before any execution is allowed.
 """
+from contextlib import nullcontext
 from dataclasses import replace
 import json
 import re
@@ -39,7 +40,13 @@ def execute(sessions, interaction, admitted, model):
     from .scientific_dialogue import _json
     app = sessions._application
     sid = sessions._interaction_session_id
-    request = AgentRequest(admitted['request_id'], interaction.utterance, admitted['inputs'])
+    selected = 'selected_candidate' in admitted
+    intent, context = interaction.utterance, None
+    if selected:
+        from .guidance_selection import execution_context, planning_intent
+        context = execution_context(sessions, interaction, admitted)
+        intent = planning_intent(sessions, interaction, admitted, context)
+    request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
 
     def accept(effective, plan):
         if admitted['tool'] not in {s.tool_name for s in plan.steps}:
@@ -49,7 +56,7 @@ def execute(sessions, interaction, admitted, model):
         schema = _object(dict(outputs={'type':'array','minItems':1,'maxItems':32,
             'items':_object(dict(name={'type':'string'}, step_id={'type':'string'}, output_key={'type':'string'}))}))
         choice = _json(model.complete(prompt=json.dumps(dict(output_selection_schema_version=1,
-            question=interaction.utterance, steps=offered,
+            question=intent, steps=offered,
             instructions='Select exact named outputs of this actual plan to retain in the new revision. Do not infer or append scientific steps.')),
             response_schema=schema))
         _shape(choice, ('outputs',))
@@ -63,7 +70,12 @@ def execute(sessions, interaction, admitted, model):
                 raise IntentError('planning_failed')
             selections.append(OutputSelection(**item))
         if len({o.name for o in selections}) != len(selections): raise IntentError('planning_failed')
+        if selected:
+            execution_context(sessions, interaction, admitted)
         def link(state):
+            if selected and (state.active_revision_id != interaction.base_revision_id
+                             or state.generation != interaction.base_generation):
+                raise SessionConflictError('Selected candidate state changed before submission.')
             if any(t.turn_id == interaction.turn_id for t in state.turns):
                 raise SessionConflictError('Turn already submitted.')
             turn = SessionTurn(interaction.turn_id, interaction.base_revision_id, interaction.base_generation,
@@ -74,7 +86,9 @@ def execute(sessions, interaction, admitted, model):
 
     execution_app = ResearchAgentApplication(app.workspace_root,
         planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)
-    result = execution_app.run(request)
+    from agent.orchestration.active_context import planning_context
+    with planning_context(context) if context is not None else nullcontext():
+        result = execution_app.run(request)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):
         sessions._record_result(sid, interaction.turn_id, result)

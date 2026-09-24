@@ -28,6 +28,17 @@ class Execute:
 
 
 @dataclass(frozen=True)
+class ExecuteCandidate:
+    candidate: str
+    evidence: str
+
+    def __post_init__(self):
+        if (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128
+                or type(self.evidence) is not str or not 0 < len(self.evidence) <= 4096):
+            raise ValueError('Invalid explicit candidate selection.')
+
+
+@dataclass(frozen=True)
 class Navigate:
     relation: str
 
@@ -99,7 +110,7 @@ class Answer:
             raise ValueError('Guidance answers require a structured question.')
 
 
-TurnDecision = Execute | Navigate | Clarify | Answer
+TurnDecision = Execute | ExecuteCandidate | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
@@ -136,6 +147,9 @@ def parse_decision(raw):
             raise IntentError('invalid_decision')
         value = envelope['decision']
         kind = value.get('kind')
+        if kind == 'execute_candidate':
+            _shape(value, ('kind', 'candidate', 'evidence'))
+            return ExecuteCandidate(value['candidate'], value['evidence'])
         if kind == 'answer_guidance':
             _shape(value, ('kind', 'targets', 'candidate'))
             if type(value['targets']) is not list: raise IntentError('invalid_decision')
@@ -218,6 +232,10 @@ def decision_schema(public):
             targets={'type':'array', 'maxItems':4, 'items':target},
             candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
         variants.append(_object(dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']))))
+        candidates = public['dialogue'].get('execution_candidates', ())
+        if candidates:
+            variants.append(_object(dict(kind=enum(('execute_candidate',)),
+                candidate=enum(c['candidate'] for c in candidates), evidence={'type':'string','maxLength':4096})))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
@@ -227,7 +245,9 @@ def interpret(model, utterance, public):
             'For what to analyze next, useful analyses, alternatives or missing evidence for an objective, choose answer_guidance. It is read-only advice, never execution. Select up to four relevant exact evidence targets; an empty set is allowed and means no result evidence selected, not scientific absence.',
             'Guidance co-presents evidence; it does not compare measurements or infer common populations/cluster correspondence. Explicit subjects and historical targets obey the same exact reference rules as scientific answers.',
             'For a guidance-option rationale follow-up, targets=[] and candidate is an offered guidance_predecessor reference quoted in the utterance, or @candidate only when a unique candidate exists. For a new objective use candidate=null. No prior generated rationale is evidence.',
-            'Executing a guidance option is not supported yet. Clarify unsupported_intent for option execution requests; do not translate an option into execute_plan.',
+            'For explicit execution of an offered execution_candidate use execute_candidate with its exact candidate ID and an exact complete command clause from this utterance as evidence. Never translate an option into execute_plan or construct a workflow here.',
+            'Resolve ordinal or named candidate references against the offered stable options and objective. Clarify ambiguous other/that references, stale references, conflicting subject/revision refinements, or missing execution intent. Interest or agreement alone is not execution authorization. Why/evidence questions remain answer_guidance.',
+            'Current-turn refinements remain user planning intent, not edits to the original candidate. Keep its captured subjects/revision fixed; an additional comparison may refine the objective but must not silently replace its subject.',
             'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',

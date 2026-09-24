@@ -97,6 +97,9 @@ def validate_capture(state, interaction, preceding):
     if interaction.admitted is not None and interaction.admitted.get('intent') == 'guidance':
         from .scientific_guidance import validate_admitted
         validate_admitted(state, interaction, preceding)
+    if interaction.admitted is not None and 'selected_candidate' in interaction.admitted:
+        from .guidance_selection import validate_selection
+        validate_selection(state, interaction, preceding)
     seen = set()
     for n, item in enumerate(value['outputs']):
         rid, name = item['revision_id'], item['output_name']
@@ -145,6 +148,8 @@ def public(captured, state, registry, *, sessions, utterance):
     from .scientific_guidance import predecessor_public
     result = dict(guidance_predecessor=predecessor_public(previous), outputs=outputs, semantics=descriptions,
         predecessor=focus, ambiguous_predecessor=value['ambiguous'], tools=list(registry.names()))
+    from .guidance_selection import public_candidates
+    result['execution_candidates'] = public_candidates(state, captured)
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return result

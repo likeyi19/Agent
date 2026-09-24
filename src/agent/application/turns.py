@@ -11,7 +11,7 @@ from agent.orchestration.prior_outputs import binding_for_locator, validate_bind
 from agent.orchestration.planner import PlannerError
 from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
-from .turn_decisions import (Execute, Navigate, Clarify, Answer, IntentDelta, IntentError, interpret, clauses,
+from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, IntentDelta, IntentError, interpret, clauses,
                              resolve_relation, admit_delta)
 
 
@@ -329,7 +329,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         decision = interpret(interpreter, utterance, visible)
         if isinstance(decision, Execute):
             from .scientific_guidance import references_candidate
-            prior = next((i for i in state.interactions if i.turn_id == captured['dialogue']['predecessor']), None)
+            from .guidance_selection import candidates
+            refs = candidates(state.interactions, captured)
+            origin = refs[0]['origin_turn_id'] if refs else captured['dialogue']['predecessor']
+            prior = next((i for i in state.interactions if i.turn_id == origin), None)
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
@@ -343,6 +346,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             else:
                 from .responses import admit_answer
                 admitted = admit_answer(interaction, decision)
+        elif isinstance(decision, ExecuteCandidate):
+            from .guidance_selection import admit as admit_candidate
+            admitted = admit_candidate(sessions, interaction, decision, execution_inputs)
         elif isinstance(decision, Execute) and decision.operation == 'plan':
             from .dialogue_execution import admit as admit_execution
             admitted = admit_execution(sessions, interaction, decision, execution_inputs)

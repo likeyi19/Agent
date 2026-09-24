@@ -222,7 +222,8 @@ print(json.dumps(result.scientific.to_dict()))
     assert all('explanation' not in i.admitted for i in state.interactions)
 
 
-def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path):
+@pytest.mark.parametrize('minimal', [False, True])
+def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path, minimal):
     accepted(app, 'inspect_scATAC')
     import anndata as ad
     from scipy import sparse
@@ -236,7 +237,8 @@ def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path):
             return AgentPlan('inspect-plan',request.request_id,'Explicit inspection.',
                 (PlanStep('inspect','inspect_scATAC',dict(path=request.inputs['path'])),))
     app = ResearchAgentApplication(app.workspace_root, planner=Planner())
-    model = Model(dict(kind='execute',base='current',operation='plan',target='inspect_scATAC',delta=None))
+    model = Model(dict(kind='execute_plan',target='inspect_scATAC') if minimal else
+                  dict(kind='execute',base='current',operation='plan',target='inspect_scATAC',delta=None))
     result = ask(app, 'science', 'Inspect the supplied matrix.', model, execution_inputs={'path':str(path)})
     assert result.kind == 'execute' and result.status == 'activated', result
     assert len(calls) == 1 and calls[0].prompt == 'Inspect the supplied matrix.'

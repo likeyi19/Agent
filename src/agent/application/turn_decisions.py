@@ -142,15 +142,21 @@ def parse_decision(raw):
             for target in value['targets']: _shape(target, ('output', 'subject'))
             return Answer('guidance', guidance=GuidanceQuestion(
                 tuple(ScientificTarget(**t) for t in value['targets']), value['candidate']))
-        # Distinct wire tags let strict providers discriminate the union. They
-        # normalize to the existing decisions; admission/storage are unchanged.
+        # Branch identity determines these internal facts. Accept the complete
+        # historical wire only with matching assertions, never partial forms.
         if kind == 'answer_scientific':
-            if value.get('intent') != 'scientific': raise IntentError('invalid_decision')
-            value = dict(value, kind='answer')
+            if 'intent' in value:
+                if value['intent'] != 'scientific': raise IntentError('invalid_decision')
+            else:
+                _shape(value, ('kind', 'target', 'comparison', 'focus'))
+            value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if value.get('operation') != 'plan': raise IntentError('invalid_decision')
-            value = dict(value, kind='execute')
+            if set(value) != {'kind', 'target'}:
+                _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
+                if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
+                    raise IntentError('invalid_decision')
+            value = dict(value, kind='execute', operation='plan', base='current', delta=None)
             kind = 'execute'
         if kind == 'clarify':
             _shape(value, ('kind', 'reason'))
@@ -206,13 +212,12 @@ def decision_schema(public):
     if 'dialogue' in public:
         target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']] + ['@focus', '@previous']),
                              subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
-        variants.append(_object(dict(kind=enum(('answer_scientific',)), intent=enum(('scientific',)), target=target,
+        variants.append(_object(dict(kind=enum(('answer_scientific',)), target=target,
             comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))))
         variants.append(_object(dict(kind=enum(('answer_guidance',)),
             targets={'type':'array', 'maxItems':4, 'items':target},
             candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
-        variants.append(_object(dict(kind=enum(('execute_plan',)), base=enum(('current',)), operation=enum(('plan',)),
-            target=enum(public['dialogue']['tools']), delta={'type':'null'})))
+        variants.append(_object(dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']))))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
@@ -234,8 +239,8 @@ def interpret(model, utterance, public):
             'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',
             'Answer intents: version, matrix, selection, thresholds, changes (originating revision versus parent), execution, reuse, comparison, provenance, verification, unsupported.',
             'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
-            'For questions about scientific results, use kind=answer_scientific, intent=scientific with offered output handles. It can return insufficient evidence.',
-            'For a new scientific command outside the offered threshold operations use kind=execute_plan, operation=plan, target=the registered tool, base=current, delta=null. Never answer a computation request as if it was already computed.',
+            'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
+            'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
             'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
             'Subject is null for the whole result, @focus to retain the subject, @other only for an unambiguous other subject, or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
             'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',

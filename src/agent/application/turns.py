@@ -23,6 +23,7 @@ class TurnOutcome:
     text: str = ""
     facts: "TurnResponseFacts | None" = None
     scientific: object = None
+    guidance: object = None
 
 
 def _update(sessions, turn_id, **changes):
@@ -67,6 +68,11 @@ def _terminal(sessions, interaction, clarification):
 def _outcome(sessions, interaction, answerer=None):
     admitted = {} if interaction.admitted is None else _serialize(interaction.admitted)
     if admitted.get('kind') == 'answer':
+        if admitted.get('intent') == 'guidance':
+            from .scientific_guidance import answer
+            if interaction.status == 'failed':
+                return TurnOutcome('answer', 'unavailable', text='The previous guidance could not be grounded.')
+            return answer(sessions, sessions_id(sessions), interaction, answerer)
         if admitted.get('intent') == 'scientific':
             from .scientific_dialogue import answer
             if interaction.status == 'failed':
@@ -321,9 +327,17 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
                                               sessions=sessions, utterance=utterance)
         decision = interpret(interpreter, utterance, visible)
+        if isinstance(decision, Execute):
+            from .scientific_guidance import references_candidate
+            prior = next((i for i in state.interactions if i.turn_id == captured['dialogue']['predecessor']), None)
+            if references_candidate(interaction, prior):
+                raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
         if isinstance(decision, Answer):
-            if decision.intent == 'scientific':
+            if decision.intent == 'guidance':
+                from .scientific_guidance import admit as admit_guidance
+                admitted = admit_guidance(sessions, interaction, decision.guidance)
+            elif decision.intent == 'scientific':
                 from .scientific_dialogue import admit as admit_scientific
                 admitted = admit_scientific(sessions, interaction, decision.scientific)
             else:
@@ -340,7 +354,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     _update(sessions, turn_id, admitted=admitted, status='admitted')
     try:
         if isinstance(decision, Answer):
-            if decision.intent == 'scientific':
+            if decision.intent == 'guidance':
+                from .scientific_guidance import answer
+                result = answer(sessions, session_id, replace(interaction, admitted=admitted), answerer)
+                return result
+            elif decision.intent == 'scientific':
                 from .scientific_dialogue import answer
                 result = answer(sessions, session_id, replace(interaction, admitted=admitted), answerer)
             else:

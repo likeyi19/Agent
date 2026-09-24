@@ -102,6 +102,8 @@ class FileSessionStore:
                     raise SessionConflictError('Captured interaction cannot change.')
                 if old.admitted is not None and old.admitted != new.admitted:
                     raise SessionConflictError('Admitted intent cannot change.')
+                if old.guidance_candidates is not None and old.guidance_candidates != new.guidance_candidates:
+                    raise SessionConflictError('Completed candidate references cannot change.')
                 if old.status in {'clarification', 'navigated', 'answered', 'failed'} and old != new:
                     raise SessionConflictError('Terminal interaction cannot change.')
             for old, new in zip(before.turns, after.turns):

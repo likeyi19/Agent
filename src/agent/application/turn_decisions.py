@@ -40,7 +40,7 @@ class Clarify:
 
 
 ANSWER_INTENTS = ('version', 'matrix', 'selection', 'thresholds', 'changes',
-                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported', 'scientific')
+                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported', 'scientific', 'guidance')
 
 
 @dataclass(frozen=True)
@@ -68,11 +68,25 @@ class ScientificQuestion:
 
 
 @dataclass(frozen=True)
+class GuidanceQuestion:
+    targets: tuple[ScientificTarget, ...] = ()
+    candidate: str | None = None
+
+    def __post_init__(self):
+        if (type(self.targets) is not tuple or len(self.targets) > 4
+                or any(not isinstance(t, ScientificTarget) for t in self.targets)
+                or self.candidate is not None and (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128)
+                or self.candidate is not None and self.targets):
+            raise ValueError('Invalid bounded guidance question.')
+
+
+@dataclass(frozen=True)
 class Answer:
     intent: str
     relation: str = 'current'
     technical: bool = False
     scientific: ScientificQuestion | None = None
+    guidance: GuidanceQuestion | None = None
 
     def __post_init__(self):
         if self.intent not in ANSWER_INTENTS or self.relation not in RELATIONS or type(self.technical) is not bool:
@@ -81,6 +95,8 @@ class Answer:
             raise ValueError('Comparison requires a historical relation.')
         if (self.intent == 'scientific') != isinstance(self.scientific, ScientificQuestion):
             raise ValueError('Scientific answers require a structured question.')
+        if (self.intent == 'guidance') != isinstance(self.guidance, GuidanceQuestion):
+            raise ValueError('Guidance answers require a structured question.')
 
 
 TurnDecision = Execute | Navigate | Clarify | Answer
@@ -120,6 +136,12 @@ def parse_decision(raw):
             raise IntentError('invalid_decision')
         value = envelope['decision']
         kind = value.get('kind')
+        if kind == 'answer_guidance':
+            _shape(value, ('kind', 'targets', 'candidate'))
+            if type(value['targets']) is not list: raise IntentError('invalid_decision')
+            for target in value['targets']: _shape(target, ('output', 'subject'))
+            return Answer('guidance', guidance=GuidanceQuestion(
+                tuple(ScientificTarget(**t) for t in value['targets']), value['candidate']))
         # Distinct wire tags let strict providers discriminate the union. They
         # normalize to the existing decisions; admission/storage are unchanged.
         if kind == 'answer_scientific':
@@ -174,7 +196,7 @@ def decision_schema(public):
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
-    variants = [_object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i != 'scientific'),
+    variants = [_object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i not in ('scientific', 'guidance')),
         relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(REASONS))),
         _object(dict(kind=enum(('navigate',)), relation=enum(public['relations'])))]
     if offered:
@@ -186,6 +208,9 @@ def decision_schema(public):
                              subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
         variants.append(_object(dict(kind=enum(('answer_scientific',)), intent=enum(('scientific',)), target=target,
             comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))))
+        variants.append(_object(dict(kind=enum(('answer_guidance',)),
+            targets={'type':'array', 'maxItems':4, 'items':target},
+            candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
         variants.append(_object(dict(kind=enum(('execute_plan',)), base=enum(('current',)), operation=enum(('plan',)),
             target=enum(public['dialogue']['tools']), delta={'type':'null'})))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
@@ -194,6 +219,10 @@ def decision_schema(public):
 def interpret(model, utterance, public):
     prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **public,
         'instructions': [
+            'For what to analyze next, useful analyses, alternatives or missing evidence for an objective, choose answer_guidance. It is read-only advice, never execution. Select up to four relevant exact evidence targets; an empty set is allowed and means no result evidence selected, not scientific absence.',
+            'Guidance co-presents evidence; it does not compare measurements or infer common populations/cluster correspondence. Explicit subjects and historical targets obey the same exact reference rules as scientific answers.',
+            'For a guidance-option rationale follow-up, targets=[] and candidate is an offered guidance_predecessor reference quoted in the utterance, or @candidate only when a unique candidate exists. For a new objective use candidate=null. No prior generated rationale is evidence.',
+            'Executing a guidance option is not supported yet. Clarify unsupported_intent for option execution requests; do not translate an option into execute_plan.',
             'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',

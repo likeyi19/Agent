@@ -186,6 +186,7 @@ class Interaction:
     snapshot: object
     status: str = 'interpreting'
     admitted: object = None
+    guidance_candidates: object = None
 
     def __post_init__(self):
         for v in (self.turn_id, self.utterance, self.base_revision_id): text(v)
@@ -195,6 +196,11 @@ class Interaction:
         object.__setattr__(self, 'snapshot', freeze_json_mapping(self.snapshot, 'interaction.snapshot'))
         if self.admitted is not None:
             object.__setattr__(self, 'admitted', freeze_json_mapping(self.admitted, 'interaction.admitted'))
+        if self.guidance_candidates is not None:
+            refs = freeze_json_mapping({'refs': self.guidance_candidates}, 'guidance references')['refs']
+            object.__setattr__(self, 'guidance_candidates', refs)
+            if self.admitted is None or self.admitted.get('intent') != 'guidance' or self.status != 'answered':
+                raise SessionError('Candidate references require an answered guidance interaction.')
 
 
 @dataclass(frozen=True)
@@ -291,7 +297,8 @@ class AnalysisSession:
                  if f.name in {'revisions', 'turns', 'navigation'} else getattr(self, f.name)
                  for f in fields(self) if f.name != 'interactions'}
         if self.interactions:
-            value['interactions'] = tuple({f.name: _serialize(getattr(i, f.name)) for f in fields(i)} for i in self.interactions)
+            value['interactions'] = tuple({f.name: _serialize(getattr(i, f.name)) for f in fields(i)
+                if f.name != 'guidance_candidates' or i.guidance_candidates is not None} for i in self.interactions)
         for turn in value['turns']:
             if not turn['retained_outputs']:
                 del turn['retained_outputs']
@@ -310,6 +317,8 @@ class AnalysisSession:
                 data = dict(data, interactions=[])
             if model is SessionTurn and type(data) is dict and 'retained_outputs' not in data:
                 data = dict(data, retained_outputs=[])
+            if model is Interaction and type(data) is dict and 'guidance_candidates' not in data:
+                data = dict(data, guidance_candidates=None)
             if type(data) is not dict or set(data) != set(model.__dataclass_fields__):
                 raise SessionError('Invalid session record shape.')
             data = dict(data)

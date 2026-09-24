@@ -23,8 +23,11 @@ from .turns import TurnOutcome
 from .response_facts import TurnResponseFacts
 from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource, DetailRequest
 from .scientific_dialogue import ScientificClaim, ScientificResponse
+from .scientific_guidance import GuidanceCandidate, GuidanceResponse
+from .turn_decisions import GuidanceQuestion
 
 __all__ = [
+    "GuidanceQuestion", "GuidanceCandidate", "GuidanceResponse",
     "ScientificQuestion", "ScientificTarget", "ScientificClaim", "ScientificResponse",
     "DialogueEvidence", "EvidenceFact", "EvidenceSource", "DetailRequest",
     "Execute", "Navigate", "Clarify", "Answer", "TurnResponseFacts", "IntentDelta", "TurnDecision", "TurnOutcome",

@@ -648,6 +648,12 @@ figureless reports; failure of an expected visualization remains fatal.
 
 ## Usage
 
+The transport-independent interactive Python interface supports empty-session
+first turns, exact stored display history, idempotent submissions, persisted
+status views, and operator-admitted per-turn model profiles. See the
+[M18.2 contract and acceptance](docs/m18.2-interactive-application-boundary.md).
+HTTP and browser interfaces remain deferred.
+
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.
 For explicit offline inspection planning:

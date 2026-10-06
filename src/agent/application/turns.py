@@ -24,6 +24,8 @@ class TurnOutcome:
     facts: "TurnResponseFacts | None" = None
     scientific: object = None
     guidance: object = None
+    error: object = None
+    presentation: object = None
 
 
 def _update(sessions, turn_id, **changes):
@@ -43,7 +45,7 @@ def _terminal(sessions, interaction, clarification):
     if clarification.reason == 'ambiguous_revision':
         choices = tuple(k for k in ('parent', 'previous_active') if k in captured['relations'])
     elif clarification.reason in {'ambiguous_parameter', 'missing_parameter_value'}:
-        base = captured['bases'][interaction.base_revision_id]
+        base = captured['bases'].get(interaction.base_revision_id, {'operations': []})
         choices = tuple(dict.fromkeys(k for o in base['operations'] for k in o['parameters']))
     if clarification.reason == 'missing_parameter_value':
         from .turn_decisions import ALIASES
@@ -66,7 +68,16 @@ def _terminal(sessions, interaction, clarification):
 
 
 def _outcome(sessions, interaction, answerer=None):
+    if interaction.presentation is not None:
+        from .interactive_schemas import PresentedResponse
+        shown = PresentedResponse.from_dict(_serialize(interaction.presentation))
+        clarification = None if shown.clarification is None else Clarify(**shown.clarification)
+        return TurnOutcome(shown.kind, shown.status, clarification, shown.text,
+                           error=shown.error, presentation=shown)
     admitted = {} if interaction.admitted is None else _serialize(interaction.admitted)
+    if (interaction.submission is not None and admitted.get('kind') == 'answer'):
+        # Interactive retries never regenerate a missing historical response.
+        return TurnOutcome('answer', 'unavailable', text='No stored displayed response is available for this turn.')
     if admitted.get('kind') == 'answer':
         if admitted.get('intent') == 'guidance':
             from .scientific_guidance import answer
@@ -275,13 +286,13 @@ def execute(sessions, interaction, admitted):
     if any(t.turn_id == interaction.turn_id for t in state.turns):
         sessions._record_result(state.session_id, interaction.turn_id, result)
         state = sessions.recover(state.session_id, interaction.turn_id)
-        return TurnOutcome('execute', state.turn(interaction.turn_id).status)
+        return TurnOutcome('execute', state.turn(interaction.turn_id).status, error=result.error)
     _update(sessions, interaction.turn_id, status='failed')
     return TurnOutcome('execute', 'failed')
 
 
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
-            answerer=None, predecessor_turn_id=None, execution_inputs=None):
+            answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None):
     # Each property access returns its own facade; no process-global turn context.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
@@ -295,6 +306,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
     if existing is not None:
         if existing.utterance != utterance: raise SessionConflictError('Interaction identity changed.')
+        if _serialize(existing.submission) != _serialize(submission):
+            raise SessionConflictError('Interaction submission changed.')
         if predecessor_turn_id is not None and existing.snapshot.get('dialogue', {}).get('predecessor') != predecessor_turn_id:
             raise SessionConflictError('Interaction predecessor changed.')
         if (execution_inputs is not None and existing.admitted is not None
@@ -315,7 +328,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     except (ValueError, RuntimeError, OSError, KeyError):
         from .responses import UNAVAILABLE
         return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
-    interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured)
+    interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured,
+                              submission=submission)
     def capture(current):
         if current.generation != generation or current.interactions != state.interactions:
             raise SessionConflictError('Interaction capture raced with another turn.')
@@ -327,6 +341,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
                                               sessions=sessions, utterance=utterance)
         decision = interpret(interpreter, utterance, visible)
+        if interaction.base_revision_id is None:
+            if not (isinstance(decision, Clarify)
+                    or isinstance(decision, Execute) and decision.operation == 'plan'
+                    or isinstance(decision, Answer) and decision.intent == 'unsupported'):
+                raise IntentError('unavailable_context')
         if isinstance(decision, Execute):
             from .scientific_guidance import references_candidate
             from .guidance_selection import candidates
@@ -345,7 +364,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 admitted = admit_scientific(sessions, interaction, decision.scientific)
             else:
                 from .responses import admit_answer
-                admitted = admit_answer(interaction, decision)
+                admitted = (dict(kind='answer', intent='unsupported', relation=decision.relation,
+                                 technical=decision.technical, revision_id=None, comparison_id=None)
+                            if interaction.base_revision_id is None else admit_answer(interaction, decision))
         elif isinstance(decision, ExecuteCandidate):
             from .guidance_selection import admit as admit_candidate
             admitted = admit_candidate(sessions, interaction, decision, execution_inputs)

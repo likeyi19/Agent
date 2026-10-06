@@ -25,8 +25,16 @@ from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource, D
 from .scientific_dialogue import ScientificClaim, ScientificResponse
 from .scientific_guidance import GuidanceCandidate, GuidanceResponse
 from .turn_decisions import GuidanceQuestion
+from .interactive import InteractiveAgentApplication, InteractiveBoundaryError
+from .interactive_schemas import (
+    ModelChoice, ClientError, PresentedResponse, TurnView, StepView,
+    RevisionView, SessionView, ArtifactHandle,
+)
 
 __all__ = [
+    "InteractiveAgentApplication", "InteractiveBoundaryError", "ModelChoice",
+    "ClientError", "PresentedResponse", "TurnView", "StepView", "RevisionView",
+    "SessionView", "ArtifactHandle",
     "GuidanceQuestion", "GuidanceCandidate", "GuidanceResponse",
     "ScientificQuestion", "ScientificTarget", "ScientificClaim", "ScientificResponse",
     "DialogueEvidence", "EvidenceFact", "EvidenceSource", "DetailRequest",

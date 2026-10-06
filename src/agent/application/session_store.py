@@ -1,5 +1,6 @@
 """Local atomic session snapshots, separate from scientific FileRunStore records."""
 from contextlib import contextmanager
+from dataclasses import replace
 import fcntl
 import hashlib
 import json
@@ -56,6 +57,23 @@ class FileSessionStore:
         with self._lock(session_id):
             return self._load(session_id)
 
+    @contextmanager
+    def processing_lease(self, session_id, turn_id):
+        """Bound one interactive caller without authorizing scientific recovery."""
+        text(turn_id)
+        path = self._path(session_id, '.turn-' + digest({'turn_id': turn_id}) + '.lease')
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise SessionError('Invalid interactive processing lease.')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise SessionConflictError('Interaction is already being processed.') from exc
+            yield
+        finally:
+            os.close(fd)
+
     def _load(self, session_id):
         def pairs(items):
             value = {}
@@ -97,14 +115,17 @@ class FileSessionStore:
             if len(after.interactions) < len(before.interactions):
                 raise SessionConflictError('Interaction history cannot shrink.')
             for old, new in zip(before.interactions, after.interactions):
-                if (old.turn_id, old.utterance, old.base_revision_id, old.base_generation, old.snapshot) != (
-                    new.turn_id, new.utterance, new.base_revision_id, new.base_generation, new.snapshot):
+                if (old.turn_id, old.utterance, old.base_revision_id, old.base_generation, old.snapshot, old.submission) != (
+                    new.turn_id, new.utterance, new.base_revision_id, new.base_generation, new.snapshot, new.submission):
                     raise SessionConflictError('Captured interaction cannot change.')
                 if old.admitted is not None and old.admitted != new.admitted:
                     raise SessionConflictError('Admitted intent cannot change.')
                 if old.guidance_candidates is not None and old.guidance_candidates != new.guidance_candidates:
                     raise SessionConflictError('Completed candidate references cannot change.')
-                if old.status in {'clarification', 'navigated', 'answered', 'failed'} and old != new:
+                if old.presentation is not None and old.presentation != new.presentation:
+                    raise SessionConflictError('Displayed presentation cannot change.')
+                if (old.status in {'clarification', 'navigated', 'answered', 'failed'}
+                        and old != replace(new, presentation=old.presentation)):
                     raise SessionConflictError('Terminal interaction cannot change.')
             for old, new in zip(before.turns, after.turns):
                 if (old.turn_id, old.base_revision_id, old.base_generation, old.request_id,

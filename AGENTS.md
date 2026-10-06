@@ -49,6 +49,26 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 18.2 — Transport-independent interactive boundary
+
+[M18.2](docs/m18.2-interactive-application-boundary.md) adds
+`InteractiveAgentApplication`, bounded client views, empty-session interaction
+admission, immutable Session-owned submission/display records, local per-turn
+processing leases, status projections, and exact operator-admitted model choices.
+Each turn uses its own profile/application bundle across interpreter, answerer,
+output selection and existing Planner. Choices never become scientific Revision
+state. Stored presentation is history, never evidence or executable authority.
+
+Empty first execution uses the existing interpreter, actual-plan output selection,
+semantic compiler, preflight and runtime. Historical presentation reads/retries
+invoke no provider; missing legacy display is explicit. Recovery is bounded and
+explicit. Artifact references expose no paths; resolution checks accepted
+presentation bytes, with no scientific reconstruction. Scientific contracts,
+Registry, authority, EpiZoo and M17.2 guidance handoff remain unchanged.
+HTTP/frontend/dependencies and full regression remain deferred to later M18
+stages. Implementation/acceptance status is recorded in the linked contract;
+no M18.2 commit or push is authorized by this record.
+
 ## Milestone 15.6 — Real multi-turn scientific acceptance
 
 [M15.6](docs/m15.6-real-multiturn-closeout.md) exercises the preserved accepted

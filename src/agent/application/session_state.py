@@ -181,15 +181,18 @@ def _unique(values, cls, key):
 class Interaction:
     turn_id: str
     utterance: str
-    base_revision_id: str
+    base_revision_id: str | None
     base_generation: int
     snapshot: object
     status: str = 'interpreting'
     admitted: object = None
     guidance_candidates: object = None
+    submission: object = None
+    presentation: object = None
 
     def __post_init__(self):
-        for v in (self.turn_id, self.utterance, self.base_revision_id): text(v)
+        for v in (self.turn_id, self.utterance): text(v)
+        if self.base_revision_id is not None: text(self.base_revision_id)
         natural(self.base_generation)
         if self.status not in {'interpreting', 'admitted', 'submitted', 'clarification', 'navigated', 'answered', 'failed'}:
             raise SessionError('Invalid interaction state.')
@@ -201,6 +204,25 @@ class Interaction:
             object.__setattr__(self, 'guidance_candidates', refs)
             if self.admitted is None or self.admitted.get('intent') != 'guidance' or self.status != 'answered':
                 raise SessionError('Candidate references require an answered guidance interaction.')
+        if self.submission is not None:
+            frozen = freeze_json_mapping(self.submission, 'interaction.submission')
+            if len(canonical(_serialize(frozen))) > 65536:
+                raise SessionError('Interaction submission storage limit exceeded.')
+            object.__setattr__(self, 'submission', frozen)
+        if self.presentation is not None:
+            frozen = freeze_json_mapping(self.presentation, 'interaction.presentation')
+            if (set(frozen) != {'version', 'kind', 'status', 'text', 'clarification',
+                               'scientific', 'guidance', 'error'}
+                    or type(frozen['version']) is not int or frozen['version'] != 1
+                    or any(type(frozen[k]) is not str for k in ('kind', 'status', 'text'))
+                    or len(canonical(_serialize(frozen))) > 262144):
+                raise SessionError('Invalid interaction presentation.')
+            from .interactive_schemas import PresentedResponse
+            try:
+                PresentedResponse.from_dict(_serialize(frozen))
+            except (ValueError, TypeError) as exc:
+                raise SessionError('Invalid interaction presentation.') from exc
+            object.__setattr__(self, 'presentation', frozen)
 
 
 @dataclass(frozen=True)
@@ -275,8 +297,8 @@ class AnalysisSession:
             captured = _serialize(interaction.snapshot)
             if set(captured) not in ({'relations', 'bases'}, {'relations', 'bases', 'dialogue'}):
                 raise SessionError('Invalid interaction snapshot.')
-            expected = {'current': interaction.base_revision_id}
-            parent = revisions[interaction.base_revision_id].parent_revision_id
+            expected = {} if interaction.base_revision_id is None else {'current': interaction.base_revision_id}
+            parent = None if interaction.base_revision_id is None else revisions[interaction.base_revision_id].parent_revision_id
             if parent is not None: expected['parent'] = parent
             previous = next((e.from_revision_id for e in reversed(self.navigation[:interaction.base_generation])
                              if e.to_revision_id != e.from_revision_id), None)
@@ -298,7 +320,8 @@ class AnalysisSession:
                  for f in fields(self) if f.name != 'interactions'}
         if self.interactions:
             value['interactions'] = tuple({f.name: _serialize(getattr(i, f.name)) for f in fields(i)
-                if f.name != 'guidance_candidates' or i.guidance_candidates is not None} for i in self.interactions)
+                if f.name not in {'guidance_candidates', 'submission', 'presentation'}
+                or getattr(i, f.name) is not None} for i in self.interactions)
         for turn in value['turns']:
             if not turn['retained_outputs']:
                 del turn['retained_outputs']
@@ -317,8 +340,10 @@ class AnalysisSession:
                 data = dict(data, interactions=[])
             if model is SessionTurn and type(data) is dict and 'retained_outputs' not in data:
                 data = dict(data, retained_outputs=[])
-            if model is Interaction and type(data) is dict and 'guidance_candidates' not in data:
-                data = dict(data, guidance_candidates=None)
+            if model is Interaction and type(data) is dict:
+                data = dict(data)
+                for key in ('guidance_candidates', 'submission', 'presentation'):
+                    data.setdefault(key, None)
             if type(data) is not dict or set(data) != set(model.__dataclass_fields__):
                 raise SessionError('Invalid session record shape.')
             data = dict(data)

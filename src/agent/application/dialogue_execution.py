@@ -93,9 +93,19 @@ def execute(sessions, interaction, admitted, model):
     if any(t.turn_id == interaction.turn_id for t in state.turns):
         sessions._record_result(sid, interaction.turn_id, result)
         state = sessions.recover(sid, interaction.turn_id)
-        return TurnOutcome('execute', state.turn(interaction.turn_id).status,
-            text='The request followed the registered scientific execution path. '
-                 + ('Its accepted outputs form the active revision.' if state.turn(interaction.turn_id).status == 'activated'
-                    else 'Its persisted execution status is ' + state.turn(interaction.turn_id).status + '.'))
+        return completion_outcome(state, interaction.turn_id, error=result.error)
     _update(sessions, interaction.turn_id, status='failed')
     return TurnOutcome('execute', 'failed', text='The scientific execution request could not form a valid plan from the supplied inputs.')
+
+
+def completion_outcome(state, turn_id, *, error=None):
+    """Render the persisted completion, including explicit post-crash recovery."""
+    from .turns import TurnOutcome
+    turn = state.turn(turn_id)
+    status = turn.status
+    active = status == 'activated' and state.active_revision_id == turn.revision_id
+    return TurnOutcome('execute', status,
+        text='The request followed the registered scientific execution path. '
+             + ('Its accepted outputs form the active revision.' if active
+                else 'Its accepted revision is historical; another revision is active.' if status == 'activated'
+                else 'Its persisted execution status is ' + status + '.'), error=error)

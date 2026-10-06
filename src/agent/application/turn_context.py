@@ -24,7 +24,9 @@ def stored_step(sessions, locator):
 def snapshot(sessions, state, *, tool_names=None):
     revisions = {r.revision_id:r for r in state.revisions}
     current = revisions.get(state.active_revision_id)
-    if current is None: raise IntentError('unavailable_context')
+    if current is None:
+        if state.active_revision_id is not None: raise IntentError('unavailable_context')
+        return dict(relations={}, bases={})
     relations = {'current':current.revision_id}
     if current.parent_revision_id is not None: relations['parent'] = current.parent_revision_id
     previous = next((e.from_revision_id for e in reversed(state.navigation)
@@ -68,6 +70,8 @@ def snapshot(sessions, state, *, tool_names=None):
 
 
 def public_context(captured):
+    if not captured['relations']:
+        return dict(relations=('current',), bases={}, previous_is_ambiguous=False)
     bases = {}
     for relation, rid in captured['relations'].items():
         base = captured['bases'][rid]

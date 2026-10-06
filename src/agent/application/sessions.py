@@ -38,15 +38,38 @@ class AnalysisSessions:
     def load(self, session_id):
         return self._store.load(session_id)
 
+    def processing_lease(self, session_id, turn_id):
+        """Nonblocking per-turn presentation/submission coordination for clients."""
+        return self._store.processing_lease(session_id, turn_id)
+
     def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
-                answerer=None, predecessor_turn_id=None, execution_inputs=None):
+                answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
         outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation, answerer=answerer,
-                       predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs)
+                       predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
+                       submission=submission)
         from .responses import summarize
         return summarize(self, session_id, turn_id, outcome)
+
+    def store_presentation(self, session_id, turn_id, presentation):
+        """Store one displayed response exactly; prose grants no scientific authority."""
+        text(turn_id)
+        if presentation is None:
+            raise SessionError('A displayed presentation is required.')
+        def change(state):
+            interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+            if interaction is None:
+                raise SessionError('Unknown interaction.')
+            updated = replace(interaction, presentation=presentation)
+            if interaction.presentation is not None:
+                if interaction.presentation != updated.presentation:
+                    raise SessionConflictError('Displayed presentation already exists.')
+                return state
+            return replace(state, interactions=tuple(updated if i.turn_id == turn_id else i
+                                                     for i in state.interactions))
+        return self._store._update(session_id, change)
 
     def answer(self, session_id, request):
         """Read-only structured answer; no interpreter, Planner, or scientific calls."""

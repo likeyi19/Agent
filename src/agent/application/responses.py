@@ -156,6 +156,8 @@ def admitted_answer(sessions, session_id, admitted):
 
 def summarize(sessions, session_id, turn_id, outcome):
     """Add text only to the high-level interface; low-level run results are unchanged."""
+    if outcome.presentation is not None:
+        return outcome
     if outcome.text: return outcome
     if outcome.kind == 'clarify':
         return replace(outcome, text=clarification_text(outcome.clarification))

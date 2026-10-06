@@ -676,6 +676,13 @@ can contain server paths. Returning to an earlier revision and executing new wor
 creates a normal child; historical revisions remain immutable. See the
 [M18.4 interaction and acceptance record](docs/m18.4-rich-scientific-interaction.md).
 
+[M18.5 real interactive acceptance and M18 closeout](docs/m18.5-real-interactive-acceptance.md)
+validates this browser workflow over preserved real PBMC science, including
+guided execution, revision branching, refresh, fresh-server restart and bounded
+failure paths. The full lightweight regression passes 4,868 tests with 83 skipped.
+M18 is ready to close within the documented scope after review; live-provider
+quality qualification remains separate.
+
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.
 For explicit offline inspection planning:

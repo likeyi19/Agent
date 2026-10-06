@@ -96,7 +96,7 @@ function showError(error) {
 function awaitingPresentation(turn) {
   // Scientific completion and immutable displayed completion are separate
   // checkpoints. Keep reading until display publication; never replay work.
-  return !turn.response && PRESENTATION_PENDING_STATES.has(turn.status)
+  return typeof turn.profile_id === "string" && !turn.response && PRESENTATION_PENDING_STATES.has(turn.status)
     && (!["failed", "cancelled"].includes(turn.status) || Boolean(turn.run_id));
 }
 

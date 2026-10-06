@@ -49,6 +49,36 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 18.5 — Real interactive end-to-end acceptance
+
+[M18.5](docs/m18.5-real-interactive-acceptance.md) validates the actual Firefox
+browser and normal web/application path over the preserved real PBMC Next GEM
+Session. Typed science, M17.2 guidance selection, evidence/report access,
+generation-checked navigation and sibling branching pass. Five new selection
+executions each run production and independent verification once; covered
+upstream production/reconstruction remains zero. The corrected guided cases
+preserve explicit flank evidence, with the earlier fixture defaults documented.
+
+Refresh and a fresh server restore 39 conversation texts, nine revisions and
+generation 13 without provider construction or science. Two scripted model
+profiles remain isolated per turn. Duplicate retries, stale/tampered references,
+browser cancellation and a separate deterministic interpretation-interruption
+fixture pass. These are application/software results, not live-provider quality
+or real scientific crash/recovery qualification. Preserved scientific artifacts
+pass bounded invariance checks; only the existing Session envelope changes
+through ordinary append/navigation. All 125 pre-existing untracked evals remain
+unchanged.
+
+The sole production fix makes presentation polling require captured interactive
+profile metadata, so terminal legacy turns do not block the composer. Eleven
+native browser lifecycle checks and 16 focused static tests pass. The single
+full lightweight regression passes **4,868 tests, 83 skipped, seven warnings in
+3,227.73 seconds**, exit 0, with all `RUN_*` gates disabled, no exclusions and
+all 402 frozen source/test/static/resource files unchanged. Scientific contracts,
+Planner/compiler/preflight, authority/evidence owners, Registry and EpiZoo are
+unchanged. M18.5 passes and M18 is ready to close within this scope after review;
+the browser fix and documentation remain unstaged, with no commit/push performed.
+
 ## Milestone 18.4 — Rich scientific interaction
 
 [M18.4](docs/m18.4-rich-scientific-interaction.md) exposes rich revision views,

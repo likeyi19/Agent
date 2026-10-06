@@ -19,8 +19,11 @@
 
     <section class="controls panel" aria-label="Session and model controls">
       <div class="session-controls">
-        <h2>Session</h2>
-        <button id="new-session" type="button">New session</button>
+        <div class="section-heading">
+          <h2>Session</h2>
+          <button id="new-session" type="button">New session</button>
+        </div>
+        <p id="session-context" class="muted small">No session open</p>
         <form id="reopen-form" class="reopen-form">
           <label for="session-input">Reopen session ID</label>
           <div class="inline-fields">
@@ -28,11 +31,14 @@
             <button id="reopen-session" type="submit">Reopen</button>
           </div>
         </form>
-        <dl class="session-summary">
-          <dt>Current session</dt><dd id="current-session">No session open</dd>
-          <dt>Generation</dt><dd id="current-generation">—</dd>
-          <dt>Active revision</dt><dd id="current-revision">—</dd>
-        </dl>
+        <details id="session-identities" class="identity-details">
+          <summary>Session details</summary>
+          <dl class="session-summary">
+            <dt>Current session</dt><dd id="current-session">No session open</dd>
+            <dt>Generation</dt><dd id="current-generation">—</dd>
+            <dt>Active revision</dt><dd id="current-revision">—</dd>
+          </dl>
+        </details>
       </div>
       <div class="model-controls">
         <label for="model-choice">Model for next turn</label>
@@ -56,21 +62,42 @@
         <p class="empty-history">Create a session or reopen one to begin.</p>
       </div>
     </section>
-    <aside class="scientific-state panel" aria-labelledby="scientific-heading">
-      <h2 id="scientific-heading">Scientific state</h2>
+
+    <section class="composer panel" aria-label="Write a request">
+      <div class="execution-state" aria-live="polite">
+        <span id="turn-status">Ready</span>
+        <button id="cancel-turn" class="secondary" type="button" hidden disabled>Cancel turn</button>
+      </div>
+      <ul id="step-status" class="step-status" hidden></ul>
+      <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
+      <form id="turn-form">
+        <label for="utterance">Ask Agent</label>
+        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Ask a question or describe an analysis…" required disabled></textarea>
+        <div class="composer-actions">
+          <span class="muted small">Responses and session state are saved by Agent.</span>
+          <div>
+            <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
+            <button id="submit-turn" type="submit" disabled>Send</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <aside id="scientific-details" class="scientific-state panel" aria-labelledby="scientific-heading" tabindex="-1">
+      <h2 id="scientific-heading">Scientific details</h2>
       <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
       <div id="revision-view" hidden>
-        <p class="small">Viewing <strong id="viewed-revision"></strong></p>
-        <dl id="revision-summary" class="revision-summary"></dl>
+        <p id="result-heading" class="result-heading"></p>
+        <p id="result-output-summary" class="muted small"></p>
         <div class="revision-actions">
           <button id="activate-revision" class="secondary" type="button">Switch to this revision</button>
           <button id="continue-revision" type="button">Continue from here</button>
         </div>
-        <p class="muted small">Switching changes the active state. Describe the next analysis below to create a child revision.</p>
+        <p class="muted small">Switching changes the active revision. Continue from here selects this revision and returns to the composer; your next analysis creates a child revision.</p>
         <details id="result-panel">
-          <summary>Accepted result</summary>
+          <summary id="result-panel-heading">Current result</summary>
           <p id="result-presentation" class="message-text small"></p>
-          <h3>Retained output names</h3>
+          <h3>Accepted output names</h3>
           <ul id="revision-outputs" class="compact-list"></ul>
         </details>
         <details id="artifact-panel">
@@ -101,30 +128,18 @@
           </form>
           <div id="detail-content"></div>
         </details>
+        <details id="revision-identities" class="identity-details">
+          <summary>Revision details</summary>
+          <p class="small">Viewing <strong id="viewed-revision"></strong></p>
+          <dl id="revision-summary" class="revision-summary"></dl>
+        </details>
       </div>
-      <h3>Revision history</h3>
-      <ol id="revision-history" class="revision-history"></ol>
+      <details id="revision-history-panel">
+        <summary>Revision history</summary>
+        <ol id="revision-history" class="revision-history"></ol>
+      </details>
     </aside>
     </div>
-
-    <section class="composer panel" aria-label="Write a request">
-      <div class="execution-state" aria-live="polite">
-        <span id="turn-status">Ready</span>
-        <button id="cancel-turn" class="secondary" type="button" hidden disabled>Cancel turn</button>
-      </div>
-      <ul id="step-status" class="step-status" hidden></ul>
-      <form id="turn-form">
-        <label for="utterance">Request</label>
-        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Ask a question or describe an analysis…" required disabled></textarea>
-        <div class="composer-actions">
-          <span class="muted small">Responses and session state are saved by Agent.</span>
-          <div>
-            <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
-            <button id="submit-turn" type="submit" disabled>Send request</button>
-          </div>
-        </div>
-      </form>
-    </section>
   </main>
 </body>
 </html>

@@ -1,11 +1,47 @@
 """Metadata-only turn snapshots. Executable trust is checked later by M15.3."""
 from dataclasses import asdict
-from agent.schemas.orchestration import _serialize
+import re
+from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputLocator
 from .turn_decisions import IntentError
 
 SELECTION = 'select_scATAC_cells'
 MATRIX = 'build_scATAC_cell_by_ccre'
+
+
+def supplied_input_context(inputs, registry):
+    """Describe supplied Registry inputs without exposing values or arbitrary keys.
+
+    Consumer descriptions are registered expectations, not observed scientific
+    formats, validated resources, or execution readiness.
+    """
+    from agent.orchestration.semantic_prompt import _json_type
+    values = freeze_json_mapping({} if inputs is None else inputs, 'execution_inputs')
+    consumers = {}
+    for tool_name in registry.names():
+        tool = registry.get(tool_name)
+        if tool.semantic_planning is None:
+            continue
+        for port in tool.semantic_planning.consumer_ports:
+            fields = {m.name: m.field_name for m in port.members}
+            for source in port.request_sources:
+                for member in source.members:
+                    name = member.input_name
+                    if name not in values or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,127}', name) is None:
+                        continue
+                    field = fields[member.name]
+                    argument = tool.required_arguments.get(field, tool.optional_arguments.get(field))
+                    planning = argument.planning
+                    descriptor = dict(tool=tool_name, port=port.name, member=member.name,
+                        lineage=None if source.lineage is None else source.lineage.value,
+                        description='' if planning is None else planning.description,
+                        expected_artifact_kinds=[] if planning is None else [k.value for k in planning.accepted_artifact_kinds],
+                        scientific_parameter=False if planning is None else planning.scientific_parameter,
+                        source_complete=all(m.input_name in values for m in source.members))
+                    if descriptor not in consumers.setdefault(name, []):
+                        consumers[name].append(descriptor)
+    return dict(present=bool(values), fields=[dict(name=name, json_type=_json_type(values[name]),
+        consumers=consumers[name]) for name in sorted(consumers)], omitted_count=len(values)-len(consumers))
 
 
 def parameter_specs(registry):

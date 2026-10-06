@@ -49,6 +49,40 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Post-M18.2b — Conversational Context Projection & Chat-First UI
+
+[Post-M18.2b](docs/post-m18.2b-conversational-context-chat-ui.md) extends the
+existing interpreter dialogue projection with safe current-turn input
+availability, opaque groups of cooutputs sharing one accepted scientific source,
+and captured current/most-recently-created/previous-turn result scopes. The LLM
+interprets language and selects an offered handle; Agent resolves it to exact
+existing Revision/output identities after accepted-evidence checks. Independent
+groups or subjects never resolve through first-match or step-order inference.
+Input descriptions expose Registry expectations and shallow types, not values,
+paths, scientific qualification or execution readiness.
+
+The existing static browser becomes one column: chronological user/Agent bubbles,
+composer, then expandable scientific details. Session/model/input controls,
+polling, cancellation, evidence, artifacts, guidance, revision switching,
+continuation, branching and refresh/restart retain their existing contracts.
+Full identities remain available through details. No framework, upload or
+execute-and-explain behavior is added. Planner/compiler/runtime, Registry,
+scientific authority, scientific tools and M17.2 are unchanged. Validation and
+the live-provider result are recorded in the linked contract. This follow-up
+uses accepted Post-M18.2a commit
+`6a8a477774c1e33b9c97669a6e59b490e97f1ea0`; it is not committed or pushed.
+
+Software acceptance passes **636 relevant tests in 717.33 seconds**, exit 0,
+with all 404 frozen source/test/static/resource files unchanged. Twelve native
+Firefox read-only rich-UI checks pass over the preserved inspection without
+providers, science or state writes. The fresh-Session live flow makes one Groq
+interpreter call, which chooses `clarify / ambiguous_subject` despite safe supplied
+input context; no execution occurs and both follow-ups remain unqualified.
+No semantic retry or deterministic language repair follows. All 125 pre-existing
+untracked evals, prior web state, operator configuration and input bytes remain
+unchanged. The implementation is ready for review within this software/UI scope;
+the requested live scientific-answer chain has not passed.
+
 ## Post-M18.1 — Typed Turn Admission Simplification
 
 [Post-M18.1](docs/post-m18.1-typed-turn-admission.md) removes three generic

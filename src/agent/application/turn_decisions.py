@@ -224,7 +224,9 @@ def decision_schema(public):
             operation=enum(o['handle'] for o in offered), target=enum(('selection','matrix')),
             delta={'anyOf':[delta, {'type':'null'}]})))
     if 'dialogue' in public:
-        target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']] + ['@focus', '@previous']),
+        target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']]
+                             + [g['handle'] for g in public['dialogue'].get('result_groups', ())]
+                             + list(public['dialogue'].get('result_referents', {})) + ['@focus', '@previous']),
                              subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
         variants.append(_object(dict(kind=enum(('answer_scientific',)), target=target,
             comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))))
@@ -251,9 +253,12 @@ def interpret(model, utterance, public):
             'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',
+            'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
+            'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
+            'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
-            'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no implicit scientific discussion; clarify unresolved short references instead of inventing a topic.',
+            'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no prior-discussion focus; captured result groups and result_referents remain available. Clarify unresolved short references instead of inventing a topic.',
             'Use unavailable_context only when the requested target is missing or its evidence unavailable. Missing rationale or scientific certainty within an available summary is for the scientific answer stage to explain as insufficient evidence, not a reason to reject the target.',
             'You select intent and exact references, not the scientific conclusion. You need not see factual values to select answer_scientific for an available result. Detailed accepted evidence is loaded after admission.',
             'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',

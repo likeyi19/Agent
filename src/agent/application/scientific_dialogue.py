@@ -39,6 +39,101 @@ def discussion_targets(admitted):
     return tuple(admitted[k] for k in ('target', 'comparison', 'previous_subject') if admitted.get(k) is not None)
 
 
+def _result_referent_targets(state, base_revision_id, context, preceding):
+    """Resolve captured navigation metadata, never natural-language phrases."""
+    revisions = state.revisions[:context['revision_count']]
+    by_id = {r.revision_id: r for r in revisions}
+    def targets(revision, *, created=False):
+        return [] if revision is None else [dict(revision_id=revision.revision_id,
+            output_name=o.name, accepted_step_sha256=o.accepted_step_sha256, subject=None)
+            for o in revision.outputs if not created or o.run_id == revision.run_id]
+    result = {'@current_result': targets(by_id.get(base_revision_id)),
+              '@most_recently_created': targets(revisions[-1] if revisions else None, created=True),
+              '@previous_turn_result': []}
+    previous = next((i for i in preceding if i.turn_id == context['previous_turn_id']), None)
+    if previous is not None:
+        created = [r for r in revisions if r.turn_id == previous.turn_id]
+        if len(created) > 1:
+            raise IntentError('unavailable_context')
+        if context.get('previous_created_result', False) and created:
+            result['@previous_turn_result'] = targets(created[0], created=True)
+        elif (context.get('previous_scientific_answer', False)
+                and previous.status == 'answered' and previous.admitted is not None
+                and previous.admitted.get('intent') == 'scientific'):
+            result['@previous_turn_result'] = [_serialize(previous.admitted[k]) for k in ('target', 'comparison')
+                if previous.admitted.get(k) is not None]
+            if any(t['revision_id'] not in by_id for t in result['@previous_turn_result']):
+                raise IntentError('unavailable_context')
+    return result
+
+
+def _result_groups(captured, state):
+    """Cooutputs share a group only under their complete accepted source tuple.
+
+    Equivalent locators use the lexicographically smallest (name, output_key)
+    as their canonical attribution. This normalization never chooses a step or
+    scientific result among independent groups.
+    """
+    revisions = {r.revision_id: r for r in state.revisions}
+    grouped = {}
+    for item in captured['dialogue']['outputs']:
+        revision = revisions[item['revision_id']]
+        locators = [o for o in revision.outputs if o.name == item['output_name']]
+        if len(locators) != 1 or locators[0].accepted_step_sha256 != item['accepted_step_sha256']:
+            raise IntentError('unavailable_context')
+        locator = locators[0]
+        key = (revision.revision_id, locator.run_id, locator.step_id, locator.accepted_step_sha256)
+        grouped.setdefault(key, []).append((item, locator))
+    groups = []
+    for members in grouped.values():
+        if len({item['tool'] for item, _ in members}) != 1:
+            raise IntentError('unavailable_context')
+        canonical, _ = min(members, key=lambda pair: (pair[1].name, pair[1].output_key))
+        groups.append(dict(handle=f'g{len(groups)}', members=[item for item, _ in members], canonical=canonical))
+    return groups
+
+
+def _group_evidence(sessions, session_id, group, *, views=None):
+    """Check accepted evidence equivalence before canonical alias attribution."""
+    evidence = [sessions.evidence(session_id, m['revision_id'], m['output_name'])
+                if views is None else views[m['handle']] for m in group['members']]
+    if any(view.status != 'available' or view.source is None for view in evidence):
+        raise IntentError('unavailable_context')
+    signatures = []
+    for item, view in zip(group['members'], evidence):
+        if (view.source.tool_name != item['tool']
+                or view.source.output_locator['accepted_step_sha256'] != item['accepted_step_sha256']):
+            raise IntentError('unavailable_context')
+        value = view.to_dict()
+        del value['output_name']
+        del value['source']['output_locator']['name']
+        del value['source']['output_locator']['output_key']
+        signatures.append(value)
+    if any(value != signatures[0] for value in signatures[1:]):
+        raise IntentError('unavailable_context')
+
+
+def _referent_choices(captured, state, groups, preceding):
+    context = captured['dialogue'].get('context')
+    if context is None:
+        return {}
+    targets = _result_referent_targets(state, captured['relations'].get('current'), context, preceding)
+    result = {}
+    for handle, values in targets.items():
+        choices = []
+        for target in values:
+            matches = [g for g in groups if any(all(m[k] == target[k]
+                for k in ('revision_id', 'output_name', 'accepted_step_sha256')) for m in g['members'])]
+            if len(matches) != 1:
+                raise IntentError('unavailable_context')
+            choice = dict(group=matches[0]['handle'], subject=target['subject'])
+            if choice not in choices:
+                choices.append(choice)
+        result[handle] = dict(status='unavailable' if not choices else 'available' if len(choices) == 1 else 'ambiguous',
+                              targets=choices)
+    return result
+
+
 def capture(sessions, state, snapshot, requested_predecessor, *, tool_names=None):
     """Choose a unique conversation leaf at capture, never completion order."""
     completed = [i for i in state.interactions if i.status == 'answered' and _scientific(i)]
@@ -58,6 +153,19 @@ def capture(sessions, state, snapshot, requested_predecessor, *, tool_names=None
         for target in discussion_targets(predecessor.admitted):
             if target is not None and (target['revision_id'], target['output_name']) not in refs:
                 refs.append((target['revision_id'], target['output_name']))
+    context = dict(revision_count=len(state.revisions),
+                   previous_turn_id=state.interactions[-1].turn_id if state.interactions else None,
+                   previous_created_result=bool(state.interactions and state.interactions[-1].status != 'failed'
+                       and any(r.turn_id == state.interactions[-1].turn_id for r in state.revisions)),
+                   previous_scientific_answer=bool(state.interactions and state.interactions[-1].status == 'answered'
+                       and state.interactions[-1].admitted is not None
+                       and state.interactions[-1].admitted.get('intent') == 'scientific'))
+    referents = _result_referent_targets(state, state.active_revision_id, context, state.interactions)
+    for targets in referents.values():
+        for target in targets:
+            reference = (target['revision_id'], target['output_name'])
+            if reference not in refs:
+                refs.append(reference)
     # M15 allows 32 outputs in each of current/parent/previous-active. Include
     # the predecessor's explicit references without shrinking that existing scope.
     if len(refs) > 128:
@@ -74,7 +182,7 @@ def capture(sessions, state, snapshot, requested_predecessor, *, tool_names=None
             version=state.revisions.index(revisions[rid]) + 1,
             relations=[k for k, v in snapshot['relations'].items() if v == rid]))
     return dict(outputs=outputs, predecessor=None if predecessor is None else predecessor.turn_id,
-                requested_predecessor=requested_predecessor, ambiguous=ambiguous)
+                requested_predecessor=requested_predecessor, ambiguous=ambiguous, context=context)
 
 
 def validate_capture(state, interaction, preceding):
@@ -82,7 +190,8 @@ def validate_capture(state, interaction, preceding):
     value = interaction.snapshot.get('dialogue')
     if value is None:
         return
-    _shape(_serialize(value), ('outputs', 'predecessor', 'requested_predecessor', 'ambiguous'))
+    keys = ('outputs', 'predecessor', 'requested_predecessor', 'ambiguous')
+    _shape(_serialize(value), keys if 'context' not in value else (*keys, 'context'))
     if type(value['ambiguous']) is not bool or len(value['outputs']) > 128:
         raise ValueError('Invalid dialogue capture.')
     predecessor = value['predecessor']
@@ -94,6 +203,33 @@ def validate_capture(state, interaction, preceding):
     allowed = set(interaction.snapshot['bases'])
     if prior is not None:
         allowed.update(t['revision_id'] for t in discussion_targets(prior.admitted))
+    required_refs = {(rid, o['name']) for rid, base in interaction.snapshot['bases'].items()
+                     for o in base['outputs']}
+    if prior is not None:
+        required_refs.update((t['revision_id'], t['output_name']) for t in discussion_targets(prior.admitted))
+    if 'context' in value:
+        context = _serialize(value['context'])
+        _shape(context, ('revision_count', 'previous_turn_id', 'previous_created_result', 'previous_scientific_answer'))
+        if (type(context['revision_count']) is not int or not 0 <= context['revision_count'] <= len(state.revisions)
+                or type(context['previous_created_result']) is not bool
+                or type(context['previous_scientific_answer']) is not bool
+                or context['previous_turn_id'] != (preceding[-1].turn_id if preceding else None)
+                or any(state.revisions.index(r) >= context['revision_count']
+                       for r in state.revisions if r.revision_id in allowed)):
+            raise ValueError('Invalid captured result context.')
+        previous = preceding[-1] if preceding else None
+        created = [r for r in state.revisions[:context['revision_count']]
+                   if r.turn_id == context['previous_turn_id']]
+        if context['previous_created_result'] and (previous is None or len(created) != 1):
+            raise ValueError('Captured previous created result changed.')
+        # A false captured availability bit remains false after later completion
+        # or recovery; current interaction status cannot recreate capture history.
+        if context['previous_scientific_answer'] and (previous is None or previous.status != 'answered'
+                or previous.admitted is None or previous.admitted.get('intent') != 'scientific'):
+            raise ValueError('Captured previous scientific answer changed.')
+        referents = _result_referent_targets(state, interaction.base_revision_id, context, preceding)
+        allowed.update(t['revision_id'] for targets in referents.values() for t in targets)
+        required_refs.update((t['revision_id'], t['output_name']) for targets in referents.values() for t in targets)
     if interaction.admitted is not None and interaction.admitted.get('intent') == 'guidance':
         from .scientific_guidance import validate_admitted
         validate_admitted(state, interaction, preceding)
@@ -109,9 +245,11 @@ def validate_capture(state, interaction, preceding):
                 or item['accepted_step_sha256'] != locator.accepted_step_sha256 or (rid, name) in seen):
             raise ValueError('Dialogue output binding changed.')
         seen.add((rid, name))
+    if 'context' in value and seen != required_refs:
+        raise ValueError('Captured result inventory changed.')
 
 
-def public(captured, state, registry, *, sessions, utterance):
+def public(captured, state, registry, *, sessions, utterance, execution_inputs=None):
     value = captured['dialogue']
     previous = next((i for i in state.interactions if i.turn_id == value['predecessor']), None)
     def target_label(t):
@@ -122,7 +260,7 @@ def public(captured, state, registry, *, sessions, utterance):
     focus = None if previous is None else dict(target=target_label(previous.admitted['target']),
         previous=target_label(previous.admitted.get('comparison') or previous.admitted.get('previous_subject')),
         focus=previous.admitted['focus'])
-    outputs, descriptions = [], {}
+    outputs, descriptions, views = [], {}, {}
     for item in value['outputs']:
         tool = item['tool']
         spec = registry.get(tool)
@@ -136,6 +274,7 @@ def public(captured, state, registry, *, sessions, utterance):
         # Only availability and field/subject identities reach interpretation.
         # Values and exact source attribution stay in the later answer context.
         view = sessions.evidence(state.session_id, item['revision_id'], item['output_name'])
+        views[item['handle']] = view
         output['evidence_status'] = view.status
         fields = [f.field for f in view.facts if f.status == 'available']
         output['available_fields'] = fields[:32]
@@ -150,6 +289,19 @@ def public(captured, state, registry, *, sessions, utterance):
         predecessor=focus, ambiguous_predecessor=value['ambiguous'], tools=list(registry.names()))
     from .guidance_selection import public_candidates
     result['execution_candidates'] = public_candidates(state, captured)
+    from .turn_context import supplied_input_context
+    result['supplied_inputs'] = supplied_input_context(execution_inputs, registry)
+    groups = _result_groups(captured, state)
+    public_outputs = {o['handle']: o for o in outputs}
+    result['result_groups'] = []
+    for group in groups:
+        canonical = public_outputs[group['canonical']['handle']]
+        if all(views[m['handle']].status == 'available' for m in group['members']):
+            _group_evidence(sessions, state.session_id, group, views=views)
+        result['result_groups'].append(dict(handle=group['handle'], outputs=[m['handle'] for m in group['members']],
+            canonical_output=canonical['handle'], **{k:canonical[k] for k in
+                ('tool', 'version', 'is_active', 'evidence_status')}))
+    result['result_referents'] = _referent_choices(captured, state, groups, state.interactions)
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return result
@@ -210,7 +362,32 @@ def admit(sessions, interaction, question, *, evidence_set=False):
     prior = None if previous is None else _serialize(previous.admitted)
 
     def resolve(target):
-        if target.output.startswith('@'):
+        selected_group = None
+        groups = _result_groups(interaction.snapshot, state)
+        modern = {g['handle'] for g in groups}
+        preceding = state.interactions[:next(n for n, i in enumerate(state.interactions) if i.turn_id == interaction.turn_id)]
+        referents = _referent_choices(interaction.snapshot, state, groups, preceding)
+        modern.update(referents)
+        if target.output in modern:
+            subject = None
+            group_handle = target.output
+            if target.output in referents:
+                choices = referents[target.output]['targets']
+                if not choices:
+                    raise IntentError('unavailable_context')
+                if len(choices) != 1:
+                    raise IntentError('ambiguous_subject')
+                group_handle, subject = choices[0]['group'], choices[0]['subject']
+            matches = [g for g in groups if g['handle'] == group_handle]
+            if len(matches) != 1:
+                raise IntentError('ambiguous_subject')
+            group = matches[0]
+            _group_evidence(sessions, state.session_id, group)
+            selected_group = group
+            item = group['canonical']
+            result = {k:item[k] for k in ('revision_id', 'output_name', 'accepted_step_sha256')}
+            result['subject'] = subject
+        elif target.output.startswith('@'):
             if prior is None:
                 raise IntentError('ambiguous_predecessor' if captured['ambiguous'] else 'ambiguous_subject')
             base = prior['target'] if target.output == '@focus' else (
@@ -237,14 +414,21 @@ def admit(sessions, interaction, question, *, evidence_set=False):
                 raise IntentError('ambiguous_subject')
             result = {k:item[k] for k in ('revision_id','output_name','accepted_step_sha256')}
             result['subject'] = None
+        def same_subject_source(base):
+            if all(result[k] == base[k] for k in ('revision_id', 'output_name')):
+                return True
+            # Modern cooutput normalization has already checked complete source
+            # and evidence equivalence. Legacy aliases retain exact-name checks.
+            return selected_group is not None and any(all(m[k] == base[k]
+                for k in ('revision_id', 'output_name', 'accepted_step_sha256')) for m in selected_group['members'])
         subject = target.subject
         if subject == '@focus':
-            if prior is None or prior.get('target') is None or any(result[k] != prior['target'][k] for k in ('revision_id','output_name')):
+            if prior is None or prior.get('target') is None or not same_subject_source(prior['target']):
                 raise IntentError('ambiguous_subject')
             subject = prior['target']['subject']
         elif subject == '@other':
             subjects, complete = _subjects(_load(sessions, state.session_id, result))
-            if prior is None or prior.get('target') is None or any(result[k] != prior['target'][k] for k in ('revision_id','output_name')):
+            if prior is None or prior.get('target') is None or not same_subject_source(prior['target']):
                 raise IntentError('ambiguous_subject')
             candidates = set(subjects) - {prior['target']['subject']}
             if not complete or len(candidates) != 1: raise IntentError('ambiguous_subject')

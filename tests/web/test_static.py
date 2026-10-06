@@ -110,3 +110,64 @@ def test_scientific_completion_waits_for_persisted_display_without_replay():
     assert '!awaitingPresentation(turn) && TERMINAL_STATES.has(turn.status)' in gate
     assert 'PRESENTATION_POLL_INTERVAL_MS = 5000' in code
     assert '? PRESENTATION_POLL_INTERVAL_MS : POLL_INTERVAL_MS' in code
+
+
+class HierarchyPage(Page):
+    def __init__(self, text):
+        self.stack, self.ancestors = [], {}
+        super().__init__(text)
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        attrs = dict(attrs)
+        if 'id' in attrs:
+            self.ancestors[attrs['id']] = tuple(a.get('id') for _, a in self.stack)
+        if tag not in {'input', 'meta', 'link', 'img', 'br', 'hr'}:
+            self.stack.append((tag, attrs))
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack)-1, -1, -1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]
+                break
+
+
+def test_conversation_composer_precede_secondary_scientific_details():
+    page = HierarchyPage((STATIC / 'index.html').read_text())
+    ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
+    assert ids.index('conversation-history') < ids.index('turn-form') < ids.index('scientific-details')
+    details = next(attrs for tag, attrs in page.tags if attrs.get('id') == 'scientific-details')
+    assert details['tabindex'] == '-1' and details['aria-labelledby'] == 'scientific-heading'
+    css = (STATIC / 'styles.css').read_text()
+    layouts = re.findall(r'\.research-layout\s*\{([^}]+)\}', css)
+    assert layouts and all('grid-template-columns' not in rule for rule in layouts)
+    assert any(re.search(r'display:\s*block', rule) for rule in layouts)
+
+
+def test_full_identities_history_and_artifacts_are_secondary_closed_details():
+    page = HierarchyPage((STATIC / 'index.html').read_text())
+    details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
+    for identifier in ('session-identities', 'revision-identities', 'revision-history-panel',
+                       'result-panel', 'artifact-panel', 'evidence-panel'):
+        assert identifier in details and 'open' not in details[identifier]
+    for identifier in ('current-session', 'current-generation', 'current-revision'):
+        assert 'session-identities' in page.ancestors[identifier]
+    for identifier in ('viewed-revision', 'revision-summary'):
+        assert 'revision-identities' in page.ancestors[identifier]
+    assert 'revision-history-panel' in page.ancestors['revision-history']
+
+
+def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
+    page = Page((STATIC / 'index.html').read_text())
+    assert any(attrs.get('id') == 'selected-input-context' for _, attrs in page.tags)
+    code = (STATIC / 'app.js').read_text()
+    context = code[code.index('function inputContext()'):code.index('element("new-session")', code.index('function inputContext()'))]
+    assert 'selectedOptions[0]' in context and 'choice.textContent' in context
+    assert 'element("selected-input-context").textContent' in context
+    assert 'inputContext();' in code
+    button = code[code.index('result.className = "secondary view-result"'):code.index('(response || article).append(result)')]
+    assert 'result.textContent = "View result details"' in button
+    assert 'loadRevision(turn.revision_id)' in button
+    assert 'scrollIntoView' in button and 'details.focus' in button
+    assert 'submitRequest(' not in button and 'postSubmission(' not in button
+    assert 'execution_inputs' not in code and 'innerHTML' not in code

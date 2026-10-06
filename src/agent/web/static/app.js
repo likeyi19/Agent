@@ -108,6 +108,11 @@ function checkpointText(turn) {
   return `Turn ${turn.turn_id} · ${turn.status}${turn.profile_id ? ` · ${turn.profile_id}` : ""}`;
 }
 
+function shortIdentity(value) {
+  // Compact labels are display only; requests and expanded metadata keep full IDs.
+  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+}
+
 function messageNode(label, text, className) {
   const message = document.createElement("div");
   message.className = `message ${className}`;
@@ -215,13 +220,18 @@ function renderRevisionHistory() {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = `${revision.revision_id}${revision.is_active ? " · Active" : ""}`;
+    button.textContent = `Revision ${shortIdentity(revision.revision_id)}${revision.is_active ? " · Active" : ""}`;
+    button.title = revision.revision_id;
     button.dataset.revisionId = revision.revision_id;
     button.setAttribute("aria-current", String(revision.is_active));
     button.addEventListener("click", () => loadRevision(revision.revision_id));
-    const metadata = document.createElement("span");
-    metadata.className = "revision-metadata";
-    metadata.textContent = `Parent: ${revision.parent_revision_id || "None"} · Turn: ${revision.turn_id} · Outputs: ${revision.outputs.join(", ") || "None"}`;
+    const metadata = document.createElement("details");
+    const label = document.createElement("summary");
+    label.textContent = "Revision details";
+    const identity = document.createElement("span");
+    identity.className = "revision-metadata";
+    identity.textContent = `Revision: ${revision.revision_id}\nParent: ${revision.parent_revision_id || "None"} · Turn: ${revision.turn_id} · Outputs: ${revision.outputs.join(", ") || "None"}`;
+    metadata.append(label, identity);
     item.append(button, metadata);
     return item;
   }));
@@ -282,6 +292,10 @@ async function loadRevision(revisionId) {
 function renderRevision(revision) {
   element("scientific-empty").hidden = true;
   element("revision-view").hidden = false;
+  element("result-heading").textContent = `${revision.is_active ? "Active" : "Historical"} result · Revision ${shortIdentity(revision.revision_id)} · ${revision.status}`;
+  element("result-heading").title = revision.revision_id;
+  element("result-panel-heading").textContent = revision.is_active ? "Current result" : "Historical result";
+  element("result-output-summary").textContent = `${revision.outputs.length} accepted outputs${revision.outputs.length ? `: ${revision.outputs.join(", ")}` : ""}`;
   element("viewed-revision").textContent = revision.revision_id;
   element("revision-summary").replaceChildren(...summaryRows([
     ["State", revision.is_active ? "Active revision" : "Historical revision"],
@@ -543,19 +557,29 @@ function renderHistory() {
     article.className = "turn";
     article.dataset.turnId = turn.turn_id;
     if (turn.utterance) article.append(messageNode("You", turn.utterance, "user"));
+    let response = null;
     if (turn.response) {
-      article.append(messageNode(RESPONSE_LABELS[turn.response.kind] || "Agent", turn.response.text, "assistant"));
-      if (turn.response.guidance) article.append(guidanceNode(turn.response.guidance));
+      response = messageNode(RESPONSE_LABELS[turn.response.kind] || "Agent", turn.response.text, "assistant");
+      article.append(response);
+      if (turn.response.guidance) response.append(guidanceNode(turn.response.guidance));
     }
+    const status = document.createElement("p");
+    status.className = "turn-status-note";
+    status.textContent = `${turn.status}${turn.profile_id ? ` · ${turn.profile_id}` : ""}`;
+    const metadata = document.createElement("details");
+    metadata.className = "turn-metadata";
+    const metadataLabel = document.createElement("summary");
+    metadataLabel.textContent = "Turn details";
+    metadata.append(metadataLabel);
     const checkpoint = document.createElement("div");
     checkpoint.className = "turn-checkpoint";
     checkpoint.textContent = checkpointText(turn);
-    article.append(checkpoint);
+    metadata.append(checkpoint);
     if (Object.prototype.hasOwnProperty.call(turn, "base_revision_id")) {
       const captured = document.createElement("div");
       captured.className = "turn-checkpoint";
       captured.textContent = `Captured base revision: ${turn.base_revision_id || "None"} · Generation: ${turn.base_generation}`;
-      article.append(captured);
+      metadata.append(captured);
     }
     const scientific = turn.response && turn.response.scientific;
     if (scientific) {
@@ -566,16 +590,25 @@ function renderHistory() {
       } else {
         targets.textContent = "Scientific target metadata was not stored in this historical display.";
       }
-      article.append(targets);
+      metadata.append(targets);
     }
     if (turn.revision_id) {
       const result = document.createElement("button");
       result.className = "secondary view-result";
-      result.textContent = turn.response && turn.response.kind === "execute"
+      result.type = "button";
+      result.textContent = "View result details";
+      result.title = turn.response && turn.response.kind === "execute"
         ? `View created result revision ${turn.revision_id}` : `View revision ${turn.revision_id}`;
-      result.addEventListener("click", () => loadRevision(turn.revision_id));
-      article.append(result);
+      result.addEventListener("click", () => {
+        element("result-panel").open = true;
+        loadRevision(turn.revision_id);
+        const details = element("scientific-details");
+        details.scrollIntoView({ block: "start" });
+        details.focus({ preventScroll: true });
+      });
+      (response || article).append(result);
     }
+    article.append(status, metadata);
     const error = turn.error || turn.response && turn.response.error;
     if (error) {
       const note = document.createElement("div");
@@ -604,7 +637,8 @@ function updateControls() {
 }
 
 function renderExecution() {
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? checkpointText(state.activeTurn) : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? `${state.activeTurn.status}${state.activeTurn.profile_id ? ` · ${state.activeTurn.profile_id}` : ""}` : "Ready";
+  element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
   list.hidden = !steps.length;
@@ -639,6 +673,8 @@ function displaySession(view) {
   element("session-input").value = view.session_id;
   element("current-generation").textContent = String(view.generation);
   element("current-revision").textContent = view.active_revision_id || "None";
+  element("session-context").textContent = `Session ${shortIdentity(view.session_id)} · Generation ${view.generation} · Active revision ${view.active_revision_id ? shortIdentity(view.active_revision_id) : "None"}`;
+  element("session-context").title = view.session_id;
   element("history-notice").hidden = !view.history_truncated;
   renderHistory();
   renderRevisionHistory();
@@ -790,6 +826,12 @@ function modelDescription() {
   saveConveniences();
 }
 
+function inputContext() {
+  // Repeat the operator-admitted display label without deriving scientific context.
+  const choice = element("input-choice").selectedOptions[0];
+  element("selected-input-context").textContent = `Scientific inputs for next turn: ${choice && choice.value ? choice.textContent : "none selected"}`;
+}
+
 element("new-session").addEventListener("click", async () => {
   const epoch = ++state.epoch;
   stopPolling();
@@ -874,6 +916,7 @@ element("detail-form").addEventListener("submit", (event) => {
 });
 
 element("model-choice").addEventListener("change", modelDescription);
+element("input-choice").addEventListener("change", inputContext);
 element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
@@ -901,6 +944,7 @@ async function initialize() {
       return option;
     }));
     element("input-choice").disabled = !inputs.choices.length;
+    inputContext();
     element("connection-state").textContent = "Connected";
     modelDescription();
     if (typeof conveniences.sessionId === "string" && conveniences.sessionId) {

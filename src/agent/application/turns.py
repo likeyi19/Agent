@@ -331,7 +331,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured,
                               submission=submission)
     def capture(current):
-        if current.generation != generation or current.interactions != state.interactions:
+        if (current.generation != generation or current.interactions != state.interactions
+                or current.revisions != state.revisions or current.turns != state.turns):
             raise SessionConflictError('Interaction capture raced with another turn.')
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
@@ -339,7 +340,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible = public_context(captured)
         from .scientific_dialogue import public as dialogue_public
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
-                                              sessions=sessions, utterance=utterance)
+                                              sessions=sessions, utterance=utterance,
+                                              execution_inputs=execution_inputs)
         decision = interpret(interpreter, utterance, visible)
         if interaction.base_revision_id is None:
             if not (isinstance(decision, Clarify)

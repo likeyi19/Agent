@@ -669,9 +669,23 @@ for the operator JSON format, launch options and recovery limits.
 See [Post-M18.1 typed turn admission](docs/post-m18.1-typed-turn-admission.md)
 for the current boundary between interpreted intent and deterministic admission.
 
-The rich scientific interface adds a separate revision/history panel, explicit
-revision switching and continuation, accepted evidence/provenance and reviewed
-detail, safe report/PNG access, and persisted guidance cards. Selecting an option
+The browser presents one conversation column with user/Agent bubbles, the
+composer immediately below the transcript, and expandable scientific details
+below the composer. Full Session, turn and Revision identities remain available
+in details. Result actions open the existing scientific view; evidence, reports,
+figures and revision history are secondary to the conversation.
+
+The interpreter receives safe supplied-input availability and accepted-result
+groups, including current, most recently created and previous-turn result scopes.
+It interprets natural references; Agent binds the selected scope to exact accepted
+Revision/output identities. Distinct scientific results still require an explicit
+choice or clarification. Input descriptions contain registered expectations and
+shallow types, never supplied values, paths or a scientific-readiness claim.
+See [Post-M18.2b context and chat-first UI](docs/post-m18.2b-conversational-context-chat-ui.md).
+
+The scientific interface retains explicit revision switching and continuation,
+accepted evidence/provenance and reviewed detail, safe report/PNG access, and
+persisted guidance cards. Selecting an option
 submits an ordinary interpreted turn through M17.2; it never calls a tool directly.
 Reports are labelled client-safe evidence projections because original Markdown
 can contain server paths. Returning to an earlier revision and executing new work
@@ -682,8 +696,8 @@ creates a normal child; historical revisions remain immutable. See the
 validates this browser workflow over preserved real PBMC science, including
 guided execution, revision branching, refresh, fresh-server restart and bounded
 failure paths. The full lightweight regression passes 4,868 tests with 83 skipped.
-M18 is ready to close within the documented scope after review; live-provider
-quality qualification remains separate.
+M18 is closed within the documented scope; live-provider quality qualification
+remains separate.
 
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.

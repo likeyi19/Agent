@@ -652,7 +652,20 @@ The transport-independent interactive Python interface supports empty-session
 first turns, exact stored display history, idempotent submissions, persisted
 status views, and operator-admitted per-turn model profiles. See the
 [M18.2 contract and acceptance](docs/m18.2-interactive-application-boundary.md).
-HTTP and browser interfaces remain deferred.
+The basic same-origin browser application is available through FastAPI:
+
+```bash
+python -m pip install -r requirements-web.txt
+PYTHONPATH=src python -m agent.web --config /path/to/operator-web.json \
+  --host 127.0.0.1 --port 8000
+```
+
+Open the configured address, create or reopen a Session, choose an admitted
+model and optional operator-configured scientific input set, and submit a request.
+The browser polls durable turn state and restores exact stored responses after
+refresh. Provider credentials and scientific input paths remain server-side.
+See [M18.3 configuration, API and acceptance](docs/m18.3-basic-web-application.md)
+for the operator JSON format, launch options, recovery limits, and M18.4 deferrals.
 
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.

@@ -1,0 +1,5 @@
+# Optional M18.3 browser server; install into the existing Agent environment.
+# python -m pip install -r requirements-web.txt
+# The transport uses Pydantic 2 validation; this FastAPI line requires it.
+fastapi>=0.128,<1
+uvicorn>=0.30,<1

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent — Research session</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="workspace">
+    <header class="page-header">
+      <div>
+        <h1>Agent</h1>
+        <p class="muted">Single-cell research workspace</p>
+      </div>
+      <span id="connection-state" class="connection-state" role="status">Connecting…</span>
+    </header>
+
+    <section class="controls panel" aria-label="Session and model controls">
+      <div class="session-controls">
+        <h2>Session</h2>
+        <button id="new-session" type="button">New session</button>
+        <form id="reopen-form" class="reopen-form">
+          <label for="session-input">Reopen session ID</label>
+          <div class="inline-fields">
+            <input id="session-input" name="session_id" autocomplete="off" maxlength="256" placeholder="Enter a known session ID" required>
+            <button id="reopen-session" type="submit">Reopen</button>
+          </div>
+        </form>
+        <dl class="session-summary">
+          <dt>Current session</dt><dd id="current-session">No session open</dd>
+          <dt>Generation</dt><dd id="current-generation">—</dd>
+          <dt>Active revision</dt><dd id="current-revision">—</dd>
+        </dl>
+      </div>
+      <div class="model-controls">
+        <label for="model-choice">Model for next turn</label>
+        <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
+        <p id="model-description" class="muted small"></p>
+        <label for="input-choice">Scientific inputs</label>
+        <select id="input-choice" disabled><option value="">No structured inputs</option></select>
+        <p class="muted small">Choose a configured input set when starting an analysis.</p>
+      </div>
+    </section>
+
+    <p id="client-error" class="error-banner" role="alert" hidden></p>
+
+    <section class="conversation panel" aria-labelledby="conversation-heading">
+      <div class="section-heading">
+        <h2 id="conversation-heading">Conversation</h2>
+        <span id="history-notice" class="muted small" hidden>Showing bounded recent history.</span>
+      </div>
+      <div id="conversation-history" role="log" aria-live="polite" aria-relevant="additions text">
+        <p class="empty-history">Create a session or reopen one to begin.</p>
+      </div>
+    </section>
+
+    <section class="composer panel" aria-label="Write a request">
+      <div class="execution-state" aria-live="polite">
+        <span id="turn-status">Ready</span>
+        <button id="cancel-turn" class="secondary" type="button" hidden disabled>Cancel turn</button>
+      </div>
+      <ul id="step-status" class="step-status" hidden></ul>
+      <form id="turn-form">
+        <label for="utterance">Request</label>
+        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Ask a question or describe an analysis…" required disabled></textarea>
+        <div class="composer-actions">
+          <span class="muted small">Responses and session state are saved by Agent.</span>
+          <div>
+            <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
+            <button id="submit-turn" type="submit" disabled>Send request</button>
+          </div>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

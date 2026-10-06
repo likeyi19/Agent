@@ -221,8 +221,8 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_TURN_CONFLICT')
         return False
 
-    def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
-                    execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+    def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
+                            execution_inputs=None, predecessor_turn_id=None, profile_id=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
                 or type(utterance) is not str or not utterance.strip() or len(utterance) > 4096):
@@ -238,10 +238,38 @@ class InteractiveAgentApplication:
         except (ValueError, TypeError, UnicodeError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
-        if self._duplicate(state, turn_id, utterance, submission):
-            return self.turn(session_id, turn_id)
-        if state.generation != expected_generation:
+        duplicate = self._duplicate(state, turn_id, utterance, submission)
+        if not duplicate and state.generation != expected_generation:
             raise _fail('INTERACTIVE_GENERATION_CONFLICT')
+        if not duplicate and predecessor_turn_id is not None:
+            prior = next((i for i in state.interactions if i.turn_id == predecessor_turn_id), None)
+            if (prior is None or prior.status != 'answered' or prior.admitted is None
+                    or prior.admitted.get('intent') not in {'scientific', 'guidance'}):
+                raise _fail('INTERACTIVE_REFERENCE_INVALID')
+        return profile, inputs, submission, state, duplicate
+
+    def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
+                            execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+        """Check a submission without providers, persistence, or execution.
+
+        The normalized fingerprint permits a local transport to coalesce in-flight
+        requests. It reserves no identity and grants no execution authority;
+        ``submit_turn`` repeats admission under the existing processing lease.
+        """
+        _, _, submission, _, _ = self._checked_submission(session_id, turn_id, utterance,
+            expected_generation=expected_generation, execution_inputs=execution_inputs,
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id)
+        return digest(dict(session_id=session_id, turn_id=turn_id,
+                           utterance=utterance, submission=submission))
+
+    def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
+                    execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+        profile, inputs, submission, state, duplicate = self._checked_submission(
+            session_id, turn_id, utterance, expected_generation=expected_generation,
+            execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
+            profile_id=profile_id)
+        if duplicate:
+            return self.turn(session_id, turn_id)
         sessions = self._application.sessions
         try:
             with sessions.processing_lease(session_id, turn_id):

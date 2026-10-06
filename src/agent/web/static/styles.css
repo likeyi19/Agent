@@ -1,0 +1,76 @@
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #192c39;
+  background: #f4f6f8;
+  line-height: 1.5;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.workspace { max-width: 1080px; margin: 0 auto; padding: 28px 24px 48px; }
+.page-header, .section-heading, .execution-state, .composer-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.page-header { margin-bottom: 24px; }
+h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -.04em; }
+h2 { margin: 0 0 12px; font-size: 17px; font-weight: 650; }
+p { margin: 4px 0 12px; }
+.muted { color: #586b79; }
+.small { font-size: 13px; }
+.connection-state { color: #586b79; font-size: 13px; }
+.panel { background: #fff; border: 1px solid #dce3e8; border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+.controls { display: grid; grid-template-columns: minmax(0, 3fr) minmax(230px, 2fr); gap: 30px; }
+.reopen-form { margin-top: 16px; }
+.inline-fields { display: flex; align-items: center; gap: 8px; }
+label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+input, select, textarea {
+  font: inherit; color: inherit; width: 100%; border: 1px solid #bdcbd5;
+  border-radius: 6px; background: #fff; padding: 9px 10px; min-width: 0;
+}
+textarea { display: block; resize: vertical; min-height: 108px; }
+input:focus, select:focus, textarea:focus, button:focus-visible {
+  outline: 3px solid #c4e0ef; outline-offset: 1px; border-color: #36718e;
+}
+button {
+  font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap;
+  color: #fff; background: #276b85; border: 1px solid #276b85;
+  border-radius: 6px; padding: 9px 14px; cursor: pointer;
+}
+button:hover:enabled { background: #205970; }
+button.secondary { color: #36576a; background: #fff; border-color: #bdcbd5; }
+button.secondary:hover:enabled { background: #edf3f7; }
+button:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: default; }
+.session-summary { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 4px 12px; font-size: 13px; margin: 16px 0 0; }
+.session-summary dt { color: #586b79; }
+.session-summary dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.model-controls { padding-top: 4px; }
+.model-controls select { margin-bottom: 4px; }
+#model-description { min-height: 20px; margin-bottom: 18px; }
+.error-banner { padding: 12px 16px; color: #862e31; background: #fff1f1; border: 1px solid #e8baba; border-radius: 6px; overflow-wrap: anywhere; }
+.section-heading h2 { margin-bottom: 0; }
+.conversation { min-height: 180px; }
+.empty-history { text-align: center; color: #586b79; margin: 36px 0; }
+.turn { padding: 20px 0 0; }
+.turn + .turn { border-top: 1px solid #edf0f2; margin-top: 20px; }
+.message { margin-top: 12px; padding: 12px 14px; border-radius: 6px; }
+.message.user { background: #edf4f8; }
+.message.assistant { border: 1px solid #e2e8ed; }
+.message-label { font-size: 12px; font-weight: 650; color: #586b79; margin-bottom: 6px; }
+.message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 14px; }
+.turn-checkpoint { color: #586b79; font-size: 12px; margin-top: 10px; }
+.turn-error { color: #862e31; margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.composer label { margin-top: 12px; }
+.execution-state { font-size: 13px; color: #36576a; min-height: 28px; }
+.step-status { list-style: none; margin: 8px 0; padding: 0; font-size: 12px; color: #586b79; }
+.step-status li { padding: 3px 0; overflow-wrap: anywhere; }
+.composer-actions { margin-top: 12px; }
+.composer-actions > div { display: flex; gap: 8px; }
+[hidden] { display: none !important; }
+@media (max-width: 700px) {
+  .workspace { padding: 18px 12px 32px; }
+  .controls { grid-template-columns: 1fr; gap: 20px; }
+  .panel { padding: 16px; }
+  .composer-actions { align-items: flex-start; flex-direction: column; }
+  .composer-actions > div { align-self: flex-end; }
+  .session-summary { grid-template-columns: 106px minmax(0, 1fr); }
+}

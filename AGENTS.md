@@ -49,6 +49,25 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 18.3 — Basic interactive web application
+
+[M18.3](docs/m18.3-basic-web-application.md) exposes the accepted interactive
+facade through optional FastAPI, same-origin static HTML/CSS/JavaScript, and
+polling. Operator configuration owns workspace, existing model profiles/factories,
+default model and named structured scientific input sets. Browsers receive safe
+IDs/labels and persisted client views, never paths, credentials or executable plans.
+
+A bounded local executor invokes synchronous facade submissions independently
+of browser connections. Its transient receipts are not a durable queue; Agent
+Session/run state remains authoritative. Completed retries and refresh/reopen
+never replay providers or science. The sole facade addition is read-only
+`validate_submission`, sharing existing admission checks without reserving work
+or changing idempotency/presentation. Existing cooperative cancellation is reused.
+Planner, Registry, scientific owners, authority, evidence and M17.2 are unchanged.
+Rich artifacts, guidance/revision controls and full closeout remain deferred.
+Validation and review readiness are recorded in the linked contract; no commit
+or push is authorized by this record.
+
 ## Milestone 18.2 — Transport-independent interactive boundary
 
 [M18.2](docs/m18.2-interactive-application-boundary.md) adds

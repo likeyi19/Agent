@@ -68,9 +68,10 @@ continuation, branching and refresh/restart retain their existing contracts.
 Full identities remain available through details. No framework, upload or
 execute-and-explain behavior is added. Planner/compiler/runtime, Registry,
 scientific authority, scientific tools and M17.2 are unchanged. Validation and
-the live-provider result are recorded in the linked contract. This follow-up
-uses accepted Post-M18.2a commit
-`6a8a477774c1e33b9c97669a6e59b490e97f1ea0`; it is not committed or pushed.
+the live-provider result are recorded in the linked contract. The software/UI
+implementation, including safe supplied-input and result-context projection,
+is accepted and closed at `854c895a07484167edfc796ad90a35c2c2e4054d`
+(`Improve conversational context and chat UI`).
 
 Software acceptance passes **636 relevant tests in 717.33 seconds**, exit 0,
 with all 404 frozen source/test/static/resource files unchanged. Twelve native
@@ -80,8 +81,12 @@ interpreter call, which chooses `clarify / ambiguous_subject` despite safe suppl
 input context; no execution occurs and both follow-ups remain unqualified.
 No semantic retry or deterministic language repair follows. All 125 pre-existing
 untracked evals, prior web state, operator configuration and input bytes remain
-unchanged. The implementation is ready for review within this software/UI scope;
-the requested live scientific-answer chain has not passed.
+unchanged. Post-M18.2b software/UI acceptance passed. Accepted Post-M18.2c
+diagnostics recover the exact provider-authored clarification and reproduce its
+prompt/schema without a provider call. No demonstrated Agent defect or justified
+production fix was found. The outcome is classified as provider-authored semantic
+variability; the live Groq current-result/scientific-answer chain remains
+unqualified. Agent does not override that semantic decision.
 
 ## Post-M18.1 — Typed Turn Admission Simplification
 

@@ -87,8 +87,7 @@ Existing context bounds still apply; broad biology and universal live-provider
 intent accuracy are not qualified by this work.
 
 Planner, semantic compiler, preflight/runtime, Registry, scientific tools,
-authority/evidence owners, EpiZoo and M17.2 are unchanged. This record authorizes
-no commit or push.
+authority/evidence owners, EpiZoo and M17.2 are unchanged.
 
 ## Focused validation and provider limitation
 
@@ -151,7 +150,7 @@ Credentials come from the existing Conda `agent` environment, with only presence
 checked; no environment configuration or plaintext credential file is created.
 Credentials are excluded from the browser environment and diagnostic records.
 
-## Native rich-UI acceptance and review status
+## Native rich-UI acceptance and closeout
 
 A separate strictly read-only native Firefox check reopens preserved Session
 `528a944d-2b4c-48f6-8dd1-2efbe81e2f36` and its accepted inspection. All **12
@@ -177,11 +176,23 @@ logs, projections and screenshots stay outside Git under
 `/tmp/agent-post-m18.2b.x46kavlm/`; the live record is in `browser-final/` and
 the successful rich-UI record is in `browser-read-only-smoke-corrected/`.
 
-Post-M18.2b is **ready for software/UI review**, with the live-provider limitation
-above. The requested live scientific-answer chain has not passed. No additional
-scientific capability, authority, language guessing, execute-and-explain, upload,
-framework, full repository regression, commit or push is introduced.
+Post-M18.2b **software/UI acceptance passed**. The safe supplied-input and
+result-context projections are accepted. The reviewed 12-file implementation was
+committed and pushed as `854c895a07484167edfc796ad90a35c2c2e4054d`
+(`Improve conversational context and chat UI`). Its closeout checks passed,
+including `git diff --check`, matching local/remote refs and unchanged evals.
+The configured credential was absent from all owned diagnostic artifacts.
 
-Final `git diff --check` passes. All changes remain unstaged. Local `main`, local
-`origin/main` and remote `main` still match the baseline SHA. A final scan confirms
-the configured credential is absent from all owned diagnostic artifacts.
+The accepted Post-M18.2c diagnostic recovered Groq's exact authored
+`clarify / ambiguous_subject` response. Current production code reconstructed
+the historical prompt bytes and schema content with matching SDK request hashes.
+There was one supplied input, no accepted result or subject candidates, and no
+deterministic conversion of another decision into this clarification. No new
+provider call, scientific execution, Planner/compiler/runtime invocation or real
+Session mutation occurred during that diagnostic.
+
+Post-M18.2c found **no demonstrated Agent defect** and justified no production
+fix. The outcome is classified as **provider-authored semantic variability**.
+The live Groq current-result/scientific-answer chain remains **unqualified**;
+the software/UI acceptance does not accept that live chain. No semantic override,
+language guessing, execute-and-explain, upload or frontend framework is added.

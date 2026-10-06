@@ -682,6 +682,11 @@ Revision/output identities. Distinct scientific results still require an explici
 choice or clarification. Input descriptions contain registered expectations and
 shallow types, never supplied values, paths or a scientific-readiness claim.
 See [Post-M18.2b context and chat-first UI](docs/post-m18.2b-conversational-context-chat-ui.md).
+Software/UI acceptance and the safe supplied-input/result-context projections
+are accepted. The live Groq current-result/scientific-answer chain remains
+unqualified because of provider-authored semantic variability. Accepted
+Post-M18.2c diagnostics found no demonstrated Agent defect or justified production
+fix; Agent does not override the provider's semantic choice.
 
 The scientific interface retains explicit revision switching and continuation,
 accepted evidence/provenance and reviewed detail, safe report/PNG access, and

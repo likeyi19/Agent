@@ -171,6 +171,68 @@ def test_provider_cannot_replace_claim_values_or_subjects(app, monkeypatch, atta
     assert response.status == 'unavailable' and response.scientific is None
 
 
+def nnz_response(value, text):
+    claim = next(c['claim_id'] for c in value['evidence']['claims'] if c['field'] == 'nnz')
+    return dict(support='supported', paragraphs=[dict(parts=[
+        dict(kind='claim', id=claim), dict(kind='text', text=text)])])
+
+
+@pytest.mark.parametrize('term', ['nonzero', 'non-zero', 'non\u2010zero', 'non\u2011zero', 'NON-ZERO'])
+def test_nonzero_metric_term_preserves_bound_value_and_prose(app, monkeypatch, term):
+    rid = accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823))[0]
+    phrase = f'The metric counts {term} entries.'
+    model = Model(question(), response=lambda value: nnz_response(value, phrase))
+    response = ask(forbid_work(app, monkeypatch), 'metric', 'Explain the nonzero entry count.', model)
+    assert response.status == 'answered', response
+    claim, = response.scientific.claims
+    assert claim.field == 'nnz' and claim.value == 11535823
+    assert claim.source['revision_id'] == rid
+    assert claim.source['pointer'] == '/steps/0/facts/nnz'
+    assert response.scientific.explanation.endswith(phrase)
+
+
+@pytest.mark.parametrize('unbound', [
+    'the matrix contains zero cells',
+    'the matrix contains ZERO cells',
+    'there are ninety nine cells',
+    'there are 999 cells',
+    'there are twenty-one cells',
+    'there are twenty\u2011one cells',
+    'non-one',
+    'xnon-zero',
+    '_non-zero',
+    'non-zero123',
+    'non zero',
+    'non\u2014zero',
+    '/private/input',
+    'https://example.org/data',
+    'csr',
+])
+def test_nonzero_metric_term_keeps_unbound_literals_rejected(app, monkeypatch, unbound):
+    accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823, x_storage_type='csr'))
+    model = Model(question(), response=lambda value: nnz_response(value, f'non-zero entries; {unbound}'))
+    response = ask(forbid_work(app, monkeypatch), 'invalid', 'Explain the nonzero entry count.', model)
+    assert response.status == 'unavailable' and response.scientific is None
+
+
+@pytest.mark.parametrize('hyphen', ['-', '\u2010', '\u2011'])
+@pytest.mark.parametrize('separator', ['adjacent_text', 'claim', 'meaning'])
+def test_nonzero_metric_term_cannot_span_parts(app, monkeypatch, hyphen, separator):
+    accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823))
+    def split(value):
+        result = nnz_response(value, f'non{hyphen}')
+        parts = result['paragraphs'][0]['parts']
+        if separator == 'claim':
+            parts.append(dict(parts[0]))
+        elif separator == 'meaning':
+            parts.append(dict(kind='meaning', id=next(iter(value['evidence']['meanings']))))
+        parts.append(dict(kind='text', text='zero cells'))
+        return result
+    response = ask(forbid_work(app, monkeypatch), 'split', 'Explain the nonzero entry count.',
+                   Model(question(), response=split))
+    assert response.status == 'unavailable' and response.scientific is None
+
+
 def test_reordered_completions_require_explicit_predecessor(app, monkeypatch):
     annotation(app)
     app = forbid_work(app,monkeypatch)

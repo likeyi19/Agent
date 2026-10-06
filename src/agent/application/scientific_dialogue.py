@@ -550,7 +550,11 @@ def render_response(result, public, claims):
                 raise ValueError('Unknown evidence reference.')
         remainder = ''.join(prose)
         if len(remainder) > 2000: raise ValueError('Invalid prose size.')
-        if re.search(r'[0-9{}]|https?://|/[A-Za-z]|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', remainder, re.I):
+        # Recognize hyphenated "nonzero" only within a text part, so dropping
+        # evidence parts cannot manufacture the lexeme. Render original prose.
+        literal_text = ''.join(re.sub(r'\bnon[-\u2010\u2011]zero\b', 'nonzero', text, flags=re.I)
+                               for text in prose)
+        if re.search(r'[0-9{}]|https?://|/[A-Za-z]|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', literal_text, re.I):
             raise ValueError('Unbound factual literal.')
         def strings(value):
             if isinstance(value, str):

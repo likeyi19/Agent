@@ -203,10 +203,7 @@ def resolve_subject(reference, candidates):
 
 
 def admit(sessions, interaction, question, *, evidence_set=False):
-    from .dialogue_execution import is_execution_command
     from .turn_decisions import relation_from_language, resolve_relation
-    if is_execution_command(interaction.utterance):
-        raise IntentError('requires_execution')
     captured = interaction.snapshot['dialogue']
     state = sessions.load(sessions._interaction_session_id)
     previous = next((i for i in state.interactions if i.turn_id == captured['predecessor']), None)

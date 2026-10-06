@@ -135,8 +135,6 @@ def validate_admitted(state, interaction, preceding):
 
 
 def admit(sessions, interaction, question):
-    from .dialogue_execution import is_execution_command
-    if is_execution_command(interaction.utterance): raise IntentError('requires_execution')
     state = sessions.load(sessions._interaction_session_id)
     captured = interaction.snapshot['dialogue']
     prior = next((i for i in state.interactions if i.turn_id == captured['predecessor']), None)

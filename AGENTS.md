@@ -49,6 +49,28 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Post-M18.1 — Typed Turn Admission Simplification
+
+[Post-M18.1](docs/post-m18.1-typed-turn-admission.md) removes three generic
+linguistic vetoes from new-science execution, scientific-answer admission and
+guidance-answer admission. The typed interpreter decision owns generic language
+intent. Registered targets, exact references, strict decision mechanics,
+scientific contracts and evidence checks remain authoritative. A deliberately
+wrong typed Execute is no longer rejected solely by a command-verb check;
+provider intent accuracy requires separate qualification.
+
+The shared command predicate remains for M17.2 candidate-selection evidence,
+and the generic candidate-bypass guard remains intact. Prompts and decision
+schemas are unchanged. Safe structured-input descriptors and uploads remain
+deferred. M18 stays the closed accepted baseline at
+`c01a076430e896cbc3a95389c2fe932c0c9f6d2d`; this is a separate follow-up.
+Software acceptance passes **221 focused checks** and one relevant
+application/dialogue regression of **492 tests in 584.66 seconds**, exit 0. An
+isolated scripted R2 reaches admission with zero planning/science and no
+Runs/Revisions. Existing evals, real web state and operator configuration remain
+unchanged. Implementation is ready for review; changes are unstaged. No commit
+or push is authorized by this record.
+
 ## Milestone 18.5 — Real interactive end-to-end acceptance
 
 [M18.5](docs/m18.5-real-interactive-acceptance.md) validates the actual Firefox

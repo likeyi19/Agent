@@ -86,6 +86,27 @@ def test_general_guidance_exact_references_and_no_science(app, monkeypatch):
     assert 'claims' not in payload and 'catalog_sha256' in payload
 
 
+@pytest.mark.parametrize('utterance', [
+    'Inspect useful analysis options for cluster 3.',
+    'Compute a recommendation for cluster 3 using the accepted evidence.',
+])
+def test_command_like_guidance_keeps_exact_evidence_and_subject(app, monkeypatch, utterance):
+    rid = annotation(app)
+    app = guard(app, monkeypatch)
+    model = Model(decision('r0', subject='3'))
+    result = ask(app, utterance=utterance, model=model)
+    assert result.kind == 'answer' and result.status == 'answered'
+    candidate, = result.guidance.candidates
+    assert candidate.reference['targets'][0]['revision_id'] == rid
+    assert candidate.reference['targets'][0]['subject'] == '3'
+    assert candidate.explanation.claims[0].subject == '3'
+    assert model.calls[-1]['context']['evidence']['targets'][0]['subject'] == '3'
+    state = app.sessions.load('session')
+    assert state.active_revision_id == rid and state.generation == 1
+    assert state.interactions[-1].admitted['intent'] == 'guidance'
+    assert len(model.calls) == 2
+
+
 def test_objective_subject_and_followup_restart_stable_candidate(app, monkeypatch):
     annotation(app)
     app = guard(app, monkeypatch)
@@ -123,8 +144,10 @@ def test_heterogeneous_context_is_not_comparison(app, monkeypatch):
 
 @pytest.mark.parametrize('choice,text', [
     (decision('r99'), 'What next?'),
+    (decision('r99'), 'Inspect possible next analyses.'),
     (decision('r0',subject='99'), 'What about cluster 99 next?'),
     (decision('r0',subject='3'), 'What about cluster 7 next?'),
+    (decision('r0',subject='3'), 'Compute a recommendation for cluster 7.'),
     (decision('r0','r0'), 'What next?'),
     (decision(candidate='first option'), 'What next?'),
 ])
@@ -269,12 +292,13 @@ def test_navigation_during_generation_marks_captured_result_historical(app,monke
     assert app.sessions.load('session').active_revision_id==old
 
 
-def test_missing_and_changed_evidence_fail_before_generation(app,monkeypatch):
+@pytest.mark.parametrize('utterance', ['What should I analyze next?', 'Inspect possible next analyses.'])
+def test_missing_and_changed_evidence_fail_before_generation(app,monkeypatch,utterance):
     _,path,_=accepted(app,'inspect_scATAC')
     app=guard(app,monkeypatch)
     path.unlink()
     model=Model()
-    result=ask(app,model=model)
+    result=ask(app,utterance=utterance,model=model)
     assert result.status=='clarification' and len(model.calls)==1
 
 

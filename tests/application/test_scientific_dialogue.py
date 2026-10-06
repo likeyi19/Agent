@@ -248,19 +248,53 @@ def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path, mini
     assert view.status == 'available'
 
 
-def test_question_cannot_be_misrouted_as_new_execution(app, monkeypatch):
-    annotation(app)
+def test_question_uses_typed_scientific_answer_without_execution(app, monkeypatch):
+    rid = annotation(app)
     app = forbid_work(app,monkeypatch)
-    model = Model(dict(kind='execute',base='current',operation='plan',target='run_replicate_differential_accessibility',delta=None))
-    result = ask(app, 'q', 'What does this result show?', model)
-    assert result.kind == 'clarify'
+    model = Model(question(subject='3'), ['primary_annotation'])
+    result = ask(app, 'q', 'What does cluster 3 show?', model)
+    assert result.kind == 'answer' and result.status == 'answered'
+    assert result.scientific.claims[0].value == 'CD8 T'
+    assert result.scientific.claims[0].source['revision_id'] == rid
+    assert len(model.calls) == 2
 
 
-def test_new_science_cannot_be_misrouted_as_result_interpretation(app, monkeypatch):
+@pytest.mark.parametrize('utterance', [
+    'Compute an explanation of the accepted result for cluster 3.',
+    'Inspect what the accepted result establishes for cluster 3.',
+])
+def test_command_like_scientific_answer_keeps_exact_target_and_subject(app, monkeypatch, utterance):
+    rid = annotation(app)
+    app = forbid_work(app, monkeypatch)
+    model = Model(question(subject='3'), ['primary_annotation'])
+    result = ask(app, 'science', utterance, model)
+    assert result.kind == 'answer' and result.status == 'answered'
+    claim, = result.scientific.claims
+    assert claim.subject == '3' and claim.value == 'CD8 T'
+    assert claim.source['revision_id'] == rid
+    assert model.calls[-1]['evidence']['targets'][0]['subject'] == '3'
+    state = app.sessions.load('session')
+    assert state.active_revision_id == rid and state.generation == 1
+    assert state.interactions[-1].admitted['intent'] == 'scientific'
+    assert len(model.calls) == 2
+
+
+def test_command_like_scientific_answer_cannot_substitute_subject(app, monkeypatch):
     annotation(app)
-    model = Model(question())
-    result = ask(forbid_work(app,monkeypatch),'science','Compute differential accessibility.',model)
-    assert result.clarification.reason == 'requires_execution'
+    model = Model(question(subject='7'), ['primary_annotation'])
+    result = ask(forbid_work(app, monkeypatch), 'wrong-subject',
+        'Compute an explanation of the accepted result for cluster 3.', model)
+    assert result.status == 'clarification' and result.clarification.reason == 'ambiguous_subject'
+    assert len(model.calls) == 1
+
+
+def test_command_like_scientific_answer_requires_accepted_evidence(app, monkeypatch):
+    _, path, _ = accepted(app, 'inspect_scATAC')
+    path.unlink()
+    model = Model(question(), ['n_cells'])
+    result = ask(forbid_work(app, monkeypatch), 'missing-evidence',
+        'Inspect what the accepted result establishes.', model)
+    assert result.status == 'unavailable' and result.scientific is None
     assert len(model.calls) == 1
 
 

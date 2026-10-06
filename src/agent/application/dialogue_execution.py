@@ -16,8 +16,8 @@ from .turn_decisions import IntentError, _object, _shape
 
 
 def is_execution_command(utterance):
-    # An execution route requires an explicit command, not a result question.
-    # No tool/parameter/step is inferred from this command-language check.
+    # Retained only for M17.2 candidate command evidence. Generic admission
+    # follows the typed interpreter decision without classifying language again.
     command = re.sub(r'^(?:please\s+|(?:can|could|would) you\s+)', '', utterance.strip(), flags=re.I)
     return bool(re.match(r'^(?:run|compute|perform|test|reannotate|annotate|inspect|build|prepare|evaluate|adapt|transfer|select)\b', command, re.I))
 
@@ -25,8 +25,6 @@ def is_execution_command(utterance):
 def admit(sessions, interaction, decision, inputs):
     if (decision.base != 'current' or decision.delta is not None
             or decision.target not in sessions._application.registry.names()):
-        raise IntentError('unsupported_intent')
-    if not is_execution_command(interaction.utterance):
         raise IntentError('unsupported_intent')
     values = {} if inputs is None else _serialize(freeze_json_mapping(inputs, 'execution_inputs'))
     return dict(kind='execute', operation='plan', tool=decision.target, revision_id=interaction.base_revision_id,

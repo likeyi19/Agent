@@ -76,7 +76,6 @@ def test_minimal_scientific_wire_preserves_durable_identity_and_followup(app, mo
 
 @pytest.mark.parametrize('wire,utterance', [
     (dict(kind='execute_plan',target='invented_tool'), 'Run invented_tool.'),
-    (dict(kind='execute_plan',target='inspect_scATAC'), 'What does this result show?'),
     (dict(kind='answer_scientific',target=dict(output='r99',subject=None),comparison=None,focus='question'), 'What does this result show?'),
     (dict(kind='answer_scientific',target=dict(output='r0',subject='99'),comparison=None,focus='question'), 'What does cluster 99 show?'),
 ])

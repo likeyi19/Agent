@@ -666,6 +666,8 @@ The browser polls durable turn state and restores exact stored responses after
 refresh. Provider credentials and scientific input paths remain server-side.
 See [M18.3 configuration, API and acceptance](docs/m18.3-basic-web-application.md)
 for the operator JSON format, launch options and recovery limits.
+See [Post-M18.1 typed turn admission](docs/post-m18.1-typed-turn-admission.md)
+for the current boundary between interpreted intent and deterministic admission.
 
 The rich scientific interface adds a separate revision/history panel, explicit
 revision switching and continuation, accepted evidence/provenance and reviewed

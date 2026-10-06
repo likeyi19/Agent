@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import json
 
 from agent.schemas.orchestration import _JsonModel, freeze_json_mapping
+from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource
 
 
 MAX_IDENTIFIER_LENGTH = 256
@@ -81,10 +82,26 @@ def _clarification(value):
 
 
 def _scientific(value):
-    _shape(value, ('support', 'limitations', 'evidence_scope'), 'scientific presentation')
+    legacy = {'support', 'limitations', 'evidence_scope'}
+    richer = legacy | {'targets'}
+    if not isinstance(value, Mapping) or set(value) not in (legacy, richer):
+        raise ValueError('Invalid interactive scientific presentation fields.')
     _support(value['support'])
     _strings(value['limitations'], 'scientific limitations')
     _identifier(value['evidence_scope'], 'evidence_scope')
+    if 'targets' in value:
+        targets = value['targets']
+        if not isinstance(targets, (tuple, list)) or len(targets) > 64:
+            raise ValueError('Invalid scientific presentation targets.')
+        identities = []
+        for target in targets:
+            _shape(target, ('revision_id', 'output_name', 'subject'), 'scientific target')
+            _identifier(target['revision_id'], 'target revision')
+            _identifier(target['output_name'], 'target output')
+            _optional_identifier(target['subject'], 'target subject')
+            identities.append((target['revision_id'], target['output_name'], target['subject']))
+        if len(set(identities)) != len(identities):
+            raise ValueError('Duplicate scientific presentation target.')
 
 
 def _guidance(value):
@@ -94,8 +111,10 @@ def _guidance(value):
     if not isinstance(candidates, (list, tuple)) or len(candidates) > 4:
         raise ValueError('Invalid interactive guidance candidates.')
     for item in candidates:
-        _shape(item, ('candidate_id', 'origin_turn_id', 'option', 'capability',
-                      'text', 'support', 'limitations'), 'guidance candidate')
+        legacy = {'candidate_id', 'origin_turn_id', 'option', 'capability', 'text', 'support', 'limitations'}
+        richer = legacy | {'base_revision_id', 'readiness'}
+        if not isinstance(item, Mapping) or set(item) not in (legacy, richer):
+            raise ValueError('Invalid interactive guidance candidate fields.')
         for key in ('candidate_id', 'origin_turn_id', 'capability'):
             _identifier(item[key], key)
         if type(item['option']) is not int or not 1 <= item['option'] <= 4:
@@ -103,6 +122,19 @@ def _guidance(value):
         _text(item['text'], 'candidate text', MAX_PRESENTATION_LENGTH, empty=True)
         _support(item['support'])
         _strings(item['limitations'], 'candidate limitations')
+        if set(item) == richer:
+            _optional_identifier(item['base_revision_id'], 'candidate base revision')
+            readiness = item['readiness']
+            _shape(readiness, ('capability_registered', 'readiness', 'request_scope',
+                'accepted_evidence_handles', 'required_ports_without_supplied_request_source',
+                'required_scientific_parameters', 'explicit_request_source_choices'), 'candidate readiness')
+            if (readiness['capability_registered'] is not True
+                    or readiness['readiness'] != 'not_fully_checked'
+                    or readiness['request_scope'] != 'no_execution_inputs_bound'):
+                raise ValueError('Invalid persisted candidate readiness.')
+            for name in ('accepted_evidence_handles', 'required_ports_without_supplied_request_source',
+                         'required_scientific_parameters', 'explicit_request_source_choices'):
+                _strings(readiness[name], name, maximum=128)
     if (len({item['candidate_id'] for item in candidates}) != len(candidates)
             or len({item['option'] for item in candidates}) != len(candidates)):
         raise ValueError('Duplicate interactive guidance candidate.')
@@ -228,13 +260,14 @@ class TurnView(_JsonModel):
     error: ClientError | None = None
     steps: tuple[StepView, ...] = ()
     state_revision: int | None = None
+    base_revision_id: str | None = None
 
     def __post_init__(self):
         _identifier(self.session_id, 'session_id')
         _identifier(self.turn_id, 'turn_id')
         _text(self.utterance, 'utterance', MAX_UTTERANCE_LENGTH, empty=True)
         _natural(self.base_generation, 'base_generation')
-        for name in ('profile_id', 'run_id', 'revision_id'):
+        for name in ('profile_id', 'run_id', 'revision_id', 'base_revision_id'):
             _optional_identifier(getattr(self, name), name)
         _text(self.status, 'turn status', 64)
         if self.response is not None and not isinstance(self.response, PresentedResponse):
@@ -253,6 +286,15 @@ class RevisionView(_JsonModel):
     turn_id: str
     is_active: bool
     outputs: tuple[str, ...] = ()
+    run_id: str | None = None
+    base_generation: int | None = None
+    session_generation: int | None = None
+    status: str | None = None
+    retained_outputs: tuple[str, ...] = ()
+    result: PresentedResponse | None = None
+    steps: tuple[StepView, ...] = ()
+    artifacts: tuple[ArtifactHandle, ...] = ()
+    evidence_outputs: tuple[str, ...] = ()
 
     def __post_init__(self):
         _identifier(self.revision_id, 'revision_id')
@@ -265,6 +307,26 @@ class RevisionView(_JsonModel):
             _identifier(name, 'output name')
         if len(set(self.outputs)) != len(self.outputs):
             raise ValueError('Duplicate interactive revision output name.')
+        _optional_identifier(self.run_id, 'run_id')
+        for name in ('base_generation', 'session_generation'):
+            if getattr(self, name) is not None:
+                _natural(getattr(self, name), name)
+        if self.status is not None:
+            _identifier(self.status, 'revision status')
+        for name in ('retained_outputs', 'evidence_outputs'):
+            values = getattr(self, name)
+            if type(values) is not tuple or len(values) > MAX_HISTORY_ITEMS or len(set(values)) != len(values):
+                raise ValueError('Invalid interactive revision output inventory.')
+            for value in values:
+                _identifier(value, name)
+            if set(values) - set(self.outputs):
+                raise ValueError('Revision inventory references an unselected output.')
+        if self.result is not None and not isinstance(self.result, PresentedResponse):
+            raise TypeError('Invalid interactive revision presentation.')
+        _collection(self.steps, StepView, 'step_id', 'steps')
+        _collection(self.artifacts, ArtifactHandle, 'handle', 'artifacts')
+        if any(a.revision_id != self.revision_id or a.turn_id != self.turn_id for a in self.artifacts):
+            raise ValueError('Artifact inventory belongs to a different revision.')
 
 
 @dataclass(frozen=True)
@@ -308,5 +370,72 @@ class ArtifactHandle(_JsonModel):
             raise ValueError('Invalid interactive artifact digest.')
 
 
-__all__ = ['ArtifactHandle', 'ClientError', 'ModelChoice', 'PresentedResponse',
+@dataclass(frozen=True)
+class EvidenceView(DialogueEvidence):
+    """The existing accepted evidence contract with client-safe whole fields.
+
+    Path/configuration-bearing values are explicitly omitted by the facade.
+    Source anchors, coverage, detail provenance and scientific limitations retain
+    their existing meanings; this adds no evidence authority or reconstruction.
+    """
+    supported_details: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        for name in ('session_id', 'revision_id', 'output_name', 'evidence_scope'):
+            _identifier(getattr(self, name), name)
+        if self.status not in ('available', 'unavailable', 'unsupported'):
+            raise ValueError('Invalid interactive evidence availability.')
+        if self.generation is not None:
+            _natural(self.generation, 'generation')
+        if self.is_active is not None:
+            _boolean(self.is_active, 'is_active')
+        if self.source is not None and not isinstance(self.source, EvidenceSource):
+            raise TypeError('Invalid interactive evidence source.')
+        for name in ('facts', 'coverage', 'detail'):
+            _collection(getattr(self, name), EvidenceFact, 'field', name)
+        _strings(self.unselected_fields, 'unselected_fields', maximum=128)
+        _strings(self.limitations, 'limitations', maximum=128)
+        if (type(self.supported_details) is not tuple or len(self.supported_details) > 2
+                or any(s not in ('annotation_rationale', 'length_histogram') for s in self.supported_details)):
+            raise ValueError('Invalid supported evidence detail inventory.')
+        if len(json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False).encode('utf-8')) > 131_072:
+            raise ValueError('Interactive evidence exceeds the client byte limit.')
+
+
+@dataclass(frozen=True)
+class ArtifactContent:
+    """Bounded server-controlled delivery, with distinct source/delivery digests."""
+    reference: ArtifactHandle
+    content_type: str
+    filename: str
+    data: bytes
+    content_sha256: str
+    presentation: str
+    limitations: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not isinstance(self.reference, ArtifactHandle):
+            raise TypeError('Invalid artifact delivery reference.')
+        if self.content_type not in ('text/plain; charset=utf-8', 'image/png'):
+            raise ValueError('Unsupported artifact delivery content type.')
+        if (type(self.filename) is not str or not self.filename.startswith('agent-')
+                or len(self.filename) > 128 or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-.' for c in self.filename)):
+            raise ValueError('Invalid server-controlled artifact filename.')
+        if type(self.data) is not bytes or len(self.data) > 16 * 1024 * 1024:
+            raise ValueError('Artifact delivery exceeds the byte bound.')
+        if self.presentation not in ('client_safe_report_projection', 'accepted_png'):
+            raise ValueError('Invalid artifact presentation kind.')
+        expected = ('analysis_figure', 'image/png') if self.presentation == 'accepted_png' else (
+            'analysis_report', 'text/plain; charset=utf-8')
+        if (self.reference.artifact_type, self.content_type) != expected:
+            raise ValueError('Artifact delivery type and presentation disagree.')
+        import hashlib
+        if hashlib.sha256(self.data).hexdigest() != self.content_sha256:
+            raise ValueError('Artifact delivery digest mismatch.')
+        if self.presentation == 'accepted_png' and self.content_sha256 != self.reference.sha256:
+            raise ValueError('Accepted figure delivery changed its pinned bytes.')
+        _strings(self.limitations, 'artifact limitations', maximum=32)
+
+
+__all__ = ['ArtifactHandle', 'ArtifactContent', 'EvidenceView', 'ClientError', 'ModelChoice', 'PresentedResponse',
            'RevisionView', 'SessionView', 'StepView', 'TurnView']

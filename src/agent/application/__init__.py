@@ -28,13 +28,13 @@ from .turn_decisions import GuidanceQuestion
 from .interactive import InteractiveAgentApplication, InteractiveBoundaryError
 from .interactive_schemas import (
     ModelChoice, ClientError, PresentedResponse, TurnView, StepView,
-    RevisionView, SessionView, ArtifactHandle,
+    RevisionView, SessionView, ArtifactHandle, EvidenceView, ArtifactContent,
 )
 
 __all__ = [
     "InteractiveAgentApplication", "InteractiveBoundaryError", "ModelChoice",
     "ClientError", "PresentedResponse", "TurnView", "StepView", "RevisionView",
-    "SessionView", "ArtifactHandle",
+    "SessionView", "ArtifactHandle", "EvidenceView", "ArtifactContent",
     "GuidanceQuestion", "GuidanceCandidate", "GuidanceResponse",
     "ScientificQuestion", "ScientificTarget", "ScientificClaim", "ScientificResponse",
     "DialogueEvidence", "EvidenceFact", "EvidenceSource", "DetailRequest",

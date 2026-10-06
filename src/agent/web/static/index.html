@@ -46,6 +46,7 @@
 
     <p id="client-error" class="error-banner" role="alert" hidden></p>
 
+    <div class="research-layout">
     <section class="conversation panel" aria-labelledby="conversation-heading">
       <div class="section-heading">
         <h2 id="conversation-heading">Conversation</h2>
@@ -55,6 +56,56 @@
         <p class="empty-history">Create a session or reopen one to begin.</p>
       </div>
     </section>
+    <aside class="scientific-state panel" aria-labelledby="scientific-heading">
+      <h2 id="scientific-heading">Scientific state</h2>
+      <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
+      <div id="revision-view" hidden>
+        <p class="small">Viewing <strong id="viewed-revision"></strong></p>
+        <dl id="revision-summary" class="revision-summary"></dl>
+        <div class="revision-actions">
+          <button id="activate-revision" class="secondary" type="button">Switch to this revision</button>
+          <button id="continue-revision" type="button">Continue from here</button>
+        </div>
+        <p class="muted small">Switching changes the active state. Describe the next analysis below to create a child revision.</p>
+        <details id="result-panel">
+          <summary>Accepted result</summary>
+          <p id="result-presentation" class="message-text small"></p>
+          <h3>Retained output names</h3>
+          <ul id="revision-outputs" class="compact-list"></ul>
+        </details>
+        <details id="artifact-panel">
+          <summary>Reports &amp; figures</summary>
+          <ul id="artifact-inventory" class="compact-list"></ul>
+          <div id="artifact-viewer" hidden>
+            <h3 id="artifact-title"></h3>
+            <pre id="report-content" class="report-content" hidden></pre>
+            <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
+            <p id="artifact-view-error" class="turn-error" hidden></p>
+          </div>
+        </details>
+        <details id="evidence-panel">
+          <summary>Evidence &amp; provenance</summary>
+          <label for="evidence-output">Accepted output</label>
+          <select id="evidence-output"></select>
+          <button id="load-evidence" class="secondary" type="button">Show evidence</button>
+          <div id="evidence-content"></div>
+          <form id="detail-form" hidden>
+            <h3>Supported detailed evidence</h3>
+            <label for="detail-section">Detail section</label>
+            <select id="detail-section"></select>
+            <label for="detail-subject">Subject, when required</label>
+            <input id="detail-subject" maxlength="128" autocomplete="off" placeholder="Exact subject ID">
+            <label for="detail-limit">Maximum records</label>
+            <input id="detail-limit" type="number" min="1" max="32" value="8" required>
+            <button id="load-detail" class="secondary" type="submit">Show supported detail</button>
+          </form>
+          <div id="detail-content"></div>
+        </details>
+      </div>
+      <h3>Revision history</h3>
+      <ol id="revision-history" class="revision-history"></ol>
+    </aside>
+    </div>
 
     <section class="composer panel" aria-label="Write a request">
       <div class="execution-state" aria-live="polite">

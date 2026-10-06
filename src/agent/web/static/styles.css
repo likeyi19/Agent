@@ -7,13 +7,14 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
-.workspace { max-width: 1080px; margin: 0 auto; padding: 28px 24px 48px; }
+.workspace { max-width: 1320px; margin: 0 auto; padding: 28px 24px 48px; }
 .page-header, .section-heading, .execution-state, .composer-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 .page-header { margin-bottom: 24px; }
 h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -.04em; }
 h2 { margin: 0 0 12px; font-size: 17px; font-weight: 650; }
+h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 650; }
 p { margin: 4px 0 12px; }
 .muted { color: #586b79; }
 .small { font-size: 13px; }
@@ -49,6 +50,37 @@ button:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: defa
 .error-banner { padding: 12px 16px; color: #862e31; background: #fff1f1; border: 1px solid #e8baba; border-radius: 6px; overflow-wrap: anywhere; }
 .section-heading h2 { margin-bottom: 0; }
 .conversation { min-height: 180px; }
+.research-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(310px, 2fr); gap: 18px; align-items: start; }
+.scientific-state { min-width: 0; }
+.revision-summary { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; }
+.revision-summary dt { color: #586b79; }
+.revision-summary dd { margin: 0; overflow-wrap: anywhere; }
+.revision-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.revision-actions button { font-size: 12px; padding: 7px 9px; }
+.scientific-state details { border-top: 1px solid #e2e8ed; padding-top: 10px; margin-top: 12px; }
+summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.scientific-state details > p, .scientific-state details > div, .scientific-state details > label { margin-top: 10px; }
+.scientific-state label { margin-top: 10px; }
+.scientific-state select, .scientific-state input { font-size: 12px; }
+.scientific-state button { margin-top: 8px; }
+.compact-list, .revision-history { padding: 0; list-style: none; font-size: 12px; }
+.compact-list li { margin: 8px 0; overflow-wrap: anywhere; }
+.artifact-actions { display: flex; gap: 12px; align-items: baseline; margin-top: 3px; }
+.artifact-actions a { color: #276b85; }
+.artifact-actions button { font-size: 12px; padding: 4px 8px; }
+.report-content, .evidence-value { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; max-height: 420px; overflow: auto; }
+.report-content { padding: 10px; background: #f4f6f8; border-radius: 6px; }
+.analysis-figure { display: block; max-width: 100%; height: auto; margin-top: 10px; }
+.revision-history li { padding: 10px 0; border-top: 1px solid #edf0f2; }
+.revision-history button { text-align: left; white-space: normal; overflow-wrap: anywhere; background: #fff; color: #36576a; border-color: #bdcbd5; width: 100%; font-size: 12px; }
+.revision-history button[aria-current="true"] { background: #edf4f8; border-color: #36718e; }
+.revision-metadata, .candidate-metadata { display: block; color: #586b79; font-size: 11px; margin-top: 6px; overflow-wrap: anywhere; }
+.guidance { margin-top: 14px; }
+.guidance-candidate { padding: 12px; margin: 10px 0; border: 1px solid #cfdfe8; border-radius: 6px; }
+.guidance-candidate h3 { margin-top: 0; }
+.guidance-candidate p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.guidance-candidate button { font-size: 12px; }
+.guidance-candidate ul { padding-left: 18px; color: #586b79; font-size: 12px; }
 .empty-history { text-align: center; color: #586b79; margin: 36px 0; }
 .turn { padding: 20px 0 0; }
 .turn + .turn { border-top: 1px solid #edf0f2; margin-top: 20px; }
@@ -73,4 +105,7 @@ button:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: defa
   .composer-actions { align-items: flex-start; flex-direction: column; }
   .composer-actions > div { align-self: flex-end; }
   .session-summary { grid-template-columns: 106px minmax(0, 1fr); }
+}
+@media (max-width: 960px) {
+  .research-layout { grid-template-columns: 1fr; gap: 0; }
 }

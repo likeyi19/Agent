@@ -6,8 +6,11 @@ in a server worker and poll the existing durable checkpoints.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import asdict, fields as dataclass_fields, replace
 import hashlib
+import io
+import json
 from pathlib import Path
 from types import MappingProxyType
 
@@ -19,7 +22,7 @@ from agent.schemas.orchestration import _serialize, freeze_json_mapping
 
 from .interactive_schemas import (
     ArtifactHandle, ClientError, ModelChoice, PresentedResponse, RevisionView,
-    SessionView, StepView, TurnView,
+    SessionView, StepView, TurnView, EvidenceView, ArtifactContent,
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
@@ -80,7 +83,24 @@ def _inputs(values):
         raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
 
-def _present(outcome, state=None):
+def _unsafe_fact_field(field):
+    return field == 'path' or field.endswith('_path') or field in {
+        'workspace_root', 'authority_payload', 'api_key', 'credentials',
+        'provider_endpoint', 'base_url', 'provider_prompt',
+    }
+
+
+def _unsafe_fact_value(value):
+    """Omit a whole unsafe field; never rewrite or reinterpret scientific values."""
+    if isinstance(value, Mapping):
+        return any(_unsafe_fact_field(k) or _unsafe_fact_value(child) for k, child in value.items())
+    if isinstance(value, (tuple, list)):
+        return any(_unsafe_fact_value(child) for child in value)
+    return isinstance(value, str) and (value.startswith(('/', '~/', 'file://'))
+        or len(value) > 2 and value[0].isalpha() and value[1:3] in (':\\', ':/'))
+
+
+def _present(outcome, state=None, *, turn_id=None):
     """Store the displayed response, not a second copy of scientific evidence."""
     if outcome.presentation is not None:
         return outcome.presentation
@@ -89,8 +109,20 @@ def _present(outcome, state=None):
     scientific = None
     if outcome.scientific is not None:
         value = outcome.scientific
+        targets = tuple(dict.fromkeys((c.source['revision_id'], c.source['output_locator']['name'], c.subject)
+            for c in value.claims))
+        interaction = None if state is None else next((i for i in state.interactions if i.turn_id == turn_id), None)
+        admitted = None if interaction is None else interaction.admitted
+        if admitted is not None and admitted.get('intent') == 'scientific':
+            # A response can use no claim slots while still addressing an exact
+            # admitted historical target. Attribution comes from admission,
+            # never from prose or the currently active revision.
+            targets = tuple(dict.fromkeys((admitted[k]['revision_id'], admitted[k]['output_name'],
+                admitted[k]['subject']) for k in ('target', 'comparison') if admitted.get(k) is not None))
         scientific = dict(support=value.support, limitations=value.limitations,
-                          evidence_scope=value.evidence_scope)
+                          evidence_scope=value.evidence_scope,
+                          targets=[dict(revision_id=revision, output_name=output, subject=subject)
+                                   for revision, output, subject in targets])
     guidance = None
     if outcome.guidance is not None:
         def ordinal(candidate, fallback):
@@ -101,6 +133,8 @@ def _present(outcome, state=None):
                 if r['candidate_id'] == candidate.reference['candidate_id']), fallback)
         guidance = dict(candidates=[dict(candidate_id=c.reference['candidate_id'],
             origin_turn_id=c.reference['origin_turn_id'], option=ordinal(c, n + 1),
+            **(dict(base_revision_id=c.reference['base_revision_id'], readiness=_serialize(c.readiness))
+               if 'base_revision_id' in c.reference else {}),
             capability=c.reference['capability'], text=c.explanation.explanation,
             support=c.explanation.support, limitations=c.explanation.limitations)
             for n, c in enumerate(outcome.guidance.candidates)],
@@ -202,6 +236,90 @@ class InteractiveAgentApplication:
         except (ValueError, TypeError, KeyError) as exc:
             raise _fail('INTERACTIVE_SESSION_INVALID') from exc
 
+    def revision(self, session_id, revision_id):
+        """Project one exact accepted revision, never reconstruct its science."""
+        _identifier(revision_id)
+        state = self._load(session_id)
+        revision = next((r for r in state.revisions if r.revision_id == revision_id), None)
+        if revision is None:
+            raise _fail('INTERACTIVE_REFERENCE_INVALID')
+        try:
+            self._application.sessions._validate_revision(revision)
+            turn = state.turn(revision.turn_id)
+            view = self._view(state, revision.turn_id)
+            return RevisionView(revision.revision_id, revision.parent_revision_id, revision.turn_id,
+                revision.revision_id == state.active_revision_id, tuple(o.name for o in revision.outputs),
+                run_id=revision.run_id, base_generation=turn.base_generation, session_generation=state.generation,
+                status=view.status, retained_outputs=tuple(o.name for o in turn.retained_outputs),
+                result=view.response, steps=view.steps, artifacts=self.artifact_handles(session_id, revision_id),
+                evidence_outputs=tuple(o.name for o in revision.outputs))
+        except InteractiveBoundaryError:
+            raise
+        except (SessionError, ValueError, RuntimeError, OSError) as exc:
+            raise _fail('INTERACTIVE_REFERENCE_INVALID') from exc
+
+    def activate_revision(self, session_id, turn_id, revision_id, *, expected_generation):
+        """Expose existing generation-checked navigation; record no new science."""
+        _identifier(turn_id)
+        _identifier(revision_id)
+        if type(expected_generation) is not int or expected_generation < 0:
+            raise _fail('INTERACTIVE_INPUT_INVALID')
+        self._load(session_id)
+        sessions = self._application.sessions
+        try:
+            with sessions.processing_lease(session_id, turn_id):
+                state = self._load(session_id)
+                if any(i.turn_id == turn_id for i in state.interactions):
+                    raise _fail('INTERACTIVE_TURN_CONFLICT')
+                try:
+                    sessions.switch(session_id, turn_id, revision_id, expected_generation=expected_generation)
+                except SessionConflictError as exc:
+                    latest = self._load(session_id)
+                    existing = any(t.turn_id == turn_id for t in latest.turns)
+                    code = ('INTERACTIVE_GENERATION_CONFLICT' if not existing
+                            and latest.generation != expected_generation else 'INTERACTIVE_TURN_CONFLICT')
+                    raise _fail(code) from exc
+                return self.reopen_session(session_id)
+        except InteractiveBoundaryError:
+            raise
+        except SessionConflictError as exc:
+            raise _fail('INTERACTIVE_OPERATION_ACTIVE') from exc
+        except (SessionError, ValueError, RuntimeError, OSError) as exc:
+            raise _fail('INTERACTIVE_REFERENCE_INVALID') from exc
+
+    def evidence(self, session_id, revision_id, output_name, *, fields=None,
+                 detail_section=None, subject=None, limit=8, candidate=None):
+        """Read the existing accepted evidence/detail owner through a safe view."""
+        _identifier(revision_id)
+        _identifier(output_name)
+        self._load(session_id)
+        from .dialogue_evidence import DetailRequest, DialogueEvidence
+        try:
+            if detail_section is None and (subject is not None or candidate is not None or limit != 8):
+                raise ValueError('Detail operands require an explicit section.')
+            detail = (None if detail_section is None else DetailRequest(detail_section, subject, limit, candidate))
+            original = self._application.sessions.evidence(session_id, revision_id, output_name,
+                fields=fields, detail=detail)
+            values = {f.name: getattr(original, f.name) for f in dataclass_fields(DialogueEvidence)}
+            omitted = False
+            for name in ('facts', 'coverage', 'detail'):
+                safe = []
+                for fact in values[name]:
+                    if fact.status == 'available' and (_unsafe_fact_field(fact.field)
+                            or _unsafe_fact_value(fact.value)):
+                        fact = replace(fact, status='omitted', value=None, reason='client_safe_content_omitted')
+                        omitted = True
+                    safe.append(fact)
+                values[name] = tuple(safe)
+            if omitted:
+                values['limitations'] += ('Path or private configuration fields are explicitly omitted from this client view.',)
+            sections = {'annotate_scATAC_cell_types': ('annotation_rationale',),
+                        'compute_scATAC_qc': ('length_histogram',)}
+            return EvidenceView(**values, supported_details=() if original.source is None
+                else sections.get(original.source.tool_name, ()))
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise _fail('INTERACTIVE_INPUT_INVALID') from exc
+
     def _submission(self, profile, generation, inputs, predecessor):
         return dict(profile_id=profile.profile_id,
             configuration_sha256=digest(dict(profile=asdict(profile),
@@ -297,7 +415,7 @@ class InteractiveAgentApplication:
                         interpreter=model, answerer=model, expected_generation=expected_generation,
                         execution_inputs=inputs, predecessor_turn_id=predecessor_turn_id,
                         submission=submission)
-                    presentation = _present(outcome, self._load(session_id))
+                    presentation = _present(outcome, self._load(session_id), turn_id=turn_id)
                 except SessionConflictError as exc:
                     code = ('INTERACTIVE_GENERATION_CONFLICT'
                         if self._load(session_id).generation != expected_generation
@@ -363,11 +481,16 @@ class InteractiveAgentApplication:
         if response is None and ((interaction is not None and interaction.status in {'answered', 'clarification', 'navigated', 'failed'})
                                 or (turn is not None and turn.status in {'activated','stale','failed','cancelled','planned','clarification'})):
             error = _fail('INTERACTIVE_PRESENTATION_UNAVAILABLE').error if error is None else error
+        if (interaction is None and turn is not None and turn.request_id is None
+                and turn.status == 'activated' and turn.revision_id is not None):
+            # Metadata-only navigation has no assistant wording to regenerate.
+            status, error = 'navigated', None
         if response is not None and response.error is not None:
             error = response.error
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,
+            base_revision_id=turn.base_revision_id if interaction is None else interaction.base_revision_id,
             profile_id=None if interaction is None or interaction.submission is None else interaction.submission.get('profile_id'),
             run_id=run_id, revision_id=None if turn is None else turn.revision_id,
             status=status, response=response, error=error, steps=steps, state_revision=state_revision)
@@ -438,7 +561,8 @@ class InteractiveAgentApplication:
         try:
             self._application.sessions._validate_revision(revision)
             turn = state.turn(revision.turn_id)
-            root = self._application._workspace.run_paths(turn.run_id)
+            workspace = self._application._workspace
+            root = workspace.runs / workspace.run_digest(turn.run_id)
             items = []
             for file in turn.completion_files:
                 path = Path(file.path)
@@ -446,7 +570,7 @@ class InteractiveAgentApplication:
                 # only rendered presentations are offered as downloadable bytes.
                 if path.suffix not in {'.md', '.png'}:
                     continue
-                relative = path.relative_to(root.root)
+                relative = path.relative_to(root)
                 if relative.parts[0] not in {'evidence','visualizations','report'}:
                     raise ValueError('Unowned completion file.')
                 kind = ('analysis_figure' if path.suffix == '.png' else
@@ -461,9 +585,13 @@ class InteractiveAgentApplication:
     def resolve_artifact(self, session_id, revision_id, handle):
         """Validate an exact handle and pinned bytes; return no path or contents.
 
-        Raw reports can contain internal paths. Their delivery belongs to a later
-        transport boundary, rather than this client-safe identity contract.
+        Raw reports can contain internal paths. Supported byte delivery uses
+        ``artifact_content`` with its separate safe presentation contract.
         """
+        return self._read_artifact(session_id, revision_id, handle)[0]
+
+    def _read_artifact(self, session_id, revision_id, handle):
+        _identifier(handle)
         matches = [(h, f) for h, f in self._artifacts(session_id, revision_id) if h.handle == handle]
         if len(matches) != 1:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE')
@@ -473,11 +601,79 @@ class InteractiveAgentApplication:
             self._application._workspace.require_regular_file(path)
             if path.resolve() != path or path.stat().st_size > 16 * 1024 * 1024:
                 raise ValueError('Unsafe presentation file.')
-            data = path.read_bytes()
+            with path.open('rb') as stream:
+                data = stream.read(16 * 1024 * 1024 + 1)
+            if len(data) > 16 * 1024 * 1024:
+                raise ValueError('Presentation size limit.')
             if hashlib.sha256(data).hexdigest() != file.sha256:
                 raise ValueError('Changed presentation bytes.')
-            return reference
+            return reference, data
         except (ValueError, RuntimeError, OSError) as exc:
+            raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
+
+    def artifact_content(self, session_id, revision_id, handle):
+        """Deliver pinned PNG or a labeled safe report projection, never paths.
+
+        Reports retain their original source digest while delivery has its own
+        digest. The report projection reads only the existing accepted evidence
+        owner and adds no scientific claims, report regeneration or verification.
+        """
+        reference, original = self._read_artifact(session_id, revision_id, handle)
+        try:
+            if reference.artifact_type == 'analysis_figure':
+                from PIL import Image
+                if (len(original) < 33 or not original.startswith(b'\x89PNG\r\n\x1a\n')
+                        or original[12:16] != b'IHDR'):
+                    raise ValueError('Unsupported figure content.')
+                width, height = (int.from_bytes(original[start:start + 4], 'big') for start in (16, 20))
+                if not 0 < width * height <= 40_000_000:
+                    raise ValueError('Unsupported figure bounds.')
+                with Image.open(io.BytesIO(original)) as image:
+                    if image.format != 'PNG' or not 0 < image.width * image.height <= 40_000_000:
+                        raise ValueError('Unsupported figure bounds.')
+                    if set(image.info) - {'Software', 'dpi', 'srgb', 'gamma', 'transparency'}:
+                        raise ValueError('Unsupported figure metadata.')
+                    if 'Software' in image.info and image.info['Software'] != 'Agent plotting spec v1':
+                        raise ValueError('Unsupported figure metadata.')
+                    image.verify()
+                return ArtifactContent(reference, 'image/png', f'agent-figure-{handle[:16]}.png',
+                    original, reference.sha256, 'accepted_png',
+                    ('This is the accepted persisted figure, not fresh scientific reconstruction.',))
+            if reference.artifact_type != 'analysis_report':
+                raise ValueError('Unsupported artifact delivery.')
+            revision = self.revision(session_id, revision_id)
+            lines = ['Client-safe report projection', '', f'Revision: {revision_id}',
+                f'Run: {revision.run_id}', f'Turn: {revision.turn_id}',
+                f'Original accepted report SHA-256: {reference.sha256}', '',
+                'This text projects accepted revision output evidence. It is not the original Markdown report.',
+                'No scientific reconstruction or fresh scientific verification was performed.', '']
+            size = sum(len(line.encode('utf-8')) + 1 for line in lines)
+            for output in revision.outputs:
+                start = len(lines)
+                view = self.evidence(session_id, revision_id, output)
+                lines.extend([f'Output: {output}', f'Evidence availability: {view.status}'])
+                if view.reason is not None:
+                    lines.append(f'Availability reason: {view.reason}')
+                if view.source is not None:
+                    lines.extend([f'Tool: {view.source.tool_name}', f'Result contract: {view.source.result_contract}',
+                        f'Evidence SHA-256: {view.source.evidence_sha256}',
+                        'Accepted verification checks: ' + ', '.join(view.source.verification_checks)])
+                for fact in view.facts:
+                    rendered = (json.dumps(_serialize(fact.value), ensure_ascii=False, allow_nan=False)
+                                if fact.status == 'available' else fact.reason or fact.status)
+                    lines.append(f'{fact.field} [{fact.status}]: {rendered}')
+                lines.extend(['Limitations:'] + list(view.limitations) + [''])
+                size += sum(len(line.encode('utf-8')) + 1 for line in lines[start:])
+                if size > 1_048_576:
+                    raise ValueError('Report projection exceeds the byte bound.')
+            data = ('\n'.join(lines) + '\n').encode('utf-8')
+            if len(data) > 1_048_576:
+                raise ValueError('Report projection exceeds the byte bound.')
+            return ArtifactContent(reference, 'text/plain; charset=utf-8', f'agent-report-{handle[:16]}.txt',
+                data, hashlib.sha256(data).hexdigest(), 'client_safe_report_projection',
+                ('The original accepted report is digest-checked but its raw bytes are not delivered.',
+                 'The delivered text is a bounded presentation of existing accepted evidence, not scientific authority.'))
+        except (ValueError, TypeError, RuntimeError, OSError, ImportError, SyntaxError) as exc:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
 
 

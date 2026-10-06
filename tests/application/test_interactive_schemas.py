@@ -112,6 +112,7 @@ def test_client_views_serialize_only_reviewed_fields_and_keep_interruption():
     assert set(serialized['turns'][0]) == {
         'session_id', 'turn_id', 'utterance', 'base_generation', 'profile_id',
         'run_id', 'revision_id', 'status', 'response', 'error', 'steps', 'state_revision',
+        'base_revision_id',
     }
     assert 'liveness' not in json.dumps(serialized) and 'percentage' not in json.dumps(serialized)
 

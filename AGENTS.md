@@ -49,6 +49,26 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Milestone 18.4 — Rich scientific interaction
+
+[M18.4](docs/m18.4-rich-scientific-interaction.md) exposes rich revision views,
+existing generation-checked switching/continuation, accepted evidence and reviewed
+annotation/QC details, pinned artifact delivery, and persisted guidance cards
+through the interactive facade and existing static browser. Guidance clicks issue
+ordinary interpreted selection commands through unchanged M17.2 and the Planner.
+Switching an earlier revision and executing creates an ordinary child; no branch
+object or historical mutation exists. Reads reconstruct no science or history.
+
+New display metadata distinguishes captured base, actual scientific targets and
+created results; historical displays remain exact. Unsafe evidence whole fields
+are explicitly omitted. PNG delivery preserves pinned bytes under closed format
+bounds. Report delivery labels a bounded safe accepted-evidence projection with
+distinct original-report and delivered-content digests; raw Markdown paths are
+withheld. HTTP invokes only facade operations. Planner, scientific authority,
+evidence owners, Registry, scientific algorithms and M17.2 remain unchanged.
+Validation and limitations are in the linked record. Full regression remains
+M18.5 work; this record does not authorize commit or push.
+
 ## Milestone 18.3 — Basic interactive web application
 
 [M18.3](docs/m18.3-basic-web-application.md) exposes the accepted interactive

@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +55,17 @@ class SubmitTurn(_Body):
         return _route_identity(value)
 
 
+class ActivateRevision(_Body):
+    turn_id: StrictStr = Field(min_length=1, max_length=256, pattern=r'^[^/\\]+$')
+    revision_id: StrictStr = Field(min_length=1, max_length=256)
+    expected_generation: StrictInt = Field(ge=0)
+
+    @field_validator('turn_id')
+    @classmethod
+    def route_identity(cls, value):
+        return _route_identity(value)
+
+
 def _route_identity(value):
     if value in {'.', '..'}:
         raise ValueError('URL dot segments cannot identify a session or turn.')
@@ -69,6 +80,7 @@ def _status_code(code):
     return {
         'INTERACTIVE_SESSION_INVALID': 404,
         'INTERACTIVE_REFERENCE_INVALID': 404,
+        'INTERACTIVE_ARTIFACT_UNAVAILABLE': 404,
         'INTERACTIVE_TURN_CONFLICT': 409,
         'INTERACTIVE_GENERATION_CONFLICT': 409,
         'INTERACTIVE_OPERATION_ACTIVE': 409,
@@ -212,7 +224,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if origin is not None and origin != str(request.base_url).rstrip('/'):
                 return _error('WEB_ORIGIN_INVALID', 'Use the same-origin Agent application.', 403)
             content_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
-            if request.url.path.endswith('/turns') or request.url.path == '/api/v1/sessions':
+            if request.url.path.endswith(('/turns', '/activate')) or request.url.path == '/api/v1/sessions':
                 if content_type != 'application/json':
                     return _error('WEB_REQUEST_INVALID', 'Send a valid JSON request.', 415)
                 # Browser input contains text/identities only, never scientific data.
@@ -221,7 +233,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         return response
 
     @app.exception_handler(InteractiveBoundaryError)
@@ -266,6 +278,42 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/sessions/{session_id}')
     def reopen_session(session_id: str):
         return application.reopen_session(session_id).to_dict()
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}')
+    def revision(session_id: str, revision_id: str):
+        return application.revision(session_id, revision_id).to_dict()
+
+    @app.post('/api/v1/sessions/{session_id}/activate')
+    def activate_revision(session_id: str, body: ActivateRevision):
+        return application.activate_revision(session_id, body.turn_id, body.revision_id,
+            expected_generation=body.expected_generation).to_dict()
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/evidence')
+    def evidence(session_id: str, revision_id: str,
+                 output_name: str = Query(min_length=1, max_length=256),
+                 fields: list[str] | None = Query(default=None, max_length=128),
+                 detail_section: str | None = Query(default=None, max_length=128),
+                 subject: str | None = Query(default=None, max_length=128),
+                 limit: int = Query(default=8, ge=1, le=32),
+                 candidate: str | None = Query(default=None, max_length=128)):
+        return application.evidence(session_id, revision_id, output_name,
+            fields=None if fields is None else tuple(fields), detail_section=detail_section,
+            subject=subject, limit=limit, candidate=candidate).to_dict()
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/artifacts')
+    def artifacts(session_id: str, revision_id: str):
+        return {'artifacts': [a.to_dict() for a in application.artifact_handles(session_id, revision_id)]}
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/artifacts/{handle}')
+    def artifact(session_id: str, revision_id: str, handle: str, download: bool = False):
+        content = application.artifact_content(session_id, revision_id, handle)
+        disposition = 'attachment' if download else 'inline'
+        return Response(content=content.data, media_type=content.content_type, headers={
+            'Content-Disposition': f'{disposition}; filename="{content.filename}"',
+            'X-Artifact-Source-SHA256': content.reference.sha256,
+            'X-Artifact-Content-SHA256': content.content_sha256,
+            'X-Artifact-Presentation': content.presentation,
+        })
 
     @app.post('/api/v1/sessions/{session_id}/turns', status_code=202)
     def submit_turn(session_id: str, body: SubmitTurn):

@@ -665,7 +665,16 @@ model and optional operator-configured scientific input set, and submit a reques
 The browser polls durable turn state and restores exact stored responses after
 refresh. Provider credentials and scientific input paths remain server-side.
 See [M18.3 configuration, API and acceptance](docs/m18.3-basic-web-application.md)
-for the operator JSON format, launch options, recovery limits, and M18.4 deferrals.
+for the operator JSON format, launch options and recovery limits.
+
+The rich scientific interface adds a separate revision/history panel, explicit
+revision switching and continuation, accepted evidence/provenance and reviewed
+detail, safe report/PNG access, and persisted guidance cards. Selecting an option
+submits an ordinary interpreted turn through M17.2; it never calls a tool directly.
+Reports are labelled client-safe evidence projections because original Markdown
+can contain server paths. Returning to an earlier revision and executing new work
+creates a normal child; historical revisions remain immutable. See the
+[M18.4 interaction and acceptance record](docs/m18.4-rich-scientific-interaction.md).
 
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.

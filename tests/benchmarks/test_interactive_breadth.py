@@ -171,14 +171,22 @@ def frozen_git(monkeypatch, *, head="a" * 40, ancestor=True, committed="", worki
         if args[0] == "merge-base": return run_breadth.BASELINE if ancestor else "b" * 40
         if args[0] == "ls-tree":
             return "\n".join(("benchmarks/interactive/README.md", "benchmarks/interactive/harness.py",
-                "benchmarks/interactive/scenarios.py", "benchmarks/interactive/candidates.py"))
+                "benchmarks/interactive/scenarios.py", "benchmarks/interactive/candidates.py",
+                "benchmarks/interactive/openrouter.py", "benchmarks/interactive/run_smoke.py",
+                "benchmarks/interactive/run_openrouter_smoke.py"))
         if args == ("diff", "--name-only"): return tracked
         if args == ("diff", "--cached", "--name-only"): return index
         if args[:3] == ("diff", "--name-only", run_breadth.BASELINE):
             assert "src/agent" in args and "benchmarks/planner" in args
             assert "benchmarks/interactive/harness.py" in args and "benchmarks/interactive/scenarios.py" in args
+            assert "benchmarks/interactive/run_smoke.py" in args
+            assert "benchmarks/interactive/run_openrouter_smoke.py" in args
             assert "benchmarks/interactive/README.md" not in args and "benchmarks/interactive/run_breadth.py" not in args
-            return working if args[3] == "--" else committed
+            assert "benchmarks/interactive/openrouter.py" not in args
+            paths = args[args.index("--") + 1:]
+            changed = working if args[3] == "--" else committed
+            return "\n".join(name for name in changed.splitlines() if
+                any(name == path or name.startswith(path + "/") for path in paths))
         pytest.fail(f"Unexpected baseline Git read: {args!r}")
     monkeypatch.setattr(run_breadth, "_git", git)
     return head, calls
@@ -206,11 +214,31 @@ def test_offline_checks_allow_pending_docs_and_new_benchmarks_but_live_requires_
     with pytest.raises(ValueError): run_breadth.repository_baseline(require_clean=True)
 
 
+@pytest.mark.parametrize("committed", [False, True])
+def test_openrouter_transport_infrastructure_can_change_without_unfreezing_semantic_owners(
+        monkeypatch, committed):
+    transport = "benchmarks/interactive/openrouter.py"
+    frozen_git(monkeypatch, committed=transport if committed else "",
+        working="" if committed else transport, tracked="" if committed else transport)
+    result = run_breadth.repository_baseline(require_clean=False)
+    assert result["experiment_baseline"] == run_breadth.BASELINE
+    assert result["tracked_clean"] is committed
+    if committed:
+        assert run_breadth.repository_baseline(require_clean=True)["tracked_clean"]
+    else:
+        with pytest.raises(ValueError, match="clean tracked tree and index"):
+            run_breadth.repository_baseline(require_clean=True)
+
+
 @pytest.mark.parametrize("drift", [
     {"ancestor": False},
     {"working": "src/agent/resources/scientific-contract.R"},
     {"working": "benchmarks/planner/canonical-case.json"},
     {"working": "benchmarks/interactive/harness.py"},
+    {"working": "benchmarks/interactive/scenarios.py"},
+    {"working": "benchmarks/interactive/run_smoke.py"},
+    {"committed": "benchmarks/interactive/run_openrouter_smoke.py"},
+    {"committed": "benchmarks/interactive/openrouter.py\nbenchmarks/interactive/harness.py"},
     {"committed": "src/agent/orchestration/semantic_prompt.py"},
 ])
 def test_unrelated_checkout_or_frozen_contract_drift_is_rejected_even_offline(monkeypatch, drift):

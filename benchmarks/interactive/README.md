@@ -39,11 +39,13 @@ DashScope reuses the explicitly configured historical `DASHSCOPE_BASE_URL`.
 Credential values are passed directly to SDK construction and never recorded.
 
 OpenRouter admission reuses the generic strict-schema Chat Completions adapter
-with exact `:free` catalog identities, required-parameter routing, zero-price
-limits, no provider fallback, and healing/compression/web plugins disabled.
-Its admission wrapper permits one completion. OpenRouter breadth calls use a
-fresh admission wrapper per production call so bounded Layer-2 recovery remains
-visible. `run_attempt` accepts an explicit model.
+with exact catalog identities, required-parameter routing, no provider fallback,
+and healing/compression/web plugins disabled. Existing free candidates retain
+zero-price limits; explicitly admitted priced candidates require provider-price
+and output limits. Its admission wrapper permits one completion. Breadth and
+frontier calls use a fresh wrapper per production call so bounded Layer-2
+recovery remains visible. Provider-reported tokens/costs are retained where
+available; conservative reservations enforce the benchmark spending ceiling.
 
 Q2 free-cohort qualification is closed for exactly:
 
@@ -58,11 +60,37 @@ primary-model qualification. This cohort has no accepted development-primary
 LLM. These are development-screening findings, not production reliability or
 biological qualification.
 
-The next comparison should use one substantially stronger frontier model against
-the frozen architecture; its exact provider/model has not been selected or added.
-I12 null-subject wording and I13 Guidance context/capacity work remain deferred.
-Agent prompts, schemas, scientific contracts and planning/admission semantics
-remain unchanged. All live evidence under `evals/` stays local and uncommitted.
+F1/F2 frontier qualification is closed for OpenRouter `openai/gpt-5.6-sol`:
+**ACCEPTED AS CURRENT DEVELOPMENT-PRIMARY LLM**. GPT-5.6 Sol is the primary
+LLM for continued Agent development and interaction testing based on this
+high-value qualification screen.
+
+| Surface | Three observed attempts | Classification |
+| --- | --- | --- |
+| I01 supported inspection planning | PASS / PASS / PASS | STABLE_IN_SCREEN |
+| I10 current-result referent | PASS / PASS / PASS | STABLE_IN_SCREEN |
+| I08 evidence-grounded Answer | PASS / PASS / PASS (externally reviewed) | STABLE_IN_SCREEN |
+| I14 genuine `Clarify / ambiguous_subject` | PASS / PASS / PASS | STABLE_IN_SCREEN |
+
+The operator supplied external human semantic **PASS** dispositions for all
+three I08 Answers: F1-1, F2-2 and F2-3. These later dispositions are recorded
+here separately; historical attempt records and review queues are not rewritten.
+The frontier improved the supported-planning and Answer-contract failures seen
+with GPT-OSS, strengthening the model-capability/reliability bottleneck hypothesis
+on those frozen contracts without establishing absolute causality.
+
+This is a development decision, not a permanent production-model selection or
+production reliability claim. Scientific execution was zero; broader Agent
+surfaces and biological acceptance remain unqualified. Release-time model
+qualification remains future work. Web choices, operator defaults, production
+code, Agent prompts/schemas and scientific semantics are unchanged. All live
+evidence under `evals/` stays local and uncommitted.
+
+I12 provider-neutral null-subject wording remains deferred: clarify model-facing
+wording while preserving deterministic referent authority, then requalify the
+targeted case. I13 Guidance representation/capacity remains deferred: first
+review lossless catalog/readiness compacting and model/profile capacity
+compatibility while preserving Registry/evidence semantics. Neither is implemented.
 
 Run focused offline acceptance in the `agent` environment:
 
@@ -77,10 +105,13 @@ missing Groq cells. Stability adds two GPT-OSS attempts for each of I01, I10, I0
 and I14. Resume/stability require compatible preserved local ledgers, and stability
 also requires the separate historical I08 operator-review disposition.
 The experiment identity remains the original Q1 commit; runners report the current
-infrastructure commit separately and reject changes to frozen Agent, Planner or
-original qualification Python contracts. Offline checks allow pending infrastructure
-edits; live runs require a clean tracked tree and index. Stability accepts an explicit
-`--human-review` path for the separate historical disposition.
+infrastructure commit separately and reject changes to frozen Agent, Planner and
+qualification semantic owners. Transport, runner and documentation infrastructure
+can advance independently; historical source hashes remain bound historical
+metadata, while current source hashes guard dispatch. Offline checks allow
+reviewed infrastructure edits; real live runs require a clean tracked tree and
+index. Stability accepts an explicit `--human-review` path for the separate
+historical disposition.
 
 Use dry validation before a separately authorized live run:
 
@@ -115,3 +146,14 @@ qualified. Existing output directories fail closed to prevent overwrites.
 The historical `run_smoke` default includes deferred candidates; neither it nor
 `run_openrouter_smoke` selects the frozen Q2 cohort or runs formal qualification.
 Running admission again requires a separate explicit request.
+
+The frontier entry points reuse the same scenarios and harness. F1 caps one
+admission smoke plus I01/I10/I08/I14 once (seven expected, nine maximum calls).
+F2 consumes preserved F1 evidence and a separate external I08 disposition, adds
+exactly two independent attempts per case, and runs no smoke (twelve expected,
+sixteen maximum calls). Both retain the 4,096-token output cap, unspecified
+reasoning defaults, strict routing and a $1 aggregate reservation ceiling;
+recovery stops before exceeding the ceiling. New scientific prose remains
+`HUMAN_REVIEW_PENDING` until externally reviewed. Reusing these runners requires
+the appropriate frozen local evidence/discovery records and separate live-call
+authorization; F3 made no provider calls and reran neither phase.

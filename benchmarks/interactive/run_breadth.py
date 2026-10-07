@@ -36,30 +36,50 @@ BASELINE = '48d83625e3da45aad5b7687d14ecf2118b29f036'
 SCENARIOS_FINGERPRINT = '588501b58a95714ef1a7cf8dcdc8a3ef483aa0f4401494941bd9ef233a33ccf3'
 FAILURES = {'operational': 'OPERATIONAL_FAIL', 'contract': 'CONTRACT_FAIL',
             'semantic': 'SEMANTIC_FAIL', 'deterministic_admission': 'ADMISSION_FAIL'}
+INFRASTRUCTURE_PATHS = frozenset({
+    'benchmarks/interactive/openrouter.py',
+    'benchmarks/interactive/run_breadth.py',
+    'benchmarks/interactive/run_stability.py',
+    'benchmarks/interactive/run_frontier.py',
+    'benchmarks/interactive/run_frontier_stability.py',
+    'benchmarks/interactive/README.md',
+})
 
 
 def _git(*arguments):
     return subprocess.check_output(['git', *arguments], text=True).strip()
 
 
-def repository_baseline(*, require_clean=False):
-    """Keep experiment identity separate from source-equivalent infrastructure commits."""
+def _infrastructure_path(name):
+    """Transport, runners, documentation and offline tests do not own semantics."""
+    path = Path(name)
+    return (name in INFRASTRUCTURE_PATHS
+        or (name.startswith('tests/benchmarks/') and path.suffix == '.py'))
+
+
+def repository_baseline(*, require_clean=False, experiment_baseline=BASELINE):
+    """Freeze semantic owners while allowing reviewed infrastructure descendants."""
+    if not isinstance(experiment_baseline, str) or not re.fullmatch(r'[0-9a-f]{40}', experiment_baseline):
+        raise ValueError('Qualification requires an exact experiment commit identity.')
     head = _git('rev-parse', 'HEAD')
     try:
-        if _git('merge-base', BASELINE, head) != BASELINE:
+        if _git('merge-base', experiment_baseline, head) != experiment_baseline:
             raise ValueError('Qualification baseline must be an ancestor of the checkout.')
     except subprocess.CalledProcessError as exc:
         raise ValueError('Qualification baseline is unavailable or unrelated.') from exc
-    original = _git('ls-tree', '-r', '--name-only', BASELINE, '--', 'benchmarks/interactive').splitlines()
-    frozen = ['src/agent', 'benchmarks/planner', *[name for name in original if name.endswith('.py')]]
-    if (_git('diff', '--name-only', BASELINE, head, '--', *frozen)
-            or _git('diff', '--name-only', BASELINE, '--', *frozen)):
+    original = _git('ls-tree', '-r', '--name-only', experiment_baseline, '--', 'benchmarks/interactive').splitlines()
+    frozen = ['src/agent', 'benchmarks/planner', *[name for name in original
+        if name.endswith('.py') and not _infrastructure_path(name)]]
+    if (_git('diff', '--name-only', experiment_baseline, head, '--', *frozen)
+            or _git('diff', '--name-only', experiment_baseline, '--', *frozen)):
         raise ValueError('Frozen Agent/planner/qualification contracts changed.')
     tracked = _git('diff', '--name-only')
     index = _git('diff', '--cached', '--name-only')
+    if any(not _infrastructure_path(name) for name in (*tracked.splitlines(), *index.splitlines())):
+        raise ValueError('Pending qualification changes must be infrastructure, documentation or offline tests.')
     if require_clean and (tracked or index):
         raise ValueError('Live qualification requires a clean tracked tree and index.')
-    return dict(experiment_baseline=BASELINE, infrastructure_commit=head,
+    return dict(experiment_baseline=experiment_baseline, infrastructure_commit=head,
                 tracked_clean=not tracked, index_clean=not index)
 
 

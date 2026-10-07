@@ -96,9 +96,13 @@ This qualifies the canonical scripted-metadata Interpreter/admission surface.
 One earlier completion is unqualified because local evidence collection failed;
 it is recorded separately and excluded from the three PASS results. Evidence
 remains local under `evals/ir1_i12_null_subject_2026-10-07/`.
-I13 Guidance representation/capacity remains deferred: first review lossless
-catalog/readiness compacting and model/profile capacity compatibility while
-preserving Registry/evidence semantics. IR2 has not begun.
+IR2 clarity-first Guidance is accepted at `8d79f69`: I13 PASS / PASS / PASS,
+fixed follow-up PASS and larger selection Guidance PASS, all with contract,
+exact binding and external human semantic review. Aliases/shared-value dictionaries
+were removed; direct full scientific semantics and authoritative readiness remain.
+Correctness and clarity precede the approximately 10% size reduction. No model/profile
+capacity admission was added; runtime/default configuration is unchanged. See the
+[interaction/model layer closeout](../../docs/interaction-model-layer-closeout.md).
 
 Run focused offline acceptance in the `agent` environment:
 

@@ -14,6 +14,7 @@ from agent.schemas.orchestration import _serialize
 from agent.orchestration.executor import PlanExecutor
 from test_dialogue_evidence import app, accepted, forbid_work
 from test_scientific_dialogue import annotation, Model as ScientificModel, question
+from test_guidance_representation import expand_context
 
 
 def decision(*outputs, subject=None, candidate=None):
@@ -24,9 +25,13 @@ class Model:
     def __init__(self, choice=None, tools=('inspect_scATAC',), attack=None, callback=None):
         self.choice = decision('r0') if choice is None else choice
         self.tools, self.attack, self.callback, self.calls = tools, attack, callback, []
+        self.requests = []
 
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
+        self.requests.append((prompt, response_schema))
+        if 'guidance_schema_version' in p:
+            p['context'] = expand_context(p['context'])
         self.calls.append(p)
         if 'turn_schema_version' in p:
             return json.dumps(dict(turn_schema_version=1, decision=self.choice))

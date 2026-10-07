@@ -86,11 +86,19 @@ qualification remains future work. Web choices, operator defaults, production
 code, Agent prompts/schemas and scientific semantics are unchanged. All live
 evidence under `evals/` stays local and uncommitted.
 
-I12 provider-neutral null-subject wording remains deferred: clarify model-facing
-wording while preserving deterministic referent authority, then requalify the
-targeted case. I13 Guidance representation/capacity remains deferred: first
-review lossless catalog/readiness compacting and model/profile capacity
-compatibility while preserving Registry/evidence semantics. Neither is implemented.
+IR1 I12 null-subject wording is complete: the Interpreter instruction distinguishes
+no new model-asserted subject from an authoritative subject retained through a
+resolved captured referent. Resolver behavior and the schema are unchanged.
+Three fully recorded OpenRouter `openai/gpt-5.6-sol` I12 trials pass: two select
+`@previous_turn_result` and one selects the same captured predecessor via `@focus`.
+All use `subject=null` and admit exact annotation subject `3`.
+This qualifies the canonical scripted-metadata Interpreter/admission surface.
+One earlier completion is unqualified because local evidence collection failed;
+it is recorded separately and excluded from the three PASS results. Evidence
+remains local under `evals/ir1_i12_null_subject_2026-10-07/`.
+I13 Guidance representation/capacity remains deferred: first review lossless
+catalog/readiness compacting and model/profile capacity compatibility while
+preserving Registry/evidence semantics. IR2 has not begun.
 
 Run focused offline acceptance in the `agent` environment:
 

@@ -3,9 +3,24 @@ import json
 
 import pytest
 
-from agent.application.turn_decisions import decision_schema, parse_decision, IntentError
+from agent.application.turn_decisions import decision_schema, interpret, parse_decision, IntentError
 from test_dialogue_evidence import app, accepted, forbid_work
 from test_scientific_dialogue import Model, annotation, ask
+
+
+def test_null_subject_instruction_preserves_captured_subject_semantics():
+    model = Model(dict(kind='answer_scientific',
+        target=dict(output='@previous_turn_result', subject=None), comparison=None, focus='question'))
+    decision = interpret(model, 'Explain the result discussed in the immediately previous turn.',
+        dict(bases={}, relations=['current'], dialogue=dict(outputs=[dict(handle='r0')], tools=[],
+            result_referents={'@previous_turn_result':dict(status='available', targets=[dict(group='g0', subject='3')])})))
+    rule, = [s for s in model.calls[0]['instructions'] if s.startswith('Subject=')]
+    for fragment in ('no new subject is asserted by the model', 'does not clear an authoritative subject',
+                     'retained through a resolved captured referent', 'need not copy or reconstruct',
+                     'Without a retained subject, null selects the whole result'):
+        assert fragment in rule
+    assert decision.scientific.target.output == '@previous_turn_result'
+    assert decision.scientific.target.subject is None
 
 
 @pytest.mark.parametrize('with_operation', [False, True])

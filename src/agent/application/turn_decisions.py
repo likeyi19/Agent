@@ -267,7 +267,11 @@ def interpret(model, utterance, public):
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
             'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
-            'Subject is null for the whole result, @focus to retain the subject, @other only for an unambiguous other subject, or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
+            'Subject=null means no new subject is asserted by the model for this turn. '
+            'It does not clear an authoritative subject retained through a resolved captured referent; '
+            'you need not copy or reconstruct that subject identity. Without a retained subject, null selects the whole result. '
+            'Use @focus to retain the predecessor subject, @other only for an unambiguous other subject, '
+            'or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
             'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',
             'Scientific comparison uses two explicit targets; do not infer correspondence between clusters from different results. Ambiguous other/previous requires clarification.',
             'A biggest/most important difference needs an explicit comparison dimension or reviewed criterion. Clarify when it is missing; do not invent a ranking. New markers, significance tests or reannotation require scientific execution, not interpretation.',

@@ -18,7 +18,7 @@ import tempfile
 from agent.schemas.orchestration import freeze_json_mapping, _serialize
 from .interactive_schemas import ClientError
 from .session_state import canonical, digest
-from .workspace import ManagedWorkspace
+from .workspace import ManagedWorkspace, ApplicationWorkspaceError
 
 
 MAX_RECORD_BYTES = 16_384
@@ -26,6 +26,12 @@ MAX_INPUT_BYTES = 65_536
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
+_INPUT_TYPES = ('h5ad', 'external_fragments')
+_OPERATION_TYPES = {
+    'inspect_scATAC': 'h5ad',
+    'adopt_scATAC_cell_by_ccre': 'h5ad',
+    'import_scATAC_fragments': 'external_fragments',
+}
 _MESSAGES = {
     'LOCAL_RESOURCE_UNAVAILABLE': 'The registered local resource is unavailable.',
     'LOCAL_RESOURCE_ACCESS_INVALID': 'The local source is unavailable or outside the approved source policy.',
@@ -102,7 +108,7 @@ class LocalResourceRecord:
 
     def __post_init__(self):
         _identifier(self.resource_id)
-        if self.input_type != 'h5ad':
+        if self.input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
         _text(self.label, 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
         _source_text(self.source_path)
@@ -133,7 +139,7 @@ class RegisteredInput:
     execution_inputs: object
 
     def __post_init__(self):
-        if type(self.tool_name) is not str or self.tool_name not in {'inspect_scATAC', 'adopt_scATAC_cell_by_ccre'}:
+        if type(self.tool_name) is not str or self.tool_name not in _OPERATION_TYPES:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
         try:
             _identifier(self.resource_id)
@@ -169,7 +175,14 @@ class LocalResourceAdmission:
         path = self._workspace.root / 'local_resources'
         try:
             if create:
-                return self._workspace._ensure_directory(path)
+                try:
+                    return self._workspace._ensure_directory(path)
+                except ApplicationWorkspaceError as exc:
+                    if not isinstance(exc.__cause__, FileExistsError):
+                        raise
+                    # Concurrent first registrations can create the directory
+                    # together. Recheck all workspace protections before reuse.
+                    return self._workspace._ensure_directory(path)
             self._workspace._assert_contained(path)
             if path.is_symlink() or (path.exists() and (not path.is_dir() or path != path.resolve())):
                 raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
@@ -244,7 +257,7 @@ class LocalResourceAdmission:
                 os.close(descriptor)
 
     def register(self, registration_key, source_path, *, input_type='h5ad', label, attribution):
-        if input_type != 'h5ad':
+        if input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
         _text(registration_key, 256, 'LOCAL_RESOURCE_RECORD_INVALID')
         _text(label, 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
@@ -326,17 +339,19 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_RECORD_INVALID') from exc
 
     def _binding_inputs(self, record, tool_name, scientific_inputs):
-        source = {'inspect_scATAC': dict(input_path=record.source_path),
-                  'adopt_scATAC_cell_by_ccre': dict(source_path=record.source_path, source_sha256=record.source_sha256)}
-        if type(tool_name) is not str or tool_name not in source:
+        if type(tool_name) is not str or tool_name not in _OPERATION_TYPES:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+        if record.input_type != _OPERATION_TYPES[tool_name]:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        source = (dict(input_path=record.source_path) if tool_name == 'inspect_scATAC'
+                  else dict(source_path=record.source_path, source_sha256=record.source_sha256))
         values = _input_mapping(scientific_inputs)
         if self._registry is None:
             from agent.orchestration.registry import build_default_tool_registry
             self._registry = build_default_tool_registry()
         try:
             specification = self._registry.get(tool_name)
-            owned = {'path'} if tool_name == 'inspect_scATAC' else set(source[tool_name])
+            owned = {'path'} if tool_name == 'inspect_scATAC' else set(source)
             required = set(specification.required_arguments) - owned - {'output_dir'}
             allowed = (set(specification.required_arguments) | set(specification.optional_arguments)) - owned - {'output_dir'}
             if set(values) - allowed:
@@ -345,7 +360,7 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
         if required - set(values):
             raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
-        return values | source[tool_name]
+        return values | source
 
     def resolve(self, resource_id, *, tool_name, scientific_inputs=None):
         record = self.load(resource_id)

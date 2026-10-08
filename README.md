@@ -760,7 +760,7 @@ The canonical application demo is inspection → EpiZoo → neighbors → Leiden
 UMAP → verified evidence → Leiden UMAP figure → deterministic report. The richer
 reference/query annotation workflow is also available.
 
-### Local H5AD registration (UA1)
+### Local resource registration (UA1 / UA2.2)
 
 The Python interactive boundary can register a completed, operator-approved local
 H5AD. Registration hashes the source and atomically persists a checksummed record
@@ -802,7 +802,39 @@ their scientific qualification remains with the existing owners. Registered
 H5AD can also resolve to `inspect_scATAC`, with no scientific declarations.
 Inspection success does not establish matrix adoption or EpiZoo readiness.
 
-UA1 keeps a hash-pinned source locator rather than copying the file. Its canonical
+UA2.2 also supports one declared `external_fragments` source through the existing
+public `import_scATAC_fragments` operation:
+
+```python
+resource = app.resources.register(
+    "local-fragments-request-001", local_fragments, input_type="external_fragments",
+    label="Supplied fragments", attribution="Caller-declared external export",
+)
+binding = app.resources.resolve(
+    resource.resource_id, tool_name="import_scATAC_fragments",
+    scientific_inputs={
+        "reference_bundle_path": reference_bundle_path,
+        "reference_bundle_sha256": reference_bundle_sha256,
+        "source_profile": "10x-atac-fragments.v1", "namespace": "library_1",
+    },
+)
+app.create_session("fragments-analysis")
+view = app.submit_turn(
+    "fragments-analysis", "import-001", "Import the supplied external fragments.",
+    expected_generation=0, registered_input=binding,
+)
+```
+
+Registration does not parse fragments or qualify their scientific contents.
+The existing importer and independent verifier own reference compatibility,
+source conservation, producer qualification and fragments-v2 authority. Public
+import remains human/hg38 or mouse/mm10. Optional `source_selection` retains the
+importer's `unknown` default; an operator-supplied `source_index_path` and
+`source_index_sha256` pair retains its existing explicit BGZF/TBI contract.
+The index is not registered, and no adjacent index is discovered. Cross-type
+H5AD/fragments bindings and caller overrides of source path/SHA are rejected.
+
+Registration keeps a hash-pinned source locator rather than copying the file. Its canonical
 approved location must remain available with identical bytes for new consumption;
 different bytes, deletion, or a symlink replacement fails closed. The registration key is an
 explicit idempotency key: equivalent retries return the same immutable record,
@@ -813,8 +845,8 @@ their captured attribution without requiring current source bytes.
 Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
 identity and exact resolved inputs are captured once in the existing immutable
 submission; scientific results retain their existing RunStore/Revision authority.
-`resource.public()` exposes safe registration metadata without paths. UA1 adds no
-browser uploads, dynamic web catalog, or FASTQ/BAM/fragments registration API;
+`resource.public()` exposes safe registration metadata without paths. This boundary adds no
+browser uploads, dynamic web catalog, FASTQ/BAM registration or registered index resources;
 operator-configured web InputSets keep their current behavior.
 
 ## Validation and current boundaries

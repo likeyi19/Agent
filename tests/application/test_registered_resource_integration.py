@@ -1,5 +1,6 @@
-"""UA1 registered sources use normal interpreted science and durable Sessions."""
+"""Registered H5AD/fragments sources use normal science and durable Sessions."""
 from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,15 +18,23 @@ from agent.application import InteractiveAgentApplication, InteractiveBoundaryEr
 from agent.application.local_resources import ResourceAdmissionError
 from agent.orchestration import PlanningModelProfile, ToolRegistry, build_default_tool_registry
 from agent.providers import PlanningModelFactoryRegistry
+from agent.report import ANALYSIS_EVIDENCE_FILENAME
 from agent.schemas.orchestration import _serialize
 from agent.tools.data import scatac_reference
 from agent.tools.data import _external_matrix_io as production
 from agent.tools.data import cell_by_ccre_verifier as verification
+from agent.tools.data import external_fragments, external_fragments_verifier
+from agent.tools.data import external_fragment_manifest, scatac_fragments_v2
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+from external_fragments.conftest import source_factory as fragment_source_factory
 
 
 PROFILE = PlanningModelProfile('local-scripted', 'scripted', 'scripted/local-resource')
 ADOPT = 'adopt_scATAC_cell_by_ccre'
+IMPORT_FRAGMENTS = 'import_scATAC_fragments'
 UTTERANCE = 'Adopt the selected canonical matrix with the supplied declarations.'
+FRAGMENTS_UTTERANCE = 'Import the supplied external fragments with the declared profile and namespace.'
 
 
 @pytest.fixture
@@ -63,9 +72,10 @@ def local_source(tmp_path):
 class ScriptedModel:
     """Semantic choices are scripted; all deterministic and scientific owners run."""
 
-    def __init__(self, target=ADOPT, *, output_callback=None):
+    def __init__(self, target=ADOPT, *, output_callback=None, source_index=False):
         self.model_id = PROFILE.model_id
         self.target, self.output_callback = target, output_callback
+        self.source_index = source_index
         self.calls = []
 
     def complete(self, *, prompt, response_schema):
@@ -75,7 +85,8 @@ class ScriptedModel:
             return json.dumps(dict(turn_schema_version=1,
                 decision=dict(kind='execute_plan', target=self.target)))
         if 'selection_schema_version' in response_schema.get('properties', {}):
-            capability = 'exact_matrix_adoption' if self.target == ADOPT else 'processed_inspection'
+            capability = {ADOPT: 'exact_matrix_adoption', IMPORT_FRAGMENTS: 'raw_preprocessing',
+                          'inspect_scATAC': 'processed_inspection'}[self.target]
             return json.dumps(dict(selection_schema_version=1,
                 decision=dict(kind='select', capability_ids=[capability])))
         if 'output_selection_schema_version' in data:
@@ -84,6 +95,8 @@ class ScriptedModel:
             outputs = ([dict(name='matrix', step_id='adopt', output_key='manifest_path'),
                         dict(name='matrix_h5ad', step_id='adopt', output_key='matrix_path')]
                        if self.target == ADOPT else
+                       [dict(name='fragments', step_id='import', output_key='manifest_path')]
+                       if self.target == IMPORT_FRAGMENTS else
                        [dict(name='inspection', step_id='inspect', output_key='n_cells')])
             return json.dumps(dict(outputs=outputs))
         if self.target == ADOPT:
@@ -95,24 +108,34 @@ class ScriptedModel:
                            ('matrix_semantics', 'matrix_semantics'),
                        )]
             step = dict(step_id='adopt', tool=ADOPT, sources=sources, control_dependencies=[])
+        elif self.target == IMPORT_FRAGMENTS:
+            ports = [('source', 'source_path'), ('reference', 'reference_bundle_path'),
+                     ('source_profile', 'source_profile'), ('namespace', 'namespace')]
+            if self.source_index:
+                ports.append(('source_index', 'source_index_path'))
+            sources = [dict(target=target, source=dict(kind='input', input=key))
+                       for target, key in ports]
+            step = dict(step_id='import', tool=IMPORT_FRAGMENTS, sources=sources, control_dependencies=[])
         else:
             step = dict(step_id='inspect', tool='inspect_scATAC', sources=[], control_dependencies=[])
         return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=[step])))
 
 
-def service_for(tmp_path, *, target=ADOPT, output_callback=None, registry=None):
+def service_for(tmp_path, *, target=ADOPT, output_callback=None, registry=None,
+                approved_source_roots=None, source_index=False):
     models = []
 
     def factory(profile):
         assert profile == PROFILE
-        model = ScriptedModel(target, output_callback=output_callback)
+        model = ScriptedModel(target, output_callback=output_callback, source_index=source_index)
         models.append(model)
         return model
 
     service = InteractiveAgentApplication(
         tmp_path / 'workspace', model_profiles=(PROFILE,), default_profile_id=PROFILE.profile_id,
         planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': factory}),
-        approved_source_roots=(tmp_path / 'approved',), registry=registry,
+        approved_source_roots=((tmp_path / 'approved',) if approved_source_roots is None
+                               else approved_source_roots), registry=registry,
     )
     return service, models
 
@@ -698,3 +721,314 @@ def test_missing_or_unsupported_declarations_are_not_guessed(local_source, tmp_p
                                     else 'LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
     assert (len(models) == 1 if declaration == 'invalid_semantics' else not models)
     assert calls == {'production': 0, 'verification': 0}
+
+
+def fragments_binding(service, arguments, *, key='external-source'):
+    resource = service.resources.register(key, arguments['source_path'], input_type='external_fragments',
+        label='Supplied external fragments', attribution='Operator-approved synthetic 10x export.')
+    declarations = {key: value for key, value in arguments.items()
+                    if key not in {'source_path', 'source_sha256', 'output_dir'}}
+    binding = service.resources.resolve(resource.resource_id, tool_name=IMPORT_FRAGMENTS,
+                                        scientific_inputs=declarations)
+    return resource, binding
+
+
+def fragments_service(tmp_path, **kwargs):
+    return service_for(tmp_path, target=IMPORT_FRAGMENTS, approved_source_roots=(tmp_path,), **kwargs)
+
+
+def submit_fragments(service, binding, *, turn='import', generation=0):
+    return service.submit_turn('analysis', turn, FRAGMENTS_UTTERANCE,
+        expected_generation=generation, registered_input=binding)
+
+
+def count_fragment_science(monkeypatch):
+    """Count production and independent source reconstruction, not proof reuse."""
+    calls = dict(production=0, verification=0)
+    prepare = external_fragments.prepare_in_stage
+    reconstruct = external_fragments_verifier._reconstruct_source
+
+    def produced(*args, **kwargs):
+        calls['production'] += 1
+        return prepare(*args, **kwargs)
+
+    def verified(*args, **kwargs):
+        calls['verification'] += 1
+        return reconstruct(*args, **kwargs)
+
+    monkeypatch.setattr(external_fragments, 'prepare_in_stage', produced)
+    monkeypatch.setattr(external_fragments_verifier, '_reconstruct_source', verified)
+    return calls
+
+
+@pytest.mark.parametrize('encoding,species,indexed', [
+    ('plain', 'human', False), ('gzip', 'mouse', False), ('bgzf', 'human', True),
+])
+def test_registered_fragments_interpreted_science_and_authority(
+        fragment_source_factory, tmp_path, monkeypatch, encoding, species, indexed):
+    arguments = fragment_source_factory(encoding=encoding, species=species, indexed=indexed,
+                                        strand=True, selection='subset_export')
+    # An unselected neighboring sidecar never becomes an input or source claim.
+    Path(arguments['source_path'] + '.tbi').write_bytes(b'unselected neighboring index')
+    service, models = fragments_service(tmp_path, source_index=indexed)
+    calls = count_fragment_science(monkeypatch)
+    resource, binding = fragments_binding(service, arguments)
+    assert not models and calls == {'production': 0, 'verification': 0}
+    assert not list(service._application.sessions._store.root.glob('*.json'))
+    assert _serialize(binding.execution_inputs) == {
+        key: value for key, value in arguments.items() if key != 'output_dir'}
+    assert resource.size_bytes == Path(arguments['source_path']).stat().st_size
+    assert service.resources.load(resource.resource_id) == resource
+    service.create_session('analysis')
+    view = submit_fragments(service, binding)
+    assert view.status == 'succeeded' and view.response.status == 'activated', view
+    assert calls == {'production': 1, 'verification': 1}
+    assert len(models) == 1 and len(models[0].calls) == 4
+    state = service._application.sessions.load('analysis')
+    revision, = state.revisions
+    assert revision.parent_revision_id is None and revision.revision_id == view.revision_id
+    assert [(o.name, o.step_id, o.output_key) for o in revision.outputs] == [
+        ('fragments', 'import', 'manifest_path')]
+    submission = state.interactions[0].submission
+    assert _serialize(submission['registered_input']) == binding.attribution()
+    assert _serialize(submission['execution_inputs']) == _serialize(binding.execution_inputs)
+    run = service._application.run_store.load(view.run_id)
+    assert all(run.request.inputs[key] == value for key, value in binding.execution_inputs.items())
+    step, = run.steps
+    assert step.tool_name == IMPORT_FRAGMENTS and step.resolved_arguments['source_sha256'] == resource.source_sha256
+    authority = step.verification.artifact_authority
+    assert authority['schema_version'] == 2
+    assert authority['verifier']['id'] == 'agent.external-fragments-independent'
+    assert authority['producer_qualification']['scope'] == 'external_source_conservation.v1'
+    assert authority['source_policy'] == 'historical_verified_sources.v1'
+    assert {'path': resource.source_path, 'sha256': resource.source_sha256,
+            'size_bytes': resource.size_bytes} in authority['historical_sources']
+    assert (step.result['n_fragment_records'], step.result['total_support'], step.result['strand_mode']) == (2, 557, 'present')
+    manifest = scatac_fragments_v2.load_fragments_manifest_v2(step.result['manifest_path'],
+        expected_sha256=step.result['manifest_sha256'])
+    provenance = manifest['libraries'][0]['provenance']
+    record = external_fragment_manifest.load_adoption_record(provenance['producer_record']['path'],
+                                                            provenance['producer_record']['sha256'])
+    assert record['namespace'] == arguments['namespace']
+    assert record['source']['resource']['sha256'] == resource.source_sha256
+    assert record['source_selection'] == 'subset_export'
+    assert (record['source_index'] is not None) is indexed
+    assert service.evidence('analysis', view.revision_id, 'fragments').status == 'available'
+    evidence_file = service._application._workspace.run_paths(view.run_id).evidence / ANALYSIS_EVIDENCE_FILENAME
+    evidence = json.loads(evidence_file.read_bytes())
+    facts = evidence['steps'][0]['facts']
+    assert facts['route'] == 'external_fragment_adoption' and facts['conservation_verification'] == 'verified'
+    assert facts['source_record_count'] == facts['n_fragment_records'] == 2
+    assert submit_fragments(service, binding) == view
+    assert service.recover_turn('analysis', 'import', complete_presentation=True) == view
+    assert calls == {'production': 1, 'verification': 1} and len(models) == 1
+    assert str(tmp_path) not in json.dumps(view.to_dict())
+
+
+def test_registered_fragments_existing_session_navigation_and_branch(
+        fragment_source_factory, tmp_path, monkeypatch):
+    service, models = fragments_service(tmp_path)
+    calls = count_fragment_science(monkeypatch)
+    first_arguments = fragment_source_factory()
+    del first_arguments['source_selection']
+    first, first_binding = fragments_binding(service, first_arguments)
+    assert 'source_selection' not in first_binding.execution_inputs
+    service.create_session('analysis')
+    one = submit_fragments(service, first_binding, turn='one')
+    assert one.status == 'succeeded', one
+    original = service._application.sessions.load('analysis').interactions[0].submission
+    step, = service._application.run_store.load(one.run_id).steps
+    manifest = scatac_fragments_v2.load_fragments_manifest_v2(step.result['manifest_path'],
+        expected_sha256=step.result['manifest_sha256'])
+    provenance = manifest['libraries'][0]['provenance']
+    record = external_fragment_manifest.load_adoption_record(provenance['producer_record']['path'],
+                                                            provenance['producer_record']['sha256'])
+    assert record['source_selection'] == 'unknown' and provenance['source_selection'] == 'unspecified'
+    second, second_binding = fragments_binding(service, fragment_source_factory(encoding='gzip'), key='second-source')
+    two = submit_fragments(service, second_binding, turn='two', generation=1)
+    assert two.status == 'succeeded', two
+    service.activate_revision('analysis', 'back', one.revision_id, expected_generation=2)
+    assert calls == {'production': 2, 'verification': 2}
+    branch = submit_fragments(service, second_binding, turn='branch', generation=3)
+    assert branch.status == 'succeeded', branch
+    state = service._application.sessions.load('analysis')
+    assert state.revisions[-1].parent_revision_id == one.revision_id
+    assert state.interactions[0].submission == original
+    assert [item.submission['registered_input']['resource_id'] for item in state.interactions] == [
+        first.resource_id, second.resource_id, second.resource_id]
+    assert calls == {'production': 3, 'verification': 3} and len(models) == 3
+
+
+@pytest.mark.parametrize('mutation,code', [
+    ('record', 'EXTERNAL_FRAGMENTS_RECORD_INVALID'),
+    ('reference', 'REFERENCE_DIGEST_MISMATCH'),
+    ('index', 'EXTERNAL_FRAGMENTS_INDEX_MISMATCH'),
+    ('conservation', 'EXTERNAL_FRAGMENTS_CONSERVATION_MISMATCH'),
+])
+def test_registered_fragments_preserve_scientific_failures(
+        fragment_source_factory, tmp_path, monkeypatch, mutation, code):
+    arguments = fragment_source_factory(encoding='bgzf' if mutation == 'index' else 'plain',
+        indexed=mutation == 'index', rows=[b'chr2\t0\t1\tB\t0\n'] if mutation == 'record' else None)
+    if mutation == 'reference':
+        arguments['reference_bundle_sha256'] = '0' * 64
+    elif mutation == 'index':
+        index = Path(arguments['source_index_path'])
+        index.write_bytes(b'not a TBI index')
+        arguments['source_index_sha256'] = hashlib.sha256(index.read_bytes()).hexdigest()
+    elif mutation == 'conservation':
+        original = external_fragments.canonicalize
+
+        def inconsistent(*args, **kwargs):
+            path, summary = original(*args, **kwargs)
+            data = path.read_bytes().replace(b'chr2\t4\t95', b'chr2\t5\t95', 1)
+            path.write_bytes(data)
+            summary['canonical_record_stream_sha256'] = hashlib.sha256(data).hexdigest()
+            return path, summary
+
+        monkeypatch.setattr(external_fragments, 'canonicalize', inconsistent)
+    service, models = fragments_service(tmp_path, source_index=mutation == 'index')
+    calls = count_fragment_science(monkeypatch)
+    resource, binding = fragments_binding(service, arguments)
+    assert service.resources.load(resource.resource_id).public()['status'] == 'registered'
+    assert not models and calls == {'production': 0, 'verification': 0}
+    service.create_session('analysis')
+    view = submit_fragments(service, binding)
+    assert_failed_science(service, view, code)
+    assert calls == {'production': int(mutation != 'reference'), 'verification': int(mutation == 'conservation')}
+    assert submit_fragments(service, binding) == view
+    reopened, reopened_models = fragments_service(tmp_path)
+    assert reopened.turn('analysis', 'import') == view and not reopened_models
+    assert service.resources.load(resource.resource_id) == resource
+
+
+def test_registered_fragments_unsupported_profile_stays_a_scientific_contract_failure(
+        fragment_source_factory, tmp_path, monkeypatch):
+    arguments = fragment_source_factory()
+    arguments['source_profile'] = 'infer-from-filename'
+    service, models = fragments_service(tmp_path)
+    calls = count_fragment_science(monkeypatch)
+    resource, binding = fragments_binding(service, arguments)
+    assert not models and calls == {'production': 0, 'verification': 0}
+    service.create_session('analysis')
+    view = submit_fragments(service, binding)
+    assert view.status == 'failed' and view.revision_id is None, view
+    run = service._application.run_store.load(view.run_id)
+    assert run.errors and view.error.code == run.errors[0].code
+    assert not view.error.code.startswith('LOCAL_RESOURCE_')
+    assert view.error.code != 'INTERACTIVE_APPLICATION_FAILED'
+    assert calls == {'production': 0, 'verification': 0}
+    assert service.resources.load(resource.resource_id) == resource
+
+
+@pytest.mark.parametrize('during_provider', [False, True])
+def test_registered_fragments_source_drift_blocks_new_science(
+        fragment_source_factory, tmp_path, monkeypatch, during_provider):
+    arguments = fragment_source_factory()
+    source = Path(arguments['source_path'])
+    def changed():
+        source.write_bytes(b'Changed registered source.\n')
+    service, models = fragments_service(tmp_path, output_callback=changed if during_provider else None)
+    calls = count_fragment_science(monkeypatch)
+    _, binding = fragments_binding(service, arguments)
+    service.create_session('analysis')
+    if during_provider:
+        view = submit_fragments(service, binding)
+        assert view.status == 'failed' and view.revision_id is None, view
+        assert view.error.code == 'LOCAL_RESOURCE_INTEGRITY_INVALID'
+        assert len(models) == 1
+    else:
+        changed()
+        with pytest.raises(ResourceAdmissionError) as error:
+            submit_fragments(service, binding)
+        assert error.value.code == 'LOCAL_RESOURCE_INTEGRITY_INVALID'
+        assert not models
+    state = service._application.sessions.load('analysis')
+    assert state.generation == 0 and not state.revisions
+    assert calls == {'production': 0, 'verification': 0}
+
+
+@pytest.mark.parametrize('source_lifetime', ['unchanged', 'changed', 'deleted'])
+def test_registered_fragments_fresh_process_recovery_preserves_historical_policy(
+        fragment_source_factory, tmp_path, monkeypatch, source_lifetime):
+    arguments = fragment_source_factory()
+    service, models = fragments_service(tmp_path)
+    calls = count_fragment_science(monkeypatch)
+    resource, binding = fragments_binding(service, arguments)
+    service.create_session('analysis')
+    from agent.application.sessions import AnalysisSessions
+    class Interrupted(BaseException):
+        pass
+    with monkeypatch.context() as stopped:
+        def interrupt(*args, **kwargs):
+            raise Interrupted()
+        stopped.setattr(AnalysisSessions, '_record_result', interrupt)
+        with pytest.raises(Interrupted):
+            submit_fragments(service, binding)
+    initial = service._application.sessions.load('analysis')
+    assert not initial.revisions and initial.turn('import').status == 'linked'
+    run = service._application.run_store.load(initial.turn('import').run_id)
+    assert run.lifecycle_status.value == 'SUCCEEDED'
+    source = Path(arguments['source_path'])
+    if source_lifetime == 'changed':
+        source.write_bytes(b'Replaced after accepted scientific execution.\n')
+    elif source_lifetime == 'deleted':
+        source.unlink()
+    script = '''
+import json, sys
+from agent.application import InteractiveAgentApplication
+from agent.application.local_resources import RegisteredInput, ResourceAdmissionError
+from agent.orchestration import PlanningModelProfile
+from agent.providers import PlanningModelFactoryRegistry
+from agent.schemas.orchestration import _serialize
+from agent.tools.data import external_fragments, external_fragments_verifier
+def forbidden(*args, **kwargs): raise AssertionError('Recovery repeated providers or science')
+external_fragments.prepare_in_stage = external_fragments_verifier._reconstruct_source = forbidden
+profile = PlanningModelProfile('local-scripted', 'scripted', 'scripted/local-resource')
+app = InteractiveAgentApplication(sys.argv[1], model_profiles=(profile,), default_profile_id=profile.profile_id,
+    planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': forbidden}))
+state = app._application.sessions.load('analysis')
+submission = _serialize(state.interactions[0].submission)
+binding = RegisteredInput(**submission['registered_input'], execution_inputs=submission['execution_inputs'])
+view = app.recover_turn('analysis', 'import', complete_presentation=True)
+assert view.status == 'succeeded' and view.revision_id
+assert app.submit_turn('analysis', 'import', sys.argv[2], expected_generation=0, registered_input=binding) == view
+assert app.recover_turn('analysis', 'import', complete_presentation=True) == view
+assert app.reopen_session('analysis').active_revision_id == view.revision_id
+accepted = app._application.sessions.load('analysis')
+assert accepted.interactions[0].submission == state.interactions[0].submission
+if sys.argv[3] != 'unchanged':
+    try:
+        app.submit_turn('analysis', 'fresh', sys.argv[2], expected_generation=1, registered_input=binding)
+    except ResourceAdmissionError as error:
+        assert error.code == 'LOCAL_RESOURCE_INTEGRITY_INVALID'
+    else:
+        raise AssertionError('Historical source consumed as fresh input')
+assert app._application.sessions.load('analysis') == accepted
+print(json.dumps(view.to_dict()))
+'''
+    child = subprocess.run([sys.executable, '-B', '-c', script,
+        str(service._application.workspace_root), FRAGMENTS_UTTERANCE, source_lifetime],
+        env=os.environ.copy(), capture_output=True, text=True, timeout=60)
+    assert child.returncode == 0, child.stdout + child.stderr
+    view = service.turn('analysis', 'import')
+    assert json.loads(child.stdout) == view.to_dict()
+    assert service.resources.load(resource.resource_id) == resource
+    assert calls == {'production': 1, 'verification': 1} and len(models) == 1
+
+
+def test_operator_fragments_input_set_uses_existing_execution_path(
+        fragment_source_factory, tmp_path, monkeypatch):
+    from agent.web.config import ScientificInputSet
+    arguments = fragment_source_factory()
+    inputs = {key: value for key, value in arguments.items() if key != 'output_dir'}
+    configured = ScientificInputSet('fragments', 'Operator fragments', inputs)
+    service, models = fragments_service(tmp_path)
+    calls = count_fragment_science(monkeypatch)
+    service.create_session('analysis')
+    view = service.submit_turn('analysis', 'operator', FRAGMENTS_UTTERANCE,
+        expected_generation=0, execution_inputs=configured.inputs())
+    assert view.status == 'succeeded', view
+    state = service._application.sessions.load('analysis')
+    assert 'registered_input' not in state.interactions[0].submission
+    assert calls == {'production': 1, 'verification': 1} and len(models) == 1
+    assert not list((tmp_path / 'workspace' / 'local_resources').glob('*.json'))

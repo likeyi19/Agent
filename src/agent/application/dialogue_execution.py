@@ -36,6 +36,7 @@ def execute(sessions, interaction, admitted, model):
     from .turns import _AdmittedPlanner, _update, TurnOutcome
     from .service import ResearchAgentApplication
     from .scientific_dialogue import _json
+    from .local_resources import LocalResourceAdmission, ResourceAdmissionError
     app = sessions._application
     sid = sessions._interaction_session_id
     selected = 'selected_candidate' in admitted
@@ -45,8 +46,12 @@ def execute(sessions, interaction, admitted, model):
         context = execution_context(sessions, interaction, admitted)
         intent = planning_intent(sessions, interaction, admitted, context)
     request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
+    registered = interaction.submission is not None and 'registered_input' in interaction.submission
+    resources = LocalResourceAdmission(app._workspace, registry=app.registry) if registered else None
+    resource_failure = None
 
     def accept(effective, plan):
+        nonlocal resource_failure
         if admitted['tool'] not in {s.tool_name for s in plan.steps}:
             raise IntentError('planning_failed')
         offered = [dict(step_id=s.step_id, tool=s.tool_name,
@@ -70,6 +75,19 @@ def execute(sessions, interaction, admitted, model):
         if len({o.name for o in selections}) != len(selections): raise IntentError('planning_failed')
         if selected:
             execution_context(sessions, interaction, admitted)
+        if registered:
+            # The last provider call has completed. Check application byte identity
+            # before execution; scientific compatibility still belongs to the tools.
+            try:
+                resources.validate_submission(interaction.submission)
+                if any(effective.inputs.get(key) != value
+                       for key, value in interaction.submission['execution_inputs'].items()):
+                    raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
+            except ResourceAdmissionError as exc:
+                from agent.orchestration.planner import PlannerError
+                from agent.schemas import ErrorCategory
+                resource_failure = exc.error
+                raise PlannerError(exc.code, exc.message, category=ErrorCategory.RESOURCE_ERROR) from exc
         def link(state):
             if selected and (state.active_revision_id != interaction.base_revision_id
                              or state.generation != interaction.base_generation):
@@ -89,11 +107,17 @@ def execute(sessions, interaction, admitted, model):
         result = execution_app.run(request)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):
-        sessions._record_result(sid, interaction.turn_id, result)
+        try:
+            sessions._record_result(sid, interaction.turn_id, result)
+        except ResourceAdmissionError as exc:
+            return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
         state = sessions.recover(sid, interaction.turn_id)
         return completion_outcome(state, interaction.turn_id, error=result.error)
     _update(sessions, interaction.turn_id, status='failed')
-    return TurnOutcome('execute', 'failed', text='The scientific execution request could not form a valid plan from the supplied inputs.')
+    error = resource_failure or result.error or next(iter(result.run_result.errors), None)
+    return TurnOutcome('execute', 'failed', error=error,
+        text=error.message if error is not None else
+        'The scientific execution request could not form a valid plan from the supplied inputs.')
 
 
 def completion_outcome(state, turn_id, *, error=None):

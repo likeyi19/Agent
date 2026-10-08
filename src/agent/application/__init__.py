@@ -26,12 +26,14 @@ from .scientific_dialogue import ScientificClaim, ScientificResponse
 from .scientific_guidance import GuidanceCandidate, GuidanceResponse
 from .turn_decisions import GuidanceQuestion
 from .interactive import InteractiveAgentApplication, InteractiveBoundaryError
+from .local_resources import LocalResourceAdmission, LocalResourceRecord, RegisteredInput, ResourceAdmissionError
 from .interactive_schemas import (
     ModelChoice, ClientError, PresentedResponse, TurnView, StepView,
     RevisionView, SessionView, ArtifactHandle, EvidenceView, ArtifactContent,
 )
 
 __all__ = [
+    "LocalResourceAdmission", "LocalResourceRecord", "RegisteredInput", "ResourceAdmissionError",
     "InteractiveAgentApplication", "InteractiveBoundaryError", "ModelChoice",
     "ClientError", "PresentedResponse", "TurnView", "StepView", "RevisionView",
     "SessionView", "ArtifactHandle", "EvidenceView", "ArtifactContent",

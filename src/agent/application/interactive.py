@@ -26,6 +26,7 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
+from .local_resources import LocalResourceAdmission, RegisteredInput, ResourceAdmissionError
 
 
 _MESSAGES = {
@@ -160,7 +161,8 @@ class InteractiveAgentApplication:
     def __init__(self, workspace_root, *, model_profiles, default_profile_id,
                  planning_model_factory_registry=None, display_labels=None,
                  registry=None, executor=None, planning_wire_mode=None,
-                 recovery_planning_profile=None, planning_recovery_policy=None):
+                 recovery_planning_profile=None, planning_recovery_policy=None,
+                 approved_source_roots=()):
         self._factory = (build_default_planning_model_factory_registry()
                          if planning_model_factory_registry is None else planning_model_factory_registry)
         if (not isinstance(self._factory, PlanningModelFactoryRegistry)
@@ -185,6 +187,8 @@ class InteractiveAgentApplication:
         except (ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
         self._config = dict(registry=self._application.registry, executor=self._application.runtime.executor)
+        self.resources = LocalResourceAdmission(self._application._workspace,
+            approved_source_roots=approved_source_roots, registry=self._application.registry)
 
     def _profile(self, profile_id):
         profile = self._profiles.get(profile_id) if type(profile_id) is str else None
@@ -320,13 +324,16 @@ class InteractiveAgentApplication:
         except (ValueError, TypeError, RecursionError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
-    def _submission(self, profile, generation, inputs, predecessor):
-        return dict(profile_id=profile.profile_id,
+    def _submission(self, profile, generation, inputs, predecessor, registered_input=None):
+        submission = dict(profile_id=profile.profile_id,
             configuration_sha256=digest(dict(profile=asdict(profile),
                 wire_mode=None if self._planning['planning_wire_mode'] is None else self._planning['planning_wire_mode'].value,
                 recovery_profile=None if self._planning['recovery_planning_profile'] is None else asdict(self._planning['recovery_planning_profile']),
                 recovery_policy=None if self._planning['planning_recovery_policy'] is None else asdict(self._planning['planning_recovery_policy']))),
             expected_generation=generation, execution_inputs=inputs, predecessor_turn_id=predecessor)
+        if registered_input is not None:
+            submission['registered_input'] = registered_input.attribution()
+        return submission
 
     @staticmethod
     def _duplicate(state, turn_id, utterance, submission):
@@ -340,7 +347,8 @@ class InteractiveAgentApplication:
         return False
 
     def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
-                            execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+                            execution_inputs=None, predecessor_turn_id=None, profile_id=None,
+                            registered_input=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
                 or type(utterance) is not str or not utterance.strip() or len(utterance) > 4096):
@@ -348,8 +356,12 @@ class InteractiveAgentApplication:
         if predecessor_turn_id is not None:
             _identifier(predecessor_turn_id)
         profile = self._profile(self._default if profile_id is None else profile_id)
+        if registered_input is not None:
+            if execution_inputs is not None or not isinstance(registered_input, RegisteredInput):
+                raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
+            execution_inputs = registered_input.execution_inputs
         inputs = _inputs(execution_inputs)
-        submission = self._submission(profile, expected_generation, inputs, predecessor_turn_id)
+        submission = self._submission(profile, expected_generation, inputs, predecessor_turn_id, registered_input)
         try:
             if len(canonical(submission)) > 65536:
                 raise ValueError('Submission bound exceeded.')
@@ -364,28 +376,34 @@ class InteractiveAgentApplication:
             if (prior is None or prior.status != 'answered' or prior.admitted is None
                     or prior.admitted.get('intent') not in {'scientific', 'guidance'}):
                 raise _fail('INTERACTIVE_REFERENCE_INVALID')
+        if not duplicate and registered_input is not None:
+            self.resources.validate_binding(registered_input, verify_source=False)
         return profile, inputs, submission, state, duplicate
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
-                            execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+                            execution_inputs=None, predecessor_turn_id=None, profile_id=None,
+                            registered_input=None):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
         requests. It reserves no identity and grants no execution authority;
         ``submit_turn`` repeats admission under the existing processing lease.
         """
-        _, _, submission, _, _ = self._checked_submission(session_id, turn_id, utterance,
+        _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
-            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id)
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input)
+        if not duplicate and registered_input is not None:
+            self.resources.validate_binding(registered_input)
         return digest(dict(session_id=session_id, turn_id=turn_id,
                            utterance=utterance, submission=submission))
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
-                    execution_inputs=None, predecessor_turn_id=None, profile_id=None):
+                    execution_inputs=None, predecessor_turn_id=None, profile_id=None,
+                    registered_input=None):
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
-            profile_id=profile_id)
+            profile_id=profile_id, registered_input=registered_input)
         if duplicate:
             return self.turn(session_id, turn_id)
         sessions = self._application.sessions
@@ -396,6 +414,8 @@ class InteractiveAgentApplication:
                     return self.turn(session_id, turn_id)
                 if state.generation != expected_generation:
                     raise _fail('INTERACTIVE_GENERATION_CONFLICT')
+                if registered_input is not None:
+                    self.resources.validate_binding(registered_input)
                 try:
                     if predecessor_turn_id is not None:
                         prior = next((i for i in state.interactions if i.turn_id == predecessor_turn_id), None)
@@ -440,6 +460,8 @@ class InteractiveAgentApplication:
                 return self._view(state, turn_id)
             raise _fail('INTERACTIVE_OPERATION_ACTIVE') from exc
         except InteractiveBoundaryError:
+            raise
+        except ResourceAdmissionError:
             raise
         except (SessionError, ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
@@ -520,7 +542,16 @@ class InteractiveAgentApplication:
                 if any(t.turn_id == turn_id for t in state.turns):
                     state = sessions.recover(session_id, turn_id)
                     if complete_presentation:
-                        state = sessions.complete_presentation(session_id, turn_id)
+                        try:
+                            state = sessions.complete_presentation(session_id, turn_id)
+                        except ResourceAdmissionError as exc:
+                            failed = self._load(session_id)
+                            interaction = next((i for i in failed.interactions if i.turn_id == turn_id), None)
+                            from .turns import TurnOutcome
+                            outcome = TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
+                            if interaction is None or _serialize(interaction.presentation) != _present(outcome).to_dict():
+                                raise  # Preserve a different immutable historical display.
+                            return self.turn(session_id, turn_id)
                     interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
                     if (interaction is not None and interaction.submission is not None
                             and interaction.presentation is None and state.turn(turn_id).request_id is not None
@@ -537,6 +568,8 @@ class InteractiveAgentApplication:
                 return self.turn(session_id, turn_id)
         except SessionConflictError as exc:
             raise _fail('INTERACTIVE_OPERATION_ACTIVE') from exc
+        except ResourceAdmissionError:
+            raise
         except (SessionError, ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
 

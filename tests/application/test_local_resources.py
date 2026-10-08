@@ -1,0 +1,376 @@
+"""Registration and deterministic bindings, without scientific qualification."""
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError, replace
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from agent.application.local_resources import (
+    LocalResourceAdmission, RegisteredInput, ResourceAdmissionError, MAX_RECORD_BYTES,
+)
+from agent.application.session_state import canonical, digest
+from agent.orchestration.registry import build_default_tool_registry, ToolArgumentError, ToolRegistry
+from agent.schemas.orchestration import _serialize
+
+
+@pytest.fixture
+def local(tmp_path):
+    sources = tmp_path / 'approved'
+    sources.mkdir()
+    source = sources / 'sample.h5ad'
+    source.write_bytes(b'deliberately unreadable scientific data')
+    owner = LocalResourceAdmission(tmp_path / 'workspace', approved_source_roots=(sources,))
+    return owner, source
+
+
+def register(owner, source, **changes):
+    return owner.register('operator-selection-1', source,
+        **(dict(label='Sample 1', attribution='Declared by the operator; provenance unverified') | changes))
+
+
+def companion_inputs(tmp_path):
+    return dict(reference_manifest_path=str(tmp_path / 'reference.json'),
+                reference_manifest_sha256='1' * 64, species='human', assembly='hg38',
+                matrix_semantics='fragment_counts')
+
+
+def assert_code(code, call):
+    with pytest.raises(ResourceAdmissionError) as failed:
+        call()
+    assert failed.value.code == failed.value.error.code == code
+    assert failed.value.message == failed.value.error.message
+    assert '/' not in failed.value.message
+
+
+def test_registration_is_lazy_private_and_not_science(local, monkeypatch):
+    owner, source = local
+    workspace = owner._workspace.root
+    assert not (workspace / 'local_resources').exists()
+    assert not (workspace / 'sessions').exists()
+    def forbidden(*args, **kwargs):
+        pytest.fail('Registration entered planning or science.')
+    import agent.tools.data.scatac as inspection
+    import agent.tools.data.scatac_matrix_adoption as adoption
+    import agent.orchestration.registry as registry
+    monkeypatch.setattr(inspection, 'inspect_scATAC', forbidden)
+    monkeypatch.setattr(adoption, 'adopt_scATAC_cell_by_ccre', forbidden)
+    monkeypatch.setattr(registry, 'build_default_tool_registry', forbidden)
+    record = register(owner, source)
+    assert record.source_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert record.size_bytes == source.stat().st_size
+    assert record.record_sha256 == digest(record.to_dict())
+    public = record.public()
+    assert public == dict(resource_id=record.resource_id, label='Sample 1', input_type='h5ad', status='registered')
+    assert str(source) not in json.dumps(public)
+    assert not (workspace / 'sessions').exists()
+    assert list((workspace / 'runs').iterdir()) == []
+    assert list((workspace / 'run_state').iterdir()) == []
+    with pytest.raises(FrozenInstanceError):
+        record.label = 'changed'
+
+
+def test_equivalent_retry_and_reopen_preserve_exact_record(local):
+    owner, source = local
+    record = register(owner, source)
+    raw = owner._path(record.resource_id).read_bytes()
+    assert register(owner, source) == record
+    assert owner._path(record.resource_id).read_bytes() == raw
+    reopened = LocalResourceAdmission(owner._workspace.root)
+    assert reopened.load(record.resource_id) == record
+    binding = reopened.resolve(record.resource_id, tool_name='inspect_scATAC')
+    assert reopened.validate_binding(binding) == {'input_path': str(source)}
+    assert_code('LOCAL_RESOURCE_ACCESS_INVALID', lambda: register(reopened, source))
+
+
+@pytest.mark.parametrize('change', ['label', 'attribution', 'source', 'bytes'])
+def test_registration_key_cannot_change_meaning(local, change):
+    owner, source = local
+    original = register(owner, source)
+    supplied = source
+    options = {}
+    if change in {'label', 'attribution'}:
+        options[change] = 'changed declaration'
+    elif change == 'source':
+        supplied = source.with_name('other.h5ad')
+        supplied.write_bytes(source.read_bytes())
+    else:
+        source.write_bytes(b'changed source bytes')
+    assert_code('LOCAL_RESOURCE_CONFLICT', lambda: register(owner, supplied, **options))
+    assert owner.load(original.resource_id) == original
+
+
+def test_new_key_can_register_changed_content_without_replacing_history(local):
+    owner, source = local
+    original = register(owner, source)
+    source.write_bytes(b'new bytes')
+    new = owner.register('operator-selection-2', source, label='Sample 2', attribution='Operator declaration')
+    assert new.resource_id != original.resource_id and new.source_sha256 != original.source_sha256
+    assert owner.load(original.resource_id) == original
+
+
+@pytest.mark.parametrize('kind', ['outside', 'directory', 'missing', 'url', 'symlink', 'ancestor_symlink'])
+def test_only_operator_approved_canonical_regular_sources(local, tmp_path, kind):
+    owner, source = local
+    supplied = source
+    if kind == 'outside':
+        supplied = tmp_path / 'outside.h5ad'
+        supplied.write_bytes(b'bytes')
+    elif kind == 'directory':
+        supplied = source.parent
+    elif kind == 'missing':
+        supplied = source.parent / 'missing.h5ad'
+    elif kind == 'url':
+        supplied = 'https://example.invalid/source.h5ad'
+    elif kind == 'symlink':
+        supplied = source.with_name('alias.h5ad')
+        supplied.symlink_to(source)
+    else:
+        alias = tmp_path / 'alias'
+        alias.symlink_to(source.parent, target_is_directory=True)
+        supplied = alias / source.name
+    assert_code('LOCAL_RESOURCE_ACCESS_INVALID', lambda: register(owner, supplied))
+    assert not (owner._workspace.root / 'local_resources').exists()
+
+
+def test_unsupported_type_and_unsafe_label_do_not_access_or_register(local, monkeypatch):
+    owner, source = local
+    monkeypatch.setattr(owner, '_source', lambda *args, **kwargs: pytest.fail('Source read occurred.'))
+    assert_code('LOCAL_RESOURCE_TYPE_UNSUPPORTED', lambda: register(owner, source, input_type='bam'))
+    assert_code('LOCAL_RESOURCE_RECORD_INVALID', lambda: register(owner, source, label=str(source)))
+    assert not (owner._workspace.root / 'local_resources').exists()
+
+
+@pytest.mark.parametrize('mutation', ['truncated', 'checksum', 'duplicate', 'extra', 'bool_version', 'wrong_identity', 'oversize'])
+def test_corrupt_or_incomplete_records_fail_closed(local, mutation):
+    owner, source = local
+    record = register(owner, source)
+    path = owner._path(record.resource_id)
+    envelope = json.loads(path.read_bytes())
+    if mutation == 'truncated':
+        payload = b'{"record":'
+    elif mutation == 'duplicate':
+        payload = path.read_bytes()[:-1] + b',"format":"agent.local-resource.v1"}'
+    elif mutation == 'oversize':
+        payload = b' ' * (MAX_RECORD_BYTES + 1)
+    else:
+        if mutation == 'checksum':
+            envelope['record']['label'] = 'changed'
+        elif mutation == 'extra':
+            envelope['record']['scientifically_accepted'] = True
+            envelope['sha256'] = digest(envelope['record'])
+        elif mutation == 'bool_version':
+            envelope['schema_version'] = True
+        else:
+            envelope['record']['resource_id'] = 'local-' + '0' * 64
+            envelope['sha256'] = digest(envelope['record'])
+        payload = canonical(envelope)
+    path.write_bytes(payload)
+    assert_code('LOCAL_RESOURCE_RECORD_INVALID', lambda: owner.load(record.resource_id))
+
+
+def test_unknown_resource_and_read_does_not_create_store(local):
+    owner, _ = local
+    unknown = 'local-' + 'a' * 64
+    assert_code('LOCAL_RESOURCE_UNAVAILABLE', lambda: owner.load(unknown))
+    assert not (owner._workspace.root / 'local_resources').exists()
+
+
+@pytest.mark.parametrize('kind', ['file', 'directory'])
+def test_resource_store_symlinks_are_rejected(local, tmp_path, kind):
+    owner, source = local
+    record = register(owner, source)
+    if kind == 'file':
+        path = owner._path(record.resource_id)
+        target = tmp_path / 'record-copy'
+        path.rename(target)
+        path.symlink_to(target)
+    else:
+        path = owner._workspace.root / 'local_resources'
+        target = tmp_path / 'resource-copy'
+        path.rename(target)
+        path.symlink_to(target, target_is_directory=True)
+    assert_code('LOCAL_RESOURCE_RECORD_INVALID', lambda: owner.load(record.resource_id))
+
+
+def test_interrupted_publication_exposes_no_partial_record(local, monkeypatch):
+    owner, source = local
+    def interrupted(*args, **kwargs):
+        raise OSError('Synthetic interrupted publication.')
+    monkeypatch.setattr(os, 'link', interrupted)
+    assert_code('LOCAL_RESOURCE_RECORD_INVALID', lambda: register(owner, source))
+    root = owner._workspace.root / 'local_resources'
+    assert list(root.glob('*.json')) == [] and list(root.glob('*.tmp')) == []
+    assert source.read_bytes() == b'deliberately unreadable scientific data'
+
+
+def test_source_changed_before_publication_is_not_registered(local, monkeypatch):
+    owner, source = local
+    original = owner._source
+    def replaced(*args, **kwargs):
+        identity = original(*args, **kwargs)
+        source.write_bytes(b'changed after source hashing')
+        return identity
+    monkeypatch.setattr(owner, '_source', replaced)
+    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: register(owner, source))
+    assert list((owner._workspace.root / 'local_resources').glob('*.json')) == []
+
+
+def test_source_mutation_during_hash_is_not_registered(local, monkeypatch):
+    owner, source = local
+    original = hashlib.sha256
+    class MutatingHash:
+        def __init__(self):
+            self.hash = original()
+        def update(self, chunk):
+            self.hash.update(chunk)
+            source.write_bytes(b'changed while hashing')
+        def hexdigest(self):
+            return self.hash.hexdigest()
+    monkeypatch.setattr(hashlib, 'sha256', lambda value=b'': original(value) if value else MutatingHash())
+    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: register(owner, source))
+    assert not (owner._workspace.root / 'local_resources').exists()
+
+
+def test_concurrent_equivalent_registration_is_idempotent(local):
+    owner, source = local
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        records = list(executor.map(lambda _: register(owner, source), range(2)))
+    assert records[0] == records[1]
+    assert len(list((owner._workspace.root / 'local_resources').glob('*.json'))) == 1
+
+
+def test_adoption_mapping_is_exact_without_scientific_qualification(local, tmp_path):
+    owner, source = local
+    record = register(owner, source)
+    # A nonexistent reference and scientifically invalid semantics are not
+    # validated by registration/resolution. Registry and the owner retain them.
+    declarations = companion_inputs(tmp_path) | {'matrix_semantics': 'invented_counts'}
+    binding = owner.resolve(record.resource_id, tool_name='adopt_scATAC_cell_by_ccre', scientific_inputs=declarations)
+    expected = declarations | dict(source_path=str(source), source_sha256=record.source_sha256)
+    assert owner.validate_binding(binding) == expected
+    assert binding.attribution() == dict(resource_id=record.resource_id,
+        record_sha256=record.record_sha256, tool_name='adopt_scATAC_cell_by_ccre')
+    with pytest.raises(ToolArgumentError):
+        build_default_tool_registry().validate_arguments(binding.tool_name, expected | {'output_dir': str(tmp_path / 'out')})
+
+
+@pytest.mark.parametrize('missing', ['reference_manifest_path', 'reference_manifest_sha256', 'species', 'assembly', 'matrix_semantics'])
+def test_required_adoption_declarations_are_not_guessed(local, tmp_path, missing):
+    owner, source = local
+    record = register(owner, source)
+    declarations = companion_inputs(tmp_path)
+    declarations.pop(missing)
+    assert_code('LOCAL_RESOURCE_DECLARATION_REQUIRED', lambda: owner.resolve(record.resource_id,
+        tool_name='adopt_scATAC_cell_by_ccre', scientific_inputs=declarations))
+
+
+@pytest.mark.parametrize('extra', ['source_path', 'source_sha256', 'output_dir', 'unknown', 'authority_payload'])
+def test_source_fields_and_reserved_declarations_cannot_be_supplied(local, tmp_path, extra):
+    owner, source = local
+    record = register(owner, source)
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.resolve(record.resource_id,
+        tool_name='adopt_scATAC_cell_by_ccre', scientific_inputs=companion_inputs(tmp_path) | {extra: 'supplied'}))
+
+
+def test_binding_is_frozen_and_preserves_exact_caller_declarations(local, tmp_path):
+    owner, source = local
+    record = register(owner, source)
+    declarations = companion_inputs(tmp_path)
+    binding = owner.resolve(record.resource_id, tool_name='adopt_scATAC_cell_by_ccre', scientific_inputs=declarations)
+    declarations['assembly'] = 'mm10'
+    assert binding.execution_inputs['assembly'] == 'hg38'
+    with pytest.raises(TypeError):
+        binding.execution_inputs['assembly'] = 'mm10'
+    with pytest.raises(FrozenInstanceError):
+        binding.resource_id = 'local-' + '0' * 64
+
+
+@pytest.mark.parametrize('mutation', ['source_path', 'source_sha256', 'missing_path', 'record_digest', 'tool'])
+def test_forged_bindings_do_not_change_registered_source(local, tmp_path, mutation):
+    owner, source = local
+    record = register(owner, source)
+    binding = owner.resolve(record.resource_id, tool_name='adopt_scATAC_cell_by_ccre', scientific_inputs=companion_inputs(tmp_path))
+    values = _serialize(binding.execution_inputs)
+    if mutation == 'record_digest':
+        forged = replace(binding, record_sha256='0' * 64)
+    elif mutation == 'tool':
+        forged = replace(binding, tool_name='inspect_scATAC')
+    else:
+        if mutation == 'missing_path':
+            values.pop('source_path')
+        else:
+            values[mutation] = str(tmp_path / 'different.h5ad') if mutation == 'source_path' else '0' * 64
+        forged = replace(binding, execution_inputs=values)
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(forged, verify_source=False))
+
+
+@pytest.mark.parametrize('mutation', ['replace', 'same_stat_size', 'delete', 'symlink'])
+def test_new_consumption_fails_but_historical_binding_survives_source_change(local, mutation):
+    owner, source = local
+    record = register(owner, source)
+    binding = owner.resolve(record.resource_id, tool_name='inspect_scATAC')
+    captured = dict(registered_input=binding.attribution(), execution_inputs=_serialize(binding.execution_inputs))
+    original = source.stat()
+    if mutation == 'replace':
+        replacement = source.with_name('replacement')
+        replacement.write_bytes(b'changed')
+        replacement.replace(source)
+    elif mutation == 'same_stat_size':
+        source.write_bytes(b'x' * original.st_size)
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+    elif mutation == 'delete':
+        source.unlink()
+    else:
+        target = source.with_name('elsewhere')
+        source.rename(target)
+        source.symlink_to(target)
+    reopened = LocalResourceAdmission(owner._workspace.root)
+    assert reopened.load(record.resource_id) == record
+    assert reopened.validate_binding(binding, verify_source=False) == {'input_path': str(source)}
+    reopened.validate_submission(captured, verify_source=False)
+    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: reopened.validate_binding(binding))
+    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: reopened.resolve(record.resource_id, tool_name='inspect_scATAC'))
+
+
+@pytest.mark.parametrize('change', ['metadata_extra', 'digest', 'inputs', 'missing'])
+def test_submission_resource_attribution_is_exact(local, change):
+    owner, source = local
+    record = register(owner, source)
+    binding = owner.resolve(record.resource_id, tool_name='inspect_scATAC')
+    submission = dict(registered_input=binding.attribution(), execution_inputs=_serialize(binding.execution_inputs))
+    owner.validate_submission(submission)
+    if change == 'metadata_extra':
+        submission['registered_input']['source_path'] = str(source)
+    elif change == 'digest':
+        submission['registered_input']['record_sha256'] = '0' * 64
+    elif change == 'inputs':
+        submission['execution_inputs']['input_path'] = str(source.with_name('different.h5ad'))
+    else:
+        submission.pop('registered_input')
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_submission(submission, verify_source=False))
+
+
+def test_unsupported_operation_is_not_selected_or_completed(local):
+    owner, source = local
+    record = register(owner, source)
+    assert_code('LOCAL_RESOURCE_OPERATION_UNSUPPORTED', lambda: owner.resolve(record.resource_id, tool_name='epizoo_embed_cells'))
+    assert_code('LOCAL_RESOURCE_OPERATION_UNSUPPORTED', lambda: RegisteredInput(record.resource_id,
+        record.record_sha256, 'epizoo_embed_cells', {'input_path': str(source)}))
+
+
+def test_registration_does_not_bypass_a_restricted_registry(local):
+    owner, source = local
+    record = register(owner, source)
+    restricted = LocalResourceAdmission(owner._workspace, registry=ToolRegistry(()))
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: restricted.resolve(record.resource_id, tool_name='inspect_scATAC'))
+
+
+def test_record_only_binding_validation_never_opens_current_source(local, monkeypatch):
+    owner, source = local
+    record = register(owner, source)
+    binding = owner.resolve(record.resource_id, tool_name='inspect_scATAC')
+    monkeypatch.setattr(owner, '_source', lambda *args, **kwargs: pytest.fail('Historical read accessed source.'))
+    assert owner.validate_binding(binding, verify_source=False) == {'input_path': str(source)}

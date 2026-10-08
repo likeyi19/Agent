@@ -760,6 +760,63 @@ The canonical application demo is inspection → EpiZoo → neighbors → Leiden
 UMAP → verified evidence → Leiden UMAP figure → deterministic report. The richer
 reference/query annotation workflow is also available.
 
+### Local H5AD registration (UA1)
+
+The Python interactive boundary can register a completed, operator-approved local
+H5AD. Registration hashes the source and atomically persists a checksummed record
+under `local_resources/`; it opens no H5AD, invokes no provider or scientific tool,
+and creates no Session or Revision. The label and caller-supplied attribution do
+not establish biological provenance, readability, or scientific compatibility.
+
+```python
+from agent.application import InteractiveAgentApplication
+
+app = InteractiveAgentApplication(
+    workspace_root, model_profiles=profiles, default_profile_id=default_profile_id,
+    planning_model_factory_registry=factories,
+    approved_source_roots=(approved_directory,),
+)
+resource = app.resources.register(
+    "local-source-request-001", local_h5ad, input_type="h5ad",
+    label="Supplied matrix", attribution="Caller-supplied local source",
+)
+binding = app.resources.resolve(
+    resource.resource_id, tool_name="adopt_scATAC_cell_by_ccre",
+    scientific_inputs={
+        "reference_manifest_path": reference_manifest_path,
+        "reference_manifest_sha256": reference_manifest_sha256,
+        "species": "human", "assembly": "hg38",
+        "matrix_semantics": "fragment_counts",
+    },
+)
+app.create_session("local-analysis")
+view = app.submit_turn(
+    "local-analysis", "adopt-001", "Adopt the supplied canonical matrix.",
+    expected_generation=0, registered_input=binding,
+)
+```
+
+This uses the ordinary Interpreter, Planner, compiler, preflight, adoption owner,
+verification, and Session completion. Explicit companions must already exist;
+their scientific qualification remains with the existing owners. Registered
+H5AD can also resolve to `inspect_scATAC`, with no scientific declarations.
+Inspection success does not establish matrix adoption or EpiZoo readiness.
+
+UA1 keeps a hash-pinned source locator rather than copying the file. Its canonical
+approved location must remain available with identical bytes for new consumption;
+different bytes, deletion, or a symlink replacement fails closed. The registration key is an
+explicit idempotency key: equivalent retries return the same immutable record,
+while changed bytes or metadata conflict. Known records can be reopened without
+granting permission to register new sources. Completed turn reads/retries retain
+their captured attribution without requiring current source bytes.
+
+Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
+identity and exact resolved inputs are captured once in the existing immutable
+submission; scientific results retain their existing RunStore/Revision authority.
+`resource.public()` exposes safe registration metadata without paths. UA1 adds no
+browser uploads, dynamic web catalog, or FASTQ/BAM/fragments registration API;
+operator-configured web InputSets keep their current behavior.
+
 ## Validation and current boundaries
 
 Real Fang2021 acceptance established exact manual EpiZoo parity for 2,000 cells,

@@ -760,10 +760,10 @@ The canonical application demo is inspection → EpiZoo → neighbors → Leiden
 UMAP → verified evidence → Leiden UMAP figure → deterministic report. The richer
 reference/query annotation workflow is also available.
 
-### Local resource registration (UA1 / UA2.2 / UA2.3)
+### Local resource registration (UA1 / UA2.2 / UA2.3 / UA2.4)
 
 The Python interactive boundary can register a completed, operator-approved local
-H5AD, external fragments file, or BAM. Registration hashes the source and atomically
+H5AD, external fragments file, BAM, or declared FASTQ. Registration hashes the source and atomically
 persists a checksummed record under `local_resources/`; it parses no scientific data,
 invokes no provider or scientific tool,
 and creates no Session or Revision. The label and caller-supplied attribution do
@@ -885,6 +885,74 @@ verifier issues the existing producer-neutral fragments-v2 authority. Public
 production remains human/hg38 or mouse/mm10 with `agent-cb-paired-atac.v1`.
 Context construction remains an explicit data-layer operation.
 
+UA2.4 composes declared FASTQ files into an exact immutable collection of existing
+`(resource_id, record_sha256)` references. Membership is closed, permutation-invariant,
+and bounded to 128 members with 32 KiB of attribution. Duplicate identities or
+source paths, missing/corrupt records, wrong types, and changed bytes fail closed.
+The collection is captured inline in each turn's existing submission; it creates
+no separate collection store or Session-wide active input. Historical scalar
+H5AD/fragments/BAM attribution remains unchanged.
+
+```python
+files = [app.resources.register(
+    f"fastq-request-001-{number}", path, input_type="fastq",
+    label=f"Supplied reads {number}", attribution="Explicit caller-selected FASTQ",
+) for number, path in enumerate(explicit_fastq_paths)]
+members = [{"resource_id": file.resource_id, "record_sha256": file.record_sha256}
+           for file in files]
+inspection = app.resources.resolve_collection(
+    members, tool_name="inspect_raw_scATAC",
+    scientific_inputs={"species": "human", "raw_assay": "TENX_ATAC",
+                       "fastq_layout": "tenx-atac-r1-r2-r3.v1"},
+)
+app.create_session("fastq-analysis")
+view = app.submit_turn(
+    "fastq-analysis", "inspect-001", "Inspect the supplied FASTQ collection.",
+    expected_generation=0, registered_input=inspection,
+)
+
+# Supply the accepted intake and explicitly provisioned scientific prerequisites.
+production = app.resources.resolve_collection(
+    members, tool_name="prepare_scATAC_fragments",
+    scientific_inputs={
+        "intake_manifest_path": intake_manifest_path,
+        "intake_manifest_sha256": intake_manifest_sha256,
+        "library_context_path": library_context_path,
+        "library_context_sha256": library_context_sha256,
+        "reference_bundle_path": reference_bundle_path,
+        "reference_bundle_sha256": reference_bundle_sha256,
+    },
+)
+view = app.submit_turn(
+    "fastq-analysis", "prepare-001", "Prepare fragments using the supplied FASTQ context.",
+    expected_generation=1, registered_input=production,
+)
+```
+
+The inspection resolves only the selected files as explicit `raw_input_paths`;
+it performs no directory discovery. The existing owner supports `.fastq`, `.fq`,
+`.fastq.gz`, and `.fq.gz`, and owns readability, syntactic grouping, roles,
+synchronization, and readiness. Registration parses no reads and can identify
+invalid files. Selected files do not automatically form a biological library.
+
+FASTQ production retains its exact Registry contract: intake, library-context,
+and reference path/SHA pairs. Registered membership must equal the complete
+explicit intake inventory. The qualified context can select a legitimate subset
+of groups; first acceptance checks the actual compiled intake and the produced
+FASTQ provenance's exact source paths, hashes, and sizes, including optional I1.
+Every collection member is checked before new consumption and first acceptance,
+including unfinished recovery. Completed historical reads/retries retain their
+existing lifetime rules. Existing scientific authority policies still govern
+scientific reuse.
+
+Assay/layout, biological library membership, barcode policy/whitelist, reference,
+qualified Chromap executable/index, producer verification, and authority stay
+with their existing owners. No prerequisites or workflow steps are manufactured.
+Current public FASTQ production remains human/hg38 or mouse/mm10. Generic resource
+identity has no species restriction; the existing M14 neutral references,
+fragments, generic QC, and matrices retain their separate qualified contracts.
+Arbitrary-species FASTQ and unregistered neutral producers are not exposed here.
+
 Successful raw inspection can report `INVALID`, `NEEDS_USER_INPUT` or
 `UNSUPPORTED`; it does not qualify downstream production. Registered-source
 integrity is checked before new consumption and before first inspection-result
@@ -906,7 +974,7 @@ Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
 identity and exact resolved inputs are captured once in the existing immutable
 submission; scientific results retain their existing RunStore/Revision authority.
 `resource.public()` exposes safe registration metadata without paths. This boundary adds no
-browser uploads, dynamic web catalog, FASTQ registration or registered index resources;
+browser uploads, dynamic web catalog, or registered index resources;
 operator-configured web InputSets keep their current behavior.
 
 ## Validation and current boundaries

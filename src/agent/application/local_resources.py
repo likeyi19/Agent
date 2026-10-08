@@ -5,6 +5,7 @@ pinned bytes; reading historical attribution does not require the source to exis
 This boundary shares the application's trusted-local filesystem lifetime contract.
 """
 from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -23,10 +24,12 @@ from .workspace import ManagedWorkspace, ApplicationWorkspaceError
 
 MAX_RECORD_BYTES = 16_384
 MAX_INPUT_BYTES = 65_536
+MAX_COLLECTION_MEMBERS = 128
+MAX_COLLECTION_BYTES = 32_768
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
-_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam')
+_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam', 'fastq')
 _OPERATION_TYPES = {
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
@@ -34,6 +37,7 @@ _OPERATION_TYPES = {
     'inspect_raw_scATAC': 'bam',
     'prepare_scATAC_bam_fragments': 'bam',
 }
+_COLLECTION_OPERATIONS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments')
 _MESSAGES = {
     'LOCAL_RESOURCE_UNAVAILABLE': 'The registered local resource is unavailable.',
     'LOCAL_RESOURCE_ACCESS_INVALID': 'The local source is unavailable or outside the approved source policy.',
@@ -155,6 +159,56 @@ class RegisteredInput:
     def attribution(self):
         return dict(resource_id=self.resource_id, record_sha256=self.record_sha256,
                     tool_name=self.tool_name)
+
+
+def _members(values):
+    """Canonical exact references, without biological grouping or path discovery."""
+    try:
+        if type(values) not in (list, tuple) or not 1 <= len(values) <= MAX_COLLECTION_MEMBERS:
+            raise ValueError('Invalid collection size.')
+        members = []
+        for value in values:
+            if not isinstance(value, Mapping) or set(value) != {'resource_id', 'record_sha256'}:
+                raise ValueError('Invalid member reference.')
+            _identifier(value['resource_id'])
+            sha = value['record_sha256']
+            if type(sha) is not str or _SHA.fullmatch(sha) is None:
+                raise ValueError('Invalid member digest.')
+            members.append(dict(resource_id=value['resource_id'], record_sha256=sha))
+        if len({member['resource_id'] for member in members}) != len(members):
+            raise ValueError('Duplicate or conflicting member identity.')
+        return sorted(members, key=lambda member: member['resource_id'])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+
+
+def _collection_sha256(members):
+    return digest(dict(format='agent.local-resource-collection.v1', members=members))
+
+
+@dataclass(frozen=True)
+class RegisteredInputCollection:
+    """Inline immutable composition of existing records; no second resource store."""
+    members: object
+    collection_sha256: str
+    tool_name: str
+    execution_inputs: object
+
+    def __post_init__(self):
+        if type(self.tool_name) is not str or self.tool_name not in _COLLECTION_OPERATIONS:
+            raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+        members = _members(self.members)
+        if self.collection_sha256 != _collection_sha256(members):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        object.__setattr__(self, 'members', tuple(freeze_json_mapping(member, 'member') for member in members))
+        values = _input_mapping(self.execution_inputs)
+        object.__setattr__(self, 'execution_inputs', freeze_json_mapping(values, 'execution_inputs'))
+        if len(canonical(self.attribution())) > MAX_COLLECTION_BYTES:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+
+    def attribution(self):
+        return dict(members=[_serialize(member) for member in self.members],
+                    collection_sha256=self.collection_sha256, tool_name=self.tool_name)
 
 
 class LocalResourceAdmission:
@@ -351,6 +405,9 @@ class LocalResourceAdmission:
             source = dict(raw_input_paths=[record.source_path])
         else:
             source = dict(source_path=record.source_path, source_sha256=record.source_sha256)
+        return self._declared_inputs(tool_name, source, scientific_inputs)
+
+    def _declared_inputs(self, tool_name, source, scientific_inputs):
         values = _input_mapping(scientific_inputs)
         if self._registry is None:
             from agent.orchestration.registry import build_default_tool_registry
@@ -367,6 +424,44 @@ class LocalResourceAdmission:
         if required - set(values):
             raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
         return values | source
+
+    def _collection_records(self, members):
+        records = []
+        for member in members:
+            record = self.load(member['resource_id'])
+            if record.input_type != 'fastq' or record.record_sha256 != member['record_sha256']:
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            records.append(record)
+        if len({record.source_path for record in records}) != len(records):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        return records
+
+    def _collection_inputs(self, records, tool_name, scientific_inputs):
+        if type(tool_name) is not str or tool_name not in _COLLECTION_OPERATIONS:
+            raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+        source = (dict(raw_input_paths=sorted(record.source_path for record in records))
+                  if tool_name == 'inspect_raw_scATAC' else {})
+        return self._declared_inputs(tool_name, source, scientific_inputs)
+
+    @staticmethod
+    def _validate_fastq_intake(records, values):
+        from agent.tools.data.raw_scatac_manifest import (
+            InputKind, SelectionBasis, load_raw_intake_manifest,
+        )
+        try:
+            if values['intake_manifest_sha256'] is None:
+                raise ValueError('Registered collection requires an intake digest.')
+            _, intake, _ = load_raw_intake_manifest(values['intake_manifest_path'],
+                expected_sha256=values['intake_manifest_sha256'])
+            expected = {record.source_path: record.size_bytes for record in records}
+            if len(intake.files) != len(expected) or {source.path for source in intake.files} != set(expected):
+                raise ValueError('Intake membership differs from the registered collection.')
+            for source in intake.files:
+                if (source.input_kind is not InputKind.FASTQ or source.size_bytes != expected[source.path]
+                        or source.selection is not SelectionBasis.EXPLICIT or source.selection_root is not None):
+                    raise ValueError('Intake does not explicitly identify registered FASTQs.')
+        except (ValueError, TypeError, OSError, KeyError) as exc:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
     @staticmethod
     def _validate_bam_intake(record, values):
@@ -398,9 +493,54 @@ class LocalResourceAdmission:
         self.validate_binding(binding)
         return binding
 
-    def validate_binding(self, binding, *, verify_source=True):
-        if type(binding) is not RegisteredInput or type(verify_source) is not bool:
+    def resolve_collection(self, members, *, tool_name, scientific_inputs=None):
+        members = _members(members)
+        records = self._collection_records(members)
+        inputs = self._collection_inputs(records, tool_name, scientific_inputs)
+        binding = RegisteredInputCollection(members, _collection_sha256(members), tool_name, inputs)
+        self.validate_binding(binding)
+        return binding
+
+    def _validate_collection(self, binding, *, verify_source):
+        records = self._collection_records(binding.members)
+        values = _serialize(binding.execution_inputs)
+        declarations = {key: value for key, value in values.items()
+                        if binding.tool_name != 'inspect_raw_scATAC' or key != 'raw_input_paths'}
+        try:
+            expected = self._collection_inputs(records, binding.tool_name, declarations)
+        except ResourceAdmissionError as exc:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+        if values != expected:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if verify_source:
+            if binding.tool_name == 'prepare_scATAC_fragments':
+                self._validate_fastq_intake(records, values)
+            # Hash and recheck all members after the intake loader finishes.
+            self._verify_records(records)
+        return values
+
+    def _verify_records(self, records):
+        # Recheck the whole collection's snapshots after hashing, so a change to
+        # an earlier member while a later member is read cannot yield a binding.
+        snapshots = []
+        for record in records:
+            source, sha, size, snapshot = self._source(record.source_path, integrity=True, include_snapshot=True)
+            if (source, sha, size) != (record.source_path, record.source_sha256, record.size_bytes):
+                raise _fail('LOCAL_RESOURCE_INTEGRITY_INVALID')
+            snapshots.append((Path(source), snapshot))
+        try:
+            if any(path != path.resolve(strict=True)
+                    or self._snapshot(path.stat(follow_symlinks=False)) != snapshot
+                    for path, snapshot in snapshots):
+                raise ValueError('Collection changed during validation.')
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise _fail('LOCAL_RESOURCE_INTEGRITY_INVALID') from exc
+
+    def validate_binding(self, binding, *, verify_source=True):
+        if type(binding) not in (RegisteredInput, RegisteredInputCollection) or type(verify_source) is not bool:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if type(binding) is RegisteredInputCollection:
+            return self._validate_collection(binding, verify_source=verify_source)
         record = self.load(binding.resource_id)
         if binding.record_sha256 != record.record_sha256:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
@@ -421,12 +561,68 @@ class LocalResourceAdmission:
             self._validate_bam_intake(record, values)
         return values
 
-    def validate_submission(self, submission, *, verify_source=True):
+    @staticmethod
+    def _submission_binding(submission):
         try:
             metadata = submission['registered_input']
-            if set(metadata) != {'resource_id', 'record_sha256', 'tool_name'}:
+            if set(metadata) == {'resource_id', 'record_sha256', 'tool_name'}:
+                binding_type = RegisteredInput
+            elif set(metadata) == {'members', 'collection_sha256', 'tool_name'}:
+                binding_type = RegisteredInputCollection
+            else:
                 raise ValueError('Invalid registered input attribution.')
-            binding = RegisteredInput(**metadata, execution_inputs=submission['execution_inputs'])
+            binding = binding_type(**metadata, execution_inputs=submission['execution_inputs'])
+            if binding.attribution() != _serialize(metadata):
+                raise ValueError('Noncanonical registered input attribution.')
+            return binding
         except (TypeError, ValueError, KeyError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+
+    def validate_submission(self, submission, *, verify_source=True):
+        binding = self._submission_binding(submission)
         self.validate_binding(binding, verify_source=verify_source)
+
+    def validate_result(self, submission, steps):
+        """First acceptance only: bind inspections and FASTQ provenance to sources.
+
+        Scientific owners have already verified the result. This checks application
+        identity, including selected producer subsets, without reconstructing science.
+        Completed historical turns do not call this guard.
+        """
+        binding = self._submission_binding(submission)
+        inspections = any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'} for step in steps)
+        producers = [step for step in steps if step.tool_name == 'prepare_scATAC_fragments']
+        collection = type(binding) is RegisteredInputCollection
+        if not inspections and not (collection and producers):
+            return
+        if collection:
+            records = self._collection_records(binding.members)
+            paths = sorted(record.source_path for record in records)
+            for step in steps:
+                if step.tool_name == 'inspect_raw_scATAC':
+                    actual = _serialize(step.resolved_arguments.get('raw_input_paths'))
+                    if (type(actual) is not list or any(type(path) is not str for path in actual)
+                            or sorted(actual) != paths):
+                        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if collection and producers:
+            from agent.tools.data.fastq_fragment_manifest import load_manifest
+            expected = {record.source_path: dict(path=record.source_path,
+                sha256=record.source_sha256, size_bytes=record.size_bytes) for record in records}
+            try:
+                for step in producers:
+                    # Check the actual compiled producer inputs too; a Planner may
+                    # select a newly inspected manifest through an intra-plan edge.
+                    self._validate_fastq_intake(records, step.resolved_arguments)
+                    manifest = load_manifest(step.result['manifest_path'],
+                        expected_sha256=step.result['manifest_sha256'])
+                    for library in manifest['libraries']:
+                        provenance = library['provenance']
+                        sources = [source['resource'] for source in provenance['sources'] if source['role'] == 'fastq']
+                        if provenance['kind'] != 'fastq_fragment_production' or not sources:
+                            raise ValueError('Missing qualified FASTQ source provenance.')
+                        if any(expected.get(source['path']) != source for source in sources):
+                            raise ValueError('Producer consumed different registered bytes.')
+            except (ValueError, TypeError, OSError, KeyError) as exc:
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+        # All association reads precede the final byte/snapshot check.
+        self.validate_binding(binding)

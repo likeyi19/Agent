@@ -233,29 +233,6 @@ class AnalysisSessions:
         if run.to_run_result() != result.run_result:
             raise SessionError('Application result differs from persisted scientific run.')
         interaction = next((item for item in captured.interactions if item.turn_id == turn_id), None)
-        if (turn.status not in {'activated', 'stale', 'ready', 'failed', 'cancelled', 'planned'}
-                and result.run_status is RunStatus.SUCCEEDED
-                and interaction is not None and interaction.submission is not None
-                and 'registered_input' in interaction.submission
-                and any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'}
-                        for step in result.run_result.steps)):
-            # Inspections have no source-SHA argument. Bind their application identity
-            # here so ordinary completion and explicit recovery share acceptance.
-            from .local_resources import LocalResourceAdmission, ResourceAdmissionError
-            try:
-                LocalResourceAdmission(self._application._workspace,
-                    registry=self._application.registry).validate_submission(interaction.submission)
-            except ResourceAdmissionError as exc:
-                from .interactive_schemas import PresentedResponse
-                presentation = PresentedResponse(kind='execute', status='failed',
-                    text=exc.message, error=exc.error).to_dict()
-                def fail(state):
-                    current = _replace_turn(state, replace(state.turn(turn_id), status='failed'))
-                    return replace(current, interactions=tuple(replace(item, status='failed',
-                        presentation=item.presentation if item.presentation is not None else presentation)
-                        if item.turn_id == turn_id else item for item in current.interactions))
-                self._store._update(session_id, fail)
-                raise
         if result.status is ApplicationStatus.SUCCEEDED:
             files = self._completion_files(result)
             anchor = digest(result.run_result.to_dict())
@@ -269,6 +246,30 @@ class AnalysisSessions:
             status = ('run_succeeded' if result.run_status is RunStatus.SUCCEEDED else
                       'cancelled' if result.status is ApplicationStatus.CANCELLED else
                       'planned' if result.status is ApplicationStatus.PLANNED else 'failed')
+        if (turn.status not in {'activated', 'stale', 'ready', 'failed', 'cancelled', 'planned'}
+                and result.run_status is RunStatus.SUCCEEDED
+                and interaction is not None and interaction.submission is not None
+                and 'registered_input' in interaction.submission):
+            # The resource owner binds inspection bytes and FASTQ producer source
+            # identities. Ordinary completion and unfinished recovery share this
+            # first-acceptance guard after completion/lineage reads; terminal
+            # historical turns do not reopen inputs.
+            from .local_resources import LocalResourceAdmission, ResourceAdmissionError
+            try:
+                LocalResourceAdmission(self._application._workspace,
+                    registry=self._application.registry).validate_result(
+                        interaction.submission, result.run_result.steps)
+            except ResourceAdmissionError as exc:
+                from .interactive_schemas import PresentedResponse
+                presentation = PresentedResponse(kind='execute', status='failed',
+                    text=exc.message, error=exc.error).to_dict()
+                def fail(state):
+                    current = _replace_turn(state, replace(state.turn(turn_id), status='failed'))
+                    return replace(current, interactions=tuple(replace(item, status='failed',
+                        presentation=item.presentation if item.presentation is not None else presentation)
+                        if item.turn_id == turn_id else item for item in current.interactions))
+                self._store._update(session_id, fail)
+                raise
         def change(state):
             current = state.turn(turn_id)
             if current.status in {'activated', 'stale', 'ready', 'failed', 'cancelled', 'planned'}:

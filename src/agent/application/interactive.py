@@ -26,7 +26,7 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
-from .local_resources import LocalResourceAdmission, RegisteredInput, ResourceAdmissionError
+from .local_resources import LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, ResourceAdmissionError
 
 
 _MESSAGES = {
@@ -357,7 +357,7 @@ class InteractiveAgentApplication:
             _identifier(predecessor_turn_id)
         profile = self._profile(self._default if profile_id is None else profile_id)
         if registered_input is not None:
-            if execution_inputs is not None or not isinstance(registered_input, RegisteredInput):
+            if execution_inputs is not None or type(registered_input) not in (RegisteredInput, RegisteredInputCollection):
                 raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
             execution_inputs = registered_input.execution_inputs
         inputs = _inputs(execution_inputs)

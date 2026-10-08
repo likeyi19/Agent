@@ -160,7 +160,7 @@ def test_only_operator_approved_canonical_regular_sources(local, tmp_path, kind,
     assert not (owner._workspace.root / 'local_resources').exists()
 
 
-@pytest.mark.parametrize('input_type', ['fastq', 'tbi', 'cram'])
+@pytest.mark.parametrize('input_type', ['tbi', 'cram', 'sam'])
 def test_unsupported_type_and_unsafe_label_do_not_access_or_register(local, monkeypatch, input_type):
     owner, source = local
     monkeypatch.setattr(owner, '_source', lambda *args, **kwargs: pytest.fail('Source read occurred.'))

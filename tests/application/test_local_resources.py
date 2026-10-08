@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -14,6 +15,9 @@ from agent.application.local_resources import (
 from agent.application.session_state import canonical, digest
 from agent.orchestration.registry import build_default_tool_registry, ToolArgumentError, ToolRegistry
 from agent.schemas.orchestration import _serialize
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+from bam_fragments.conftest import bam_factory
 
 
 @pytest.fixture
@@ -51,7 +55,7 @@ def assert_code(code, call):
     assert '/' not in failed.value.message
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 def test_registration_is_lazy_private_and_not_science(local, monkeypatch, input_type):
     owner, source = local
     workspace = owner._workspace.root
@@ -64,12 +68,16 @@ def test_registration_is_lazy_private_and_not_science(local, monkeypatch, input_
     import agent.tools.data.scatac_fragment_import as fragments
     import agent.tools.data.external_fragments as fragment_parser
     import agent.tools.data.external_fragments_verifier as fragment_verifier
+    import agent.tools.data._raw_bam as raw_bam
+    import agent.tools.data.bam_fragments as bam_producer
     import agent.orchestration.registry as registry
     monkeypatch.setattr(inspection, 'inspect_scATAC', forbidden)
     monkeypatch.setattr(adoption, 'adopt_scATAC_cell_by_ccre', forbidden)
     monkeypatch.setattr(fragments, 'import_scATAC_fragments', forbidden)
     monkeypatch.setattr(fragment_parser, 'scan_source', forbidden)
     monkeypatch.setattr(fragment_verifier, '_reconstruct_source', forbidden)
+    monkeypatch.setattr(raw_bam, 'inspect_bam_inputs', forbidden)
+    monkeypatch.setattr(bam_producer, 'prepare_in_stage', forbidden)
     monkeypatch.setattr(registry, 'build_default_tool_registry', forbidden)
     record = register(owner, source, input_type=input_type)
     assert record.source_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
@@ -98,7 +106,7 @@ def test_equivalent_retry_and_reopen_preserve_exact_record(local):
     assert_code('LOCAL_RESOURCE_ACCESS_INVALID', lambda: register(reopened, source))
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 @pytest.mark.parametrize('change', ['label', 'attribution', 'source', 'bytes', 'type'])
 def test_registration_key_cannot_change_meaning(local, change, input_type):
     owner, source = local
@@ -127,7 +135,7 @@ def test_new_key_can_register_changed_content_without_replacing_history(local):
     assert owner.load(original.resource_id) == original
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 @pytest.mark.parametrize('kind', ['outside', 'directory', 'missing', 'url', 'symlink', 'ancestor_symlink'])
 def test_only_operator_approved_canonical_regular_sources(local, tmp_path, kind, input_type):
     owner, source = local
@@ -152,7 +160,7 @@ def test_only_operator_approved_canonical_regular_sources(local, tmp_path, kind,
     assert not (owner._workspace.root / 'local_resources').exists()
 
 
-@pytest.mark.parametrize('input_type', ['bam', 'fastq', 'tbi'])
+@pytest.mark.parametrize('input_type', ['fastq', 'tbi', 'cram'])
 def test_unsupported_type_and_unsafe_label_do_not_access_or_register(local, monkeypatch, input_type):
     owner, source = local
     monkeypatch.setattr(owner, '_source', lambda *args, **kwargs: pytest.fail('Source read occurred.'))
@@ -161,7 +169,7 @@ def test_unsupported_type_and_unsafe_label_do_not_access_or_register(local, monk
     assert not (owner._workspace.root / 'local_resources').exists()
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 @pytest.mark.parametrize('mutation', ['truncated', 'checksum', 'duplicate', 'extra', 'bool_version', 'wrong_identity', 'oversize'])
 def test_corrupt_or_incomplete_records_fail_closed(local, mutation, input_type):
     owner, source = local
@@ -214,7 +222,7 @@ def test_resource_store_symlinks_are_rejected(local, tmp_path, kind):
     assert_code('LOCAL_RESOURCE_RECORD_INVALID', lambda: owner.load(record.resource_id))
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 def test_interrupted_publication_exposes_no_partial_record(local, monkeypatch, input_type):
     owner, source = local
     def interrupted(*args, **kwargs):
@@ -226,7 +234,7 @@ def test_interrupted_publication_exposes_no_partial_record(local, monkeypatch, i
     assert source.read_bytes() == b'deliberately unreadable scientific data'
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 def test_source_changed_before_publication_is_not_registered(local, monkeypatch, input_type):
     owner, source = local
     original = owner._source
@@ -239,7 +247,7 @@ def test_source_changed_before_publication_is_not_registered(local, monkeypatch,
     assert list((owner._workspace.root / 'local_resources').glob('*.json')) == []
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 def test_source_mutation_during_hash_is_not_registered(local, monkeypatch, input_type):
     owner, source = local
     original = hashlib.sha256
@@ -256,7 +264,7 @@ def test_source_mutation_during_hash_is_not_registered(local, monkeypatch, input
     assert not (owner._workspace.root / 'local_resources').exists()
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 def test_concurrent_equivalent_registration_is_idempotent(local, input_type):
     owner, source = local
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -265,7 +273,7 @@ def test_concurrent_equivalent_registration_is_idempotent(local, input_type):
     assert len(list((owner._workspace.root / 'local_resources').glob('*.json'))) == 1
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 @pytest.mark.parametrize('created', ['directory', 'symlink', 'file'])
 def test_concurrent_resource_directory_creation_is_revalidated(local, tmp_path, monkeypatch, input_type, created):
     owner, source = local
@@ -374,13 +382,14 @@ def test_forged_bindings_do_not_change_registered_source(local, tmp_path, mutati
     assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(forged, verify_source=False))
 
 
-@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments'])
+@pytest.mark.parametrize('input_type', ['h5ad', 'external_fragments', 'bam'])
 @pytest.mark.parametrize('mutation', ['replace', 'same_stat_size', 'delete', 'symlink'])
 def test_new_consumption_fails_but_historical_binding_survives_source_change(local, tmp_path, mutation, input_type):
     owner, source = local
     record = register(owner, source, input_type=input_type)
-    tool = 'inspect_scATAC' if input_type == 'h5ad' else 'import_scATAC_fragments'
-    declarations = None if input_type == 'h5ad' else fragments_inputs(tmp_path)
+    tool = {'h5ad': 'inspect_scATAC', 'external_fragments': 'import_scATAC_fragments',
+            'bam': 'inspect_raw_scATAC'}[input_type]
+    declarations = fragments_inputs(tmp_path) if input_type == 'external_fragments' else None
     binding = owner.resolve(record.resource_id, tool_name=tool, scientific_inputs=declarations)
     captured = dict(registered_input=binding.attribution(), execution_inputs=_serialize(binding.execution_inputs))
     original = source.stat()
@@ -508,7 +517,10 @@ def test_fragments_source_overrides_and_unsupported_inputs_fail_closed(local, tm
 
 
 @pytest.mark.parametrize('input_type,tool', [('h5ad', 'import_scATAC_fragments'),
-    ('external_fragments', 'inspect_scATAC'), ('external_fragments', 'adopt_scATAC_cell_by_ccre')])
+    ('external_fragments', 'inspect_scATAC'), ('external_fragments', 'adopt_scATAC_cell_by_ccre'),
+    ('h5ad', 'inspect_raw_scATAC'), ('h5ad', 'prepare_scATAC_bam_fragments'),
+    ('external_fragments', 'inspect_raw_scATAC'), ('external_fragments', 'prepare_scATAC_bam_fragments'),
+    ('bam', 'inspect_scATAC'), ('bam', 'adopt_scATAC_cell_by_ccre'), ('bam', 'import_scATAC_fragments')])
 def test_cross_type_resolution_and_forged_bindings_fail_closed(local, input_type, tool):
     owner, source = local
     record = register(owner, source, input_type=input_type)
@@ -557,3 +569,144 @@ def test_fragments_scientific_values_remain_registry_owned(local, tmp_path):
     restricted = LocalResourceAdmission(owner._workspace, registry=ToolRegistry(()))
     assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: restricted.resolve(record.resource_id,
         tool_name='import_scATAC_fragments', scientific_inputs=fragments_inputs(tmp_path)))
+
+
+@pytest.fixture
+def registered_bam(bam_factory, tmp_path):
+    arguments = bam_factory()
+    owner = LocalResourceAdmission(tmp_path / 'workspace', approved_source_roots=(tmp_path,))
+    record = owner.register('bam-selection', arguments['source_path'], input_type='bam',
+        label='Supplied BAM', attribution='Explicit caller declaration')
+    declarations = {key: value for key, value in arguments.items()
+                    if key not in {'source_path', 'source_sha256', 'output_dir'}}
+    return owner, record, declarations
+
+
+@pytest.mark.parametrize('tool', ['inspect_raw_scATAC', 'prepare_scATAC_bam_fragments'])
+def test_bam_binding_preserves_registry_inputs_without_scientific_execution(registered_bam, monkeypatch, tool):
+    owner, record, declarations = registered_bam
+    import agent.tools.data._raw_bam as intake
+    import agent.tools.data.bam_fragments as producer
+    monkeypatch.setattr(intake, 'inspect_bam_inputs', lambda *a, **k: pytest.fail('Resolver inspected BAM.'))
+    monkeypatch.setattr(producer, 'prepare_in_stage', lambda *a, **k: pytest.fail('Resolver produced fragments.'))
+    if tool == 'inspect_raw_scATAC':
+        declarations = dict(species='human', raw_assay='SCATAC', source_genome_assembly='hg38')
+        source = dict(raw_input_paths=[record.source_path])
+    else:
+        source = dict(source_path=record.source_path, source_sha256=record.source_sha256)
+    binding = owner.resolve(record.resource_id, tool_name=tool, scientific_inputs=declarations)
+    assert owner.validate_binding(binding) == declarations | source
+    assert binding.attribution() == dict(resource_id=record.resource_id,
+        record_sha256=record.record_sha256, tool_name=tool)
+    owner.validate_submission(dict(registered_input=binding.attribution(), execution_inputs=declarations | source))
+
+
+@pytest.mark.parametrize('missing', ['intake_manifest_path', 'intake_manifest_sha256', 'library_context_path',
+    'library_context_sha256', 'reference_bundle_path', 'reference_bundle_sha256', 'source_profile'])
+def test_bam_producer_declarations_are_not_guessed(registered_bam, missing):
+    owner, record, declarations = registered_bam
+    del declarations[missing]
+    assert_code('LOCAL_RESOURCE_DECLARATION_REQUIRED', lambda: owner.resolve(record.resource_id,
+        tool_name='prepare_scATAC_bam_fragments', scientific_inputs=declarations))
+
+
+@pytest.mark.parametrize('tool,extra', [('inspect_raw_scATAC', 'raw_input_paths'),
+    ('inspect_raw_scATAC', 'source_path'), ('inspect_raw_scATAC', 'source_sha256'),
+    ('inspect_raw_scATAC', 'output_dir'), ('prepare_scATAC_bam_fragments', 'source_path'),
+    ('prepare_scATAC_bam_fragments', 'source_sha256'), ('prepare_scATAC_bam_fragments', 'raw_input_paths'),
+    ('prepare_scATAC_bam_fragments', 'source_index_path'), ('prepare_scATAC_bam_fragments', 'input_spec_path'),
+    ('prepare_scATAC_bam_fragments', 'output_dir')])
+def test_bam_source_overrides_and_unsupported_inputs_fail_closed(registered_bam, tool, extra):
+    owner, record, declarations = registered_bam
+    if tool == 'inspect_raw_scATAC':
+        declarations = {}
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.resolve(record.resource_id,
+        tool_name=tool, scientific_inputs=declarations | {extra: 'caller-supplied'}))
+
+
+@pytest.mark.parametrize('tool', ['inspect_raw_scATAC', 'prepare_scATAC_bam_fragments'])
+@pytest.mark.parametrize('mutation', ['source', 'missing', 'record_digest'])
+def test_bam_forged_source_identity_is_rejected(registered_bam, tool, mutation):
+    owner, record, declarations = registered_bam
+    binding = owner.resolve(record.resource_id, tool_name=tool,
+        scientific_inputs={} if tool == 'inspect_raw_scATAC' else declarations)
+    values = _serialize(binding.execution_inputs)
+    field = 'raw_input_paths' if tool == 'inspect_raw_scATAC' else 'source_sha256'
+    if mutation == 'record_digest':
+        forged = replace(binding, record_sha256='0' * 64)
+    else:
+        if mutation == 'missing':
+            del values[field]
+        else:
+            values[field] = [record.source_path, '/unregistered.bam'] if tool == 'inspect_raw_scATAC' else '0' * 64
+        forged = replace(binding, execution_inputs=values)
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(forged, verify_source=False))
+
+
+def test_bam_binding_historical_validation_opens_neither_source_nor_intake(registered_bam, monkeypatch):
+    owner, record, declarations = registered_bam
+    binding = owner.resolve(record.resource_id, tool_name='prepare_scATAC_bam_fragments', scientific_inputs=declarations)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Historical attribution reopened an input.')
+    monkeypatch.setattr(owner, '_source', forbidden)
+    monkeypatch.setattr(owner, '_validate_bam_intake', forbidden)
+    assert owner.validate_binding(binding, verify_source=False) == _serialize(binding.execution_inputs)
+    owner.validate_submission(dict(registered_input=binding.attribution(),
+        execution_inputs=_serialize(binding.execution_inputs)), verify_source=False)
+
+
+def test_bam_registration_preserves_existing_resource_records(local, tmp_path):
+    owner, source = local
+    old = [owner.register(kind, source, input_type=kind, label=kind, attribution='Existing declaration')
+           for kind in ('h5ad', 'external_fragments')]
+    raw = {record.resource_id: owner._path(record.resource_id).read_bytes() for record in old}
+    bam = owner.register('bam', source, input_type='bam', label='BAM', attribution='New declaration')
+    reopened = LocalResourceAdmission(owner._workspace.root)
+    assert reopened.load(bam.resource_id) == bam
+    for record in old:
+        assert reopened.load(record.resource_id) == record
+        assert reopened._path(record.resource_id).read_bytes() == raw[record.resource_id]
+    assert reopened.resolve(old[0].resource_id, tool_name='inspect_scATAC').execution_inputs['input_path'] == str(source)
+    assert reopened.resolve(old[1].resource_id, tool_name='import_scATAC_fragments',
+        scientific_inputs=fragments_inputs(tmp_path)).execution_inputs['source_path'] == str(source)
+
+
+@pytest.mark.parametrize('mutation', ['other_source', 'directory', 'extra_source', 'checksum', 'unpinned', 'corrupt', 'size'])
+def test_bam_intake_must_identify_exact_registered_file(registered_bam, bam_factory, tmp_path, mutation):
+    owner, record, declarations = registered_bam
+    from agent.tools.data import raw_scatac_manifest as intake_owner
+    from agent.tools.data.raw_scatac import inspect_raw_scATAC
+    declarations = dict(declarations)
+    if mutation == 'other_source':
+        other = bam_factory()
+        declarations.update({key: other[key] for key in ('intake_manifest_path', 'intake_manifest_sha256')})
+    elif mutation in {'directory', 'extra_source'}:
+        paths = str(Path(record.source_path).parent) if mutation == 'directory' else [
+            record.source_path, bam_factory()['source_path']]
+        result = inspect_raw_scATAC(paths, tmp_path / 'other-intake',
+            species='human', raw_assay='SCATAC', source_genome_assembly='hg38')
+        declarations.update(intake_manifest_path=result['manifest_path'], intake_manifest_sha256=result['manifest_sha256'])
+    elif mutation == 'checksum':
+        declarations['intake_manifest_sha256'] = '0' * 64
+    elif mutation == 'unpinned':
+        declarations['intake_manifest_sha256'] = None
+    elif mutation == 'corrupt':
+        Path(declarations['intake_manifest_path']).write_bytes(b'Corrupt intake metadata')
+    else:
+        _, manifest, _ = intake_owner.load_raw_intake_manifest(declarations['intake_manifest_path'])
+        changed = replace(manifest, files=(replace(manifest.files[0], size_bytes=record.size_bytes + 1),))
+        result = intake_owner.publish_raw_intake_manifest(changed, tmp_path / 'wrong-size.json')
+        declarations.update(intake_manifest_path=result['manifest_path'], intake_manifest_sha256=result['manifest_sha256'])
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.resolve(record.resource_id,
+        tool_name='prepare_scATAC_bam_fragments', scientific_inputs=declarations))
+
+
+def test_bam_producer_binding_rechecks_intake_before_new_consumption(registered_bam, bam_factory):
+    owner, record, declarations = registered_bam
+    binding = owner.resolve(record.resource_id, tool_name='prepare_scATAC_bam_fragments', scientific_inputs=declarations)
+    other = bam_factory()
+    forged = replace(binding, execution_inputs=_serialize(binding.execution_inputs) | {
+        key: other[key] for key in ('intake_manifest_path', 'intake_manifest_sha256')})
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(forged))
+    Path(declarations['intake_manifest_path']).write_bytes(b'Intake replaced after resolution')
+    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(binding))

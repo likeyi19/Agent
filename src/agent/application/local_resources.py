@@ -26,11 +26,13 @@ MAX_INPUT_BYTES = 65_536
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
-_INPUT_TYPES = ('h5ad', 'external_fragments')
+_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam')
 _OPERATION_TYPES = {
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
     'import_scATAC_fragments': 'external_fragments',
+    'inspect_raw_scATAC': 'bam',
+    'prepare_scATAC_bam_fragments': 'bam',
 }
 _MESSAGES = {
     'LOCAL_RESOURCE_UNAVAILABLE': 'The registered local resource is unavailable.',
@@ -343,8 +345,12 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
         if record.input_type != _OPERATION_TYPES[tool_name]:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        source = (dict(input_path=record.source_path) if tool_name == 'inspect_scATAC'
-                  else dict(source_path=record.source_path, source_sha256=record.source_sha256))
+        if tool_name == 'inspect_scATAC':
+            source = dict(input_path=record.source_path)
+        elif tool_name == 'inspect_raw_scATAC':
+            source = dict(raw_input_paths=[record.source_path])
+        else:
+            source = dict(source_path=record.source_path, source_sha256=record.source_sha256)
         values = _input_mapping(scientific_inputs)
         if self._registry is None:
             from agent.orchestration.registry import build_default_tool_registry
@@ -362,6 +368,29 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
         return values | source
 
+    @staticmethod
+    def _validate_bam_intake(record, values):
+        from agent.tools.data.raw_scatac_manifest import (
+            InputKind, SelectionBasis, load_raw_intake_manifest,
+        )
+        try:
+            # The loader permits unpinned reads; registered association does not.
+            if values['intake_manifest_sha256'] is None:
+                raise ValueError('Registered BAM requires an intake digest.')
+            _, intake, _ = load_raw_intake_manifest(values['intake_manifest_path'],
+                expected_sha256=values['intake_manifest_sha256'])
+            if len(intake.files) != 1 or len(intake.groups) != 1:
+                raise ValueError('Registered BAM requires a singleton intake.')
+            source = intake.files[0]
+            # The intake owner validates group membership. Require explicit file
+            # selection so producer reinspection cannot rediscover other sources.
+            if (source.input_kind is not InputKind.BAM or source.path != record.source_path
+                    or source.size_bytes != record.size_bytes
+                    or source.selection is not SelectionBasis.EXPLICIT or source.selection_root is not None):
+                raise ValueError('Intake does not identify the registered BAM.')
+        except (ValueError, TypeError, OSError, KeyError) as exc:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+
     def resolve(self, resource_id, *, tool_name, scientific_inputs=None):
         record = self.load(resource_id)
         inputs = self._binding_inputs(record, tool_name, scientific_inputs)
@@ -376,7 +405,9 @@ class LocalResourceAdmission:
         if binding.record_sha256 != record.record_sha256:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         values = _serialize(binding.execution_inputs)
-        fields = ('input_path',) if binding.tool_name == 'inspect_scATAC' else ('source_path', 'source_sha256')
+        fields = (('input_path',) if binding.tool_name == 'inspect_scATAC' else
+                  ('raw_input_paths',) if binding.tool_name == 'inspect_raw_scATAC' else
+                  ('source_path', 'source_sha256'))
         declarations = {key: value for key, value in values.items() if key not in fields}
         try:
             expected = self._binding_inputs(record, binding.tool_name, declarations)
@@ -386,6 +417,8 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         if verify_source and self._source(record.source_path, integrity=True) != (record.source_path, record.source_sha256, record.size_bytes):
             raise _fail('LOCAL_RESOURCE_INTEGRITY_INVALID')
+        if verify_source and binding.tool_name == 'prepare_scATAC_bam_fragments':
+            self._validate_bam_intake(record, values)
         return values
 
     def validate_submission(self, submission, *, verify_source=True):

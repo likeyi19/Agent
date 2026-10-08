@@ -237,8 +237,9 @@ class AnalysisSessions:
                 and result.run_status is RunStatus.SUCCEEDED
                 and interaction is not None and interaction.submission is not None
                 and 'registered_input' in interaction.submission
-                and any(step.tool_name == 'inspect_scATAC' for step in result.run_result.steps)):
-            # Inspection has no source-SHA argument. Bind its application identity
+                and any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'}
+                        for step in result.run_result.steps)):
+            # Inspections have no source-SHA argument. Bind their application identity
             # here so ordinary completion and explicit recovery share acceptance.
             from .local_resources import LocalResourceAdmission, ResourceAdmissionError
             try:

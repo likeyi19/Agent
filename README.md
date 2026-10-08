@@ -760,11 +760,12 @@ The canonical application demo is inspection → EpiZoo → neighbors → Leiden
 UMAP → verified evidence → Leiden UMAP figure → deterministic report. The richer
 reference/query annotation workflow is also available.
 
-### Local resource registration (UA1 / UA2.2)
+### Local resource registration (UA1 / UA2.2 / UA2.3)
 
 The Python interactive boundary can register a completed, operator-approved local
-H5AD. Registration hashes the source and atomically persists a checksummed record
-under `local_resources/`; it opens no H5AD, invokes no provider or scientific tool,
+H5AD, external fragments file, or BAM. Registration hashes the source and atomically
+persists a checksummed record under `local_resources/`; it parses no scientific data,
+invokes no provider or scientific tool,
 and creates no Session or Revision. The label and caller-supplied attribution do
 not establish biological provenance, readability, or scientific compatibility.
 
@@ -831,8 +832,67 @@ source conservation, producer qualification and fragments-v2 authority. Public
 import remains human/hg38 or mouse/mm10. Optional `source_selection` retains the
 importer's `unknown` default; an operator-supplied `source_index_path` and
 `source_index_sha256` pair retains its existing explicit BGZF/TBI contract.
-The index is not registered, and no adjacent index is discovered. Cross-type
-H5AD/fragments bindings and caller overrides of source path/SHA are rejected.
+The index is not registered, and no adjacent index is discovered.
+
+UA2.3 supports one declared `bam` source through the existing raw inspection and
+qualified BAM fragments operations:
+
+```python
+resource = app.resources.register(
+    "local-bam-request-001", local_bam, input_type="bam",
+    label="Supplied BAM", attribution="Caller-declared local BAM",
+)
+inspection = app.resources.resolve(
+    resource.resource_id, tool_name="inspect_raw_scATAC",
+    scientific_inputs={
+        "species": "human", "raw_assay": "SCATAC",
+        "source_genome_assembly": "hg38",
+    },
+)
+app.create_session("bam-analysis")
+view = app.submit_turn(
+    "bam-analysis", "inspect-001", "Inspect the supplied BAM.",
+    expected_generation=0, registered_input=inspection,
+)
+
+# Use the exact accepted intake and an explicitly prepared, qualified context.
+production = app.resources.resolve(
+    resource.resource_id, tool_name="prepare_scATAC_bam_fragments",
+    scientific_inputs={
+        "intake_manifest_path": intake_manifest_path,
+        "intake_manifest_sha256": intake_manifest_sha256,
+        "library_context_path": library_context_path,
+        "library_context_sha256": library_context_sha256,
+        "reference_bundle_path": reference_bundle_path,
+        "reference_bundle_sha256": reference_bundle_sha256,
+        "source_profile": "agent-cb-paired-atac.v1",
+    },
+)
+view = app.submit_turn(
+    "bam-analysis", "prepare-001", "Prepare fragments from the supplied qualified BAM.",
+    expected_generation=1, registered_input=production,
+)
+```
+
+The resolver supplies exactly `[registered_source_path]` for raw inspection, and
+the pinned source path/full SHA for production. Production binding requires an
+intake with one BAM file and one group, selected explicitly at that exact path;
+directory-discovered intake is outside this registered single-file boundary.
+The existing manifest owner validates membership; the existing producer owns
+fresh intake reinspection, explicit context/reference/profile compatibility,
+corrected-CB paired-ATAC transformation and source conservation. Its independent
+verifier issues the existing producer-neutral fragments-v2 authority. Public
+production remains human/hg38 or mouse/mm10 with `agent-cb-paired-atac.v1`.
+Context construction remains an explicit data-layer operation.
+
+Successful raw inspection can report `INVALID`, `NEEDS_USER_INPUT` or
+`UNSUPPORTED`; it does not qualify downstream production. Registered-source
+integrity is checked before new consumption and before first inspection-result
+acceptance, including unfinished recovery. Completed historical results retain
+their existing source-lifetime policies. A BAM index is not required or created
+by registration; existing intake observations of adjacent BAI/CSI files and
+producer reinspection remain unchanged. Cross-type bindings and caller overrides
+of registered source fields are rejected.
 
 Registration keeps a hash-pinned source locator rather than copying the file. Its canonical
 approved location must remain available with identical bytes for new consumption;
@@ -846,7 +906,7 @@ Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
 identity and exact resolved inputs are captured once in the existing immutable
 submission; scientific results retain their existing RunStore/Revision authority.
 `resource.public()` exposes safe registration metadata without paths. This boundary adds no
-browser uploads, dynamic web catalog, FASTQ/BAM registration or registered index resources;
+browser uploads, dynamic web catalog, FASTQ registration or registered index resources;
 operator-configured web InputSets keep their current behavior.
 
 ## Validation and current boundaries

@@ -44,7 +44,12 @@ def main(argv=None):
     try:
         configuration = load_web_configuration(arguments.config)
         interactive = build_interactive_application(configuration)
-        application = create_app(interactive, input_sets=configuration.input_sets, max_workers=arguments.max_workers)
+        options = dict(input_sets=configuration.input_sets, max_workers=arguments.max_workers)
+        if configuration.upload_root is not None:
+            from agent.application.uploads import H5ADUploadAdmission
+            options['uploads'] = H5ADUploadAdmission(interactive.resources, configuration.upload_root,
+                max_bytes=configuration.upload_max_bytes, max_concurrent=configuration.upload_max_concurrent)
+        application = create_app(interactive, **options)
     except (WebConfigurationError, ValueError, OSError) as exc:
         print(f"Agent web startup failed: {exc}", file=sys.stderr)
         return 2

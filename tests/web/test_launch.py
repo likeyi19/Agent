@@ -8,12 +8,17 @@ from agent.web import __main__ as launch
 from agent.web.config import WebConfigurationError
 
 
-def launch_fakes(monkeypatch):
+def launch_fakes(monkeypatch, *, attachments=False):
     calls = {}
-    facade = object()
+    class Facade:
+        resources = object()
+    facade = Facade()
     app = object()
     class Configuration:
         input_sets = ("operator-input-set",)
+        upload_root = '/workspace/uploads' if attachments else None
+        upload_max_bytes = 8192
+        upload_max_concurrent = 1
     configuration = Configuration()
     def load(path):
         calls["path"] = path
@@ -36,6 +41,13 @@ def launch_fakes(monkeypatch):
     monkeypatch.setitem(sys.modules, "uvicorn", uvicorn)
     monkeypatch.setattr(launch, "load_web_configuration", load)
     monkeypatch.setattr(launch, "build_interactive_application", build)
+    if attachments:
+        from agent.application import uploads
+        def admission(resources, root, **kwargs):
+            assert resources is facade.resources
+            calls['uploads'] = {'root': root, **kwargs}
+            return 'upload-owner'
+        monkeypatch.setattr(uploads, 'H5ADUploadAdmission', admission)
     return calls
 
 
@@ -55,6 +67,14 @@ def test_explicit_launch_arguments(monkeypatch):
                         "--max-workers", "1"]) == 0
     assert calls["run"] == {"host": "0.0.0.0", "port": 8123, "workers": 1}
     assert calls["create"]["max_workers"] == 1
+
+
+def test_enabled_uploads_use_configured_application_resource_owner(monkeypatch):
+    calls = launch_fakes(monkeypatch, attachments=True)
+    assert launch.main(['--config', 'operator.json']) == 0
+    assert calls['uploads'] == {'root': '/workspace/uploads', 'max_bytes': 8192, 'max_concurrent': 1}
+    assert calls['create']['uploads'] == 'upload-owner'
+    assert calls['run'] == {'host': '127.0.0.1', 'port': 8000, 'workers': 1}
 
 
 @pytest.mark.parametrize("arguments", [

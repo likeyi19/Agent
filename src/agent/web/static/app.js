@@ -3,6 +3,7 @@
 // Browser storage holds display conveniences. Session generations and history
 // are reconstructed from Agent whenever a session is opened or a turn completes.
 const STORAGE_KEY = "agent.web.presentation.v1";
+const RESOURCE_STORAGE_KEY = "agent.web.selected-resource.v1";
 const POLL_INTERVAL_MS = 2000;
 const PRESENTATION_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATES = new Set([
@@ -23,6 +24,7 @@ const state = {
   posting: false, opening: false, timer: null, epoch: 0, pollEpoch: 0,
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
+  resources: [], resourcesEnabled: false, upload: null,
 };
 
 class ApiError extends Error {
@@ -622,7 +624,7 @@ function renderHistory() {
 
 function updateControls() {
   const busy = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
-  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating;
+  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || Boolean(state.upload);
   element("submit-turn").disabled = cannotSubmit;
   document.querySelectorAll(".guidance-select").forEach((button) => { button.disabled = cannotSubmit; });
   element("activate-revision").disabled = !state.revision || busy || state.opening || state.navigating;
@@ -634,6 +636,13 @@ function updateControls() {
   cancel.hidden = !(state.activeTurn && state.activeTurn.run_id &&
     ["planning", "validated", "running"].includes(state.activeTurn.status) && !terminal(state.activeTurn));
   cancel.disabled = cancel.hidden || state.posting;
+  const uploading = Boolean(state.upload && state.upload.status === "uploading");
+  element("resource-choice").disabled = !state.resourcesEnabled || !state.resources.length || uploading;
+  element("upload-file").disabled = !state.resourcesEnabled || uploading;
+  element("upload-file-button").disabled = !state.resourcesEnabled || !state.upload || uploading;
+  element("upload-file-button").textContent = state.upload && state.upload.status === "failed" ? "Retry upload" : "Upload";
+  element("clear-upload").hidden = !state.upload;
+  element("input-choice").disabled = !element("input-choice").options.length || element("input-choice").options.length === 1 || uploading;
 }
 
 function renderExecution() {
@@ -829,8 +838,146 @@ function modelDescription() {
 function inputContext() {
   // Repeat the operator-admitted display label without deriving scientific context.
   const choice = element("input-choice").selectedOptions[0];
-  element("selected-input-context").textContent = `Scientific inputs for next turn: ${choice && choice.value ? choice.textContent : "none selected"}`;
+  const resource = element("resource-choice").selectedOptions[0];
+  const label = resource && resource.value ? resource.textContent : choice && choice.value ? choice.textContent : "none selected";
+  element("selected-input-context").textContent = `Scientific inputs for next turn: ${label}`;
 }
+
+function saveResourceSelection() {
+  // This convenience is rechecked against the server catalog and sent per turn.
+  try { localStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value); } catch (_) {}
+}
+
+function uploadStatus(text, failed = false) {
+  element("upload-status").textContent = text;
+  element("upload-status").classList.toggle("upload-error", failed);
+}
+
+function renderResources(selectedId = "") {
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No uploaded input selected";
+  element("resource-choice").replaceChildren(none, ...state.resources.map((choice) => {
+    const option = document.createElement("option");
+    option.value = choice.resource_id;
+    option.textContent = `${choice.label} · H5AD · registered`;
+    return option;
+  }));
+  if (state.resources.some((choice) => choice.resource_id === selectedId)) {
+    element("resource-choice").value = selectedId;
+    element("input-choice").value = "";
+  }
+  saveResourceSelection();
+  inputContext();
+  updateControls();
+}
+
+async function loadResources() {
+  let selectedId = "";
+  try { selectedId = localStorage.getItem(RESOURCE_STORAGE_KEY) || ""; } catch (_) {}
+  try {
+    const catalog = await api("/resources");
+    state.resourcesEnabled = catalog.enabled === true;
+    state.resources = state.resourcesEnabled ? catalog.choices : [];
+    renderResources(element("input-choice").value ? "" : selectedId);
+    uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "H5AD attachments are unavailable on this server.");
+  } catch (error) {
+    state.resourcesEnabled = false;
+    state.resources = [];
+    renderResources();
+    uploadStatus(`${error.code}: ${error.message}`, true);
+  }
+}
+
+function clearPendingUpload(keepFile = false) {
+  const upload = state.upload;
+  state.upload = null;
+  if (upload && upload.request) upload.request.abort();
+  if (!keepFile) element("upload-file").value = "";
+  element("upload-progress").hidden = true;
+  uploadStatus("No file awaiting upload. You can send a message without an attachment.");
+  updateControls();
+}
+
+function transferUpload(upload) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    upload.request = request;
+    request.open("PUT", `/api/v1/uploads/${encodeURIComponent(upload.uploadId)}?filename=${encodeURIComponent(upload.file.name)}`);
+    request.setRequestHeader("Content-Type", "application/octet-stream");
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (state.upload !== upload || !event.lengthComputable || event.total <= 0) return;
+      const percent = Math.min(100, Math.round(event.loaded * 100 / event.total));
+      element("upload-progress").value = percent;
+      uploadStatus(percent === 100 ? "Transfer complete. Waiting for registration…" : `Uploading ${upload.file.name} · ${percent}%`);
+    });
+    request.onload = () => {
+      const data = request.response;
+      if (request.status < 200 || request.status >= 300) {
+        const error = data && data.error;
+        reject(new ApiError(error && error.code || "UPLOAD_FAILED", error && error.message || "The file could not be registered.", request.status));
+      } else if (!data || typeof data.resource_id !== "string" || typeof data.label !== "string" || data.input_type !== "h5ad" || data.status !== "registered") {
+        reject(new ApiError("RESPONSE_UNAVAILABLE", "The upload response could not be read. Retry the same file to recover its registration."));
+      } else {
+        resolve(data);
+      }
+    };
+    const interrupted = () => reject(new ApiError("UPLOAD_INTERRUPTED", "The upload was interrupted. Retry the same file to recover its registration."));
+    request.onerror = interrupted;
+    request.onabort = interrupted;
+    request.ontimeout = interrupted;
+    request.send(upload.file);
+  });
+}
+
+async function uploadSelectedFile() {
+  const upload = state.upload;
+  if (!state.resourcesEnabled || !upload || upload.status === "uploading") return;
+  upload.status = "uploading";
+  element("upload-progress").hidden = false;
+  element("upload-progress").value = 0;
+  uploadStatus(`Uploading ${upload.file.name}…`);
+  updateControls();
+  try {
+    const resource = await transferUpload(upload);
+    if (state.upload !== upload) return;
+    state.resources = [...state.resources.filter((choice) => choice.resource_id !== resource.resource_id), resource];
+    state.upload = null;
+    element("upload-file").value = "";
+    element("upload-progress").hidden = true;
+    renderResources(resource.resource_id);
+    uploadStatus(`${resource.label} · registered. Describe what you want Agent to do, then send your message.`);
+  } catch (error) {
+    if (state.upload !== upload) return;
+    upload.status = "failed";
+    element("upload-progress").hidden = true;
+    uploadStatus(`${error.code || "UPLOAD_FAILED"}: ${error.message}`, true);
+  }
+  updateControls();
+}
+
+element("upload-file").addEventListener("change", () => {
+  const file = element("upload-file").files[0];
+  clearPendingUpload(true);
+  if (!file) return;
+  // Selection creates a new transfer identity; Retry keeps this same File and ID.
+  state.upload = { uploadId: newTurnId(), file, status: "selected", request: null };
+  element("resource-choice").value = "";
+  element("input-choice").value = "";
+  saveResourceSelection();
+  inputContext();
+  uploadStatus(`${file.name} · selected. Upload this file before sending your request.`);
+  updateControls();
+});
+element("upload-file-button").addEventListener("click", uploadSelectedFile);
+element("clear-upload").addEventListener("click", () => clearPendingUpload());
+element("resource-choice").addEventListener("change", () => {
+  if (state.upload) clearPendingUpload();
+  if (element("resource-choice").value) element("input-choice").value = "";
+  saveResourceSelection();
+  inputContext();
+});
 
 element("new-session").addEventListener("click", async () => {
   const epoch = ++state.epoch;
@@ -869,7 +1016,8 @@ function submitRequest(utterance, predecessorTurnId = null) {
     utterance, profile_id: element("model-choice").value,
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
-  if (element("input-choice").value) body.input_set_id = element("input-choice").value;
+  if (element("resource-choice").value) body.resource_id = element("resource-choice").value;
+  else if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   state.submission = Object.freeze({ sessionId: state.session.session_id, body: Object.freeze(body) });
   state.activeTurn = { session_id: state.session.session_id, turn_id: body.turn_id, status: "submitted", steps: [] };
   saveConveniences();
@@ -916,11 +1064,17 @@ element("detail-form").addEventListener("submit", (event) => {
 });
 
 element("model-choice").addEventListener("change", modelDescription);
-element("input-choice").addEventListener("change", inputContext);
+element("input-choice").addEventListener("change", () => {
+  if (state.upload) clearPendingUpload();
+  if (element("input-choice").value) element("resource-choice").value = "";
+  saveResourceSelection();
+  inputContext();
+});
 element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
   const conveniences = readConveniences();
+  const resources = loadResources();
   if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
   try {
     const [, models, inputs] = await Promise.all([api("/health"), api("/models"), api("/input-sets")]);
@@ -954,6 +1108,7 @@ async function initialize() {
     element("connection-state").textContent = "Connection unavailable";
     showError(error);
   }
+  await resources;
   updateControls();
 }
 

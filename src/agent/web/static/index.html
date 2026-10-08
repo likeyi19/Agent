@@ -71,6 +71,20 @@
       <ul id="step-status" class="step-status" hidden></ul>
       <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
       <form id="turn-form">
+        <div class="attachment-controls" aria-label="Scientific attachment">
+          <label for="resource-choice">Uploaded scientific input</label>
+          <select id="resource-choice" disabled><option value="">No uploaded input selected</option></select>
+          <div class="attachment-upload">
+            <div class="attachment-file">
+              <label for="upload-file">Attach an H5AD file</label>
+              <input id="upload-file" type="file" accept=".h5ad" disabled aria-describedby="upload-status">
+            </div>
+            <button id="upload-file-button" class="secondary" type="button" disabled>Upload</button>
+            <button id="clear-upload" class="secondary" type="button" hidden>Remove file</button>
+          </div>
+          <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
+          <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
+        </div>
         <label for="utterance">Ask Agent</label>
         <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Ask a question or describe an analysis…" required disabled></textarea>
         <div class="composer-actions">

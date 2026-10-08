@@ -973,9 +973,33 @@ their captured attribution without requiring current source bytes.
 Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
 identity and exact resolved inputs are captured once in the existing immutable
 submission; scientific results retain their existing RunStore/Revision authority.
-`resource.public()` exposes safe registration metadata without paths. This boundary adds no
-browser uploads, dynamic web catalog, or registered index resources;
-operator-configured web InputSets keep their current behavior.
+`resource.public()` exposes safe registration metadata without paths. The Python
+UA1–UA2.4 admission boundary does not transfer browser files or register indexes.
+UA3.1 adds optional H5AD browser transfer and discovery of those completed
+registrations through the same owner; operator-configured Web InputSets retain
+their current behavior.
+
+### Optional H5AD browser attachment (UA3.1)
+
+Add `"upload_root": "uploads"` to the existing Web operator configuration to
+enable the attachment control near the composer. The location is relative to
+`workspace_root` and must be a canonical descendant of that managed workspace.
+Attachments are disabled when `upload_root` is absent or null. The optional
+`upload_max_bytes` defaults to 268435456 (256 MiB; maximum 1 GiB), and
+`upload_max_concurrent` defaults to 2 (allowed 1–4).
+
+Upload a single H5AD, select its registered label, and send an ordinary request
+such as “Inspect this dataset.” Uploading only registers completed bytes; the
+existing Interpreter/Planner decides the scientific operation. The source can
+be reselected after refresh or server restart, and accepted results remain in
+the existing Session/Revision conversation. Registration does not establish
+H5AD readability, EpiZoo compatibility, or other scientific readiness.
+
+This remains a trusted local/lab-host application with loopback-first launch,
+without account authorization. Existing safe report-text and PNG downloads are
+unchanged; inspection does not generate a new downloadable scientific dataset.
+See the [UA3.1 implementation and validation record](docs/ua3.1-web-upload.md)
+for transfer/retry bounds and multi-turn acceptance.
 
 ## Validation and current boundaries
 
@@ -1019,8 +1043,8 @@ metadata was fabricated or external data downloaded. Broader statistical models,
 regulatory interpretation, genomic/peak-to-gene annotation, motifs/pathways,
 volcano/MA plots, perturbation, and mutation analysis remain deferred. So do
 reporting-stage cancellation, transferred-label UMAP, richer figures/exports,
-LLM scientific interpretation, retrieval/RAG, multi-agent architecture, and
-browser or multi-turn UI. The detailed acceptance gates, environment warnings,
+LLM scientific interpretation, retrieval/RAG, and multi-agent architecture.
+The detailed acceptance gates, environment warnings,
 and nonblocking engineering follow-ups are preserved in [AGENTS.md](AGENTS.md).
 
 Species adaptation now composes exact neutral matrix adoption with the qualified

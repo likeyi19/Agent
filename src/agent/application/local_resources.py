@@ -26,6 +26,8 @@ MAX_RECORD_BYTES = 16_384
 MAX_INPUT_BYTES = 65_536
 MAX_COLLECTION_MEMBERS = 128
 MAX_COLLECTION_BYTES = 32_768
+MAX_DISCOVERY_RECORDS = 1024
+MAX_DISCOVERY_CHOICES = 128
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
@@ -48,6 +50,7 @@ _MESSAGES = {
     'LOCAL_RESOURCE_BINDING_INVALID': 'The registered input binding or its explicit scientific declarations are invalid.',
     'LOCAL_RESOURCE_OPERATION_UNSUPPORTED': 'This operation is not supported by the local resource binding boundary.',
     'LOCAL_RESOURCE_DECLARATION_REQUIRED': 'Required explicit scientific input declarations are missing.',
+    'LOCAL_RESOURCE_DISCOVERY_LIMIT': 'The registered resource listing exceeds its supported bound.',
 }
 
 
@@ -312,14 +315,26 @@ class LocalResourceAdmission:
             if descriptor is not None:
                 os.close(descriptor)
 
-    def register(self, registration_key, source_path, *, input_type='h5ad', label, attribution):
+    @staticmethod
+    def registration_id(registration_key):
+        """The existing deterministic identity, also usable before source publication."""
+        _text(registration_key, 256, 'LOCAL_RESOURCE_RECORD_INVALID')
+        return 'local-' + hashlib.sha256(b'agent.local-resource-id.v1\0' + registration_key.encode('utf-8')).hexdigest()
+
+    def register(self, registration_key, source_path, *, input_type='h5ad', label, attribution,
+                 expected_source_sha256=None, expected_size_bytes=None):
         if input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
-        _text(registration_key, 256, 'LOCAL_RESOURCE_RECORD_INVALID')
+        resource_id = self.registration_id(registration_key)
         _text(label, 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
         _text(attribution, 1024, 'LOCAL_RESOURCE_RECORD_INVALID')
-        resource_id = 'local-' + hashlib.sha256(b'agent.local-resource-id.v1\0' + registration_key.encode('utf-8')).hexdigest()
+        expected = expected_source_sha256 is not None or expected_size_bytes is not None
+        if expected and (type(expected_source_sha256) is not str or _SHA.fullmatch(expected_source_sha256) is None
+                         or type(expected_size_bytes) is not int or expected_size_bytes < 0):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         source, sha, size, snapshot = self._source(source_path, approval=True, include_snapshot=True)
+        if expected and (sha, size) != (expected_source_sha256, expected_size_bytes):
+            raise _fail('LOCAL_RESOURCE_INTEGRITY_INVALID')
         record = LocalResourceRecord(resource_id, input_type, label, source, sha, size, attribution)
         with self._lock(resource_id):
             path = self._path(resource_id)
@@ -392,6 +407,45 @@ class LocalResourceAdmission:
         except FileNotFoundError as exc:
             raise _fail('LOCAL_RESOURCE_UNAVAILABLE') from exc
         except (ValueError, TypeError, OSError, KeyError, RecursionError) as exc:
+            raise _fail('LOCAL_RESOURCE_RECORD_INVALID') from exc
+
+    def list_records(self, *, source_root, limit=MAX_DISCOVERY_CHOICES):
+        """Bounded durable discovery beneath an explicitly selected source root.
+
+        Records establish registration only. Listing neither reads source bytes
+        nor confers readability/readiness, and does not discover arbitrary files.
+        The caller must project ``record.public()`` before crossing a client boundary.
+        """
+        if type(limit) is not int or not 1 <= limit <= MAX_DISCOVERY_CHOICES:
+            raise _fail('LOCAL_RESOURCE_DISCOVERY_LIMIT')
+        try:
+            selected = Path(source_root).absolute()
+            if (selected != selected.resolve(strict=True) or not selected.is_dir()
+                    or not any(selected.is_relative_to(root) for root in self._approved)):
+                raise ValueError('Unapproved discovery root.')
+            try:
+                directory = self._directory()
+            except ResourceAdmissionError as exc:
+                if exc.code == 'LOCAL_RESOURCE_UNAVAILABLE':
+                    return ()
+                raise
+            records, inspected = [], 0
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.endswith('.json'):
+                        continue
+                    inspected += 1
+                    if inspected > MAX_DISCOVERY_RECORDS:
+                        raise _fail('LOCAL_RESOURCE_DISCOVERY_LIMIT')
+                    record = self.load(entry.name[:-5])
+                    if Path(record.source_path).is_relative_to(selected):
+                        records.append(record)
+                        if len(records) > limit:
+                            raise _fail('LOCAL_RESOURCE_DISCOVERY_LIMIT')
+            return tuple(sorted(records, key=lambda record: record.resource_id))
+        except ResourceAdmissionError:
+            raise
+        except (ValueError, TypeError, OSError, RuntimeError) as exc:
             raise _fail('LOCAL_RESOURCE_RECORD_INVALID') from exc
 
     def _binding_inputs(self, record, tool_name, scientific_inputs):
@@ -486,11 +540,11 @@ class LocalResourceAdmission:
         except (ValueError, TypeError, OSError, KeyError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
-    def resolve(self, resource_id, *, tool_name, scientific_inputs=None):
+    def resolve(self, resource_id, *, tool_name, scientific_inputs=None, verify_source=True):
         record = self.load(resource_id)
         inputs = self._binding_inputs(record, tool_name, scientific_inputs)
         binding = RegisteredInput(record.resource_id, record.record_sha256, tool_name, inputs)
-        self.validate_binding(binding)
+        self.validate_binding(binding, verify_source=verify_source)
         return binding
 
     def resolve_collection(self, members, *, tool_name, scientific_inputs=None):

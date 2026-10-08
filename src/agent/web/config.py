@@ -15,6 +15,7 @@ from types import MappingProxyType
 
 from agent.application import InteractiveAgentApplication
 from agent.application.interactive import _inputs
+from agent.application.workspace import ManagedWorkspace, ApplicationWorkspaceError
 from agent.orchestration import PlanningModelProfile
 from agent.providers import PlanningModelFactoryRegistry, build_default_planning_model_factory_registry
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
@@ -73,6 +74,9 @@ class WebConfiguration:
     default_profile_id: str
     display_labels: Mapping[str, str] = field(default_factory=dict)
     input_sets: tuple[ScientificInputSet, ...] = ()
+    upload_root: Path | None = None
+    upload_max_bytes: int = 256 * 1024 * 1024
+    upload_max_concurrent: int = 2
 
     def __post_init__(self):
         if not isinstance(self.workspace_root, (str, Path)) or not str(self.workspace_root).strip():
@@ -100,6 +104,22 @@ class WebConfiguration:
                 or any(not isinstance(s, ScientificInputSet) for s in self.input_sets)
                 or len({s.input_set_id for s in self.input_sets}) != len(self.input_sets)):
             raise WebConfigurationError("Input sets must have bounded unique identities.")
+        if type(self.upload_max_bytes) is not int or not 1 <= self.upload_max_bytes <= 1024 ** 3:
+            raise WebConfigurationError("The attachment size limit must be between one byte and one GiB.")
+        if type(self.upload_max_concurrent) is not int or not 1 <= self.upload_max_concurrent <= 4:
+            raise WebConfigurationError("Concurrent attachments must be between one and four.")
+        if self.upload_root is not None:
+            if not isinstance(self.upload_root, (str, Path)) or not str(self.upload_root).strip():
+                raise WebConfigurationError("An attachment root must be a workspace directory.")
+            root = Path(self.upload_root).expanduser()
+            if '..' in root.parts:
+                raise WebConfigurationError("The attachment root must not contain parent traversal.")
+            if not root.is_absolute():
+                root = self.workspace_root / root
+            root = root.absolute()
+            if root == self.workspace_root or not root.is_relative_to(self.workspace_root):
+                raise WebConfigurationError("The attachment root must be contained below the workspace.")
+            object.__setattr__(self, 'upload_root', root)
 
 
 def _pairs(items):
@@ -128,7 +148,8 @@ def load_web_configuration(path):
         if len(content) > _CONFIGURATION_BYTES:
             raise WebConfigurationError("Operator configuration exceeds one MiB.")
         value = json.loads(content.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_reject_constant)
-        allowed = {"workspace_root", "model_profiles", "default_profile_id", "input_sets"}
+        allowed = {"workspace_root", "model_profiles", "default_profile_id", "input_sets",
+                   "upload_root", "upload_max_bytes", "upload_max_concurrent"}
         required = {"workspace_root", "model_profiles", "default_profile_id"}
         if type(value) is not dict or set(value) - allowed or required - set(value):
             raise WebConfigurationError("Operator configuration fields are invalid.")
@@ -160,7 +181,9 @@ def load_web_configuration(path):
             if type(item) is not dict or set(item) != {"input_set_id", "label", "execution_inputs"}:
                 raise WebConfigurationError("Operator input-set fields are invalid.")
             input_sets.append(ScientificInputSet(**item))
-        return WebConfiguration(workspace, tuple(profiles), value["default_profile_id"], labels, tuple(input_sets))
+        return WebConfiguration(workspace, tuple(profiles), value["default_profile_id"], labels, tuple(input_sets),
+            value.get('upload_root'), value.get('upload_max_bytes', 256 * 1024 * 1024),
+            value.get('upload_max_concurrent', 2))
     except WebConfigurationError:
         raise
     except (ValueError, TypeError, OSError, UnicodeError, RecursionError) as exc:
@@ -179,7 +202,23 @@ def build_interactive_application(configuration, *, planning_model_factory_regis
     if any(p.enabled and p.supports_structured_output and p.provider_id not in factory.provider_ids
            for p in configuration.model_profiles):
         raise WebConfigurationError("An enabled model profile uses an unregistered provider.")
+    approved_source_roots = ()
+    if configuration.upload_root is not None:
+        try:
+            if configuration.upload_root != configuration.upload_root.resolve(strict=False):
+                raise ValueError('Noncanonical attachment root.')
+            workspace = ManagedWorkspace(configuration.workspace_root)
+            # Walk the declared descendant using the existing workspace owner,
+            # checking every parent before a registration can approve this root.
+            root = workspace.root
+            for component in configuration.upload_root.relative_to(configuration.workspace_root).parts:
+                root = workspace._ensure_directory(root / component)
+            if root != root.resolve(strict=True):
+                raise ValueError('Noncanonical attachment root.')
+            approved_source_roots = (root,)
+        except (ApplicationWorkspaceError, ValueError, OSError, RuntimeError) as exc:
+            raise WebConfigurationError('The attachment root could not be initialized safely.') from exc
     return InteractiveAgentApplication(configuration.workspace_root,
         model_profiles=configuration.model_profiles, default_profile_id=configuration.default_profile_id,
         display_labels=configuration.display_labels, planning_model_factory_registry=factory,
-        registry=registry, executor=executor)
+        registry=registry, executor=executor, approved_source_roots=approved_source_roots)

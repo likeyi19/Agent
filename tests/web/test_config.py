@@ -145,3 +145,85 @@ def test_configuration_size_and_identity_bounds(tmp_path):
         replace(config, model_profiles=[profile])
     with pytest.raises(WebConfigurationError):
         ScientificInputSet("../server-path", "Tiny", {})
+
+
+def test_upload_configuration_is_opt_in_and_approves_only_controlled_workspace_root(tmp_path):
+    value = configuration_json()
+    default = load_web_configuration(write_configuration(tmp_path, value))
+    assert default.upload_root is None
+    assert default.upload_max_bytes == 256 * 1024 * 1024 and default.upload_max_concurrent == 2
+    value.update(upload_root='inputs/uploads', upload_max_bytes=8192, upload_max_concurrent=1)
+    configured = load_web_configuration(write_configuration(tmp_path, value))
+    assert configured.upload_root == tmp_path / 'workspace' / 'inputs' / 'uploads'
+    assert not configured.workspace_root.exists()
+    calls = []
+    def forbidden(profile):
+        calls.append(profile)
+        raise AssertionError('Configuration must not construct a provider.')
+    application = build_interactive_application(configured,
+        planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': forbidden}))
+    assert configured.upload_root.is_dir() and not calls
+    source = configured.upload_root / 'complete.h5ad'
+    source.write_bytes(b'bytes are not science')
+    record = application.resources.register('completed', source, label='tiny.h5ad', attribution='test')
+    assert record.input_type == 'h5ad'
+    outside = tmp_path / 'outside.h5ad'
+    outside.write_bytes(b'not approved')
+    from agent.application.local_resources import ResourceAdmissionError
+    with pytest.raises(ResourceAdmissionError) as error:
+        application.resources.register('outside', outside, label='outside.h5ad', attribution='test')
+    assert error.value.code == 'LOCAL_RESOURCE_ACCESS_INVALID'
+
+
+@pytest.mark.parametrize('changes', [
+    {'upload_root': '../outside'}, {'upload_root': '.'}, {'upload_root': ''},
+    {'upload_root': 1}, {'upload_root': []},
+    {'upload_max_bytes': True}, {'upload_max_bytes': 0}, {'upload_max_bytes': 1024 ** 3 + 1},
+    {'upload_max_concurrent': True}, {'upload_max_concurrent': 0}, {'upload_max_concurrent': 5},
+])
+def test_upload_configuration_rejects_unsafe_roots_and_unbounded_limits(tmp_path, changes):
+    value = configuration_json()
+    value.update(changes)
+    with pytest.raises(WebConfigurationError):
+        load_web_configuration(write_configuration(tmp_path, value))
+    assert not (tmp_path / 'workspace').exists()
+
+
+def test_absolute_upload_root_must_be_a_workspace_descendant(tmp_path):
+    value = configuration_json()
+    value['upload_root'] = str(tmp_path / 'outside')
+    with pytest.raises(WebConfigurationError):
+        load_web_configuration(write_configuration(tmp_path, value))
+    value['upload_root'] = str(tmp_path / 'workspace' / 'uploads')
+    configuration = load_web_configuration(write_configuration(tmp_path, value))
+    assert configuration.upload_root == tmp_path / 'workspace' / 'uploads'
+
+
+def test_upload_root_symlink_is_rejected_before_admission(tmp_path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (workspace / 'uploads').symlink_to(outside, target_is_directory=True)
+    value = configuration_json()
+    value['upload_root'] = 'uploads'
+    configuration = load_web_configuration(write_configuration(tmp_path, value))
+    with pytest.raises(WebConfigurationError):
+        build_interactive_application(configuration,
+            planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': lambda profile: None}))
+    assert list(outside.iterdir()) == []
+
+
+def test_upload_parent_alias_is_rejected_before_admission(tmp_path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    parent = workspace / 'target'
+    parent.mkdir()
+    (workspace / 'alias').symlink_to(parent, target_is_directory=True)
+    value = configuration_json()
+    value['upload_root'] = 'alias/uploads'
+    configuration = load_web_configuration(write_configuration(tmp_path, value))
+    with pytest.raises(WebConfigurationError):
+        build_interactive_application(configuration,
+            planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': lambda profile: None}))
+    assert list(parent.iterdir()) == []

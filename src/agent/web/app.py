@@ -20,6 +20,8 @@ from starlette.exceptions import HTTPException
 
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
+from agent.application.local_resources import RegisteredInput, ResourceAdmissionError
+from agent.application.uploads import H5ADUploadAdmission, UploadError
 
 from .config import ScientificInputSet
 
@@ -47,6 +49,7 @@ class SubmitTurn(_Body):
     utterance: StrictStr = Field(min_length=1, max_length=4096)
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
+    resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator('turn_id')
@@ -116,20 +119,28 @@ class _LocalWorkers:
         try:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-                predecessor_turn_id=payload.predecessor_turn_id, execution_inputs=inputs)
+                predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
+            return exc.error
+        except ResourceAdmissionError as exc:
+            logger.warning('Registered input admission failed: %s', exc.code)
             return exc.error
         except Exception:
             logger.exception('Unexpected interactive turn failure')
             return ClientError('INTERACTIVE_APPLICATION_FAILED',
                                'The application could not complete this turn.')
 
+    @staticmethod
+    def _input_arguments(inputs):
+        return ({'registered_input': inputs} if isinstance(inputs, RegisteredInput)
+                else {'execution_inputs': inputs})
+
     def submit(self, session_id, payload, inputs):
         # Domain validation and normalization belong to M18.2, not HTTP models.
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-            predecessor_turn_id=payload.predecessor_turn_id, execution_inputs=inputs)
+            predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
             receipt = self.receipts.get(key)
@@ -193,12 +204,16 @@ class _WorkersBusy(Exception):
     pass
 
 
-def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2):
+def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2, uploads=None):
     """Compose a single lab-host server around one configured domain facade."""
     if not isinstance(application, InteractiveAgentApplication):
         raise TypeError('A configured InteractiveAgentApplication is required.')
     if type(max_workers) is not int or not 1 <= max_workers <= 8:
         raise ValueError('max_workers must be between 1 and 8.')
+    if uploads is not None and not isinstance(uploads, H5ADUploadAdmission):
+        raise TypeError('uploads must use the application H5AD upload boundary.')
+    if uploads is not None and uploads.resources is not application.resources:
+        raise ValueError('uploads must use this application resource owner.')
     if not isinstance(input_sets, tuple) or not all(isinstance(s, ScientificInputSet) for s in input_sets):
         raise TypeError('input_sets must be an operator-configured tuple.')
     inputs_by_id = {s.input_set_id: s for s in input_sets}
@@ -224,7 +239,9 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if origin is not None and origin != str(request.base_url).rstrip('/'):
                 return _error('WEB_ORIGIN_INVALID', 'Use the same-origin Agent application.', 403)
             content_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
-            if request.url.path.endswith(('/turns', '/activate')) or request.url.path == '/api/v1/sessions':
+            if (request.url.path == '/api/v1/sessions'
+                    or (request.url.path.startswith('/api/v1/sessions/')
+                        and request.url.path.endswith(('/turns', '/activate')))):
                 if content_type != 'application/json':
                     return _error('WEB_REQUEST_INVALID', 'Send a valid JSON request.', 415)
                 # Browser input contains text/identities only, never scientific data.
@@ -239,6 +256,15 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.exception_handler(InteractiveBoundaryError)
     async def boundary_error(request, exc):
         return JSONResponse({'error': exc.error.to_dict()}, status_code=_status_code(exc.error.code))
+
+    @app.exception_handler(ResourceAdmissionError)
+    async def resource_error(request, exc):
+        status = 404 if exc.code == 'LOCAL_RESOURCE_UNAVAILABLE' else 400
+        return JSONResponse({'error': exc.error.to_dict()}, status_code=status)
+
+    @app.exception_handler(UploadError)
+    async def upload_error(request, exc):
+        return _error(exc.code, exc.message, exc.status_code)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
@@ -270,6 +296,35 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/input-sets')
     def scientific_inputs():
         return {'choices': [s.choice() for s in input_sets]}
+
+    @app.get('/api/v1/resources')
+    def uploaded_resources():
+        return {'enabled': uploads is not None,
+                'choices': [] if uploads is None else list(uploads.choices())}
+
+    @app.put('/api/v1/uploads/{upload_id}', status_code=201)
+    async def upload_h5ad(upload_id: str, request: Request,
+                         filename: str = Query(min_length=1, max_length=160)):
+        if uploads is None:
+            return _error('WEB_UPLOAD_UNAVAILABLE', 'H5AD attachments are not configured.', 404)
+        if list(request.query_params.keys()) != ['filename'] or len(request.query_params.getlist('filename')) != 1:
+            return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
+        content_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
+        if content_type != 'application/octet-stream':
+            return _error('WEB_UPLOAD_REQUEST_INVALID', 'Send the file as a binary stream.', 415)
+        length = request.headers.get('content-length')
+        expected_size = None
+        if length is not None:
+            if (len(request.headers.getlist('content-length')) != 1
+                    or not length.isascii() or not length.isdecimal()):
+                return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
+            normalized_length = length.lstrip('0') or '0'
+            if len(normalized_length) > 20 or int(normalized_length) > uploads.max_bytes:
+                return _error('UPLOAD_TOO_LARGE', 'The file exceeds the configured attachment size limit.', 413)
+            expected_size = int(normalized_length)
+        record = await uploads.receive(upload_id, filename, request.stream(),
+                                       expected_size=expected_size)
+        return record.public()
 
     @app.post('/api/v1/sessions', status_code=201)
     def create_session(body: CreateSession):
@@ -318,6 +373,12 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.post('/api/v1/sessions/{session_id}/turns', status_code=202)
     def submit_turn(session_id: str, body: SubmitTurn):
         inputs = {}
+        if body.resource_id is not None:
+            if body.input_set_id is not None or uploads is None:
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+            # Completed retries remain readable even after source bytes disappear.
+            # The facade validates bytes itself before each new consumption.
+            inputs = uploads.resolve(body.resource_id, verify_source=False)
         if body.input_set_id is not None:
             input_set = inputs_by_id.get(body.input_set_id)
             if input_set is None:

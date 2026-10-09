@@ -295,6 +295,7 @@ class RevisionView(_JsonModel):
     steps: tuple[StepView, ...] = ()
     artifacts: tuple[ArtifactHandle, ...] = ()
     evidence_outputs: tuple[str, ...] = ()
+    scientific_artifacts: tuple[ScientificArtifactHandle, ...] = ()
 
     def __post_init__(self):
         _identifier(self.revision_id, 'revision_id')
@@ -327,6 +328,10 @@ class RevisionView(_JsonModel):
         _collection(self.artifacts, ArtifactHandle, 'handle', 'artifacts')
         if any(a.revision_id != self.revision_id or a.turn_id != self.turn_id for a in self.artifacts):
             raise ValueError('Artifact inventory belongs to a different revision.')
+        _collection(self.scientific_artifacts, ScientificArtifactHandle, 'handle', 'scientific artifacts')
+        if any(a.revision_id != self.revision_id or a.turn_id != self.turn_id
+               for a in self.scientific_artifacts):
+            raise ValueError('Scientific artifact inventory belongs to a different revision.')
 
 
 @dataclass(frozen=True)
@@ -368,6 +373,29 @@ class ArtifactHandle(_JsonModel):
         if (type(self.sha256) is not str or len(self.sha256) != 64
                 or any(char not in '0123456789abcdef' for char in self.sha256)):
             raise ValueError('Invalid interactive artifact digest.')
+
+
+@dataclass(frozen=True)
+class ScientificArtifactHandle(ArtifactHandle):
+    """Eligible accepted identity; payload integrity is checked on download."""
+
+    size_bytes: int
+    filename: str = 'matrix.h5ad'
+    label: str = 'Original accepted matrix'
+
+    def __post_init__(self):
+        super().__post_init__()
+        _natural(self.size_bytes, 'scientific artifact size')
+        reviewed = {
+            ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
+            ('scientific_qc_table', 'barcodes.tsv.gz', 'Barcode QC'),
+            ('scientific_qc_table', 'lengths.tsv.gz', 'Fragment length distribution'),
+            ('scientific_selection_table', 'decisions.tsv.gz', 'Cell-selection decisions'),
+            ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
+        }
+        if (self.size_bytes == 0
+                or (self.artifact_type, self.filename, self.label) not in reviewed):
+            raise ValueError('Unsupported scientific artifact descriptor.')
 
 
 @dataclass(frozen=True)
@@ -437,5 +465,5 @@ class ArtifactContent:
         _strings(self.limitations, 'artifact limitations', maximum=32)
 
 
-__all__ = ['ArtifactHandle', 'ArtifactContent', 'EvidenceView', 'ClientError', 'ModelChoice', 'PresentedResponse',
+__all__ = ['ArtifactHandle', 'ScientificArtifactHandle', 'ArtifactContent', 'EvidenceView', 'ClientError', 'ModelChoice', 'PresentedResponse',
            'RevisionView', 'SessionView', 'StepView', 'TurnView']

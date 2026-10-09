@@ -26,6 +26,7 @@ const state = {
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   resources: [], resourcesEnabled: false, upload: null,
   inputSets: [], epizooResources: [],
+  scientificFiles: new Map(),
 };
 
 class ApiError extends Error {
@@ -336,6 +337,69 @@ function artifactPath(sessionId, revisionId, handle) {
   return `${revisionPath(sessionId, revisionId)}/artifacts/${encodeURIComponent(handle)}`;
 }
 
+function scientificArtifactPath(sessionId, revisionId, handle) {
+  return `${revisionPath(sessionId, revisionId)}/scientific-artifacts/${encodeURIComponent(handle)}`;
+}
+
+function supportedScientificFile(artifact) {
+  const files = {
+    scientific_matrix: { "matrix.h5ad": "Original accepted matrix" },
+    scientific_qc_table: {
+      "barcodes.tsv.gz": "Barcode QC",
+      "lengths.tsv.gz": "Fragment length distribution",
+    },
+    scientific_selection_table: {
+      "decisions.tsv.gz": "Cell-selection decisions",
+      "selected.tsv.gz": "Selected cells",
+    },
+  };
+  return Object.hasOwn(files, artifact.artifact_type)
+    && Object.hasOwn(files[artifact.artifact_type], artifact.filename)
+    && files[artifact.artifact_type][artifact.filename] === artifact.label;
+}
+
+function scientificFileNode(sessionId, artifact) {
+  const row = document.createElement("div");
+  row.className = "scientific-file";
+  const title = document.createElement("span");
+  title.textContent = `${artifact.filename} — ${artifact.label}`;
+  const download = document.createElement("a");
+  download.textContent = "Download";
+  download.href = `/api/v1${scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)}`;
+  download.download = artifact.filename;
+  download.setAttribute("aria-label", `Download ${artifact.filename}`);
+  // The browser streams an attachment directly; scientific bytes stay out of JS.
+  row.append(title, download);
+  return row;
+}
+
+function appendScientificFiles(response, turn) {
+  if (turn.response.kind !== "execute" || !turn.revision_id
+      || !["succeeded", "activated", "stale"].includes(turn.status)) return;
+  const sessionId = state.session.session_id;
+  const key = JSON.stringify([sessionId, turn.turn_id, turn.revision_id]);
+  const cached = state.scientificFiles.get(key);
+  if (cached) {
+    for (const artifact of cached.artifacts) {
+      response.append(scientificFileNode(sessionId, artifact));
+    }
+    return;
+  }
+  const epoch = state.epoch;
+  const entry = { artifacts: [] };
+  state.scientificFiles.set(key, entry);
+  // Inventory is metadata only and requested once per captured result. Regular
+  // conversation polling reuses this display cache; refresh reads it afresh.
+  api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`).then((view) => {
+    if (epoch !== state.epoch || state.scientificFiles.get(key) !== entry) return;
+    entry.artifacts = view.artifacts.filter((artifact) => supportedScientificFile(artifact)
+      && artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id);
+    renderHistory();
+  }).catch(() => {
+    // Missing or unqualified historical associations expose no download.
+  });
+}
+
 function renderArtifacts(revision) {
   const sessionId = state.session.session_id;
   const nodes = revision.artifacts.map((artifact) => {
@@ -368,6 +432,12 @@ function renderArtifacts(revision) {
     }
     return item;
   });
+  for (const artifact of revision.scientific_artifacts || []) {
+    if (!supportedScientificFile(artifact)) continue;
+    const item = document.createElement("li");
+    item.append(scientificFileNode(sessionId, artifact));
+    nodes.push(item);
+  }
   if (!nodes.length) {
     const empty = document.createElement("li");
     empty.textContent = "No accepted reports or figures are available.";
@@ -548,6 +618,11 @@ async function activateViewedRevision(continueFromHere = false) {
 function renderHistory() {
   const history = element("conversation-history");
   const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response) : [];
+  const visibleFileKeys = new Set(turns.map((turn) =>
+    JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id])));
+  for (const key of state.scientificFiles.keys()) {
+    if (!visibleFileKeys.has(key)) state.scientificFiles.delete(key);
+  }
   if (!turns.length) {
     const empty = document.createElement("p");
     empty.className = "empty-history";
@@ -565,6 +640,7 @@ function renderHistory() {
       response = messageNode(RESPONSE_LABELS[turn.response.kind] || "Agent", turn.response.text, "assistant");
       article.append(response);
       if (turn.response.guidance) response.append(guidanceNode(turn.response.guidance));
+      appendScientificFiles(response, turn);
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
@@ -762,6 +838,7 @@ function watchTurn(sessionId, turnId) {
 
 async function openSession(sessionId, resumeTurnId = "") {
   const epoch = ++state.epoch;
+  state.scientificFiles.clear();
   stopPolling();
   state.opening = true;
   state.navigating = false;
@@ -993,6 +1070,7 @@ element("resource-choice").addEventListener("change", () => {
 
 element("new-session").addEventListener("click", async () => {
   const epoch = ++state.epoch;
+  state.scientificFiles.clear();
   stopPolling();
   state.opening = true;
   state.navigating = false;

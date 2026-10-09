@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from starlette.exceptions import HTTPException
@@ -21,6 +21,7 @@ from starlette.exceptions import HTTPException
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
 from agent.application.local_resources import RegisteredInput, ResourceAdmissionError
+from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
 from .config import QualifiedEpiZooResource, ScientificInputSet
@@ -86,6 +87,7 @@ def _status_code(code):
         'INTERACTIVE_SESSION_INVALID': 404,
         'INTERACTIVE_REFERENCE_INVALID': 404,
         'INTERACTIVE_ARTIFACT_UNAVAILABLE': 404,
+        'INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE': 404,
         'INTERACTIVE_TURN_CONFLICT': 409,
         'INTERACTIVE_GENERATION_CONFLICT': 409,
         'INTERACTIVE_OPERATION_ACTIVE': 409,
@@ -206,6 +208,31 @@ class _WorkersBusy(Exception):
     pass
 
 
+class _ScientificFileResponse(StreamingResponse):
+    """Own a prepared snapshot through the whole ASGI response lifecycle."""
+
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        try:
+            super().__init__(snapshot.iter_chunks(), media_type=snapshot.content_type, headers={
+                'Content-Disposition': f'attachment; filename="{snapshot.filename}"',
+                'Content-Length': str(snapshot.size_bytes),
+                'X-Artifact-Source-SHA256': snapshot.sha256,
+                'X-Artifact-Content-SHA256': snapshot.sha256,
+            })
+        except BaseException:
+            snapshot.close()
+            raise
+
+    async def __call__(self, scope, receive, send):
+        # An iterator's finally does not run if cancellation precedes its first
+        # iteration. Ownership therefore belongs to the response itself.
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.snapshot.close()
+
+
 def _epizoo_selection(inputs, selected_id, resources):
     """Resolve exact configured selection from typed context, without science."""
     species = inputs.get('species')
@@ -294,6 +321,20 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.exception_handler(UploadError)
     async def upload_error(request, exc):
         return _error(exc.code, exc.message, exc.status_code)
+
+    @app.exception_handler(MatrixDeliveryError)
+    async def scientific_file_error(request, exc):
+        response = _error(exc.code, exc.message, {
+            'MATRIX_DOWNLOAD_UNAVAILABLE': 404,
+            'MATRIX_DOWNLOAD_LIMIT': 413,
+            'MATRIX_DOWNLOAD_BUSY': 503,
+            'SCIENTIFIC_DOWNLOAD_UNAVAILABLE': 404,
+            'SCIENTIFIC_DOWNLOAD_LIMIT': 413,
+            'SCIENTIFIC_DOWNLOAD_BUSY': 503,
+        }.get(exc.code, 400))
+        if exc.code in {'MATRIX_DOWNLOAD_BUSY', 'SCIENTIFIC_DOWNLOAD_BUSY'}:
+            response.headers['Retry-After'] = '2'
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
@@ -402,6 +443,23 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             'X-Artifact-Content-SHA256': content.content_sha256,
             'X-Artifact-Presentation': content.presentation,
         })
+
+    @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/scientific-artifacts')
+    def turn_scientific_artifacts(session_id: str, turn_id: str):
+        return {'artifacts': [a.to_dict() for a in
+                application.scientific_artifacts_for_turn(session_id, turn_id)]}
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/scientific-artifacts')
+    def scientific_artifacts(session_id: str, revision_id: str):
+        return {'artifacts': [a.to_dict() for a in
+                application.scientific_artifact_handles(session_id, revision_id)]}
+
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/scientific-artifacts/{handle}')
+    def scientific_artifact(session_id: str, revision_id: str, handle: str):
+        # Preparation completes integrity/privacy validation before HTTP sends
+        # headers or bytes. The response never reopens a scientific source path.
+        snapshot = application.prepare_scientific_artifact(session_id, revision_id, handle)
+        return _ScientificFileResponse(snapshot)
 
     @app.post('/api/v1/sessions/{session_id}/turns', status_code=202)
     def submit_turn(session_id: str, body: SubmitTurn):

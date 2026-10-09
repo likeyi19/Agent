@@ -75,6 +75,10 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .artifact-actions { display: flex; gap: 12px; align-items: baseline; margin-top: 3px; }
 .artifact-actions a { color: #276b85; }
 .artifact-actions button { font-size: 12px; padding: 4px 8px; }
+.scientific-file { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; padding: 10px 12px; border: 1px solid #cfdfe8; border-radius: 6px; font-size: 13px; }
+.scientific-file span { overflow-wrap: anywhere; }
+.scientific-file a { color: #276b85; font-weight: 600; }
+.scientific-file a:focus-visible { outline: 3px solid #c4e0ef; outline-offset: 2px; }
 .report-content, .evidence-value { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; max-height: 420px; overflow: auto; }
 .report-content { padding: 10px; background: #f4f6f8; border-radius: 6px; }
 .analysis-figure { display: block; max-width: 100%; height: auto; margin-top: 10px; }

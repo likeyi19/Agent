@@ -1,6 +1,6 @@
 """Actual tiny publications and normal scoped Planner for rich web acceptance."""
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -128,7 +128,8 @@ class RichHarness:
         return self.inputs
 
 
-def rich_harness(tmp_path):
+def rich_harness(tmp_path, *, managed_matrix=False, managed_tables=False,
+                 selection_names=('fragments', 'qc', 'selection', 'matrix')):
     """Seed normal accepted science, then expose only the interactive facade."""
     import pysam
     from agent.tools.data import scatac_reference as reference, scatac_qc_reference as qc_reference
@@ -179,9 +180,15 @@ def rich_harness(tmp_path):
             def plan(self, request, registry):
                 return plan
         application = ResearchAgentApplication(tmp_path / 'workspace', planner=SeedPlanner())
+        managed = ({'matrix'} if managed_matrix else set()) | ({'qc', 'selection'} if managed_tables else set())
+        if managed:
+            plan = replace(plan, steps=tuple(replace(step, arguments={
+                **step.arguments,
+                'output_dir': str(application._workspace.run_paths('seed-request:run').scientific / step.step_id),
+            }) if step.step_id in managed else step for step in steps))
         application.sessions.create('analysis')
         state = application.sessions.run('analysis', 'seed', AgentRequest('seed-request', 'Tiny accepted preprocessing.', {}),
-            tuple(OutputSelection(name, name, 'manifest_path') for name in ('fragments', 'qc', 'selection', 'matrix')), expected_generation=0)
+            tuple(OutputSelection(name, name, 'manifest_path') for name in selection_names), expected_generation=0)
         assert state.turn('seed').status == 'activated', state
         models = []
         def factory(profile):

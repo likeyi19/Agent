@@ -211,6 +211,42 @@ def test_companion_cannot_bypass_reviewed_resource_selection(field, value):
         ScientificInputSet('mouse', 'Mouse', {'species': 'mouse', field: value}, h5ad_companion=True)
 
 
+def test_fragments_companion_reuses_private_operator_inputs_and_explicit_default(tmp_path):
+    value = configuration_json()
+    declarations = {'reference_bundle_path': '/operator/reviewed-hg38/reference.json',
+                    'reference_bundle_sha256': 'a' * 64,
+                    'source_profile': '10x-atac-fragments.v1', 'namespace': 'pbmc',
+                    'source_selection': 'full_export'}
+    value['input_sets'] = [dict(input_set_id='human-fragments', label='Human hg38 PBMC declarations',
+        execution_inputs=declarations, fragments_companion=True, fragments_default=True)]
+    config = load_web_configuration(write_configuration(tmp_path, value))
+    companion = config.input_sets[0]
+    assert companion.choice() == dict(input_set_id='human-fragments',
+        display_label='Human hg38 PBMC declarations', fragments_companion=True, fragments_default=True)
+    assert companion.inputs() == declarations
+    assert '/operator' not in json.dumps(companion.choice())
+    assert 'sha256' not in json.dumps(companion.choice())
+    changed = companion.inputs()
+    changed['namespace'] = 'another-source'
+    assert companion.inputs()['namespace'] == 'pbmc'
+
+
+@pytest.mark.parametrize('values', [
+    {'fragments_companion': 'yes'}, {'fragments_default': 1},
+    {'fragments_default': True}, {'h5ad_companion': True, 'fragments_companion': True},
+])
+def test_fragments_companion_role_and_default_are_explicit(values):
+    with pytest.raises(WebConfigurationError):
+        ScientificInputSet('fragments', 'Fragments declarations', {}, **values)
+
+
+@pytest.mark.parametrize('field', ['source_path', 'source_sha256', 'source_index_path', 'source_index_sha256'])
+def test_fragments_companions_cannot_override_registered_source_or_index(field):
+    with pytest.raises(WebConfigurationError):
+        ScientificInputSet('fragments', 'Fragments declarations', {field: 'operator-value'},
+                           fragments_companion=True)
+
+
 def test_upload_configuration_is_opt_in_and_approves_only_controlled_workspace_root(tmp_path):
     value = configuration_json()
     default = load_web_configuration(write_configuration(tmp_path, value))

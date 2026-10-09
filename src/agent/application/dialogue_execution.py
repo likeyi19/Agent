@@ -123,6 +123,35 @@ def execute(sessions, interaction, admitted, model):
         # Presentation of a compiler-authored missing-port fact, not a second
         # interpretation of the utterance or a repaired scientific plan.
         error = ResourceAdmissionError('H5AD_SPECIES_REQUIRED').error
+    if (registered and interaction.submission['registered_input'].get('composition') == 'bam-science.v1'
+            and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
+            and error.details.get('tool_name') == 'prepare_scATAC_bam_fragments'):
+        # Present only the compiler's exact missing prerequisite. Inspection has
+        # no producer requirements, and this does not add or repair plan inputs.
+        prerequisites = {
+            'library_context': (('library_context_path', 'library_context_sha256'), 'BAM_LIBRARY_CONTEXT_REQUIRED'),
+            'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'BAM_REFERENCE_REQUIRED'),
+            'source_profile': (('source_profile',), 'BAM_PROFILE_REQUIRED'),
+            'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'BAM_INTAKE_REQUIRED'),
+        }
+        missing = prerequisites.get(error.details.get('target_port'))
+        if missing is not None and any(key not in interaction.submission['execution_inputs'] for key in missing[0]):
+            selection_error = interaction.submission['registered_input'].get('resource_selection_error')
+            code = 'BAM_RESOURCE_AMBIGUOUS' if selection_error == 'BAM_RESOURCE_AMBIGUOUS' else missing[1]
+            error = ResourceAdmissionError(code).error
+    if (registered and interaction.submission['registered_input'].get('composition') == 'fastq-science.v1'
+            and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
+            and error.details.get('tool_name') == 'prepare_scATAC_fragments'):
+        prerequisites = {
+            'library_context': (('library_context_path', 'library_context_sha256'), 'FASTQ_LIBRARY_CONTEXT_REQUIRED'),
+            'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'FASTQ_REFERENCE_REQUIRED'),
+            'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'FASTQ_INTAKE_REQUIRED'),
+        }
+        missing = prerequisites.get(error.details.get('target_port'))
+        if missing is not None and any(key not in interaction.submission['execution_inputs'] for key in missing[0]):
+            selection_error = interaction.submission['registered_input'].get('resource_selection_error')
+            code = 'FASTQ_RESOURCE_AMBIGUOUS' if selection_error == 'FASTQ_RESOURCE_AMBIGUOUS' else missing[1]
+            error = ResourceAdmissionError(code).error
     return TurnOutcome('execute', 'failed', error=error,
         text=error.message if error is not None else
         'The scientific execution request could not form a valid plan from the supplied inputs.')

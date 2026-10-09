@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException
 
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
-from agent.application.local_resources import RegisteredInput, ResourceAdmissionError
+from agent.application.local_resources import RegisteredInput, RegisteredInputCollection, ResourceAdmissionError
 from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
@@ -42,6 +42,12 @@ class CreateSession(_Body):
     @classmethod
     def route_identity(cls, value):
         return _route_identity(value)
+
+
+class CompleteFastqCollection(_Body):
+    collection_id: StrictStr = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_-]+$')
+    label: StrictStr = Field(min_length=1, max_length=160)
+    member_ids: list[StrictStr] = Field(min_length=1, max_length=128)
 
 
 class SubmitTurn(_Body):
@@ -137,7 +143,7 @@ class _LocalWorkers:
 
     @staticmethod
     def _input_arguments(inputs):
-        return ({'registered_input': inputs} if isinstance(inputs, RegisteredInput)
+        return ({'registered_input': inputs} if isinstance(inputs, (RegisteredInput, RegisteredInputCollection))
                 else {'execution_inputs': inputs})
 
     def submit(self, session_id, payload, inputs):
@@ -253,6 +259,54 @@ def _epizoo_selection(inputs, selected_id, resources):
                             else 'EPIZOO_RESOURCE_AMBIGUOUS')
         selected = applicable[0]
     return {**inputs, **selected.inputs()}, None
+
+
+def _fragments_selection(selected, input_sets):
+    """Choose one explicit operator context; scientific owners qualify its use."""
+    if selected is not None:
+        if not selected.fragments_companion:
+            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+    else:
+        defaults = tuple(s for s in input_sets if s.fragments_companion and s.fragments_default)
+        if len(defaults) != 1:
+            raise ResourceAdmissionError('FRAGMENTS_RESOURCE_REQUIRED' if not defaults
+                                         else 'FRAGMENTS_RESOURCE_AMBIGUOUS')
+        selected = defaults[0]
+    inputs = selected.inputs()
+    for fields, code in (
+        (('reference_bundle_path', 'reference_bundle_sha256'), 'FRAGMENTS_REFERENCE_REQUIRED'),
+        (('source_profile',), 'FRAGMENTS_PROFILE_REQUIRED'),
+        (('namespace',), 'FRAGMENTS_NAMESPACE_REQUIRED'),
+    ):
+        if any(field not in inputs for field in fields):
+            raise ResourceAdmissionError(code)
+    return inputs
+
+
+def _bam_selection(selected, input_sets):
+    """Offer only an explicit context; inspection also works without one."""
+    if selected is not None:
+        if not selected.bam_companion:
+            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+    else:
+        defaults = tuple(s for s in input_sets if s.bam_companion and s.bam_default)
+        if len(defaults) != 1:
+            return {}, 'BAM_RESOURCE_AMBIGUOUS' if defaults else None
+        selected = defaults[0]
+    return selected.inputs(), None
+
+
+def _fastq_selection(selected, input_sets):
+    """Inspection remains usable without producer-only prerequisites."""
+    if selected is not None:
+        if not selected.fastq_companion:
+            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+    else:
+        defaults = tuple(s for s in input_sets if s.fastq_companion and s.fastq_default)
+        if len(defaults) != 1:
+            return {}, 'FASTQ_RESOURCE_AMBIGUOUS' if defaults else None
+        selected = defaults[0]
+    return selected.inputs(), None
 
 
 def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2,
@@ -373,16 +427,50 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
 
     @app.get('/api/v1/resources')
     def uploaded_resources():
-        return {'enabled': uploads is not None,
-                'choices': [] if uploads is None else list(uploads.choices())}
+        result = {'enabled': uploads is not None,
+                  'choices': [] if uploads is None else list(uploads.choices())}
+        members = () if uploads is None else uploads.fastq_members()
+        if members:
+            result['fastq_members'] = list(members)
+        return result
+
+    @app.post('/api/v1/uploads/fastq-collections', status_code=201)
+    def complete_fastq_collection(body: CompleteFastqCollection):
+        if uploads is None:
+            return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
+        return uploads.complete_fastq_collection(body.collection_id, body.label, body.member_ids).public()
 
     @app.put('/api/v1/uploads/{upload_id}', status_code=201)
-    async def upload_h5ad(upload_id: str, request: Request,
-                         filename: str = Query(min_length=1, max_length=160)):
+    async def upload_source(upload_id: str, request: Request,
+                            filename: str = Query(min_length=1, max_length=160),
+                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq)$'),
+                            index_filename: str | None = Query(default=None, min_length=1, max_length=160),
+                            source_size: str | None = Query(default=None, min_length=1, max_length=20),
+                            library_id: str | None = Query(default=None, min_length=1, max_length=64),
+                            fastq_layout: str | None = Query(default=None, min_length=1, max_length=64),
+                            role: str | None = Query(default=None, min_length=1, max_length=2),
+                            lane: str | None = Query(default=None, min_length=3, max_length=3),
+                            chunk: str | None = Query(default=None, min_length=3, max_length=3),
+                            compression: str | None = Query(default=None, min_length=1, max_length=5)):
         if uploads is None:
-            return _error('WEB_UPLOAD_UNAVAILABLE', 'H5AD attachments are not configured.', 404)
-        if list(request.query_params.keys()) != ['filename'] or len(request.query_params.getlist('filename')) != 1:
+            return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
+        fastq_member = dict(library_id=library_id, fastq_layout=fastq_layout, role=role,
+                           lane=lane, chunk=chunk, compression=compression)
+        if (set(request.query_params) - {'filename', 'input_type', 'index_filename', 'source_size',
+                                         *fastq_member}
+                or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params)
+                or (index_filename is None) != (source_size is None)
+                or index_filename is not None and input_type != 'external_fragments'
+                or input_type == 'fastq' and any(value is None for value in fastq_member.values())
+                or input_type != 'fastq' and any(value is not None for value in fastq_member.values())):
             return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
+        paired_source_size = None
+        if source_size is not None:
+            if not source_size.isascii() or not source_size.isdecimal() or int(source_size) < 1:
+                return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
+            paired_source_size = int(source_size)
+            if paired_source_size > uploads.max_bytes:
+                raise UploadError('UPLOAD_TOO_LARGE', max_bytes=uploads.max_bytes)
         content_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
         if content_type != 'application/octet-stream':
             return _error('WEB_UPLOAD_REQUEST_INVALID', 'Send the file as a binary stream.', 415)
@@ -393,11 +481,15 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                     or not length.isascii() or not length.isdecimal()):
                 return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
             normalized_length = length.lstrip('0') or '0'
-            if len(normalized_length) > 20 or int(normalized_length) > uploads.max_bytes:
-                return _error('UPLOAD_TOO_LARGE', 'The file exceeds the configured attachment size limit.', 413)
+            maximum_length = uploads.max_bytes * (2 if index_filename is not None else 1)
+            if len(normalized_length) > 20 or int(normalized_length) > maximum_length:
+                raise UploadError('UPLOAD_TOO_LARGE', max_bytes=uploads.max_bytes)
             expected_size = int(normalized_length)
+            if paired_source_size is not None and expected_size <= paired_source_size:
+                return _error('WEB_UPLOAD_REQUEST_INVALID', 'The paired index transfer is incomplete.', 422)
         record = await uploads.receive(upload_id, filename, request.stream(),
-                                       expected_size=expected_size)
+            input_type=input_type, index_filename=index_filename, source_size=paired_source_size,
+            expected_size=expected_size, **({'fastq_member': fastq_member} if input_type == 'fastq' else {}))
         return record.public()
 
     @app.post('/api/v1/sessions', status_code=201)
@@ -470,7 +562,34 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if input_set is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
         if body.resource_id is not None:
-            if uploads is None or input_set is not None and not input_set.h5ad_companion:
+            if uploads is None:
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+            selected_source = uploads.resources.load(body.resource_id)
+            if selected_source.input_type == 'fastq':
+                if body.epizoo_resource_id is not None:
+                    raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+                companion_inputs, selection_error = _fastq_selection(input_set, input_sets)
+                inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
+                    resource_selection_error=selection_error, verify_source=False)
+                workers.submit(session_id, body, inputs)
+                return {'session_id': session_id, 'turn_id': body.turn_id}
+            if selected_source.input_type == 'bam':
+                if body.epizoo_resource_id is not None:
+                    raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+                companion_inputs, selection_error = _bam_selection(input_set, input_sets)
+                inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
+                    resource_selection_error=selection_error, verify_source=False)
+                workers.submit(session_id, body, inputs)
+                return {'session_id': session_id, 'turn_id': body.turn_id}
+            if selected_source.input_type == 'external_fragments':
+                if body.epizoo_resource_id is not None:
+                    raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+                inputs = uploads.resolve(body.resource_id,
+                    scientific_inputs=_fragments_selection(input_set, input_sets), verify_source=False)
+                workers.submit(session_id, body, inputs)
+                return {'session_id': session_id, 'turn_id': body.turn_id}
+            if (selected_source.input_type != 'h5ad'
+                    or input_set is not None and not input_set.h5ad_companion):
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
             companion_inputs, selection_error = None, None
             if input_set is not None or body.epizoo_resource_id is not None:
@@ -484,6 +603,12 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
                 resource_selection_error=selection_error, verify_source=False)
         else:
+            if input_set is not None and input_set.fastq_companion:
+                raise ResourceAdmissionError('FASTQ_SOURCE_REQUIRED')
+            if input_set is not None and input_set.bam_companion:
+                raise ResourceAdmissionError('BAM_SOURCE_REQUIRED')
+            if input_set is not None and input_set.fragments_companion:
+                raise ResourceAdmissionError('FRAGMENTS_SOURCE_REQUIRED')
             if body.epizoo_resource_id is not None or input_set is not None and input_set.h5ad_companion:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
             if input_set is not None:

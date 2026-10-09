@@ -44,9 +44,6 @@
         <label for="model-choice">Model for next turn</label>
         <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
         <p id="model-description" class="muted small"></p>
-        <label for="input-choice">Scientific inputs</label>
-        <select id="input-choice" disabled><option value="">No structured inputs</option></select>
-        <p class="muted small">Choose configured inputs or declarations for an uploaded H5AD. Species and analysis parameters come from these typed selections.</p>
         <label for="epizoo-resource-choice">EpiZoo resource for uploaded H5AD</label>
         <select id="epizoo-resource-choice" disabled><option value="">Use applicable configured default</option></select>
       </div>
@@ -76,13 +73,51 @@
         <div class="attachment-controls" aria-label="Scientific attachment">
           <label for="resource-choice">Uploaded scientific input</label>
           <select id="resource-choice" disabled><option value="">No uploaded input selected</option></select>
+          <label for="input-choice">Scientific inputs and declarations</label>
+          <select id="input-choice" disabled><option value="">No structured inputs</option></select>
+          <p id="input-choice-help" class="muted small">Choose configured inputs or declarations for an uploaded source.</p>
+          <label for="upload-type">New attachment role</label>
+          <select id="upload-type" disabled>
+            <option value="h5ad">H5AD matrix</option>
+            <option value="external_fragments">External fragments</option>
+            <option value="bam">scATAC-seq BAM</option>
+            <option value="fastq">scATAC-seq FASTQ library</option>
+          </select>
+          <div id="fastq-fields" hidden>
+            <div class="fastq-attribution">
+              <div><label for="fastq-library">Library name</label><input id="fastq-library" maxlength="64" placeholder="One explicitly declared library" disabled></div>
+              <div><label for="fastq-layout">Read layout</label><select id="fastq-layout" disabled><option value="">Choose a supported layout</option><option value="tenx-atac-r1-r2-r3.v1">A: R1 + R2 barcode + R3</option><option value="tenx-atac-r1-i2-r2.v1">B: R1 + R2 + I2 barcode</option></select></div>
+              <div><label for="fastq-role">Role of the next file</label><select id="fastq-role" disabled><option value="">Choose the read role</option><option value="R1">R1 (genomic)</option><option value="R2">R2 (A: barcode / B: genomic)</option><option value="R3">R3 (genomic, layout A)</option><option value="I2">I2 (barcode, layout B)</option><option value="I1">I1 (optional index)</option></select></div>
+              <div><label for="fastq-lane">Lane</label><input id="fastq-lane" maxlength="3" placeholder="e.g. 001" disabled></div>
+              <div><label for="fastq-chunk">Chunk</label><input id="fastq-chunk" maxlength="3" placeholder="e.g. 001" disabled></div>
+              <div><label for="fastq-compression">File encoding</label><select id="fastq-compression" disabled><option value="">Choose the encoding</option><option value="plain">Plain FASTQ</option><option value="gzip">gzip FASTQ</option></select></div>
+            </div>
+            <p class="muted small">Declare each file's role and encoding before uploading. Filenames do not assign roles. Upload every required role for each lane/chunk; optional I1 is supported. To replace a registered file, declare a new library name.</p>
+          </div>
           <div class="attachment-upload">
             <div class="attachment-file">
-              <label for="upload-file">Attach an H5AD file</label>
+              <label id="upload-file-label" for="upload-file">Attach an H5AD file</label>
               <input id="upload-file" type="file" accept=".h5ad" disabled aria-describedby="upload-status">
             </div>
             <button id="upload-file-button" class="secondary" type="button" disabled>Upload</button>
             <button id="clear-upload" class="secondary" type="button" hidden>Remove file</button>
+          </div>
+          <div id="upload-index-fields" class="attachment-upload" hidden>
+            <div class="attachment-file">
+              <label for="upload-index">Paired TBI index (optional)</label>
+              <input id="upload-index" type="file" accept=".tbi" disabled aria-describedby="upload-status">
+            </div>
+            <button id="clear-upload-index" class="secondary" type="button" hidden>Remove index</button>
+          </div>
+          <p id="fragments-input-help" class="muted small" hidden>Select approved fragment declarations and a reference above, or use an explicitly configured default. Upload registers bytes; scientific format and compatibility are checked during import.</p>
+          <p id="bam-input-help" class="muted small" hidden>Upload one BAM; no index is required. Inspection can establish file contents. Fragment preparation requires an approved paired-ATAC source context and compatible reference.</p>
+          <div id="fastq-collection-fields" hidden>
+            <label for="fastq-collection-label">Completed library label</label>
+            <input id="fastq-collection-label" maxlength="160" placeholder="A useful label for this library" disabled>
+            <p class="muted small">Select completed members of one declared library. Complete the library before selecting it for a chat request.</p>
+            <div id="fastq-members" class="fastq-members"></div>
+            <button id="complete-fastq-collection" class="secondary" type="button" disabled>Complete FASTQ library</button>
+            <p id="fastq-collection-status" class="muted small" role="status" aria-live="polite"></p>
           </div>
           <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
           <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>

@@ -25,6 +25,7 @@ const state = {
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   resources: [], resourcesEnabled: false, upload: null,
+  fastqMembers: [], fastqCompletion: null,
   inputSets: [], epizooResources: [],
   scientificFiles: new Map(),
 };
@@ -52,6 +53,7 @@ function saveConveniences() {
     profileId: element("model-choice").value,
     polledTurnId: state.activeTurn ? state.activeTurn.turn_id : "",
     draft: element("utterance").value,
+    inputSetId: element("input-choice").value,
   };
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
 }
@@ -701,7 +703,7 @@ function renderHistory() {
 
 function updateControls() {
   const busy = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
-  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || Boolean(state.upload);
+  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || Boolean(state.upload) || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("submit-turn").disabled = cannotSubmit;
   document.querySelectorAll(".guidance-select").forEach((button) => { button.disabled = cannotSubmit; });
   element("activate-revision").disabled = !state.revision || busy || state.opening || state.navigating;
@@ -713,14 +715,26 @@ function updateControls() {
   cancel.hidden = !(state.activeTurn && state.activeTurn.run_id &&
     ["planning", "validated", "running"].includes(state.activeTurn.status) && !terminal(state.activeTurn));
   cancel.disabled = cancel.hidden || state.posting;
-  const uploading = Boolean(state.upload && state.upload.status === "uploading");
+  const uploading = Boolean(state.upload && state.upload.status === "uploading")
+    || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("resource-choice").disabled = !state.resourcesEnabled || !state.resources.length || uploading;
   element("upload-file").disabled = !state.resourcesEnabled || uploading;
+  element("upload-type").disabled = !state.resourcesEnabled || uploading;
+  element("upload-index").disabled = !state.resourcesEnabled || uploading || !state.upload;
+  element("clear-upload-index").hidden = !(state.upload && state.upload.index);
+  element("clear-upload-index").disabled = uploading;
   element("upload-file-button").disabled = !state.resourcesEnabled || !state.upload || uploading;
   element("upload-file-button").textContent = state.upload && state.upload.status === "failed" ? "Retry upload" : "Upload";
   element("clear-upload").hidden = !state.upload;
   element("input-choice").disabled = !element("input-choice").options.length || element("input-choice").options.length === 1 || uploading;
-  element("epizoo-resource-choice").disabled = !element("resource-choice").value || !state.epizooResources.length || uploading;
+  element("epizoo-resource-choice").disabled = selectedResourceType() !== "h5ad" || !state.epizooResources.length || uploading;
+  const completing = Boolean(state.fastqCompletion && state.fastqCompletion.pending);
+  for (const id of ["fastq-library", "fastq-layout", "fastq-role", "fastq-lane", "fastq-chunk", "fastq-compression", "fastq-collection-label"]) {
+    element(id).disabled = !state.resourcesEnabled || uploading || completing;
+  }
+  document.querySelectorAll(".fastq-member input").forEach((node) => { node.disabled = uploading || completing; });
+  element("complete-fastq-collection").disabled = !state.resourcesEnabled || !state.fastqMembers.length || uploading || completing || Boolean(state.upload);
+  element("complete-fastq-collection").textContent = completing ? "Completing library…" : "Complete FASTQ library";
 }
 
 function renderExecution() {
@@ -921,13 +935,45 @@ function inputContext() {
   const epizoo = element("epizoo-resource-choice").selectedOptions[0];
   const labels = [resource && resource.value ? resource.textContent : "",
     choice && choice.value ? choice.textContent : "",
-    resource && resource.value && epizoo && epizoo.value ? epizoo.textContent : ""].filter(Boolean);
+    selectedResourceType() === "h5ad" && epizoo && epizoo.value ? epizoo.textContent : ""].filter(Boolean);
   const label = labels.length ? labels.join(" · ") : "none selected";
   element("selected-input-context").textContent = `Scientific inputs for next turn: ${label}`;
+  const fragments = selectedResourceType() === "external_fragments";
+  const bam = selectedResourceType() === "bam";
+  const fastq = selectedResourceType() === "fastq";
+  const configuredDefaults = state.inputSets.filter((item) => item.fragments_default === true);
+  const bamDefaults = state.inputSets.filter((item) => item.bam_default === true);
+  const fastqDefaults = state.inputSets.filter((item) => item.fastq_default === true);
+  element("input-choice").options[0].textContent = fragments
+    ? configuredDefaults.length === 1 ? "Use explicitly configured fragments default" : "Choose approved fragments declarations"
+    : bam ? bamDefaults.length === 1 ? "Use explicitly configured BAM context" : "No qualified BAM context — inspection available"
+      : fastq ? fastqDefaults.length === 1 ? "Use explicitly configured FASTQ context" : "No qualified FASTQ producer context — inspection available"
+        : "No structured inputs";
+  element("input-choice-help").textContent = fragments
+    ? "Choose an approved fragments declaration set with a reference, source profile and namespace. Missing prerequisites are reported when you send the request."
+    : bam ? "Inspect the BAM without a producer context. To prepare fragments, choose an approved paired-ATAC source context and compatible reference."
+      : fastq ? "Inspect the completed FASTQ library without producer resources. Fragment production requires an approved library context, barcode policy and compatible reference/runtime."
+        : "Choose configured inputs or declarations for an uploaded source.";
+  for (const option of element("input-choice").options) {
+    const configured = state.inputSets.find((item) => item.input_set_id === option.value);
+    option.disabled = Boolean(option.value) && (bam && !(configured && configured.bam_companion === true)
+      || fastq && !(configured && configured.fastq_companion === true));
+    option.hidden = option.disabled;
+  }
 }
 
-function selectedCompanion() {
-  return state.inputSets.some((choice) => choice.input_set_id === element("input-choice").value && choice.h5ad_companion === true);
+function selectedResourceType() {
+  const resource = state.resources.find((choice) => choice.resource_id === element("resource-choice").value);
+  return resource ? resource.input_type : state.upload ? state.upload.inputType : null;
+}
+
+function selectedCompanion(inputType = selectedResourceType()) {
+  return state.inputSets.some((choice) => choice.input_set_id === element("input-choice").value &&
+    (inputType === "external_fragments" ? choice.fragments_companion === true :
+      inputType === "h5ad" ? choice.h5ad_companion === true :
+        inputType === "bam" ? choice.bam_companion === true :
+          inputType === "fastq" ? choice.fastq_companion === true :
+            choice.h5ad_companion === true || choice.fragments_companion === true || choice.bam_companion === true || choice.fastq_companion === true));
 }
 
 function saveResourceSelection() {
@@ -947,7 +993,8 @@ function renderResources(selectedId = "") {
   element("resource-choice").replaceChildren(none, ...state.resources.map((choice) => {
     const option = document.createElement("option");
     option.value = choice.resource_id;
-    option.textContent = `${choice.label} · H5AD · registered`;
+    const role = choice.input_type === "external_fragments" ? `Fragments${choice.has_source_index === true ? " + TBI" : ""}` : choice.input_type === "bam" ? "BAM" : choice.input_type === "fastq" ? "FASTQ library" : "H5AD";
+    option.textContent = `${choice.label} · ${role} · registered`;
     return option;
   }));
   if (state.resources.some((choice) => choice.resource_id === selectedId)) {
@@ -955,6 +1002,7 @@ function renderResources(selectedId = "") {
     if (!selectedCompanion()) element("input-choice").value = "";
   }
   saveResourceSelection();
+  saveConveniences();
   inputContext();
   updateControls();
 }
@@ -966,11 +1014,16 @@ async function loadResources() {
     const catalog = await api("/resources");
     state.resourcesEnabled = catalog.enabled === true;
     state.resources = state.resourcesEnabled ? catalog.choices : [];
-    renderResources(element("input-choice").value && !selectedCompanion() ? "" : selectedId);
-    uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "H5AD attachments are unavailable on this server.");
+    state.fastqMembers = state.resourcesEnabled && Array.isArray(catalog.fastq_members) ? catalog.fastq_members : [];
+    renderFastqMembers();
+    const selected = state.resources.find((choice) => choice.resource_id === selectedId);
+    renderResources(element("input-choice").value && !selectedCompanion(selected && selected.input_type) ? "" : selectedId);
+    uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "Scientific attachments are unavailable on this server.");
   } catch (error) {
     state.resourcesEnabled = false;
     state.resources = [];
+    state.fastqMembers = [];
+    renderFastqMembers();
     renderResources();
     uploadStatus(`${error.code}: ${error.message}`, true);
   }
@@ -981,8 +1034,81 @@ function clearPendingUpload(keepFile = false) {
   state.upload = null;
   if (upload && upload.request) upload.request.abort();
   if (!keepFile) element("upload-file").value = "";
+  element("upload-index").value = "";
   element("upload-progress").hidden = true;
   uploadStatus("No file awaiting upload. You can send a message without an attachment.");
+  updateControls();
+}
+
+function renderUploadType() {
+  const fragments = element("upload-type").value === "external_fragments";
+  const bam = element("upload-type").value === "bam";
+  const fastq = element("upload-type").value === "fastq";
+  element("upload-file-label").textContent = fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : "Attach an H5AD file";
+  element("upload-file").accept = fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : ".h5ad";
+  element("upload-index-fields").hidden = !fragments;
+  element("fragments-input-help").hidden = !fragments;
+  element("bam-input-help").hidden = !bam;
+  element("fastq-fields").hidden = !fastq;
+  element("fastq-collection-fields").hidden = !fastq;
+}
+
+function fastqAttribution() {
+  return Object.freeze({ library_id: element("fastq-library").value,
+    fastq_layout: element("fastq-layout").value, role: element("fastq-role").value,
+    lane: element("fastq-lane").value, chunk: element("fastq-chunk").value,
+    compression: element("fastq-compression").value });
+}
+
+function selectedFastqMembers() {
+  return Array.from(document.querySelectorAll(".fastq-member input:checked")).map((node) => node.value);
+}
+
+function renderFastqMembers(selectId = "") {
+  const selected = new Set(selectedFastqMembers());
+  if (selectId) selected.add(selectId);
+  element("fastq-members").replaceChildren(...state.fastqMembers.map((member) => {
+    const row = document.createElement("label");
+    row.className = "fastq-member";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = member.resource_id;
+    checkbox.checked = selected.has(member.resource_id);
+    const text = document.createElement("span");
+    const facts = member.fastq_attribution;
+    text.textContent = `${member.label} · ${facts.library_id} · ${facts.role} · lane ${facts.lane || "unspecified"} / chunk ${facts.chunk}`;
+    row.append(checkbox, text);
+    return row;
+  }));
+}
+
+function fastqCollectionStatus(text, failed = false) {
+  element("fastq-collection-status").textContent = text;
+  element("fastq-collection-status").classList.toggle("upload-error", failed);
+}
+
+async function completeFastqCollection() {
+  if (!state.resourcesEnabled || state.upload || state.fastqCompletion && state.fastqCompletion.pending) return;
+  if (!state.fastqCompletion) {
+    state.fastqCompletion = { pending: false, body: Object.freeze({ collection_id: newTurnId(),
+      label: element("fastq-collection-label").value, member_ids: Object.freeze(selectedFastqMembers()) }) };
+  }
+  const completion = state.fastqCompletion;
+  completion.pending = true;
+  fastqCollectionStatus("Checking declared members and completing the library…");
+  updateControls();
+  try {
+    const collection = await api("/uploads/fastq-collections", "POST", completion.body);
+    if (state.fastqCompletion !== completion) return;
+    state.resources = [...state.resources.filter((choice) => choice.resource_id !== collection.resource_id), collection];
+    state.fastqCompletion = null;
+    renderResources(collection.resource_id);
+    fastqCollectionStatus(`${collection.label} · library registered. Describe the analysis in your message. Fragment production requires qualified context.`);
+  } catch (error) {
+    if (state.fastqCompletion !== completion) return;
+    completion.pending = false;
+    fastqCollectionStatus(`${error.code || "COLLECTION_FAILED"}: ${error.message}`, true);
+  }
   updateControls();
 }
 
@@ -990,7 +1116,12 @@ function transferUpload(upload) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     upload.request = request;
-    request.open("PUT", `/api/v1/uploads/${encodeURIComponent(upload.uploadId)}?filename=${encodeURIComponent(upload.file.name)}`);
+    let query = `?filename=${encodeURIComponent(upload.file.name)}&input_type=${encodeURIComponent(upload.inputType)}`;
+    if (upload.index) query += `&index_filename=${encodeURIComponent(upload.index.name)}&source_size=${upload.file.size}`;
+    if (upload.fastq) {
+      for (const [key, value] of Object.entries(upload.fastq)) query += `&${key}=${encodeURIComponent(value)}`;
+    }
+    request.open("PUT", `/api/v1/uploads/${encodeURIComponent(upload.uploadId)}${query}`);
     request.setRequestHeader("Content-Type", "application/octet-stream");
     request.responseType = "json";
     request.upload.addEventListener("progress", (event) => {
@@ -1004,7 +1135,7 @@ function transferUpload(upload) {
       if (request.status < 200 || request.status >= 300) {
         const error = data && data.error;
         reject(new ApiError(error && error.code || "UPLOAD_FAILED", error && error.message || "The file could not be registered.", request.status));
-      } else if (!data || typeof data.resource_id !== "string" || typeof data.label !== "string" || data.input_type !== "h5ad" || data.status !== "registered") {
+      } else if (!data || typeof data.resource_id !== "string" || typeof data.label !== "string" || data.input_type !== upload.inputType || data.status !== "registered") {
         reject(new ApiError("RESPONSE_UNAVAILABLE", "The upload response could not be read. Retry the same file to recover its registration."));
       } else {
         resolve(data);
@@ -1014,7 +1145,7 @@ function transferUpload(upload) {
     request.onerror = interrupted;
     request.onabort = interrupted;
     request.ontimeout = interrupted;
-    request.send(upload.file);
+    request.send(upload.index ? new Blob([upload.file, upload.index]) : upload.file);
   });
 }
 
@@ -1029,12 +1160,24 @@ async function uploadSelectedFile() {
   try {
     const resource = await transferUpload(upload);
     if (state.upload !== upload) return;
-    state.resources = [...state.resources.filter((choice) => choice.resource_id !== resource.resource_id), resource];
+    if (resource.input_type === "fastq") {
+      state.fastqMembers = [...state.fastqMembers.filter((choice) => choice.resource_id !== resource.resource_id), resource];
+      state.fastqCompletion = null;
+      renderFastqMembers(resource.resource_id);
+    } else {
+      state.resources = [...state.resources.filter((choice) => choice.resource_id !== resource.resource_id), resource];
+    }
     state.upload = null;
     element("upload-file").value = "";
+    element("upload-index").value = "";
     element("upload-progress").hidden = true;
-    renderResources(resource.resource_id);
-    uploadStatus(`${resource.label} · registered. Describe what you want Agent to do, then send your message.`);
+    if (resource.input_type === "fastq") {
+      renderResources();
+      uploadStatus(`${resource.label} · member registered. Upload the remaining declared roles, then complete the FASTQ library.`);
+    } else {
+      renderResources(resource.resource_id);
+      uploadStatus(`${resource.label} · registered. Describe what you want Agent to do, then send your message.`);
+    }
   } catch (error) {
     if (state.upload !== upload) return;
     upload.status = "failed";
@@ -1049,21 +1192,51 @@ element("upload-file").addEventListener("change", () => {
   clearPendingUpload(true);
   if (!file) return;
   // Selection creates a new transfer identity; Retry keeps this same File and ID.
-  state.upload = { uploadId: newTurnId(), file, status: "selected", request: null };
+  state.upload = { uploadId: newTurnId(), file, inputType: element("upload-type").value, index: null, status: "selected", request: null,
+    fastq: element("upload-type").value === "fastq" ? fastqAttribution() : null };
   element("resource-choice").value = "";
   if (!selectedCompanion()) element("input-choice").value = "";
   saveResourceSelection();
+  saveConveniences();
   inputContext();
   uploadStatus(`${file.name} · selected. Upload this file before sending your request.`);
   updateControls();
+});
+element("upload-type").addEventListener("change", () => {
+  clearPendingUpload();
+  renderUploadType();
+});
+for (const id of ["fastq-library", "fastq-layout", "fastq-role", "fastq-lane", "fastq-chunk", "fastq-compression"]) {
+  element(id).addEventListener("change", () => {
+    if (!state.upload || state.upload.inputType !== "fastq" || state.upload.status === "uploading") return;
+    state.upload = { ...state.upload, uploadId: newTurnId(), fastq: fastqAttribution(), status: "selected", request: null };
+    updateControls();
+  });
+}
+element("fastq-members").addEventListener("change", () => { state.fastqCompletion = null; });
+element("fastq-collection-label").addEventListener("input", () => { state.fastqCompletion = null; });
+element("complete-fastq-collection").addEventListener("click", completeFastqCollection);
+function changePairedIndex(index) {
+  const upload = state.upload;
+  if (!upload || upload.inputType !== "external_fragments" || upload.status === "uploading") return;
+  // Changing the explicit pair creates a new unit identity. Retry keeps it exact.
+  state.upload = { ...upload, uploadId: newTurnId(), index, status: "selected", request: null };
+  uploadStatus(`${upload.file.name}${index ? ` + ${index.name}` : ""} · selected. Upload this source before sending your request.`);
+  updateControls();
+}
+element("upload-index").addEventListener("change", () => changePairedIndex(element("upload-index").files[0] || null));
+element("clear-upload-index").addEventListener("click", () => {
+  element("upload-index").value = "";
+  changePairedIndex(null);
 });
 element("upload-file-button").addEventListener("click", uploadSelectedFile);
 element("clear-upload").addEventListener("click", () => clearPendingUpload());
 element("resource-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
   if (element("resource-choice").value && !selectedCompanion()) element("input-choice").value = "";
-  if (!element("resource-choice").value) element("epizoo-resource-choice").value = "";
+  if (selectedResourceType() !== "h5ad") element("epizoo-resource-choice").value = "";
   saveResourceSelection();
+  saveConveniences();
   inputContext();
   updateControls();
 });
@@ -1109,7 +1282,7 @@ function submitRequest(utterance, predecessorTurnId = null) {
   if (element("resource-choice").value) {
     body.resource_id = element("resource-choice").value;
     if (selectedCompanion()) body.input_set_id = element("input-choice").value;
-    if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
+    if (selectedResourceType() === "h5ad" && element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
   }
   else if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   state.submission = Object.freeze({ sessionId: state.session.session_id, body: Object.freeze(body) });
@@ -1165,6 +1338,7 @@ element("input-choice").addEventListener("change", () => {
     element("epizoo-resource-choice").value = "";
   }
   saveResourceSelection();
+  saveConveniences();
   inputContext();
   updateControls();
 });
@@ -1173,7 +1347,7 @@ element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
   const conveniences = readConveniences();
-  const resources = loadResources();
+  let resources;
   if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
   try {
     const [, models, inputs, epizoo] = await Promise.all([api("/health"), api("/models"), api("/input-sets"), api("/epizoo-resources")]);
@@ -1195,10 +1369,13 @@ async function initialize() {
     element("input-choice").replaceChildren(none, ...inputs.choices.map((choice) => {
       const option = document.createElement("option");
       option.value = choice.input_set_id;
-      option.textContent = choice.display_label;
+      option.textContent = `${choice.display_label}${choice.fragments_default === true ? " (fragments default)" : choice.bam_default === true ? " (BAM default)" : ""}`;
       return option;
     }));
     element("input-choice").disabled = !inputs.choices.length;
+    if (state.inputSets.some((choice) => choice.input_set_id === conveniences.inputSetId)) {
+      element("input-choice").value = conveniences.inputSetId;
+    }
     const resourceDefault = document.createElement("option");
     resourceDefault.value = "";
     resourceDefault.textContent = "Use applicable configured default";
@@ -1208,6 +1385,7 @@ async function initialize() {
       option.textContent = `${choice.display_label} · ${choice.species}${choice.is_default ? " (default)" : ""}`;
       return option;
     }));
+    resources = loadResources();
     inputContext();
     element("connection-state").textContent = "Connected";
     modelDescription();

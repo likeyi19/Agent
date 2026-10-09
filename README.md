@@ -973,8 +973,9 @@ their captured attribution without requiring current source bytes.
 Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
 identity and exact resolved inputs are captured once in the existing immutable
 submission; scientific results retain their existing RunStore/Revision authority.
-`resource.public()` exposes safe registration metadata without paths. The Python
-UA1–UA2.4 admission boundary does not transfer browser files or register indexes.
+`resource.public()` exposes safe registration metadata without paths. The initial
+UA1–UA2.4 admission boundary did not transfer browser files or register indexes;
+UA3.4.1 adds optional paired-index identities to the same source records.
 UA3.1 adds optional H5AD browser transfer and discovery of those completed
 registrations through the same owner; operator-configured Web InputSets retain
 their current behavior. UA3.2.2 additionally allows explicitly designated H5AD
@@ -1023,6 +1024,83 @@ qualified derived model. Existing `adapt_epizoo_species` retains its qualified
 pretrained-source, SEAM and explicit `mapped_reference`/`de_novo` contracts and
 publishes separate target-species weights. Adapted-target inference remains
 deferred; original pretrained weights are preserved.
+
+### External fragments browser attachment (UA3.4.1)
+
+With the existing upload configuration enabled, choose **External fragments**
+near the composer, attach one source and optionally its TBI, then upload. The
+importer accepts consistent five/six-column TSV in plain, gzip or BGZF encoding;
+a supplied TBI requires BGZF and exact source compatibility. Encoding and
+scientific validity are checked from bytes during import. Uploading registers
+bytes without starting analysis.
+
+Choose an approved **Scientific inputs and declarations** set and send an
+ordinary request, such as “Import these scATAC-seq fragments.” The operator
+designates that existing InputSet with `"fragments_companion": true` and supplies
+`reference_bundle_path`, `reference_bundle_sha256`, `source_profile` (currently
+`10x-atac-fragments.v1`) and `namespace` in its `execution_inputs`. Optional
+`source_selection` declares export history; omission retains `unknown`.
+`"fragments_default": true` explicitly opts into a default, usable only when
+exactly one exists. Explicit selection takes priority. Source/index paths and
+digests come from registration and cannot be configured as companions.
+
+The public importer retains its human/mouse scope. Species/assembly come from
+the qualified reference, never a filename. Additional explicit QC resources,
+selection thresholds and cCRE resources can accompany the same InputSet; the
+ordinary Interpreter/Planner selects operations and the scientific owners check
+compatibility. Missing prerequisites produce safe errors. Typed selections still
+supply declarations and numerical parameters; conversational collection is
+deferred. Sources remain selectable after refresh/restart. Existing accepted
+matrix, QC and selection downloads remain available; fragments/TBI downloads
+remain deferred. See the [implementation and acceptance record](docs/ua3.4.1-external-fragments-web-upload.md).
+
+### BAM browser attachment (UA3.4.2)
+
+Choose **BAM** in the existing composer and upload one source. No BAI/CSI is
+required or uploaded. Registration captures bytes without asserting scientific
+eligibility. An ordinary inspection request works without producer context;
+bounded BAM observations do not establish corrected-barcode or upstream history.
+
+For fragment preparation, select an operator InputSet marked `bam_companion: true`
+containing the existing `agent-cb-paired-atac.v1` profile, exact library-context
+path/SHA and reference-bundle path/SHA. The context must be qualified for the
+actual stored uploaded source and its pinned intake, rather than the file's old
+location. The public producer retains human/hg38 and mouse/mm10 scope, explicit
+corrected-CB/already-corrected context, unshifted coordinate and retained-duplicate
+declarations. Agent does not reconstruct missing source history.
+
+Only a unique explicitly configured `bam_default: true` may supply a context;
+explicit selection wins. Inspection stays available without such a default.
+The ordinary plan may consume an explicit pinned intake or a new inspection's
+semantic output. Qualified preparation and optional downstream QC/selection/matrix
+still require their existing resources and parameters. The operator JSON remains
+unchanged. See the [UA3.4.2 record](docs/ua3.4.2-bam-web-upload.md) for a
+configuration example and acceptance scope. Existing upload limits apply per
+source; oversized transfers report the exact limit and `upload_max_bytes` action.
+
+### FASTQ library browser attachment (UA3.4.3)
+
+Choose **FASTQ**, name one library, and explicitly select its layout, read role,
+three-digit lane/chunk and plain/gzip encoding before each file upload. Layout A
+uses genomic R1/R3 and barcode R2; layout B uses genomic R1/R2 and barcode I2.
+Both allow optional sample-index I1. Multiple complete lane/chunk groups are
+supported. Original filenames are display labels; generated source names encode
+the explicit declarations for the unchanged scientific owner.
+
+Select the completed members and click **Complete FASTQ library**. Missing required
+roles are reported per group. Only complete collections enter the scientific input
+selector; member upload and collection completion run no science. The same catalog
+persists both members and complete choices across refresh/restart.
+
+Request inspection without producer context. Qualified preparation additionally
+needs an operator InputSet marked `fastq_companion: true`, binding the actual stored
+sources' library context/whitelist/namespace and human/hg38 or mouse/mm10 reference.
+Only a unique explicit `fastq_default: true` may supply a default. Assay/layout are
+already captured by the collection and cannot be overridden by companions. Existing
+qualified Chromap/index runtime provisioning remains operator-owned; no configuration
+is changed automatically. Natural language selects the operations, while typed
+selections still supply scientific declarations and thresholds. See the
+[FASTQ acceptance and UA3.4 closeout](docs/ua3.4.3-fastq-web-upload.md).
 
 ## Validation and current boundaries
 

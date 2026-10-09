@@ -40,6 +40,12 @@ _OPERATION_TYPES = {
     'prepare_scATAC_bam_fragments': 'bam',
 }
 _COLLECTION_OPERATIONS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments')
+_H5AD_COMPOSITION = 'h5ad-science.v1'
+_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors',
+                         'cluster_cells', 'compute_cell_umap')
+_H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
+                          'cell_ids_path', 'analysis_path'}
+_RESOURCE_SELECTION_ERRORS = ('EPIZOO_RESOURCE_REQUIRED', 'EPIZOO_RESOURCE_AMBIGUOUS')
 _MESSAGES = {
     'LOCAL_RESOURCE_UNAVAILABLE': 'The registered local resource is unavailable.',
     'LOCAL_RESOURCE_ACCESS_INVALID': 'The local source is unavailable or outside the approved source policy.',
@@ -51,6 +57,14 @@ _MESSAGES = {
     'LOCAL_RESOURCE_OPERATION_UNSUPPORTED': 'This operation is not supported by the local resource binding boundary.',
     'LOCAL_RESOURCE_DECLARATION_REQUIRED': 'Required explicit scientific input declarations are missing.',
     'LOCAL_RESOURCE_DISCOVERY_LIMIT': 'The registered resource listing exceeds its supported bound.',
+    'H5AD_SPECIES_REQUIRED': 'Declare the dataset species as human or mouse using a scientific input selection.',
+    'H5AD_SOURCE_MISMATCH': 'The plan does not consume the selected registered H5AD.',
+    'EPIZOO_RESOURCE_REQUIRED': 'Select a qualified EpiZoo resource, or ask the operator to configure an applicable qualified default.',
+    'EPIZOO_RESOURCE_AMBIGUOUS': 'More than one qualified EpiZoo default applies. Select one explicitly.',
+    'EPIZOO_RESOURCE_SELECTION_INVALID': 'The selected EpiZoo resource is unavailable or conflicts with the declared species.',
+    'EPIZOO_RESOURCE_IDENTITY_INVALID': 'The selected EpiZoo resource identity is incomplete or invalid.',
+    'EPIZOO_RESOURCE_IDENTITY_MISMATCH': 'The EpiZoo resources no longer match the selected qualified identity.',
+    'EPIZOO_RESOURCE_CONSUMPTION_MISMATCH': 'The plan does not consume the selected EpiZoo resource and declarations.',
 }
 
 
@@ -146,10 +160,17 @@ class RegisteredInput:
     record_sha256: str
     tool_name: str
     execution_inputs: object
+    composition: str | None = None
+    resource_selection_error: str | None = None
 
     def __post_init__(self):
         if type(self.tool_name) is not str or self.tool_name not in _OPERATION_TYPES:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+        if (self.composition not in (None, _H5AD_COMPOSITION)
+                or (self.composition is not None and self.tool_name != 'inspect_scATAC')
+                or (self.resource_selection_error is not None
+                    and (self.composition is None or self.resource_selection_error not in _RESOURCE_SELECTION_ERRORS))):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         try:
             _identifier(self.resource_id)
             if type(self.record_sha256) is not str or _SHA.fullmatch(self.record_sha256) is None:
@@ -160,8 +181,13 @@ class RegisteredInput:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
     def attribution(self):
-        return dict(resource_id=self.resource_id, record_sha256=self.record_sha256,
-                    tool_name=self.tool_name)
+        result = dict(resource_id=self.resource_id, record_sha256=self.record_sha256,
+                      tool_name=self.tool_name)
+        if self.composition is not None:
+            result['composition'] = self.composition
+        if self.resource_selection_error is not None:
+            result['resource_selection_error'] = self.resource_selection_error
+        return result
 
 
 def _members(values):
@@ -547,6 +573,65 @@ class LocalResourceAdmission:
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
+    def _h5ad_inputs(self, record, scientific_inputs):
+        """Compose request declarations; do not add arguments to inspection."""
+        if record.input_type != 'h5ad':
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        values = _input_mapping(scientific_inputs)
+        if self._registry is None:
+            from agent.orchestration.registry import build_default_tool_registry
+            self._registry = build_default_tool_registry()
+        declarations = {}
+        for name in _H5AD_COMPANION_TOOLS:
+            spec = self._registry.get(name)
+            arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
+            for key, argument in arguments.items():
+                if key not in _H5AD_SOURCE_ARGUMENTS:
+                    declarations.setdefault(key, []).append((key, argument))
+            if spec.semantic_planning is not None:
+                for port in spec.semantic_planning.consumer_ports:
+                    fields = {member.name: member.field_name for member in port.members}
+                    for source in port.request_sources:
+                        for member in source.members:
+                            key = fields[member.name]
+                            if key not in _H5AD_SOURCE_ARGUMENTS:
+                                declarations.setdefault(member.input_name, []).append((key, arguments[key]))
+        if set(values) - set(declarations):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        try:
+            for key, value in values.items():
+                for field, argument in declarations[key]:
+                    if field == 'overwrite' and value is True:
+                        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+                    argument.validate(key, value)
+            if 'expected_resource_identity' in values:
+                from agent.tools.analysis.epizoo_embedding import validate_expected_resource_identity
+                values['expected_resource_identity'] = validate_expected_resource_identity(values['expected_resource_identity'])
+                if 'checkpoint_path' not in values:
+                    raise _fail('EPIZOO_RESOURCE_IDENTITY_INVALID')
+        except ResourceAdmissionError:
+            raise
+        except (ValueError, TypeError) as exc:
+            code = getattr(exc, 'code', 'LOCAL_RESOURCE_BINDING_INVALID')
+            raise _fail(code if code in _MESSAGES else 'LOCAL_RESOURCE_BINDING_INVALID') from exc
+        return values | dict(input_path=record.source_path)
+
+    def compose_h5ad(self, resource_id, scientific_inputs=None, *,
+                     resource_selection_error=None, verify_source=True):
+        """One registered H5AD plus explicitly typed focused analysis companions.
+
+        No operation is selected here. Required declarations/resources are checked
+        against the actual compiled plan; an inspection needs neither.
+        """
+        record = self.load(resource_id)
+        inputs = self._h5ad_inputs(record, scientific_inputs)
+        if resource_selection_error is not None and 'expected_resource_identity' in inputs:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        binding = RegisteredInput(record.resource_id, record.record_sha256, 'inspect_scATAC', inputs,
+                                  _H5AD_COMPOSITION, resource_selection_error)
+        self.validate_binding(binding, verify_source=verify_source)
+        return binding
+
     def resolve_collection(self, members, *, tool_name, scientific_inputs=None):
         members = _members(members)
         records = self._collection_records(members)
@@ -599,12 +684,15 @@ class LocalResourceAdmission:
         if binding.record_sha256 != record.record_sha256:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         values = _serialize(binding.execution_inputs)
+        if binding.resource_selection_error is not None and 'expected_resource_identity' in values:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         fields = (('input_path',) if binding.tool_name == 'inspect_scATAC' else
                   ('raw_input_paths',) if binding.tool_name == 'inspect_raw_scATAC' else
                   ('source_path', 'source_sha256'))
         declarations = {key: value for key, value in values.items() if key not in fields}
         try:
-            expected = self._binding_inputs(record, binding.tool_name, declarations)
+            expected = (self._h5ad_inputs(record, declarations) if binding.composition is not None
+                        else self._binding_inputs(record, binding.tool_name, declarations))
         except ResourceAdmissionError as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
         if values != expected:
@@ -619,7 +707,10 @@ class LocalResourceAdmission:
     def _submission_binding(submission):
         try:
             metadata = submission['registered_input']
-            if set(metadata) == {'resource_id', 'record_sha256', 'tool_name'}:
+            scalar = {'resource_id', 'record_sha256', 'tool_name'}
+            if (set(metadata) == scalar or
+                    (scalar | {'composition'} <= set(metadata)
+                     and set(metadata) <= scalar | {'composition', 'resource_selection_error'})):
                 binding_type = RegisteredInput
             elif set(metadata) == {'members', 'collection_sha256', 'tool_name'}:
                 binding_type = RegisteredInputCollection
@@ -636,6 +727,54 @@ class LocalResourceAdmission:
         binding = self._submission_binding(submission)
         self.validate_binding(binding, verify_source=verify_source)
 
+    def validate_plan(self, submission, plan):
+        """Check exact registered-source/resource consumption before execution.
+
+        The existing compiler owns semantic handoffs. This guard only checks
+        association with the selected source, never completes a workflow.
+        """
+        from agent.schemas.orchestration import StepOutputRef
+        binding = self._submission_binding(submission)
+        values = self.validate_binding(binding)
+        if type(binding) is not RegisteredInput or binding.tool_name != 'inspect_scATAC':
+            return
+        by_id = {step.step_id: step for step in plan.steps}
+        source_path = values['input_path']
+        channels = None
+        for step in plan.steps:
+            if step.tool_name not in ('inspect_scATAC', 'epizoo_embed_cells'):
+                continue
+            argument = 'path' if step.tool_name == 'inspect_scATAC' else 'input_path'
+            source = step.arguments.get(argument)
+            if isinstance(source, StepOutputRef):
+                producer = by_id.get(source.step_id)
+                if channels is None:
+                    from agent.orchestration.semantic_compiler import build_m92_semantic_compiler_contract
+                    channels = build_m92_semantic_compiler_contract(self._registry).step_output_channels
+                permitted = (producer is not None and source.step_id in step.depends_on
+                    and producer.tool_name == 'inspect_scATAC'
+                    and producer.arguments.get('path') == source_path
+                    and any(channel.producer_tool_name == producer.tool_name
+                        and channel.consumer_tool_name == step.tool_name
+                        and any(member.output_key == source.output_key and member.argument_name == argument
+                                for member in channel.members) for channel in channels))
+                if not permitted:
+                    raise _fail('H5AD_SOURCE_MISMATCH')
+            elif source != source_path:
+                raise _fail('H5AD_SOURCE_MISMATCH')
+            if step.tool_name == 'epizoo_embed_cells':
+                if 'species' not in values:
+                    raise _fail('H5AD_SPECIES_REQUIRED')
+                if binding.resource_selection_error is not None:
+                    raise _fail(binding.resource_selection_error)
+                if 'expected_resource_identity' not in values:
+                    raise _fail('EPIZOO_RESOURCE_REQUIRED')
+                for key in ('species', 'checkpoint_path', 'expected_resource_identity'):
+                    if step.arguments.get(key) != values.get(key):
+                        raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
+                if 'device' in values and step.arguments.get('device') != values['device']:
+                    raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
+
     def validate_result(self, submission, steps):
         """First acceptance only: bind inspections and FASTQ provenance to sources.
 
@@ -645,10 +784,27 @@ class LocalResourceAdmission:
         """
         binding = self._submission_binding(submission)
         inspections = any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'} for step in steps)
+        h5ad_steps = ([step for step in steps if step.tool_name in {'inspect_scATAC', 'epizoo_embed_cells'}]
+                     if type(binding) is RegisteredInput and binding.tool_name == 'inspect_scATAC' else [])
         producers = [step for step in steps if step.tool_name == 'prepare_scATAC_fragments']
         collection = type(binding) is RegisteredInputCollection
-        if not inspections and not (collection and producers):
+        if not inspections and not h5ad_steps and not (collection and producers):
             return
+        if h5ad_steps:
+            values = _serialize(binding.execution_inputs)
+            for step in h5ad_steps:
+                argument = 'path' if step.tool_name == 'inspect_scATAC' else 'input_path'
+                if (step.resolved_arguments.get(argument) != values['input_path']
+                        or step.result.get('input_path') != values['input_path']):
+                    raise _fail('H5AD_SOURCE_MISMATCH')
+                if step.tool_name == 'epizoo_embed_cells':
+                    if binding.resource_selection_error is not None:
+                        raise _fail(binding.resource_selection_error)
+                    if 'expected_resource_identity' not in values:
+                        raise _fail('EPIZOO_RESOURCE_REQUIRED')
+                    for key in ('species', 'checkpoint_path', 'expected_resource_identity'):
+                        if step.resolved_arguments.get(key) != values.get(key):
+                            raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
         if collection:
             records = self._collection_records(binding.members)
             paths = sorted(record.source_path for record in records)

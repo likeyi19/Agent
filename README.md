@@ -977,7 +977,8 @@ submission; scientific results retain their existing RunStore/Revision authority
 UA1–UA2.4 admission boundary does not transfer browser files or register indexes.
 UA3.1 adds optional H5AD browser transfer and discovery of those completed
 registrations through the same owner; operator-configured Web InputSets retain
-their current behavior.
+their current behavior. UA3.2.2 additionally allows explicitly designated H5AD
+companion InputSets and exact reviewed EpiZoo resources to accompany one upload.
 
 ### Optional H5AD browser attachment (UA3.1)
 
@@ -1000,6 +1001,28 @@ without account authorization. Existing safe report-text and PNG downloads are
 unchanged; inspection does not generate a new downloadable scientific dataset.
 See the [UA3.1 implementation and validation record](docs/ua3.1-web-upload.md)
 for transfer/retry bounds and multi-turn acceptance.
+
+For EpiZoo analysis, select an operator-configured H5AD companion containing an
+explicit `human` or `mouse` declaration, and an explicitly selected reviewed
+EpiZoo resource or its uniquely applicable approved default. The original
+joint human/mouse EpiZoo checkpoint is the approved foundation; the reviewed
+mouse resource configuration qualifies for a default. Ordinary embedding uses
+these weights without training. The ordinary Interpreter/Planner can select
+embedding directly or the existing inspection, embedding, neighbors, Leiden and
+UMAP chain. Actual source consumption and checkpoint/auxiliary resource pins
+are checked before accepted publication; numerical defaults remain the owners'
+existing values. Typed companion parameters supply species and explicit numeric
+settings; entering those values only in prose does not capture new execution
+arguments at this stage. See the
+[UA3.2.2 composition and acceptance record](docs/ua3.2.2-h5ad-composition.md)
+for the approved mouse default example, configuration procedure, provenance and
+closeout status. Configuration activation remains operator-owned.
+
+General task-specific fine-tuning is future work and must publish a separate
+qualified derived model. Existing `adapt_epizoo_species` retains its qualified
+pretrained-source, SEAM and explicit `mapped_reference`/`de_novo` contracts and
+publishes separate target-species weights. Adapted-target inference remains
+deferred; original pretrained weights are preserved.
 
 ## Validation and current boundaries
 

@@ -79,7 +79,7 @@ def execute(sessions, interaction, admitted, model):
             # The last provider call has completed. Check application byte identity
             # before execution; scientific compatibility still belongs to the tools.
             try:
-                resources.validate_submission(interaction.submission)
+                resources.validate_plan(interaction.submission, plan)
                 if any(effective.inputs.get(key) != value
                        for key, value in interaction.submission['execution_inputs'].items()):
                     raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
@@ -115,6 +115,14 @@ def execute(sessions, interaction, admitted, model):
         return completion_outcome(state, interaction.turn_id, error=result.error)
     _update(sessions, interaction.turn_id, status='failed')
     error = resource_failure or result.error or next(iter(result.run_result.errors), None)
+    if (registered and interaction.submission['registered_input'].get('composition') == 'h5ad-science.v1'
+            and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
+            and error.details.get('tool_name') == 'epizoo_embed_cells'
+            and error.details.get('target_port') == 'species'
+            and 'species' not in interaction.submission['execution_inputs']):
+        # Presentation of a compiler-authored missing-port fact, not a second
+        # interpretation of the utterance or a repaired scientific plan.
+        error = ResourceAdmissionError('H5AD_SPECIES_REQUIRED').error
     return TurnOutcome('execute', 'failed', error=error,
         text=error.message if error is not None else
         'The scientific execution request could not form a valid plan from the supplied inputs.')

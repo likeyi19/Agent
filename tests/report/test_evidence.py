@@ -837,6 +837,49 @@ def test_missing_verified_source_artifact_prevents_evidence_creation(
     assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
 
 
+def test_embedding_evidence_optionally_projects_verified_pinned_owner_provenance(tmp_path: Path) -> None:
+    pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
+            "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
+    embedding = tmp_path / "embedding.npy"
+    embedding.write_bytes(b"legacy verified nonempty artifact")
+    cells = tmp_path / "cells.txt"
+    cells.write_text("cell-1\n")
+    arguments = {"input_path": str(tmp_path / "input.h5ad"), "output_dir": str(tmp_path),
+                 "species": "mouse", "checkpoint_path": "/models/epizoo.pth",
+                 "expected_resource_identity": pins}
+    provenance = {"schema": "epizoo-resource-provenance.v1", "expected_resource_identity": pins,
+        "actual_resource_identity": dict(pins), "species": "mouse", "inference_settings": {
+            "batch_size": 4, "max_length": 8192, "random_sample": True, "random_seed": 0,
+            "num_workers": 0, "device": "cuda:0", "dtype": "float32", "amp_requested": True,
+            "amp_enabled": True, "show_progress": False, "overwrite": False}}
+    result = {"status": "success", "input_path": arguments["input_path"], "embedding_path": str(embedding),
+        "cell_ids_path": str(cells), "n_cells": 1, "embedding_dim": 512, "embedding_dtype": "float32",
+        "finite": True, "cell_order_preserved": True, "backend": "EpiZoo", "species": "mouse",
+        "checkpoint_path": "/models/epizoo.pth", "device": "cuda:0", "resource_provenance": provenance}
+    plan = AgentPlan("pinned-plan", "pinned-request", "scripted",
+                     (PlanStep("embed", "epizoo_embed_cells", arguments),))
+    step = StepExecutionResult("embed", "epizoo_embed_cells", StepStatus.SUCCEEDED, 1,
+                               arguments, result, _passed("step", "embed"))
+    run = AgentRunResult("pinned-request:run", "pinned-request", RunStatus.SUCCEEDED, False,
+                         plan=plan, steps=(step,), verification=verify_run(plan, (step,)))
+    registry = _guarded_registry()
+    evidence = build_analysis_evidence(run, tmp_path / "evidence", registry=registry)
+    payload = json.loads(Path(evidence["evidence_path"]).read_text())
+    assert payload["steps"][0]["facts"]["resource_provenance"] == provenance
+    assert verify_analysis_evidence(run, evidence, registry=registry).passed
+
+    legacy_arguments = {key: value for key, value in arguments.items() if key != "expected_resource_identity"}
+    legacy_result = {key: value for key, value in result.items() if key != "resource_provenance"}
+    legacy_plan = replace(plan, steps=(replace(plan.steps[0], arguments=legacy_arguments),))
+    legacy_step = replace(step, resolved_arguments=legacy_arguments, result=legacy_result)
+    legacy_run = replace(run, plan=legacy_plan, steps=(legacy_step,),
+                         verification=verify_run(legacy_plan, (legacy_step,)))
+    historical = build_analysis_evidence(legacy_run, tmp_path / "historical", registry=registry)
+    historical_payload = json.loads(Path(historical["evidence_path"]).read_text())
+    assert "resource_provenance" not in historical_payload["steps"][0]["facts"]
+    assert verify_analysis_evidence(legacy_run, historical, registry=registry).passed
+
+
 def test_analysis_stage_tampering_fails_through_existing_verifier(
     tmp_path: Path,
 ) -> None:

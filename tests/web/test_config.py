@@ -8,7 +8,7 @@ from agent.application import InteractiveAgentApplication, InteractiveBoundaryEr
 from agent.orchestration import PlanningModelProfile
 from agent.providers import PlanningModelFactoryRegistry
 from agent.web.config import (
-    ScientificInputSet, WebConfiguration, WebConfigurationError,
+    QualifiedEpiZooResource, ScientificInputSet, WebConfiguration, WebConfigurationError,
     build_interactive_application, load_web_configuration,
 )
 
@@ -145,6 +145,70 @@ def test_configuration_size_and_identity_bounds(tmp_path):
         replace(config, model_profiles=[profile])
     with pytest.raises(WebConfigurationError):
         ScientificInputSet("../server-path", "Tiny", {})
+
+
+def qualified_resource(**changes):
+    values = dict(resource_id='mouse-reviewed', label='Reviewed mouse resource', species='mouse',
+        checkpoint_path='/operator/epizoo.pt', checkpoint_sha256='a' * 64,
+        frequencies_sha256='b' * 64, filter_indices_sha256='c' * 64,
+        qualification='Reviewed resource identities for the pinned execution', default=True)
+    values.update(changes)
+    return values
+
+
+def test_typed_companion_and_reviewed_epizoo_configuration_are_explicit_and_private(tmp_path):
+    value = configuration_json()
+    value['input_sets'] = [dict(input_set_id='mouse', label='Mouse declarations',
+        execution_inputs={'species': 'mouse', 'resolution': 0.7}, h5ad_companion=True)]
+    value['epizoo_resources'] = [qualified_resource()]
+    config = load_web_configuration(write_configuration(tmp_path, value))
+    companion = config.input_sets[0]
+    assert companion.choice() == dict(input_set_id='mouse', display_label='Mouse declarations', h5ad_companion=True)
+    assert companion.inputs() == {'species': 'mouse', 'resolution': 0.7}
+    resource = config.epizoo_resources[0]
+    assert resource.choice() == dict(resource_id='mouse-reviewed', display_label='Reviewed mouse resource',
+                                     species='mouse', is_default=True)
+    assert '/operator' not in json.dumps(resource.choice())
+    assert 'sha256' not in json.dumps(resource.choice())
+    assert resource.inputs() == dict(checkpoint_path='/operator/epizoo.pt', expected_resource_identity={
+        'resource_id': 'mouse-reviewed', 'checkpoint_sha256': 'a' * 64,
+        'frequencies_sha256': 'b' * 64, 'filter_indices_sha256': 'c' * 64})
+    changed = resource.inputs()
+    changed['expected_resource_identity']['checkpoint_sha256'] = 'd' * 64
+    assert resource.checkpoint_sha256 == 'a' * 64
+
+
+@pytest.mark.parametrize('changes', [
+    {'resource_id': '../checkpoint'}, {'species': 'macaque'}, {'checkpoint_path': ''},
+    {'checkpoint_sha256': 'a' * 63}, {'frequencies_sha256': 'B' * 64},
+    {'filter_indices_sha256': 123}, {'qualification': ''}, {'default': 1},
+])
+def test_epizoo_configuration_requires_explicit_review_and_exact_pins(changes):
+    with pytest.raises(WebConfigurationError):
+        QualifiedEpiZooResource(**qualified_resource(**changes))
+
+
+@pytest.mark.parametrize('change', [
+    lambda value: value['epizoo_resources'][0].update(auxiliary_directory='/operator/unreviewed'),
+    lambda value: value['epizoo_resources'][0].pop('qualification'),
+    lambda value: value['epizoo_resources'].append(dict(value['epizoo_resources'][0])),
+    lambda value: value['input_sets'][0].update(h5ad_companion='yes'),
+])
+def test_epizoo_config_loader_rejects_extra_missing_and_duplicate_fields(tmp_path, change):
+    value = configuration_json()
+    value['epizoo_resources'] = [qualified_resource()]
+    change(value)
+    with pytest.raises(WebConfigurationError):
+        load_web_configuration(write_configuration(tmp_path, value))
+
+
+@pytest.mark.parametrize('field,value', [
+    ('checkpoint_path', '/operator/unreviewed.pt'),
+    ('expected_resource_identity', {'checkpoint_sha256': 'a' * 64}),
+])
+def test_companion_cannot_bypass_reviewed_resource_selection(field, value):
+    with pytest.raises(WebConfigurationError):
+        ScientificInputSet('mouse', 'Mouse', {'species': 'mouse', field: value}, h5ad_companion=True)
 
 
 def test_upload_configuration_is_opt_in_and_approves_only_controlled_workspace_root(tmp_path):

@@ -599,6 +599,7 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     assert "anyOf" not in schema
     assert set(schema["$defs"]) == {
         "i",
+        "in",
         "r",
         "ir",
         "b",
@@ -651,6 +652,7 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "output_dir",
         "species",
         "checkpoint_path",
+        "expected_resource_identity",
         "device",
         "overwrite",
     }

@@ -25,6 +25,7 @@ const state = {
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   resources: [], resourcesEnabled: false, upload: null,
+  inputSets: [], epizooResources: [],
 };
 
 class ApiError extends Error {
@@ -643,6 +644,7 @@ function updateControls() {
   element("upload-file-button").textContent = state.upload && state.upload.status === "failed" ? "Retry upload" : "Upload";
   element("clear-upload").hidden = !state.upload;
   element("input-choice").disabled = !element("input-choice").options.length || element("input-choice").options.length === 1 || uploading;
+  element("epizoo-resource-choice").disabled = !element("resource-choice").value || !state.epizooResources.length || uploading;
 }
 
 function renderExecution() {
@@ -839,8 +841,16 @@ function inputContext() {
   // Repeat the operator-admitted display label without deriving scientific context.
   const choice = element("input-choice").selectedOptions[0];
   const resource = element("resource-choice").selectedOptions[0];
-  const label = resource && resource.value ? resource.textContent : choice && choice.value ? choice.textContent : "none selected";
+  const epizoo = element("epizoo-resource-choice").selectedOptions[0];
+  const labels = [resource && resource.value ? resource.textContent : "",
+    choice && choice.value ? choice.textContent : "",
+    resource && resource.value && epizoo && epizoo.value ? epizoo.textContent : ""].filter(Boolean);
+  const label = labels.length ? labels.join(" · ") : "none selected";
   element("selected-input-context").textContent = `Scientific inputs for next turn: ${label}`;
+}
+
+function selectedCompanion() {
+  return state.inputSets.some((choice) => choice.input_set_id === element("input-choice").value && choice.h5ad_companion === true);
 }
 
 function saveResourceSelection() {
@@ -865,7 +875,7 @@ function renderResources(selectedId = "") {
   }));
   if (state.resources.some((choice) => choice.resource_id === selectedId)) {
     element("resource-choice").value = selectedId;
-    element("input-choice").value = "";
+    if (!selectedCompanion()) element("input-choice").value = "";
   }
   saveResourceSelection();
   inputContext();
@@ -879,7 +889,7 @@ async function loadResources() {
     const catalog = await api("/resources");
     state.resourcesEnabled = catalog.enabled === true;
     state.resources = state.resourcesEnabled ? catalog.choices : [];
-    renderResources(element("input-choice").value ? "" : selectedId);
+    renderResources(element("input-choice").value && !selectedCompanion() ? "" : selectedId);
     uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "H5AD attachments are unavailable on this server.");
   } catch (error) {
     state.resourcesEnabled = false;
@@ -964,7 +974,7 @@ element("upload-file").addEventListener("change", () => {
   // Selection creates a new transfer identity; Retry keeps this same File and ID.
   state.upload = { uploadId: newTurnId(), file, status: "selected", request: null };
   element("resource-choice").value = "";
-  element("input-choice").value = "";
+  if (!selectedCompanion()) element("input-choice").value = "";
   saveResourceSelection();
   inputContext();
   uploadStatus(`${file.name} · selected. Upload this file before sending your request.`);
@@ -974,9 +984,11 @@ element("upload-file-button").addEventListener("click", uploadSelectedFile);
 element("clear-upload").addEventListener("click", () => clearPendingUpload());
 element("resource-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
-  if (element("resource-choice").value) element("input-choice").value = "";
+  if (element("resource-choice").value && !selectedCompanion()) element("input-choice").value = "";
+  if (!element("resource-choice").value) element("epizoo-resource-choice").value = "";
   saveResourceSelection();
   inputContext();
+  updateControls();
 });
 
 element("new-session").addEventListener("click", async () => {
@@ -1016,7 +1028,11 @@ function submitRequest(utterance, predecessorTurnId = null) {
     utterance, profile_id: element("model-choice").value,
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
-  if (element("resource-choice").value) body.resource_id = element("resource-choice").value;
+  if (element("resource-choice").value) {
+    body.resource_id = element("resource-choice").value;
+    if (selectedCompanion()) body.input_set_id = element("input-choice").value;
+    if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
+  }
   else if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   state.submission = Object.freeze({ sessionId: state.session.session_id, body: Object.freeze(body) });
   state.activeTurn = { session_id: state.session.session_id, turn_id: body.turn_id, status: "submitted", steps: [] };
@@ -1066,10 +1082,15 @@ element("detail-form").addEventListener("submit", (event) => {
 element("model-choice").addEventListener("change", modelDescription);
 element("input-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
-  if (element("input-choice").value) element("resource-choice").value = "";
+  if (element("input-choice").value && !selectedCompanion()) {
+    element("resource-choice").value = "";
+    element("epizoo-resource-choice").value = "";
+  }
   saveResourceSelection();
   inputContext();
+  updateControls();
 });
+element("epizoo-resource-choice").addEventListener("change", inputContext);
 element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
@@ -1077,8 +1098,10 @@ async function initialize() {
   const resources = loadResources();
   if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
   try {
-    const [, models, inputs] = await Promise.all([api("/health"), api("/models"), api("/input-sets")]);
+    const [, models, inputs, epizoo] = await Promise.all([api("/health"), api("/models"), api("/input-sets"), api("/epizoo-resources")]);
     state.models = models.choices;
+    state.inputSets = inputs.choices;
+    state.epizooResources = epizoo.choices;
     element("model-choice").replaceChildren(...state.models.map((choice) => {
       const option = document.createElement("option");
       option.value = choice.profile_id;
@@ -1098,6 +1121,15 @@ async function initialize() {
       return option;
     }));
     element("input-choice").disabled = !inputs.choices.length;
+    const resourceDefault = document.createElement("option");
+    resourceDefault.value = "";
+    resourceDefault.textContent = "Use applicable configured default";
+    element("epizoo-resource-choice").replaceChildren(resourceDefault, ...state.epizooResources.map((choice) => {
+      const option = document.createElement("option");
+      option.value = choice.resource_id;
+      option.textContent = `${choice.display_label} · ${choice.species}${choice.is_default ? " (default)" : ""}`;
+      return option;
+    }));
     inputContext();
     element("connection-state").textContent = "Connected";
     modelDescription();

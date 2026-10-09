@@ -45,6 +45,8 @@ def main(argv=None):
         configuration = load_web_configuration(arguments.config)
         interactive = build_interactive_application(configuration)
         options = dict(input_sets=configuration.input_sets, max_workers=arguments.max_workers)
+        if configuration.epizoo_resources:
+            options['epizoo_resources'] = configuration.epizoo_resources
         if configuration.upload_root is not None:
             from agent.application.uploads import H5ADUploadAdmission
             options['uploads'] = H5ADUploadAdmission(interactive.resources, configuration.upload_root,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace as dataclass_replace
+from collections.abc import Mapping as MappingABC
 import errno
 from enum import Enum
 import inspect
@@ -28,6 +29,11 @@ from agent.tools import (
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
+from agent.tools.analysis.epizoo_embedding import (
+    EpiZooResourceIdentityError,
+    validate_expected_resource_identity,
+    validate_resource_provenance,
+)
 from agent.tools.data.raw_scatac import RawScATACError, RawScATACInspection
 from agent.tools.data._raw_fastq import FastqInspectionError
 from agent.tools.data._raw_bam import BamInspectionError
@@ -429,6 +435,18 @@ class ArgumentSpec:
                 f"Argument {name!r} must be one of {self.choices!r}; "
                 f"received {value!r}."
             )
+
+
+class _EpiZooResourceIdentityArgument(ArgumentSpec):
+    """The embedding owner's narrow public resource-pin shape."""
+
+    def validate(self, name: str, value: object) -> None:
+        super().validate(name, value)
+        if value is not None:
+            try:
+                validate_expected_resource_identity(value)
+            except EpiZooResourceIdentityError as exc:
+                raise ToolArgumentError("EpiZoo resource identity pins are invalid.") from exc
 
 
 @dataclass(frozen=True)
@@ -1000,6 +1018,11 @@ def _validate_raw_intake_result(result: Mapping[str, object]) -> None:
 
 
 def _classify_embedding_exception(exception: Exception) -> ErrorClassification:
+    if isinstance(exception, EpiZooResourceIdentityError):
+        category = (ErrorCategory.USER_INPUT_ERROR
+                    if exception.code == "EPIZOO_RESOURCE_IDENTITY_INVALID"
+                    else ErrorCategory.VERIFICATION_ERROR)
+        return ErrorClassification(category, exception.code)
     classification = _classify_tool_exception(exception)
     if (
         classification.code == "TOOL_EXCEPTION"
@@ -1084,6 +1107,12 @@ def _validate_embedding_result(result: Mapping[str, object]) -> None:
         raise ToolResultContractError(
             "epizoo_embed_cells must not return an embedding array in its result."
         )
+    if "resource_provenance" in result:
+        try:
+            validate_resource_provenance(result["resource_provenance"],
+                                         species=result["species"], device=result["device"])
+        except (EpiZooResourceIdentityError, TypeError, ValueError) as exc:
+            raise ToolResultContractError("EpiZoo resource provenance is invalid.") from exc
 
 
 def _validate_neighbors_result(result: Mapping[str, object]) -> None:
@@ -1761,6 +1790,16 @@ def build_default_tool_registry() -> ToolRegistry:
                 source=direct,
                 scientific_parameter=True,
             ),
+            "expected_resource_identity": _EpiZooResourceIdentityArgument(
+                (MappingABC, type(None)),
+                allow_step_output_ref=False,
+                planning=ArgumentPlanningSemantics(
+                    description="Exact approved EpiZoo resource ID and checkpoint, frequencies, and filter SHA-256 pins.",
+                    source_eligibility=direct,
+                    scientific_parameter=True,
+                    provenance_role=branch,
+                ),
+            ),
             "overwrite": _planning_argument(
                 (bool,),
                 "Whether an existing identical output may be replaced.",
@@ -1858,6 +1897,7 @@ def build_default_tool_registry() -> ToolRegistry:
                     port_name="checkpoint",
                 ),
                 _semantic_argument_port("device", required=False),
+                _semantic_argument_port("expected_resource_identity", required=False),
                 _semantic_argument_port(
                     "overwrite",
                     required=False,

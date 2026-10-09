@@ -97,6 +97,29 @@ def test_valid_embedding_arguments(registry) -> None:
     assert validated["species"] == "mouse"
 
 
+def test_embedding_resource_pins_are_optional_bounded_and_not_output_refs(registry) -> None:
+    pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
+            "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
+    argument = registry.get("epizoo_embed_cells").optional_arguments["expected_resource_identity"]
+    argument.validate("expected_resource_identity", pins)
+    argument.validate("expected_resource_identity", None)
+    for invalid in (dict(pins, path="/private"), dict(pins, checkpoint_sha256="A" * 64),
+                    StepOutputRef("inspect", "input_path")):
+        with pytest.raises(ToolArgumentError):
+            argument.validate("expected_resource_identity", invalid)
+
+
+def test_embedding_typed_pin_errors_have_safe_central_classification(registry) -> None:
+    from agent.tools.analysis.epizoo_embedding import EpiZooResourceIdentityError
+    for code, category in (("EPIZOO_RESOURCE_IDENTITY_INVALID", ErrorCategory.USER_INPUT_ERROR),
+                           ("EPIZOO_RESOURCE_IDENTITY_MISMATCH", ErrorCategory.VERIFICATION_ERROR)):
+        classified = registry.classify_exception("epizoo_embed_cells", EpiZooResourceIdentityError(code))
+        assert classified.code == code
+        assert classified.category is category
+        assert classified.recoverable is False
+        assert "/" not in classified.message
+
+
 def test_missing_required_embedding_arguments(registry) -> None:
     with pytest.raises(ToolArgumentError, match="output_dir"):
         registry.validate_arguments(

@@ -109,6 +109,78 @@ def _artifacts(tmp_path):
     return embedding_path, cell_ids_path
 
 
+def _resource_provenance(pins: dict[str, str]) -> dict[str, object]:
+    return {"schema": "epizoo-resource-provenance.v1", "expected_resource_identity": dict(pins),
+            "actual_resource_identity": dict(pins), "species": "mouse",
+            "inference_settings": {"batch_size": 4, "max_length": 8192, "random_sample": True,
+                "random_seed": 0, "num_workers": 0, "device": "cuda:0", "dtype": "float32",
+                "amp_requested": True, "amp_enabled": True, "show_progress": False, "overwrite": False}}
+
+
+def test_embedding_pinned_provenance_is_required_and_matches_resolved_pins(registry, tmp_path: Path) -> None:
+    paths = _artifacts(tmp_path)
+    step = _embedding_step()
+    arguments = dict(step.arguments)
+    pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
+            "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
+    arguments["expected_resource_identity"] = pins
+    arguments["checkpoint_path"] = "/models/epizoo.pth"
+    step = replace(step, arguments=arguments)
+    result = _embedding_result(arguments["input_path"], *(str(path) for path in paths))
+    legacy = verify_step(step, arguments, result, registry)
+    assert not legacy.passed
+    assert legacy.error.code == "EPIZOO_RESOURCE_IDENTITY_MISMATCH"
+
+    result["resource_provenance"] = _resource_provenance(pins)
+    verified = verify_step(step, arguments, result, registry)
+    assert verified.passed
+    assert "resource_identity_pins_match" in {check.name for check in verified.checks}
+
+    changed_arguments = dict(arguments, expected_resource_identity=dict(pins, checkpoint_sha256="d" * 64))
+    mismatched = verify_step(step, changed_arguments, result, registry)
+    assert not mismatched.passed
+    assert "resource_identity_pins_match" in mismatched.error.details["failed_checks"]
+
+
+@pytest.mark.parametrize("field,value", [("overwrite", True), ("device", "cpu"),
+                                         ("checkpoint_path", "/models/substituted.pth")])
+def test_embedding_provenance_agrees_with_explicit_execution_settings(registry, tmp_path, field, value) -> None:
+    paths = _artifacts(tmp_path)
+    step = _embedding_step()
+    pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
+            "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
+    arguments = dict(step.arguments, expected_resource_identity=pins, checkpoint_path="/models/epizoo.pth")
+    arguments[field] = value
+    step = replace(step, arguments=arguments)
+    result = _embedding_result(arguments["input_path"], *(str(path) for path in paths))
+    result["resource_provenance"] = _resource_provenance(pins)
+    verification = verify_step(step, arguments, result, registry)
+    assert not verification.passed
+    assert "resource_identity_pins_match" in verification.error.details["failed_checks"]
+
+
+def test_pinned_verification_checks_omitted_device_and_checkpoint_owner_defaults(registry, tmp_path: Path) -> None:
+    from agent.tools.analysis.epizoo_embedding import epizoo_embed_cells
+    from inspect import signature
+    defaults = signature(epizoo_embed_cells).parameters
+    paths = _artifacts(tmp_path)
+    pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
+            "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
+    step = _embedding_step()
+    arguments = dict(step.arguments, expected_resource_identity=pins)
+    step = replace(step, arguments=arguments)
+    result = _embedding_result(arguments["input_path"], *(str(path) for path in paths))
+    result["checkpoint_path"] = str(defaults["checkpoint_path"].default)
+    result["resource_provenance"] = _resource_provenance(pins)
+    assert verify_step(step, arguments, result, registry).passed
+
+    result["device"] = "cpu"
+    result["resource_provenance"]["inference_settings"].update(device="cpu", amp_enabled=False)
+    switched = verify_step(step, arguments, result, registry)
+    assert not switched.passed
+    assert "resource_identity_pins_match" in switched.error.details["failed_checks"]
+
+
 def _downstream_artifacts(tmp_path: Path):
     rng = np.random.default_rng(11)
     embedding_path = tmp_path / "embedding.npy"

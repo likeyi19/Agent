@@ -23,7 +23,7 @@ from agent.application.interactive_schemas import ClientError, TurnView
 from agent.application.local_resources import RegisteredInput, ResourceAdmissionError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
-from .config import ScientificInputSet
+from .config import QualifiedEpiZooResource, ScientificInputSet
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,8 @@ class SubmitTurn(_Body):
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
+    epizoo_resource_id: StrictStr | None = Field(default=None, min_length=1, max_length=64,
+                                               pattern=r'^[a-z][a-z0-9_-]*$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator('turn_id')
@@ -204,7 +206,30 @@ class _WorkersBusy(Exception):
     pass
 
 
-def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2, uploads=None):
+def _epizoo_selection(inputs, selected_id, resources):
+    """Resolve exact configured selection from typed context, without science."""
+    species = inputs.get('species')
+    if selected_id is not None:
+        selected = next((r for r in resources if r.resource_id == selected_id), None)
+        if selected is None:
+            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
+        if species is None:
+            raise ResourceAdmissionError('H5AD_SPECIES_REQUIRED')
+        if species != selected.species:
+            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
+    else:
+        applicable = tuple(r for r in resources if r.default and r.species == species)
+        if len(applicable) != 1:
+            # This prerequisite is captured for admission of an actual embedding
+            # operation. Inspection remains usable with missing model resources.
+            return inputs, ('EPIZOO_RESOURCE_REQUIRED' if not applicable
+                            else 'EPIZOO_RESOURCE_AMBIGUOUS')
+        selected = applicable[0]
+    return {**inputs, **selected.inputs()}, None
+
+
+def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2,
+               uploads=None, epizoo_resources=()):
     """Compose a single lab-host server around one configured domain facade."""
     if not isinstance(application, InteractiveAgentApplication):
         raise TypeError('A configured InteractiveAgentApplication is required.')
@@ -219,6 +244,10 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     inputs_by_id = {s.input_set_id: s for s in input_sets}
     if len(inputs_by_id) != len(input_sets):
         raise ValueError('Duplicate scientific input-set identifier.')
+    if (type(epizoo_resources) is not tuple or len(epizoo_resources) > 64
+            or any(not isinstance(r, QualifiedEpiZooResource) for r in epizoo_resources)
+            or len({r.resource_id for r in epizoo_resources}) != len(epizoo_resources)):
+        raise ValueError('EpiZoo resources must be a bounded unique configured tuple.')
     workers = _LocalWorkers(application, max_workers)
 
     @asynccontextmanager
@@ -297,6 +326,10 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     def scientific_inputs():
         return {'choices': [s.choice() for s in input_sets]}
 
+    @app.get('/api/v1/epizoo-resources')
+    def scientific_model_resources():
+        return {'choices': [r.choice() for r in epizoo_resources]}
+
     @app.get('/api/v1/resources')
     def uploaded_resources():
         return {'enabled': uploads is not None,
@@ -373,17 +406,30 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.post('/api/v1/sessions/{session_id}/turns', status_code=202)
     def submit_turn(session_id: str, body: SubmitTurn):
         inputs = {}
-        if body.resource_id is not None:
-            if body.input_set_id is not None or uploads is None:
-                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-            # Completed retries remain readable even after source bytes disappear.
-            # The facade validates bytes itself before each new consumption.
-            inputs = uploads.resolve(body.resource_id, verify_source=False)
+        input_set = None
         if body.input_set_id is not None:
             input_set = inputs_by_id.get(body.input_set_id)
             if input_set is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-            inputs = input_set.inputs()
+        if body.resource_id is not None:
+            if uploads is None or input_set is not None and not input_set.h5ad_companion:
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+            companion_inputs, selection_error = None, None
+            if input_set is not None or body.epizoo_resource_id is not None:
+                companion_inputs, selection_error = _epizoo_selection(
+                    {} if input_set is None else input_set.inputs(), body.epizoo_resource_id,
+                    epizoo_resources)
+            # Completed retries remain readable even after source bytes disappear.
+            # The facade validates bytes itself before each new consumption.
+            # Changed operator inputs/pins retain the facade's exact retry
+            # conflict behavior; captured scientific work is never replayed.
+            inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
+                resource_selection_error=selection_error, verify_source=False)
+        else:
+            if body.epizoo_resource_id is not None or input_set is not None and input_set.h5ad_companion:
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+            if input_set is not None:
+                inputs = input_set.inputs()
         workers.submit(session_id, body, inputs)
         return {'session_id': session_id, 'turn_id': body.turn_id}
 

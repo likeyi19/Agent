@@ -391,6 +391,25 @@ for _code in ('CHROMAP_UNAVAILABLE', 'CHROMAP_VERSION_UNSUPPORTED', 'CHROMAP_IND
     _ERROR_POLICY_CATALOG[_code] = ErrorPolicyEntry(
         'The qualified fragment runtime configuration or index is unavailable or incompatible.', _USER)
 
+_ERROR_POLICY_CATALOG.update({
+    "EPIZOO_RESOURCE_IDENTITY_INVALID": ErrorPolicyEntry(
+        "The approved EpiZoo resource selection is invalid.", _USER),
+    "EPIZOO_RESOURCE_IDENTITY_MISMATCH": ErrorPolicyEntry(
+        "EpiZoo resource identities do not match the approved selection; execution cannot proceed.", _NO),
+    "H5AD_SPECIES_REQUIRED": ErrorPolicyEntry(
+        "Select an explicit human or mouse declaration for EpiZoo embedding.", _USER),
+    "EPIZOO_RESOURCE_SELECTION_INVALID": ErrorPolicyEntry(
+        "The selected EpiZoo resource is not qualified for the declared species.", _USER),
+    "EPIZOO_RESOURCE_REQUIRED": ErrorPolicyEntry(
+        "Select a qualified EpiZoo resource or configure a unique applicable qualified default.", _USER),
+    "EPIZOO_RESOURCE_AMBIGUOUS": ErrorPolicyEntry(
+        "Choose one applicable qualified EpiZoo resource explicitly.", _USER),
+    "H5AD_SOURCE_MISMATCH": ErrorPolicyEntry(
+        "The planned H5AD input does not match the selected registered source.", _NO),
+    "EPIZOO_RESOURCE_CONSUMPTION_MISMATCH": ErrorPolicyEntry(
+        "The planned EpiZoo resources do not match the selected approved resources.", _NO),
+})
+
 ERROR_POLICY_CATALOG: Mapping[str, ErrorPolicyEntry] = MappingProxyType(
     _ERROR_POLICY_CATALOG
 )

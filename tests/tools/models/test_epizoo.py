@@ -16,6 +16,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
 from agent.tools.models import epizoo as wrapper
+from agent.tools.models import epizoo_cache
 
 
 FANG_H5AD = Path(
@@ -138,6 +139,194 @@ def test_fixed_loss_buffers_are_explicitly_synthesized() -> None:
     assert state["cca_loss_fn.pos_weight"].item() == 1.0
     assert state["signal_loss_fn.pos_weight"].item() == 100.0
     assert wrapper._add_fixed_loss_buffers(state, cfg) == ()
+
+
+@pytest.fixture
+def tiny_checkpoint_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    checkpoint = tmp_path / "tiny-checkpoint.pth"
+    torch.save({"weight": torch.tensor([1.0])}, checkpoint)
+    original_stat = checkpoint.stat()
+    os.utime(checkpoint, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns - 1_000_000_000))
+
+    class TinyModel(torch.nn.Module):
+        def __init__(self, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state, **kwargs):
+            self.weight = torch.nn.Parameter(state["weight"])
+            return SimpleNamespace(missing_keys=[], unexpected_keys=[])
+
+    monkeypatch.setattr(wrapper, "_get_backend", lambda: SimpleNamespace(EpiZoo=TinyModel))
+    monkeypatch.setattr(wrapper, "_build_model_config", lambda backend: SimpleNamespace())
+    monkeypatch.setattr(wrapper, "_validate_config_values", lambda config: None)
+    monkeypatch.setattr(wrapper, "_validate_checkpoint_state_dict", lambda state: None)
+    monkeypatch.setattr(wrapper, "_add_fixed_loss_buffers", lambda state, config: ())
+    monkeypatch.setattr(wrapper, "_validate_model_structure", lambda model: None)
+    return checkpoint, TinyModel
+
+
+def test_checkpoint_load_preserves_stable_read_proof_and_private_mmap_after_cleanup(
+    tiny_checkpoint_loader, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, _ = tiny_checkpoint_loader
+    original_load = torch.load
+    original_sha256 = wrapper._sha256_file(checkpoint)
+    snapshot_paths = []
+
+    def capture_private_load(path, **kwargs):
+        path = Path(path)
+        assert path != checkpoint
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert kwargs["mmap"] is True
+        snapshot_paths.append(path)
+        return original_load(path, **kwargs)
+
+    monkeypatch.setattr(torch, "load", capture_private_load)
+    model = wrapper.load_model(checkpoint, device="cpu")
+    assert model.weight.item() == 1.0
+    assert model._agent_checkpoint_path == str(checkpoint)
+    assert model._agent_checkpoint_sha256 == original_sha256
+    assert model._agent_checkpoint_source_snapshot == wrapper._resource_file_snapshot(checkpoint)
+    assert model._agent_checkpoint_validated is True
+    assert len(snapshot_paths) == 1
+    assert not snapshot_paths[0].exists()
+    assert not snapshot_paths[0].parent.exists()
+    torch.save({"weight": torch.tensor([9.0])}, checkpoint)
+    assert model.weight.item() == 1.0
+
+
+@pytest.mark.parametrize("same_stat", [False, True])
+def test_original_checkpoint_swap_cannot_change_private_mmap_even_with_same_stat(
+    tiny_checkpoint_loader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_stat: bool,
+) -> None:
+    checkpoint, model_type = tiny_checkpoint_loader
+    alternate = tmp_path / "alternate.pth"
+    torch.save({"weight": torch.tensor([9.0])}, alternate)
+    original_bytes, alternate_bytes = checkpoint.read_bytes(), alternate.read_bytes()
+    original_load = torch.load
+    original_snapshot = wrapper._resource_file_snapshot
+    original_file_snapshot = original_snapshot(checkpoint)
+    original_sha256 = wrapper._sha256_file(checkpoint)
+    consumed_values = []
+    snapshot_paths = []
+
+    def swapped_load(path, **kwargs):
+        snapshot_paths.append(Path(path))
+        checkpoint.write_bytes(alternate_bytes)
+        return original_load(path, **kwargs)
+
+    def restored_after_copy(model, **kwargs):
+        # Emulate the checkpoint-to-device copy with one CPU tensor before
+        # restoring the configured original path. The private mmap stays exact.
+        model.weight = torch.nn.Parameter(model.weight.detach().clone())
+        consumed_values.append(model.weight.item())
+        checkpoint.write_bytes(original_bytes)
+        return model
+
+    epizoo_cache.clear_epizoo_backend_cache()
+    try:
+        with monkeypatch.context() as perturbation:
+            perturbation.setattr(torch, "load", swapped_load)
+            perturbation.setattr(model_type, "to", restored_after_copy)
+            if same_stat:
+                # Even when the filesystem cannot expose the transient write,
+                # torch.load reads the private A snapshot and its actual digest.
+                perturbation.setattr(wrapper, "_resource_file_snapshot",
+                    lambda path: original_file_snapshot if path == checkpoint else original_snapshot(path))
+                accepted = epizoo_cache.get_cached_epizoo_model(checkpoint, device="cpu")
+                assert accepted.weight.item() == 1.0
+                assert accepted._agent_checkpoint_sha256 == original_sha256
+            else:
+                with pytest.raises(wrapper.EpiZooResourceChangedError):
+                    epizoo_cache.get_cached_epizoo_model(checkpoint, device="cpu")
+        assert consumed_values == [1.0]
+        assert checkpoint.read_bytes() == original_bytes
+        assert len(snapshot_paths) == 1
+        assert not snapshot_paths[0].exists()
+        assert not snapshot_paths[0].parent.exists()
+        recovered = epizoo_cache.get_cached_epizoo_model(checkpoint, device="cpu")
+        assert recovered.weight.item() == 1.0
+        assert epizoo_cache.get_cached_epizoo_model(checkpoint, device="cpu") is recovered
+    finally:
+        epizoo_cache.clear_epizoo_backend_cache()
+
+
+@pytest.mark.parametrize("resource", ["frequencies", "filter_indices"])
+def test_transient_auxiliary_swap_before_hash_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resource: str,
+) -> None:
+    config = replace(wrapper.MOUSE_CONFIG, raw_dimension=4, retained_ccres=2)
+    frequency = tmp_path / config.frequency_filename
+    filters = tmp_path / config.filter_filename
+    np.save(frequency, np.array([1.0, 2.0, 3.0, 4.0]))
+    pd.DataFrame({"cCRE": ["peak-1", "peak-2"], "idx": [0, 1]}).to_csv(filters)
+    for source in (frequency, filters):
+        original_stat = source.stat()
+        os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns - 1_000_000_000))
+    path = frequency if resource == "frequencies" else filters
+    original_bytes = path.read_bytes()
+    consumed = []
+    original_read = Path.read_bytes
+
+    def swapped_read(source):
+        if source != path:
+            return original_read(source)
+        if resource == "frequencies":
+            np.save(path, np.array([40.0, 30.0, 20.0, 10.0]))
+        else:
+            pd.DataFrame({"cCRE": ["peak-3", "peak-4"], "idx": [0, 1]}).to_csv(path)
+        values = original_read(source)
+        consumed.append(values)
+        path.write_bytes(original_bytes)
+        return values
+
+    monkeypatch.setattr(Path, "read_bytes", swapped_read)
+    with pytest.raises(wrapper.EpiZooResourceChangedError):
+        wrapper._load_resources(config, tmp_path)
+    assert len(consumed) == 1
+    assert consumed[0] != original_bytes
+    assert original_read(path) == original_bytes
+
+
+def test_checkpoint_snapshot_digest_describes_consumed_bytes_after_source_restoration(
+    tiny_checkpoint_loader, tmp_path: Path,
+) -> None:
+    checkpoint, _ = tiny_checkpoint_loader
+    original_bytes = checkpoint.read_bytes()
+    original_sha256 = wrapper._sha256_file(checkpoint)
+    alternate = tmp_path / "alternate-copy.pth"
+    torch.save({"weight": torch.tensor([9.0])}, alternate)
+    checkpoint.write_bytes(alternate.read_bytes())
+    consumed_sha256 = wrapper._sha256_file(checkpoint)
+    with wrapper._checkpoint_bytes_snapshot(checkpoint) as (snapshot_path, actual_sha256):
+        checkpoint.write_bytes(original_bytes)
+        actual = torch.load(snapshot_path, mmap=True, map_location="cpu", weights_only=True)
+        assert actual["weight"].item() == 9.0
+        assert actual_sha256 == consumed_sha256
+        assert actual_sha256 != original_sha256
+        assert wrapper._sha256_file(checkpoint) == original_sha256
+    assert not snapshot_path.exists()
+
+
+def test_file_snapshot_detects_restored_symlink_with_unchanged_target(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"qualified bytes")
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"other bytes")
+    locator = tmp_path / "resource"
+    locator.symlink_to(target)
+    before = wrapper._resource_file_snapshot(locator)
+    # Keep the initial symlink inode alive so immediate inode reuse cannot
+    # disguise replacing the locator on filesystems with coarse timestamps.
+    locator.rename(tmp_path / "original-locator")
+    locator.symlink_to(replacement)
+    assert locator.read_bytes() == b"other bytes"
+    locator.unlink()
+    locator.symlink_to(target)
+    assert locator.read_bytes() == b"qualified bytes"
+    with pytest.raises(wrapper.EpiZooResourceChangedError):
+        wrapper._check_resource_snapshot(locator, before)
 
 
 def test_input_validation_rejects_non_anndata() -> None:

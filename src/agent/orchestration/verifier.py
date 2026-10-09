@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import inspect
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -37,6 +38,7 @@ from agent.tools.analysis.embedding_analysis import (
     _validate_cluster_labels,
     _validate_neighbors_artifact,
 )
+from agent.tools.analysis.epizoo_embedding import epizoo_embed_cells, validate_resource_provenance
 from agent.tools.analysis.label_transfer import (
     LABEL_TRANSFER_ARTIFACT_SCHEMA_VERSION,
     LABEL_TRANSFER_BACKEND,
@@ -925,6 +927,28 @@ def _verify_embedding(
     dependency_results: Mapping[str, Mapping[str, object]],
     checks: _VerificationChecks,
 ) -> None:
+    expected = resolved_arguments.get("expected_resource_identity")
+    if expected is not None or "resource_provenance" in result:
+        owner_parameters = inspect.signature(epizoo_embed_cells).parameters
+        effective_device = resolved_arguments.get("device", owner_parameters["device"].default)
+        effective_checkpoint = resolved_arguments.get("checkpoint_path", owner_parameters["checkpoint_path"].default)
+        effective_overwrite = resolved_arguments.get("overwrite", owner_parameters["overwrite"].default)
+        try:
+            validate_resource_provenance(
+                result.get("resource_provenance"), expected_resource_identity=expected,
+                species=resolved_arguments.get("species"), device=effective_device,
+                overwrite=effective_overwrite,
+            )
+            provenance_matches = expected is not None and effective_device == result.get("device")
+            checkpoint_matches = _path_corresponds(result.get("checkpoint_path"), effective_checkpoint)
+        except (TypeError, ValueError):
+            provenance_matches = checkpoint_matches = False
+        checks.add(
+            "resource_identity_pins_match", provenance_matches and checkpoint_matches,
+            "Owner-produced invocation provenance matches the resolved resource pins and settings.",
+            "Owner-produced invocation provenance is missing or does not match the resolved resource pins and settings.",
+            "EPIZOO_RESOURCE_IDENTITY_MISMATCH",
+        )
     checks.add(
         "backend_identity",
         result.get("backend") == "EpiZoo",

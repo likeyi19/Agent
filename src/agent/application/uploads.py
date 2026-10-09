@@ -151,10 +151,14 @@ class H5ADUploadAdmission:
         except (ValueError, OSError, RuntimeError) as exc:
             raise UploadError('UPLOAD_STORAGE_INVALID') from exc
 
-    def resolve(self, resource_id, *, verify_source=True):
+    def resolve(self, resource_id, *, scientific_inputs=None,
+                resource_selection_error=None, verify_source=True):
         self._owned(self.resources.load(resource_id))
         # The facade owns new-consumption versus completed-retry lifetime checks.
         # Metadata-only transport resolution must not reopen a historical source.
+        if scientific_inputs is not None or resource_selection_error is not None:
+            return self.resources.compose_h5ad(resource_id, scientific_inputs,
+                resource_selection_error=resource_selection_error, verify_source=verify_source)
         return self.resources.resolve(resource_id, tool_name='inspect_scATAC', verify_source=verify_source)
 
     async def receive(self, upload_id, filename, chunks, *, expected_size=None):

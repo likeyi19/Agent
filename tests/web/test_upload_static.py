@@ -71,10 +71,12 @@ def test_upload_retry_preserves_file_identity_and_selection_creates_a_new_identi
     assert clear.index('state.upload = null') < clear.index('upload.request.abort()')
 
 
-def test_turn_resource_binding_is_explicit_exclusive_and_retry_keeps_the_frozen_body():
+def test_turn_resource_binding_admits_only_declared_companions_and_retry_keeps_the_frozen_body():
     request = section('function submitRequest(', 'element("turn-form").addEventListener')
     assert 'body.resource_id = element("resource-choice").value' in request
     assert 'else if (element("input-choice").value) body.input_set_id' in request
+    assert 'if (selectedCompanion()) body.input_set_id' in request
+    assert 'body.epizoo_resource_id = element("epizoo-resource-choice").value' in request
     assert 'Object.freeze(body)' in request
     assert 'predecessor_turn_id = predecessorTurnId' in request
     assert 'expected_generation: state.session.generation' in request
@@ -82,9 +84,23 @@ def test_turn_resource_binding_is_explicit_exclusive_and_retry_keeps_the_frozen_
     assert 'postSubmission(state.submission)' in source()
     resource = section('element("resource-choice").addEventListener', 'element("new-session")')
     assert 'element("input-choice").value = ""' in resource
+    assert '!selectedCompanion()' in resource
     configured = section('element("input-choice").addEventListener', 'element("utterance").addEventListener')
     assert 'element("resource-choice").value = ""' in configured
+    assert '!selectedCompanion()' in configured
     assert 'execution_inputs' not in source() and 'source_sha256' not in source()
+
+
+def test_resource_and_companion_controls_use_only_safe_configured_choices():
+    initialize = source()[source().index('async function initialize()'):]
+    assert 'api("/epizoo-resources")' in initialize
+    assert 'state.inputSets = inputs.choices' in initialize
+    assert 'option.value = choice.resource_id' in initialize
+    assert 'choice.display_label' in initialize and 'choice.is_default' in initialize
+    assert 'checkpoint_path' not in source() and 'frequencies_sha256' not in source()
+    helper = section('function selectedCompanion()', 'function saveResourceSelection()')
+    assert 'choice.input_set_id === element("input-choice").value' in helper
+    assert 'choice.h5ad_companion === true' in helper
 
 
 def test_resource_selection_is_only_a_rechecked_display_convenience():

@@ -12,8 +12,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
 from importlib import import_module, metadata as importlib_metadata
+from io import BytesIO
 from pathlib import Path
 import re
+import stat
+import tempfile
 from types import MappingProxyType
 from typing import Any, Iterator, Literal, Mapping
 
@@ -187,6 +190,48 @@ def _sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class EpiZooResourceChangedError(ValueError):
+    """A resource changed while its scientific content was being consumed."""
+
+    def __init__(self) -> None:
+        super().__init__("EpiZoo resource changed during scientific consumption.")
+
+
+def _resource_file_snapshot(path: Path) -> tuple[int, ...]:
+    """Capture target and final symlink identity on the trusted local filesystem."""
+    try:
+        target, locator = path.stat(), path.lstat()
+    except OSError as exc:
+        raise EpiZooResourceChangedError() from exc
+    if not stat.S_ISREG(target.st_mode):
+        raise EpiZooResourceChangedError()
+    return tuple(
+        value
+        for record in (target, locator)
+        for value in (record.st_dev, record.st_ino, record.st_size,
+                      record.st_mtime_ns, record.st_ctime_ns)
+    )
+
+
+def _check_resource_snapshot(path: Path, expected: tuple[int, ...]) -> None:
+    if _resource_file_snapshot(path) != expected:
+        raise EpiZooResourceChangedError()
+
+
+@contextmanager
+def _checkpoint_bytes_snapshot(path: Path) -> Iterator[tuple[Path, str]]:
+    """Hash exactly the private bytes consumed by mmap checkpoint loading."""
+    digest = sha256()
+    with tempfile.TemporaryDirectory(prefix="agent-epizoo-checkpoint-") as private_directory:
+        with tempfile.NamedTemporaryFile(dir=private_directory, suffix=".pth") as snapshot:
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+                    snapshot.write(chunk)
+                    digest.update(chunk)
+            snapshot.flush()
+            yield Path(snapshot.name), digest.hexdigest()
 
 
 def _unwrap_state_dict(checkpoint: Any) -> OrderedDict[str, torch.Tensor]:
@@ -375,38 +420,41 @@ def load_model(
     cfg = _build_model_config(backend)
     _validate_config_values(cfg)
 
-    checkpoint = torch.load(
-        checkpoint_path,
-        map_location="cpu",
-        weights_only=True,
-        mmap=True,
-    )
-    state_dict = _unwrap_state_dict(checkpoint)
-    _validate_checkpoint_state_dict(state_dict)
-    synthesized_buffers = _add_fixed_loss_buffers(state_dict, cfg)
-
-    # Meta construction avoids randomly initializing 2.6B parameters that are
-    # immediately replaced by checkpoint tensors. `assign=True` materializes
-    # the strictly matched CPU state before the deliberate dtype/device move.
-    with torch.device("meta"):
-        model = backend.EpiZoo(cfg=cfg)
-    incompatible = model.load_state_dict(state_dict, strict=True, assign=True)
-    if incompatible.missing_keys or incompatible.unexpected_keys:
-        raise RuntimeError(
-            "Strict EpiZoo checkpoint loading returned incompatible keys: "
-            f"missing={incompatible.missing_keys}, "
-            f"unexpected={incompatible.unexpected_keys}."
+    checkpoint_snapshot = _resource_file_snapshot(checkpoint_path)
+    with _checkpoint_bytes_snapshot(checkpoint_path) as (snapshot_path, checkpoint_sha256):
+        checkpoint = torch.load(
+            snapshot_path,
+            map_location="cpu",
+            weights_only=True,
+            mmap=True,
         )
+        state_dict = _unwrap_state_dict(checkpoint)
+        _validate_checkpoint_state_dict(state_dict)
+        synthesized_buffers = _add_fixed_loss_buffers(state_dict, cfg)
 
-    model = model.to(device=resolved_device, dtype=dtype)
-    model.eval()
-    _validate_model_structure(model)
-    if model.training:
-        raise RuntimeError("EpiZoo model remained in training mode after eval().")
+        # Meta construction avoids randomly initializing 2.6B parameters that are
+        # immediately replaced by checkpoint tensors. `assign=True` materializes
+        # the strictly matched CPU state before the deliberate dtype/device move.
+        with torch.device("meta"):
+            model = backend.EpiZoo(cfg=cfg)
+        incompatible = model.load_state_dict(state_dict, strict=True, assign=True)
+        if incompatible.missing_keys or incompatible.unexpected_keys:
+            raise RuntimeError(
+                "Strict EpiZoo checkpoint loading returned incompatible keys: "
+                f"missing={incompatible.missing_keys}, "
+                f"unexpected={incompatible.unexpected_keys}."
+            )
 
+        model = model.to(device=resolved_device, dtype=dtype)
+        model.eval()
+        _validate_model_structure(model)
+        if model.training:
+            raise RuntimeError("EpiZoo model remained in training mode after eval().")
+        _check_resource_snapshot(checkpoint_path, checkpoint_snapshot)
     model._agent_checkpoint_validated = True
     model._agent_checkpoint_path = str(checkpoint_path)
-    model._agent_checkpoint_sha256 = _sha256_file(checkpoint_path)
+    model._agent_checkpoint_sha256 = checkpoint_sha256
+    model._agent_checkpoint_source_snapshot = checkpoint_snapshot
     model._agent_model_config = dict(MODEL_CONFIG)
     model._agent_checkpoint_missing_keys = tuple(incompatible.missing_keys)
     model._agent_checkpoint_unexpected_keys = tuple(incompatible.unexpected_keys)
@@ -485,7 +533,12 @@ def _load_resources(
         if not path.is_file():
             raise FileNotFoundError(f"EpiZoo {label} resource not found: {path}")
 
-    frequencies = np.load(frequency_path, allow_pickle=False)
+    frequency_snapshot = _resource_file_snapshot(frequency_path)
+    filter_snapshot = _resource_file_snapshot(filter_path)
+    frequency_bytes = frequency_path.read_bytes()
+    frequency_sha256 = sha256(frequency_bytes).hexdigest()
+    frequencies = np.load(BytesIO(frequency_bytes), allow_pickle=False)
+    del frequency_bytes
     if frequencies.ndim != 1 or frequencies.shape[0] != species_cfg.raw_dimension:
         raise ValueError(
             f"{species_cfg.name} frequency resource must have shape "
@@ -494,7 +547,10 @@ def _load_resources(
     if not np.all(np.isfinite(frequencies)) or np.any(frequencies < 0):
         raise ValueError("EpiZoo frequency resource must be finite and nonnegative.")
 
-    frame = pd.read_csv(filter_path, index_col=0)
+    filter_bytes = filter_path.read_bytes()
+    filter_sha256 = sha256(filter_bytes).hexdigest()
+    frame = pd.read_csv(BytesIO(filter_bytes), index_col=0)
+    del filter_bytes
     required_columns = {"cCRE", "idx"}
     if not required_columns.issubset(frame.columns):
         raise ValueError(
@@ -522,14 +578,16 @@ def _load_resources(
         raise ValueError("EpiZoo retained cCRE names must be non-null and unique.")
     retained_names = frame["cCRE"].astype(str).to_numpy(copy=True)
 
+    _check_resource_snapshot(frequency_path, frequency_snapshot)
+    _check_resource_snapshot(filter_path, filter_snapshot)
     return _Resources(
         frequencies=np.asarray(frequencies),
         filter_indices=filter_indices,
         retained_names=retained_names,
         frequency_path=frequency_path,
         filter_path=filter_path,
-        frequency_sha256=_sha256_file(frequency_path),
-        filter_sha256=_sha256_file(filter_path),
+        frequency_sha256=frequency_sha256,
+        filter_sha256=filter_sha256,
     )
 
 

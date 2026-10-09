@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
+from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
@@ -1288,6 +1289,13 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == "epizoo_embed_cells" and "resource_provenance" in step_result.result:
+            facts["resource_provenance"] = validate_resource_provenance(
+                step_result.result["resource_provenance"],
+                expected_resource_identity=step_result.resolved_arguments.get("expected_resource_identity"),
+                species=step_result.result["species"], device=step_result.result["device"],
+                overwrite=step_result.resolved_arguments.get("overwrite", False),
+            )
         if step.tool_name == "run_replicate_differential_accessibility":
             facts.update(
                 _differential_accessibility_derived_facts(

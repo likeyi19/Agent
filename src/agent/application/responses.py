@@ -81,6 +81,18 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if clarification.reason == 'conflicting_scientific_parameter':
+        return 'The explicit scientific parameter values conflict. Please provide one consistent value.'
+    if clarification.reason == 'missing_species':
+        return 'I need to know the species of the selected dataset. Is it human or mouse?'
+    if clarification.reason == 'ambiguous_species':
+        return 'Please confirm whether the selected dataset is human or mouse. I cannot continue without an explicit species declaration.'
+    if clarification.reason == 'unsupported_species':
+        return 'This EpiZoo inference pathway supports human or mouse declarations. I cannot use another species for this request.'
+    if clarification.reason == 'conflicting_species':
+        return 'The species answer conflicts with the supplied scientific declarations. Resolve the conflict before continuing.'
+    if clarification.reason == 'invalid_prerequisite':
+        return 'There is no valid pending scientific clarification for this request. Please submit the intended analysis with its inputs.'
     if clarification.reason == 'requires_execution':
         return 'This request requires the scientific execution path and its required inputs; it cannot be answered as an existing result.'
     if clarification.reason == 'ambiguous_subject':
@@ -95,10 +107,17 @@ def clarification_text(clarification):
         return 'Do you mean the ' + ' or the '.join(names[c] for c in clarification.choices) + '?'
     if clarification.reason in {'missing_parameter_value', 'ambiguous_parameter'}:
         if not clarification.choices: return 'There is no editable selection threshold in the captured state.'
+        if clarification.reason == 'ambiguous_parameter' and any('.' in name for name in clarification.choices):
+            return 'Please identify one unambiguous operation for ' + ' and '.join(clarification.choices) + '.'
         if len(clarification.choices) == 1:
-            return f'What value should I use for {LABELS[clarification.choices[0]].lower()}?'
-        return 'Which threshold would you like to change, and what value should I use?'
-    if clarification.reason == 'unsupported_intent': return UNSUPPORTED
+            return f'What value should I use for {LABELS.get(clarification.choices[0], clarification.choices[0]).lower()}?'
+        names = [LABELS.get(name, name).lower() for name in clarification.choices]
+        return 'Please provide values for ' + ' and '.join(names) + '.'
+    if clarification.reason in {'invalid_parameter_value', 'ungrounded_operand'}:
+        return 'Please provide a valid explicit value for the scientific parameter.'
+    if clarification.reason == 'unsupported_intent':
+        return ('This request is not supported by the available scientific or conversational operations. '
+                'Please clarify or revise the request.')
     if clarification.reason == 'unavailable_context': return UNAVAILABLE
     return 'I could not establish an exact supported change. Please specify the threshold and numerical value, or an explicit version.'
 

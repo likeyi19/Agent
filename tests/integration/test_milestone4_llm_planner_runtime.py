@@ -94,6 +94,7 @@ def _embed_step() -> dict[str, object]:
             "checkpoint_path": None,
             "device": None,
             "overwrite": None,
+            "expected_resource_identity": None,
         },
         "depends_on": ["inspect"],
         "description": "Compute EpiZoo embeddings.",

@@ -28,6 +28,7 @@ GPT = COHORT[0]
 
 @pytest.fixture(autouse=True)
 def offline_manifest(monkeypatch):
+    frozen_git(monkeypatch)
     manifest = lambda: {"repository_commit": run_breadth.BASELINE, "qualification_claim": False}
     monkeypatch.setattr(run_breadth, "comparison_manifest", manifest)
     if hasattr(run_stability, "comparison_manifest"):
@@ -43,6 +44,7 @@ def merged_ledger(tmp_path_factory, original_ledger):
     })
     output = tmp_path_factory.mktemp("synthetic-merged-ledger") / "q2-1b"
     with pytest.MonkeyPatch.context() as patch:
+        frozen_git(patch)
         patch.setattr(run_breadth, "comparison_manifest", lambda: {
             "repository_commit": run_breadth.BASELINE, "qualification_claim": False})
         result = run_breadth.resume_breadth(original=source, output=output,

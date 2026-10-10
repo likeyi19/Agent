@@ -136,6 +136,7 @@ def scenarios():
 
 @pytest.fixture(autouse=True)
 def offline_manifest(monkeypatch):
+    frozen_git(monkeypatch)
     monkeypatch.setattr(run_breadth, "comparison_manifest", lambda: {
         "repository_commit": run_breadth.BASELINE, "qualification_claim": False})
 
@@ -722,6 +723,7 @@ def original_ledger(tmp_path_factory):
     factory = Factory(canonical, overrides={("I01", COHORT[0].candidate_id): outcomes})
     output = tmp_path_factory.mktemp("original-ledger") / "q2-1"
     with pytest.MonkeyPatch.context() as patch:
+        frozen_git(patch)
         patch.setattr(run_breadth, "comparison_manifest", lambda: {
             "repository_commit": run_breadth.BASELINE, "qualification_claim": False})
         report = run_breadth.run_breadth(output=output, discovery=discovery(), factory=factory, environment={})

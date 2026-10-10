@@ -146,10 +146,10 @@ def bam_body(resource, *, turn='analysis', generation=0, companion=None, **chang
     return value | changes
 
 
-def execute(client, body):
+def execute(client, body, *, timeout=20):
     response = client.post('/api/v1/sessions/analysis/turns', json=body)
     assert response.status_code == 202, response.text
-    return wait_turn(client, body['turn_id'], session='analysis')
+    return wait_turn(client, body['turn_id'], session='analysis', timeout=timeout)
 
 
 @pytest.mark.parametrize('case,readiness', [('missing', 'NEEDS_USER_INPUT'), ('valid', 'READY'), ('invalid', 'INVALID')])
@@ -433,7 +433,7 @@ def test_bam_provider_plan_downstream_handoff_preserves_all_existing_downloads(t
         with TestClient(create_app(backend.service, uploads=backend.uploads, input_sets=(companion,))) as client:
             client.post('/api/v1/sessions', json={'session_id': 'analysis'})
             body = bam_body(resource, companion='qualified', utterance='Use this BAM to prepare fragments, perform QC, select cells using supplied thresholds, and build a cell-by-cCRE matrix.')
-            view = execute(client, body)
+            view = execute(client, body, timeout=60)
             assert view['status'] == 'succeeded', view
             run = backend.service._application.run_store.load(view['run_id'])
             assert [step.tool_name for step in run.steps] == [INSPECT, PREPARE, 'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre']

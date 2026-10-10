@@ -43,13 +43,14 @@ class AnalysisSessions:
         return self._store.processing_lease(session_id, turn_id)
 
     def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
-                answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None):
+                answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
+                epizoo_resources=()):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
         outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation, answerer=answerer,
                        predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
-                       submission=submission)
+                       submission=submission, epizoo_resources=epizoo_resources)
         from .responses import summarize
         return summarize(self, session_id, turn_id, outcome)
 
@@ -233,6 +234,8 @@ class AnalysisSessions:
         if run.to_run_result() != result.run_result:
             raise SessionError('Application result differs from persisted scientific run.')
         interaction = next((item for item in captured.interactions if item.turn_id == turn_id), None)
+        from .dialogue_execution import execution_submission
+        submission = None if interaction is None else execution_submission(interaction)
         if result.status is ApplicationStatus.SUCCEEDED:
             files = self._completion_files(result)
             anchor = digest(result.run_result.to_dict())
@@ -248,8 +251,8 @@ class AnalysisSessions:
                       'planned' if result.status is ApplicationStatus.PLANNED else 'failed')
         if (turn.status not in {'activated', 'stale', 'ready', 'failed', 'cancelled', 'planned'}
                 and result.run_status is RunStatus.SUCCEEDED
-                and interaction is not None and interaction.submission is not None
-                and 'registered_input' in interaction.submission):
+                and interaction is not None and submission is not None
+                and 'registered_input' in submission):
             # The resource owner binds inspection bytes and FASTQ producer source
             # identities. Ordinary completion and unfinished recovery share this
             # first-acceptance guard after completion/lineage reads; terminal
@@ -258,7 +261,7 @@ class AnalysisSessions:
             try:
                 LocalResourceAdmission(self._application._workspace,
                     registry=self._application.registry).validate_result(
-                        interaction.submission, result.run_result.steps)
+                        submission, result.run_result.steps)
             except ResourceAdmissionError as exc:
                 from .interactive_schemas import PresentedResponse
                 presentation = PresentedResponse(kind='execute', status='failed',

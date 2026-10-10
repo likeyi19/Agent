@@ -1,5 +1,6 @@
-"""Bounded turn interpretation and exact, utterance-grounded numeric admission."""
+"""Bounded turn interpretation and exact, utterance-grounded scalar admission."""
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import json
 import re
@@ -20,11 +21,73 @@ class IntentDelta:
 
 
 @dataclass(frozen=True)
+class ScopedArgument:
+    """An operation-qualified scalar declaration at an exact utterance span."""
+
+    tool: str
+    argument: str
+    literal: str
+    start: int
+    end: int
+
+    def __post_init__(self):
+        if (type(self.tool) is not str or not 0 < len(self.tool) <= 128 or not self.tool.isidentifier()
+                or type(self.argument) is not str or not 0 < len(self.argument) <= 128 or not self.argument.isidentifier()
+                or type(self.literal) is not str or not 0 < len(self.literal) <= 80
+                or type(self.start) is not int or type(self.end) is not int
+                or not 0 <= self.start < self.end <= 4096):
+            raise ValueError('Invalid scoped scientific argument declaration.')
+
+
+@dataclass(frozen=True)
+class LeidenResolution(ScopedArgument):
+    """The strict historical wire for the original clustering declaration."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.tool != 'cluster_cells' or self.argument != 'resolution':
+            raise ValueError('Invalid explicit Leiden resolution declaration.')
+
+
+@dataclass(frozen=True)
+class ScalarChoiceArgument(ScopedArgument):
+    """An LLM-normalized reviewed choice with its verbatim declaration span."""
+
+    value: str
+
+    def __post_init__(self):
+        super().__post_init__()
+        if (not self.literal.strip() or type(self.value) is not str
+                or not self.value.strip() or len(self.value) > 80):
+            raise ValueError('Invalid scalar choice declaration.')
+
+
+def _validate_arguments(arguments, argument=None):
+    if (type(arguments) is not tuple or len(arguments) > 8
+            or any(not isinstance(item, ScopedArgument) for item in arguments)):
+        raise ValueError('Invalid bounded scientific arguments.')
+    identities = [(item.tool, item.argument) for item in arguments]
+    if argument is not None:
+        identities.append((argument.tool, argument.argument))
+    if len(identities) > 8:
+        raise ValueError('Scientific argument declaration limit exceeded.')
+    if len(identities) != len(set(identities)):
+        raise ValueError('Duplicate scoped scientific argument.')
+
+
+@dataclass(frozen=True)
 class Execute:
     base: str
     operation: str
     target: str
     delta: IntentDelta | None
+    argument: LeidenResolution | None = None
+    arguments: tuple[ScopedArgument, ...] = ()
+
+    def __post_init__(self):
+        if self.argument is not None and not isinstance(self.argument, LeidenResolution):
+            raise ValueError('Invalid explicit scientific declaration.')
+        _validate_arguments(self.arguments, self.argument)
 
 
 @dataclass(frozen=True)
@@ -36,6 +99,40 @@ class ExecuteCandidate:
         if (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128
                 or type(self.evidence) is not str or not 0 < len(self.evidence) <= 4096):
             raise ValueError('Invalid explicit candidate selection.')
+
+
+@dataclass(frozen=True)
+class SpeciesAnswer:
+    """A declaration answering one offered, exact pending clarification."""
+
+    pending: str
+    species: str
+    argument: LeidenResolution | None = None
+    arguments: tuple[ScopedArgument, ...] = ()
+
+    def __post_init__(self):
+        if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
+                or type(self.species) is not str or self.species not in ('human', 'mouse')
+                or self.argument is not None and not isinstance(self.argument, LeidenResolution)):
+            raise ValueError('Invalid pending species declaration.')
+        _validate_arguments(self.arguments, self.argument)
+        if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
+            raise ValueError('Species answers use the existing species field.')
+
+
+@dataclass(frozen=True)
+class ParameterAnswer:
+    """Numeric declarations answering one exact pending scientific request."""
+
+    pending: str
+    arguments: tuple[ScopedArgument, ...]
+
+    def __post_init__(self):
+        if type(self.pending) is not str or not 0 < len(self.pending) <= 128 or not self.arguments:
+            raise ValueError('Invalid pending scientific parameter answer.')
+        _validate_arguments(self.arguments)
+        if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
+            raise ValueError('Parameter answers require numeric declarations.')
 
 
 @dataclass(frozen=True)
@@ -110,12 +207,14 @@ class Answer:
             raise ValueError('Guidance answers require a structured question.')
 
 
-TurnDecision = Execute | ExecuteCandidate | Navigate | Clarify | Answer
+TurnDecision = Execute | ExecuteCandidate | SpeciesAnswer | ParameterAnswer | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
            'unavailable_context', 'invalid_decision', 'planning_failed', 'ambiguous_subject',
-           'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution')
+           'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution',
+           'missing_species', 'ambiguous_species', 'unsupported_species',
+           'conflicting_species', 'invalid_prerequisite', 'conflicting_scientific_parameter')
 # These are language aliases, not scientific types/ranges/defaults. Those stay
 # exclusively in the registered ArgumentSpecs. Initial interaction scope is QC selection.
 ALIASES = {
@@ -130,6 +229,25 @@ ALIASES = {
 def _shape(value, keys):
     if type(value) is not dict or set(value) != set(keys):
         raise IntentError('invalid_decision')
+
+
+def _leiden_argument(value):
+    if value is None:
+        return None
+    _shape(value, ('tool', 'argument', 'literal', 'start', 'end'))
+    return LeidenResolution(**value)
+
+
+def _scientific_arguments(value):
+    if type(value) is not list or len(value) > 8:
+        raise IntentError('invalid_decision')
+    result = []
+    for item in value:
+        choice = type(item) is dict and 'value' in item
+        _shape(item, ('tool', 'argument', 'literal', 'start', 'end', 'value') if choice
+               else ('tool', 'argument', 'literal', 'start', 'end'))
+        result.append((ScalarChoiceArgument if choice else ScopedArgument)(**item))
+    return tuple(result)
 
 
 def parse_decision(raw):
@@ -150,6 +268,15 @@ def parse_decision(raw):
         if kind == 'execute_candidate':
             _shape(value, ('kind', 'candidate', 'evidence'))
             return ExecuteCandidate(value['candidate'], value['evidence'])
+        if kind == 'answer_prerequisite':
+            _shape(value, ('kind', 'pending', 'species') + tuple(
+                key for key in ('argument', 'arguments') if key in value))
+            return SpeciesAnswer(value['pending'], value['species'],
+                                 _leiden_argument(value.get('argument')),
+                                 _scientific_arguments(value.get('arguments', [])))
+        if kind == 'answer_parameters':
+            _shape(value, ('kind', 'pending', 'arguments'))
+            return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
         if kind == 'answer_guidance':
             _shape(value, ('kind', 'targets', 'candidate'))
             if type(value['targets']) is not list: raise IntentError('invalid_decision')
@@ -166,7 +293,13 @@ def parse_decision(raw):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if set(value) != {'kind', 'target'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments'}:
+                if type(value['target']) is not str:
+                    raise IntentError('invalid_decision')
+                return Execute('current', 'plan', value['target'], None,
+                               _leiden_argument(value.get('argument')),
+                               _scientific_arguments(value.get('arguments', [])))
+            else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
                     raise IntentError('invalid_decision')
@@ -214,10 +347,31 @@ def _object(properties):
 def decision_schema(public):
     offered = [o for b in public['bases'].values() for o in b['operations']]
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
+    argument = {'anyOf': [_object(dict(tool=enum(('cluster_cells',)),
+        argument=enum(('resolution',)), literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
+        start={'type': 'integer', 'minimum': 0, 'maximum': 4096},
+        end={'type': 'integer', 'minimum': 1, 'maximum': 4096})), {'type': 'null'}]}
+    parameters = public.get('dialogue', {}).get('scientific_parameters', ())
+    identities = tuple(dict.fromkeys((item['tool'], item['argument']) for item in parameters))
+    def declaration_schema(item):
+        properties = dict(tool=enum((item['tool'],)), argument=enum((item['argument'],)),
+            literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
+            start={'type': 'integer', 'minimum': 0, 'maximum': 4096},
+            end={'type': 'integer', 'minimum': 1, 'maximum': 4096})
+        if 'choices' in item:
+            properties['value'] = enum(item['choices'])
+        return _object(properties)
+    declarations = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
+        declaration_schema(item) for item in parameters]}}
+    numeric = [item for item in parameters if 'choices' not in item]
+    numeric_declarations = declarations | {'items': {'anyOf': [declaration_schema(item) for item in numeric]}}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
+    pending = public.get('dialogue', {}).get('pending_prerequisite')
+    species_pending = pending is not None and pending.get('field', 'species') == 'species'
+    clarification_reasons = REASONS if species_pending else tuple(r for r in REASONS if r != 'missing_species')
     variants = [_object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i not in ('scientific', 'guidance')),
-        relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(REASONS))),
+        relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(clarification_reasons))),
         _object(dict(kind=enum(('navigate',)), relation=enum(public['relations'])))]
     if offered:
         variants.append(_object(dict(kind=enum(('execute',)), base=enum(public['relations']),
@@ -233,11 +387,24 @@ def decision_schema(public):
         variants.append(_object(dict(kind=enum(('answer_guidance',)),
             targets={'type':'array', 'maxItems':4, 'items':target},
             candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
-        variants.append(_object(dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']))))
+        execution = dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']), argument=argument)
+        if identities:
+            execution['arguments'] = declarations
+        variants.append(_object(execution))
         candidates = public['dialogue'].get('execution_candidates', ())
         if candidates:
             variants.append(_object(dict(kind=enum(('execute_candidate',)),
                 candidate=enum(c['candidate'] for c in candidates), evidence={'type':'string','maxLength':4096})))
+        pending = public['dialogue'].get('pending_prerequisite')
+        if pending is not None and pending.get('field', 'species') == 'species':
+            answer = dict(kind=enum(('answer_prerequisite',)),
+                pending=enum((pending['handle'],)), species=enum(pending['choices']), argument=argument)
+            if numeric:
+                answer['arguments'] = numeric_declarations
+            variants.append(_object(answer))
+        elif pending is not None and pending.get('field') == 'parameters' and numeric:
+            variants.append(_object(dict(kind=enum(('answer_parameters',)),
+                pending=enum((pending['handle'],)), arguments=numeric_declarations | {'minItems': 1})))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
@@ -266,6 +433,12 @@ def interpret(model, utterance, public):
             'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
+            'For an otherwise supported new scientific command with a selected input, an omitted or unresolved required dataset declaration is not unsupported intent and is not a direct missing-prerequisite answer. Choose execute_plan and omit that declaration from arguments. The existing Planner/compiler determines the exact missing prerequisite and the Application creates its durable clarification. Use missing_species only while answering an offered pending species prerequisite; never fabricate a pending request. Do not guess a value or bypass genuinely unsupported capabilities, input identity ambiguity or conflicting explicit declarations.',
+            'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
+            'execute_plan.argument is the historical nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim and give start/end zero-based Unicode character offsets in this utterance. Do not repeat an identity across argument and arguments.',
+            'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
+            'Use argument=null when resolution is omitted; the scientific owner retains its existing default. A number alone does not request an operation. Explanatory questions about resolution remain answers, never execution or edits to a pending request. Clarify ambiguous argument association or conflicting explicit values; do not guess, invent an amount or replace an invalid value with a default.',
+            'Use arguments=[] for omitted scientific parameters. Registered owners and existing compiler/resource contracts decide requirements and defaults; never invent a numeric default, infer scientific input identity, or create arbitrary execution dictionaries. Exact decimal or rational threshold literals stay exact; do not approximate them with floating point values.',
             'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
             'Subject=null means no new subject is asserted by the model for this turn. '
             'It does not clear an authoritative subject retained through a resolved captured referent; '
@@ -284,8 +457,87 @@ def interpret(model, utterance, public):
             'Use relation previous for earlier/previous version or go back one version; parent requires the word parent.',
             'Default parameter changes to selection only. Matrix requires an explicit rebuild request.',
             'Keep selection and rebuild matrix uses delta=null and target=matrix.',
-        ]}, sort_keys=True, separators=(',', ':'))
+        ] + ([
+            'dialogue.pending_prerequisite describes one captured scientific request awaiting an explicit human/mouse species declaration. Its objective and selected dataset remain fixed; this context is not scientific compatibility evidence.',
+            'Choose answer_prerequisite only when this utterance unambiguously answers that specifically pending species question for the same request and selected dataset. Use its exact offered pending handle and normalize the explicit declaration to the offered human or mouse value. Meaning is yours to interpret; never infer species from filenames, dimensions, features, available checkpoints or unrelated datasets.',
+            'Uncertainty or ambiguous species requires clarify/ambiguous_species; another species requires clarify/unsupported_species; a conflicting declaration requires clarify/conflicting_species. Do not guess or emit arbitrary scientific input dictionaries.',
+            'If the user changes the analysis objective, choose the ordinary decision for that new request, such as execute_plan. Cancellation or an unrelated message must never answer the old prerequisite; use clarify/unsupported_intent when no other supported decision applies. An answer authorizes continuation only of the captured original objective, never additional operations.',
+            'answer_prerequisite.argument and arguments may declare explicit offered scientific parameters in the same reply only for operations already requested by the captured objective. Otherwise use null and []; original validated scientific parameters remain captured. Do not add clustering or other operations to answer a species prerequisite.',
+        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field', 'species') == 'species'
+              and public.get('dialogue', {}).get('pending_prerequisite') is not None else []) + ([
+            'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',
+            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
+            'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
+        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else [])},
+        sort_keys=True, separators=(',', ':'))
     return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)))
+
+
+def admit_scientific_argument(declaration, utterance, argument_spec):
+    """Check one semantic declaration's literal identity, then delegate its science."""
+    if not isinstance(declaration, ScopedArgument):
+        raise IntentError('invalid_decision')
+    literal, start, end = declaration.literal, declaration.start, declaration.end
+    if (type(utterance) is not str or end > len(utterance)
+            or utterance[start:end] != literal):
+        raise IntentError('ungrounded_operand')
+    if isinstance(declaration, ScalarChoiceArgument):
+        if (start and utterance[start - 1].isalnum()
+                or end < len(utterance) and utterance[end].isalnum()):
+            raise IntentError('ungrounded_operand')
+        if (not argument_spec.planning or not argument_spec.planning.conversational_choice
+                or argument_spec.accepted_types != (str,) or not argument_spec.choices):
+            raise IntentError('unsupported_intent')
+        try:
+            argument_spec.validate(declaration.argument, declaration.value)
+        except (ValueError, TypeError) as exc:
+            raise IntentError('invalid_parameter_value') from exc
+        return declaration.value
+    # These are numeric-token boundaries, not a classifier for scientific intent
+    # or a language parser. The Interpreter owns both assignment and association.
+    if start and (utterance[start - 1].isalnum() or utterance[start - 1] in '.+-/_%'):
+        raise IntentError('ungrounded_operand')
+    if end < len(utterance):
+        following = utterance[end]
+        sentence_period = (following == '.'
+            and (end + 1 == len(utterance) or not utterance[end + 1].isdigit()))
+        if (following.isalnum() or following in '+-/_%'
+                or following == '.' and not sentence_period):
+            raise IntentError('ungrounded_operand')
+    try:
+        if any(c not in '+-./0123456789eE' for c in literal):
+            raise InvalidOperation
+        types = argument_spec.accepted_types
+        if float in types:
+            number = Decimal(literal)
+            if not number.is_finite():
+                raise InvalidOperation
+            value = float(number)
+            if not Decimal(str(value)).is_finite():
+                raise InvalidOperation
+        elif int in types and literal.lstrip('+-').isdigit() and literal.lstrip('+-'):
+            value = int(literal)
+        elif str in types:
+            # Preserve the exact lexical representation. The registered owner,
+            # including its exact-ratio grammar, owns validity and range checks.
+            if '/' in literal:
+                Fraction(literal)
+            elif not Decimal(literal).is_finite():
+                raise InvalidOperation
+            value = literal
+        else:
+            raise InvalidOperation
+        argument_spec.validate(declaration.argument, value)
+    except (InvalidOperation, ValueError, TypeError, OverflowError, ZeroDivisionError) as exc:
+        raise IntentError('invalid_parameter_value') from exc
+    return value
+
+
+def admit_leiden_resolution(declaration, utterance, argument_spec):
+    """Keep the historical narrow admission surface on the shared binder."""
+    if not isinstance(declaration, LeidenResolution):
+        raise IntentError('invalid_decision')
+    return admit_scientific_argument(declaration, utterance, argument_spec)
 
 
 def clauses(utterance):

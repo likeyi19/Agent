@@ -66,6 +66,22 @@ def test_unknown_tool_is_rejected(registry) -> None:
         registry.get("arbitrary_python")
 
 
+@pytest.mark.parametrize('value', [0, -0.7, float('nan'), float('inf'), float('-inf'), True, '0.7'])
+def test_clustering_resolution_argument_uses_existing_owner_constraints(registry, value):
+    with pytest.raises(ToolArgumentError):
+        registry.validate_arguments('cluster_cells',
+            dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters', resolution=value))
+
+
+@pytest.mark.parametrize('value', [0.7, 1, 2.5])
+def test_clustering_resolution_argument_retains_valid_types_and_owner_default(registry, value):
+    arguments = dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters', resolution=value)
+    assert registry.validate_arguments('cluster_cells', arguments) == arguments
+    assert inspect.signature(registry.get('cluster_cells').function).parameters['resolution'].default == 1.0
+    omitted = dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters')
+    assert registry.validate_arguments('cluster_cells', omitted) == omitted
+
+
 def test_valid_inspection_arguments(registry) -> None:
     validated = registry.validate_arguments(
         "inspect_scATAC", {"path": Path("input.h5ad")}

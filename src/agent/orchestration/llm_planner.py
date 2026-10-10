@@ -189,6 +189,8 @@ def _binding_schema(
 ) -> Mapping[str, JsonValue]:
     has_inputs = bool(request.inputs)
     if not has_inputs and not argument_spec.allow_step_output_ref:
+        if optional:
+            return {"type": "null"}
         raise PlannerError(
             "PLANNER_CATALOG_INVALID",
             "A registered tool argument has no available binding source.",
@@ -1685,6 +1687,8 @@ class LLMPlanner:
                     tool_name=_known_tool_name(registry, fields.get("tool_name")),
                     target_port=fields.get("target_port"),
                     source_port=fields.get("source_port"),
+                    argument_names=tuple(name for name in fields.get("argument_names", ())
+                        if _known_argument_name(registry, name) is not None),
                     reason_code=exc.diagnostic_reason_code,
                 )
             )

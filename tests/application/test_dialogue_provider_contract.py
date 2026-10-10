@@ -37,7 +37,13 @@ def test_strict_union_has_distinct_discriminators(with_operation):
         assert set(variant['required']) == set(variant['properties'])
     by_kind = {v['properties']['kind']['enum'][0]: v for v in variants}
     assert set(by_kind['answer_scientific']['properties']) == {'kind', 'target', 'comparison', 'focus'}
-    assert set(by_kind['execute_plan']['properties']) == {'kind', 'target'}
+    assert set(by_kind['execute_plan']['properties']) == {'kind', 'target', 'argument'}
+    argument_variants = by_kind['execute_plan']['properties']['argument']['anyOf']
+    assert {'type': 'null'} in argument_variants
+    declaration, = [v for v in argument_variants if v.get('type') == 'object']
+    assert declaration['additionalProperties'] is False
+    assert declaration['properties']['tool']['enum'] == ['cluster_cells']
+    assert declaration['properties']['argument']['enum'] == ['resolution']
 
 
 @pytest.mark.parametrize('tag,decision', [

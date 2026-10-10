@@ -26,7 +26,8 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
-from .local_resources import LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, ResourceAdmissionError
+from .local_resources import (LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, ResourceAdmissionError,
+    qualified_epizoo_resources)
 
 
 _MESSAGES = {
@@ -195,7 +196,8 @@ class InteractiveAgentApplication:
                  planning_model_factory_registry=None, display_labels=None,
                  registry=None, executor=None, planning_wire_mode=None,
                  recovery_planning_profile=None, planning_recovery_policy=None,
-                 approved_source_roots=()):
+                 approved_source_roots=(), epizoo_resources=()):
+        self._epizoo_resources = qualified_epizoo_resources(epizoo_resources)
         self._factory = (build_default_planning_model_factory_registry()
                          if planning_model_factory_registry is None else planning_model_factory_registry)
         if (not isinstance(self._factory, PlanningModelFactoryRegistry)
@@ -373,7 +375,7 @@ class InteractiveAgentApplication:
             configuration_sha256=digest(dict(profile=asdict(profile),
                 wire_mode=None if self._planning['planning_wire_mode'] is None else self._planning['planning_wire_mode'].value,
                 recovery_profile=None if self._planning['recovery_planning_profile'] is None else asdict(self._planning['recovery_planning_profile']),
-                recovery_policy=None if self._planning['planning_recovery_policy'] is None else asdict(self._planning['planning_recovery_policy']))),
+                recovery_policy=None if self._planning['planning_recovery_policy'] is None else self._planning['planning_recovery_policy'].to_dict())),
             expected_generation=generation, execution_inputs=inputs, predecessor_turn_id=predecessor)
         if registered_input is not None:
             submission['registered_input'] = registered_input.attribution()
@@ -426,13 +428,14 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None):
+                            registered_input=None, epizoo_resources=None):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
         requests. It reserves no identity and grants no execution authority;
         ``submit_turn`` repeats admission under the existing processing lease.
         """
+        resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
             predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input)
@@ -443,7 +446,8 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None):
+                    registered_input=None, epizoo_resources=None):
+        resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
@@ -478,7 +482,7 @@ class InteractiveAgentApplication:
                     outcome = app.sessions.respond(session_id, turn_id, utterance,
                         interpreter=model, answerer=model, expected_generation=expected_generation,
                         execution_inputs=inputs, predecessor_turn_id=predecessor_turn_id,
-                        submission=submission)
+                        submission=submission, epizoo_resources=resources)
                     presentation = _present(outcome, self._load(session_id), turn_id=turn_id)
                 except SessionConflictError as exc:
                     code = ('INTERACTIVE_GENERATION_CONFLICT'
@@ -553,6 +557,8 @@ class InteractiveAgentApplication:
             status, error = 'navigated', None
         if response is not None and response.error is not None:
             error = response.error
+        if interaction is not None and interaction.prerequisite is not None:
+            status, error = 'clarification', None
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,

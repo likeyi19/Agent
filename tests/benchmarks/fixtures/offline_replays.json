@@ -37,9 +37,12 @@
               },
               "checkpoint_path": null,
               "device": null,
-              "overwrite": null
+              "overwrite": null,
+              "expected_resource_identity": null
             },
-            "depends_on": ["provider-inspection-id"],
+            "depends_on": [
+              "provider-inspection-id"
+            ],
             "description": null
           }
         ],
@@ -88,7 +91,8 @@
               },
               "checkpoint_path": null,
               "device": null,
-              "overwrite": null
+              "overwrite": null,
+              "expected_resource_identity": null
             },
             "depends_on": [],
             "description": "The scorer must ignore this wording."

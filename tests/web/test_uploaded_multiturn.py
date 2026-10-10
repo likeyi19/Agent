@@ -145,7 +145,7 @@ def test_uploaded_inspection_dialogue_reselection_branch_and_restart(tmp_path):
         state = backend.service._application.sessions.load('session')
         assert _serialize(state.interactions[0].submission['registered_input']) == dict(
             resource_id=registered.resource_id, record_sha256=registered.record_sha256,
-            tool_name='inspect_scATAC')
+            tool_name='inspect_scATAC', composition='h5ad-science.v1')
         assert state.revisions[0].outputs[0].accepted_step_sha256
         evidence, artifacts, first_report_url, first_report = accepted_presentations(client, first['revision_id'])
         before_follow = len(backend.science_calls)
@@ -313,8 +313,9 @@ def test_uploaded_h5ad_does_not_substitute_inspection_for_other_scientific_inten
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         resource = upload(client, backend.source.read_bytes())
         result = submit(client, body(resource['resource_id'], utterance='Compute EpiZoo embeddings.'))
-        assert result['status'] == 'failed' and result['revision_id'] is None, result
-        assert result['error']['code'] == 'MISSING_REQUIRED_SOURCE'
+        assert result['status'] == 'clarification' and result['revision_id'] is None, result
+        assert result['error'] is None
+        assert result['response']['clarification']['reason'] == 'missing_species'
         assert not backend.science_calls and len(backend.models) == 1
         assert all(step['tool_name'] != 'inspect_scATAC' for step in result['steps'])
         state = backend.service._application.sessions.load('session')

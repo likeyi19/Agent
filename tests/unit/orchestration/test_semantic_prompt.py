@@ -592,8 +592,13 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     unsupported_rule = next(
         rule for rule in payload["instructions"] if "unsupported" in rule.lower()
     )
-    assert "genuine capability/input insufficiency only" in unsupported_rule
-    assert "plan if the catalog can satisfy the request" in unsupported_rule
+    assert "unavailable capabilities or explicit implementations" in unsupported_rule
+    assert "ambiguous source identity or invalid DAGs" in unsupported_rule
+    incomplete_rule = next(rule for rule in payload["instructions"]
+                           if "required explicit user declarations" in rule)
+    assert "omitting those unavailable sources" in incomplete_rule
+    assert "prerequisite handling alone decides" in incomplete_rule
+    assert any("no execution permission" in rule for rule in payload["instructions"])
     assert "downstream" not in unsupported_rule
 
 

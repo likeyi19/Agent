@@ -322,8 +322,12 @@ def test_embedding_prerequisites_fail_with_safe_codes_and_no_revision(tmp_path, 
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         resource = upload(client, harness.source.read_bytes())
         result, _ = scientific_submit(client, resource['resource_id'])
-        assert result['status'] == 'failed' and result['revision_id'] is None, result
-        assert result['error']['code'] == expected, result
+        assert result['revision_id'] is None, result
+        if condition == 'missing-species':
+            assert result['status'] == 'clarification' and result['error'] is None, result
+            assert result['response']['clarification']['reason'] == 'missing_species'
+        else:
+            assert result['status'] == 'failed' and result['error']['code'] == expected, result
         assert not harness.inference_calls
         if condition != 'changed-resource':
             assert not harness.science_calls

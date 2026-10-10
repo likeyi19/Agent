@@ -101,7 +101,6 @@ def test_missing_or_ambiguous_resources_do_not_block_inspection(tmp_path, inputs
 @pytest.mark.parametrize('inputs,selection,expected', [
     ({'species': 'mouse'}, 'absent', 'EPIZOO_RESOURCE_SELECTION_INVALID'),
     ({'species': 'human'}, 'mouse-reviewed', 'EPIZOO_RESOURCE_SELECTION_INVALID'),
-    ({}, 'mouse-reviewed', 'H5AD_SPECIES_REQUIRED'),
     ({'input_path': '/private/other.h5ad', 'species': 'mouse'}, None, 'LOCAL_RESOURCE_BINDING_INVALID'),
     ({'extra': 'unsupported'}, None, 'LOCAL_RESOURCE_BINDING_INVALID'),
 ])
@@ -118,6 +117,26 @@ def test_invalid_explicit_selection_and_companion_source_injection_fail_before_p
         assert response.status_code == 400, response.text
         assert response.json()['error']['code'] == expected and '/private' not in response.text
         assert not backend.models and not backend.science_calls
+
+
+def test_explicit_model_selection_without_species_preserves_pins_and_inspection(tmp_path):
+    configured = resource(default=False)
+    backend, _, app = web_composition(tmp_path, companions=(), resources=(configured,))
+    with TestClient(app) as client:
+        uploaded = attach(client, backend.source.read_bytes()).json()
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        response = client.post('/api/v1/sessions/session/turns', json=submission(
+            resource_id=uploaded['resource_id'], input_set_id=None,
+            epizoo_resource_id=configured.resource_id))
+        assert response.status_code == 202, response.text
+        result = wait_turn(client)
+        assert result['status'] == 'succeeded'
+        stored = backend.service._application.sessions.load('session').interactions[0].submission
+        assert 'species' not in stored['execution_inputs']
+        assert stored['execution_inputs']['checkpoint_path'] == configured.checkpoint_path
+        assert stored['execution_inputs']['expected_resource_identity'] == configured.inputs()['expected_resource_identity']
+        assert stored['registered_input']['resource_id'] == uploaded['resource_id']
+        assert backend.science_calls == ['inspect_scATAC']
 
 
 def test_companion_and_epizoo_selection_require_selected_upload(tmp_path):

@@ -17,7 +17,7 @@ from agent.report.evidence import (
     ANALYSIS_EVIDENCE_SCHEMA_VERSION, _TOOL_PROJECTIONS,
     _reject_duplicate_keys, _reject_constant,
 )
-from agent.schemas import PriorOutputRef
+from agent.schemas import PriorOutputRef, StepOutputRef
 from agent.schemas.orchestration import _JsonModel, _serialize, freeze_json_mapping
 from agent.schemas.verification_authority import VerifiedArtifactAuthority
 from .session_state import digest, text
@@ -173,8 +173,13 @@ def _accepted(sessions, state, revision, output):
     return run, step, planned, value, completion.sha256
 
 
-def _project(sessions, state, revision, output, fields, detail):
-    run, step, planned, value, evidence_sha = _accepted(sessions, state, revision, output)
+def _step_summary(sessions, run, step, planned, value):
+    """Read one exact accepted step summary, including a named same-run source."""
+    if (step.status.value != 'SUCCEEDED' or step.result is None or step.error is not None
+            or step.tool_name != planned.tool_name or step.verification is None
+            or not step.verification.passed or step.verification.target_type != 'step'
+            or step.verification.target_id != step.step_id):
+        raise _Unavailable('source_step_not_accepted')
     projection = _TOOL_PROJECTIONS.get(step.tool_name)
     if projection is None or step.tool_name not in sessions._application.registry.names():
         raise _Unsupported('unsupported_tool')
@@ -213,6 +218,196 @@ def _project(sessions, state, revision, output, fields, detail):
     workflow = _one([s for s in value['workflow']['ordered_steps'] if s['step_id'] == step.step_id])
     if workflow != dict(step_id=step.step_id, tool_name=step.tool_name, depends_on=list(planned.depends_on)):
         raise _Unavailable('evidence_lineage_mismatch')
+    return spec, projection, index, evidence
+
+
+def _clustering_source(run, step, planned):
+    """UMAP attribution requires its exact accepted same-plan clustering binding."""
+    if step.tool_name not in ('cluster_cells', 'compute_cell_umap'):
+        return None
+    if step.tool_name == 'compute_cell_umap':
+        reference = planned.arguments.get('analysis_path')
+        if not isinstance(reference, StepOutputRef) or reference.output_key != 'analysis_path':
+            return None
+        source_step = _one([s for s in run.steps if s.step_id == reference.step_id])
+        source_plan = _one([s for s in run.plan.steps if s.step_id == reference.step_id])
+        if source_step.tool_name != 'cluster_cells' or source_plan.tool_name != 'cluster_cells':
+            return None
+        if (reference.step_id not in planned.depends_on or source_step.result is None
+                or step.resolved_arguments.get('analysis_path') != source_step.result.get('analysis_path')):
+            raise _Unavailable('clustering_source_binding_mismatch')
+        step, planned = source_step, source_plan
+    return step, planned
+
+
+def _clustering_parameter_facts(sessions, run, step, planned, value):
+    """Project recorded values only; defaults never come from current code."""
+    if step.tool_name not in ('cluster_cells', 'compute_cell_umap'):
+        return ()
+    source = _clustering_source(run, step, planned)
+    if source is None:
+        return tuple(EvidenceFact(name, 'unavailable', reason='exact_clustering_source_not_recorded')
+                     for name in ('clustering_parameters', 'clustering_resolution_origin'))
+    step, planned = source
+    spec, _, index, evidence = _step_summary(sessions, run, step, planned, value)
+    fields = evidence['facts']
+    explicit = 'resolution' in step.resolved_arguments
+    if explicit != ('resolution' in planned.arguments):
+        raise _Unavailable('clustering_arguments_mismatch')
+    if explicit:
+        argument = step.resolved_arguments['resolution']
+        try:
+            spec.optional_arguments['resolution'].validate('resolution', planned.arguments['resolution'])
+            spec.optional_arguments['resolution'].validate('resolution', argument)
+        except (ValueError, TypeError) as exc:
+            raise _Unavailable('clustering_arguments_invalid') from exc
+        if (isinstance(argument, (PriorOutputRef, StepOutputRef))
+                or _bytes(argument) != _bytes(planned.arguments['resolution'])
+                or argument != fields['resolution']):
+            raise _Unavailable('clustering_arguments_mismatch')
+    run_index = _one([i for i, item in enumerate(run.steps) if item.step_id == step.step_id])
+    return (
+        EvidenceFact('clustering_parameters', 'available',
+            {'resolution': fields['resolution'], 'random_seed': fields['random_seed']},
+            f'/steps/{index}/facts', reason='accepted_clustering_summary'),
+        EvidenceFact('clustering_resolution_origin', 'available',
+            'explicit_execution_argument' if explicit else 'existing_owner_default',
+            f'/steps/{run_index}/resolved_arguments', reason='accepted_execution_argument_presence',
+            artifact_sha256=digest(run.to_dict()), artifact_name='accepted_run_result'),
+    )
+
+
+def _selection_parameter_facts(sessions, run, step, planned, evidence):
+    """Attribute the pinned owner's exact thresholds without inventing defaults."""
+    if step.tool_name != 'select_scATAC_cells':
+        return ()
+    from agent.tools.data.scatac_selection_profile import REQUIRED, OPTIONAL, thresholds
+    names = (*REQUIRED, *OPTIONAL)
+    effective = evidence['facts'].get('effective_thresholds')
+    # Historical summaries can omit the owner threshold projection. They remain
+    # readable, but cannot establish the additional parameter-origin facts.
+    if not isinstance(effective, Mapping) or set(effective) != set(names):
+        return ()
+    spec = sessions._application.registry.get(step.tool_name)
+    try:
+        for name in names:
+            declaration = name in planned.arguments
+            if declaration != (name in step.resolved_arguments):
+                raise ValueError('Threshold argument presence differs.')
+            if declaration:
+                argument = (spec.required_arguments | spec.optional_arguments)[name]
+                argument.validate(name, planned.arguments[name])
+                argument.validate(name, step.resolved_arguments[name])
+                if _bytes(planned.arguments[name]) != _bytes(step.resolved_arguments[name]):
+                    raise ValueError('Threshold argument differs.')
+        # The existing owner performs exact decimal/rational normalization and
+        # optional omission handling. No conversational threshold rules exist.
+        if _bytes(thresholds(step.resolved_arguments)) != _bytes(effective):
+            raise ValueError('Effective owner threshold differs.')
+    except (ValueError, TypeError, KeyError) as exc:
+        raise _Unavailable('selection_arguments_mismatch') from exc
+    run_index = _one([i for i, item in enumerate(run.steps) if item.step_id == step.step_id])
+    return (EvidenceFact('selection_threshold_origins', 'available',
+        {name: 'explicit_execution_argument' if name in step.resolved_arguments
+         else 'existing_owner_default' for name in names},
+        f'/steps/{run_index}/resolved_arguments', reason='accepted_execution_argument_presence',
+        artifact_sha256=digest(run.to_dict()), artifact_name='accepted_run_result'),)
+
+
+def _explicit_user_parameter_facts(sessions, state, run, step, planned):
+    """A Session declaration proves user origin only for its exact admitted run.
+
+    Execution argument presence alone never establishes how a historical value
+    was supplied. Follow only recorded continuation links; conversation order or
+    matching values in unrelated turns confer no attribution.
+    """
+    if step.tool_name == 'compute_cell_umap':
+        source = _clustering_source(run, step, planned)
+        if source is None:
+            return ()
+        step, planned = source
+    turn = _one([t for t in state.turns if t.run_id == run.run_id])
+    matches = [i for i in state.interactions if i.turn_id == turn.turn_id]
+    if not matches:
+        return ()
+    interaction = _one(matches)
+    admitted = interaction.admitted or {}
+    if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
+            or admitted.get('request_id') != run.request_id):
+        return ()
+    from .dialogue_execution import _parameter_input
+    from .turn_decisions import _scientific_arguments, admit_scientific_argument
+    indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
+    linked, current = [], interaction
+    while current is not None:
+        if len(linked) >= MAX_FIELDS:
+            raise _Unavailable('session_parameter_record_limit')
+        linked.append(current)
+        record = current.admitted or {}
+        continuation = record.get('parameter_continuation', record.get('continuation'))
+        if continuation is None:
+            break
+        parent_id = continuation.get('binding_turn_id', continuation.get('origin_turn_id'))
+        parent = _one([i for i in state.interactions if i.turn_id == parent_id])
+        if (indices[parent.turn_id] >= indices[current.turn_id]
+                or parent.base_generation != interaction.base_generation
+                or parent.base_revision_id != interaction.base_revision_id):
+            raise _Unavailable('session_parameter_binding_mismatch')
+        current = parent
+    linked.reverse()
+    declarations = {}
+    try:
+        for current in linked:
+            record = current.admitted or {}
+            arguments = ([] if record.get('argument') is None else [record['argument']])
+            arguments += list(record.get('arguments', ()))
+            for encoded in arguments:
+                declaration, = _scientific_arguments([_serialize(encoded)])
+                name, specification = _parameter_input(sessions._application.registry,
+                    declaration.tool, declaration.argument)
+                argument = admit_scientific_argument(declaration, current.utterance, specification)
+                if (name not in record.get('inputs', {})
+                        or _bytes(record['inputs'][name]) != _bytes(argument)):
+                    raise ValueError('Declaration differs from its admitted binding.')
+                declarations[declaration.tool, declaration.argument] = (name, argument)
+        names = {}
+        for (tool, argument_name), (input_name, argument) in declarations.items():
+            if tool != step.tool_name:
+                continue
+            if (len([p for p in run.plan.steps if p.tool_name == tool]) != 1
+                    or input_name not in admitted.get('inputs', {})
+                    or _bytes(admitted['inputs'][input_name]) != _bytes(argument)
+                    or argument_name not in planned.arguments
+                    or _bytes(planned.arguments[argument_name]) != _bytes(argument)
+                    or argument_name not in step.resolved_arguments
+                    or _bytes(step.resolved_arguments[argument_name]) != _bytes(argument)):
+                raise ValueError('Declaration differs from exact accepted execution.')
+            names[argument_name] = 'explicit_user_instruction'
+    except (ValueError, TypeError, KeyError) as exc:
+        raise _Unavailable('session_parameter_binding_mismatch') from exc
+    if not names:
+        return ()
+    # Presentation/status completion does not change an admitted declaration.
+    # Pin only the immutable received text, admitted binding and captured scope.
+    records = {'interactions': [dict(turn_id=i.turn_id, utterance=i.utterance,
+        base_revision_id=i.base_revision_id, base_generation=i.base_generation,
+        admitted=_serialize(i.admitted)) for i in linked]}
+    return (EvidenceFact('explicit_user_parameters', 'available',
+        dict(tool=step.tool_name, step_id=step.step_id, parameters=names), '/interactions',
+        reason='accepted_utterance_bound_session_declarations',
+        artifact_sha256=digest(records), artifact_name='accepted_session_interactions'),)
+
+
+def _project(sessions, state, revision, output, fields, detail):
+    run, step, planned, value, evidence_sha = _accepted(sessions, state, revision, output)
+    spec, projection, index, evidence = _step_summary(sessions, run, step, planned, value)
+    facts = evidence['facts']
+    parameters = {fact.field: fact for fact in (
+        *_clustering_parameter_facts(sessions, run, step, planned, value),
+        *_selection_parameter_facts(sessions, run, step, planned, evidence),
+        *_explicit_user_parameter_facts(sessions, state, run, step, planned))}
+    if len(set(facts) | set(parameters)) > MAX_FIELDS:
+        raise _Unavailable('evidence_field_limit')
     authority = None if step.verification.artifact_authority is None else VerifiedArtifactAuthority(
         step.verification.artifact_authority)
     prior = tuple(dict(argument=k, run_id=r.binding.run_id, step_id=r.binding.step_id,
@@ -226,6 +421,11 @@ def _project(sessions, state, revision, output, fields, detail):
         None if authority is None else authority.record['scope'], planned.depends_on, prior)
 
     def fact(key):
+        if key in parameters:
+            parameter = parameters[key]
+            if parameter.status == 'available' and len(_bytes(parameter.value)) > MAX_FACT_BYTES:
+                return replace(parameter, status='omitted', value=None, reason='field_size_limit')
+            return parameter
         if key not in facts:
             return EvidenceFact(key, 'unavailable', reason='not_in_accepted_summary')
         pointer = f'/steps/{index}/facts/' + key.replace('~', '~0').replace('/', '~1')
@@ -233,14 +433,14 @@ def _project(sessions, state, revision, output, fields, detail):
             return EvidenceFact(key, 'omitted', source_pointer=pointer, reason='field_size_limit')
         return EvidenceFact(key, 'available', facts[key], pointer)
 
-    selected = tuple(sorted(facts)) if fields is None else fields
+    selected = tuple(sorted(set(facts) | set(parameters))) if fields is None else fields
     # Preserve the existing annotation coverage counter even for field-selected
     # access. No group lookup or annotation semantics are implemented here.
     coverage = (fact('groups_omitted'),) if step.tool_name == 'annotate_scATAC_cell_types' else ()
     result = DialogueEvidence(state.session_id, revision.revision_id, output.name, 'available',
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
-        unselected_fields=tuple(sorted(set(facts) - set(selected))))
+        unselected_fields=tuple(sorted((set(facts) | set(parameters)) - set(selected))))
     if detail is not None:
         result = replace(result, detail=_detail(sessions, step, detail),
             evidence_scope='accepted_summary_and_published_detail',

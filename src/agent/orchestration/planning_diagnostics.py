@@ -145,6 +145,7 @@ class PlanningDiagnosticContext:
         repair_used: bool | None = None,
         failover_used: bool | None = None,
         recovery_policy_fingerprint: str | None = None,
+        argument_names: tuple[str, ...] = (),
     ) -> PlanningDiagnostic:
         return PlanningDiagnostic(
             context=self,
@@ -182,6 +183,7 @@ class PlanningDiagnosticContext:
             repair_used=repair_used,
             failover_used=failover_used,
             recovery_policy_fingerprint=recovery_policy_fingerprint,
+            argument_names=argument_names,
         )
 
 
@@ -218,8 +220,13 @@ class PlanningDiagnostic:
     repair_used: bool | None = None
     failover_used: bool | None = None
     recovery_policy_fingerprint: str | None = None
+    argument_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if (type(self.argument_names) is not tuple or len(self.argument_names) > 128
+                or len(set(self.argument_names)) != len(self.argument_names)
+                or any(safe_diagnostic_identifier(name) != name for name in self.argument_names)):
+            raise ValueError('Invalid diagnostic argument identities.')
         if not isinstance(self.context, PlanningDiagnosticContext):
             raise TypeError("`context` must be a PlanningDiagnosticContext.")
         if not isinstance(self.stage, PlanningDiagnosticStage):
@@ -337,6 +344,7 @@ class PlanningDiagnostic:
             "step_index": self.step_index,
             "step_id": self.step_id,
             "argument_name": self.argument_name,
+            "argument_names": self.argument_names or None,
             "input_name": self.input_name,
             "producer_step_index": self.producer_step_index,
             "producer_step_id": self.producer_step_id,

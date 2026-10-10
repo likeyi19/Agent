@@ -573,15 +573,25 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         for key, val, pointer in values:
             # Keep internal paths/digests out of the provider's scientific facts.
             # Full exact attribution is returned separately to the application.
-            if key.endswith(('_sha256','_path')) or isinstance(val, (dict, tuple, list)) or hasattr(val, 'keys'):
+            if (key.endswith(('_sha256','_path')) or key == 'explicit_user_parameters.step_id'
+                    or isinstance(val, (dict, tuple, list)) or hasattr(val, 'keys')):
                 continue
             if isinstance(val, str) and (len(val) > 512 or val.startswith('/')): continue
             if len(claims) >= summary_limit:
                 limitations.append('Additional accepted fields were omitted from this bounded context.')
                 break
-            claims.append(ScientificClaim(f'c{len(claims)}', f't{index}', target['subject'], key, val,
-                dict(revision_id=target['revision_id'], output_locator=_serialize(view.source.output_locator),
-                     evidence_sha256=view.source.evidence_sha256, pointer=pointer)))
+            source = dict(revision_id=target['revision_id'], output_locator=_serialize(view.source.output_locator),
+                          evidence_sha256=view.source.evidence_sha256, pointer=pointer)
+            fact = next((f for f in view.facts if f.field == key.split('.', 1)[0]), None)
+            if fact is not None and fact.artifact_name == 'accepted_run_result':
+                if fact.artifact_sha256 != view.source.source_run_result_sha256:
+                    raise IntentError('unavailable_context')
+                source.update(source_run_result_sha256=fact.artifact_sha256,
+                              artifact_name=fact.artifact_name, artifact_sha256=fact.artifact_sha256)
+            elif fact is not None and fact.artifact_name == 'accepted_session_interactions':
+                source.update(session_id=session_id, artifact_name=fact.artifact_name,
+                              artifact_sha256=fact.artifact_sha256, pointer=fact.source_pointer)
+            claims.append(ScientificClaim(f'c{len(claims)}', f't{index}', target['subject'], key, val, source))
         for fact in detail_facts:
             if fact.status != 'available' or len(claims) >= claim_limit:
                 limitations.append(f'{label}: detail {fact.field} omitted ({fact.reason or "claim_limit"}).')
@@ -611,6 +621,34 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         spec = sessions._application.registry.get(view.source.tool_name)
         field = claim.field
         semantics = {}
+        parameter_labels = {'clustering_parameters.resolution': 'Leiden resolution',
+                            'clustering_parameters.random_seed': 'Leiden random seed',
+                            'clustering_resolution_origin': 'Leiden resolution origin'}
+        if field in parameter_labels:
+            semantics['label'] = parameter_labels[field]
+            semantics['label_source'] = 'reviewed_clustering_parameter_projection'
+        if field == 'clustering_resolution_origin':
+            semantics['description'] = ('This origin is established by accepted execution arguments. '
+                'An explicit execution argument alone does not establish how a historical user supplied it. '
+                'The effective value comes from the accepted clustering owner result, not current defaults.')
+            semantics['description_source'] = 'reviewed_clustering_parameter_projection'
+        if field.startswith('selection_threshold_origins.'):
+            argument_name = field.split('.', 1)[1]
+            argument = {**spec.required_arguments, **spec.optional_arguments}.get(argument_name)
+            if argument is not None:
+                semantics['label'] = argument_name + ' origin'
+                semantics['label_source'] = 'registry_argument_identity'
+                semantics['description'] = ('The origin comes from exact accepted execution argument presence. '
+                    'Omitted optional thresholds retain the existing owner disabled state. '
+                    'The effective value is the pinned owner threshold projection; this origin alone does not establish a user instruction.')
+                semantics['description_source'] = 'reviewed_selection_parameter_projection'
+        if field.startswith('explicit_user_parameters.parameters.'):
+            semantics['label'] = field.rsplit('.', 1)[1] + ' user origin'
+            semantics['label_source'] = 'registry_argument_identity'
+            semantics['description'] = ('An exact utterance-bound Session declaration, its admitted input, '
+                'and the accepted planned and resolved operation argument agree. '
+                'This records an explicit user instruction; effective scientific values remain owner evidence facts.')
+            semantics['description_source'] = 'reviewed_session_parameter_projection'
         if field in _REPORT_FIELDS.get(view.source.tool_name, ()) and field in _FIELD_LABELS:
             semantics['label'] = _FIELD_LABELS[field]
             semantics['label_source'] = 'reviewed_report_field'

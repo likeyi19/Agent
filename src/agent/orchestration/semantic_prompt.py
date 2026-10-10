@@ -336,18 +336,12 @@ def build_semantic_planning_prompt(
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
-            "Choose offered tools; compose a valid DAG.",
-            "Use offered inputs/compatible outputs; invent no values or capabilities.",
-            "Preserve lineage; resolve source choices explicitly.",
-            "Ports marked deterministic_scoped are compiler-bound from explicit "
-            "request scope; do not emit their request source.",
-            "Ports marked optional_explicit are per-step choices: select only request "
-            "sources whose scope matches that step; availability never implies "
-            "fanout; omission preserves defaults.",
-            "Required ports use a unique input unless a producer fits. Sources add "
-            "dependencies; controls only order.",
-            "Unsupported means genuine capability/input insufficiency only; otherwise "
-            "plan if the catalog can satisfy the request.",
+            'Offered tools/compatible sources; no invention; valid DAG, lineage, explicit sources.',
+            'deterministic_scoped: compiler-bound from explicit scope; do not emit source. optional_explicit: per-step scope, no fanout, defaults on omission.',
+            'Required: unique input or fitting producer; sources add dependencies; controls order.',
+            'Supported, known artifacts: plan omitting those unavailable sources only for missing required explicit user declarations/scalars; compiler diagnoses; prerequisite handling alone decides clarification.',
+            'Candidates: no execution permission; compiler/resource/preflight/admission required.',
+            'Exclude artifacts/references/checkpoints/upstream authority and incompatible lineage, ambiguous source identity or invalid DAGs. Unsupported: unavailable capabilities or explicit implementations, incompatibility or no legitimate candidate.',
         ),
         "user_request": request.prompt,
         "catalog": catalog,

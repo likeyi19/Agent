@@ -11,7 +11,7 @@ from agent.orchestration.prior_outputs import binding_for_locator, validate_bind
 from agent.orchestration.planner import PlannerError
 from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
-from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, IntentDelta, IntentError, interpret, clauses,
+from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, IntentDelta, IntentError, interpret, clauses,
                              resolve_relation, admit_delta)
 
 
@@ -41,19 +41,37 @@ def sessions_id(sessions):
 
 def _terminal(sessions, interaction, clarification):
     captured = _serialize(interaction.snapshot)
-    choices = ()
+    choices = clarification.choices
+    prerequisite = None
+    species_reason = clarification.reason in {'missing_species', 'ambiguous_species', 'unsupported_species', 'conflicting_species'}
+    parameter_reason = clarification.reason in {'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'}
+    reference = captured.get('prerequisite')
+    if reference is not None and reference['field'] == 'parameters':
+        prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
+        choices = tuple(reference['missing'])
+    elif (species_reason or parameter_reason) and reference is not None:
+        prerequisite = {k: reference[k] for k in ('origin_turn_id', 'field', 'resource_context_sha256')}
+        choices = ('human', 'mouse') if species_reason else ('Leiden resolution',)
+    elif species_reason:
+        if clarification.reason == 'missing_species':
+            # Only compiler diagnosis creates a new durable missing declaration.
+            clarification = Clarify('invalid_prerequisite')
+        else:
+            # A fresh semantic refusal owns no pending request or execution.
+            choices = ('human', 'mouse')
     if clarification.reason == 'ambiguous_revision':
         choices = tuple(k for k in ('parent', 'previous_active') if k in captured['relations'])
-    elif clarification.reason in {'ambiguous_parameter', 'missing_parameter_value'}:
+    elif clarification.reason in {'ambiguous_parameter', 'missing_parameter_value'} and prerequisite is None and not choices:
         base = captured['bases'].get(interaction.base_revision_id, {'operations': []})
         choices = tuple(dict.fromkeys(k for o in base['operations'] for k in o['parameters']))
-    if clarification.reason == 'missing_parameter_value':
+    if clarification.reason == 'missing_parameter_value' and prerequisite is None:
         from .turn_decisions import ALIASES
         mentioned = tuple(k for k in choices if any(re.search(r'\b' + re.escape(a) + r'\b',
             interaction.utterance, re.I) for a in ALIASES.get(k, ())))
         if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
-                            value_required=clarification.reason == 'missing_parameter_value')
+                            value_required=clarification.reason in {'missing_parameter_value', 'missing_species', 'ambiguous_species',
+                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'})
     admitted = dict(kind='clarify', **asdict(clarification))
     def change(state):
         turns = state.turns
@@ -61,7 +79,7 @@ def _terminal(sessions, interaction, clarification):
             turns += (SessionTurn(interaction.turn_id, interaction.base_revision_id,
                                    interaction.base_generation, None, None, None, 'clarification'),)
         return replace(state, turns=turns, interactions=tuple(
-            replace(i, status='clarification', admitted=admitted) if i.turn_id == interaction.turn_id else i
+            replace(i, status='clarification', admitted=admitted, prerequisite=prerequisite) if i.turn_id == interaction.turn_id else i
             for i in state.interactions))
     sessions._store._update(sessions_id(sessions), change)
     return TurnOutcome('clarify', 'clarification', clarification)
@@ -95,6 +113,19 @@ def _outcome(sessions, interaction, answerer=None):
         from .responses import admitted_answer
         return admitted_answer(sessions, sessions_id(sessions), admitted)
     if interaction.status == 'clarification':
+        if admitted.get('kind') == 'execute' and interaction.prerequisite is None:
+            from .dialogue_execution import parameter_scope_choices
+            state = sessions.load(sessions_id(sessions))
+            run = sessions._application.run_store.load(admitted['request_id'] + ':run')
+            if not any(error.code == 'AMBIGUOUS_PARAMETER_SCOPE' for error in run.errors):
+                raise IntentError('invalid_prerequisite')
+            return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter',
+                parameter_scope_choices(admitted, state.interactions)))
+        if interaction.prerequisite is not None and admitted.get('kind') == 'execute':
+            if interaction.prerequisite['field'] == 'parameters':
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value',
+                    tuple(interaction.prerequisite['missing']), True))
+            return TurnOutcome('clarify', 'clarification', Clarify('missing_species', ('human', 'mouse'), True))
         return TurnOutcome('clarify', 'clarification', Clarify(admitted['reason'],
             tuple(admitted.get('choices', ())), admitted.get('value_required', False)))
     state = sessions.load(sessions_id(sessions))
@@ -292,7 +323,8 @@ def execute(sessions, interaction, admitted):
 
 
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
-            answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None):
+            answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
+            epizoo_resources=()):
     # Each property access returns its own facade; no process-global turn context.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
@@ -311,9 +343,18 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if predecessor_turn_id is not None and existing.snapshot.get('dialogue', {}).get('predecessor') != predecessor_turn_id:
             raise SessionConflictError('Interaction predecessor changed.')
         if (execution_inputs is not None and existing.admitted is not None
-                and existing.admitted.get('operation') == 'plan'
-                and _serialize(execution_inputs) != _serialize(existing.admitted['inputs'])):
-            raise SessionConflictError('Execution inputs changed on retry.')
+                and (existing.admitted.get('operation') == 'plan' or 'parameter_continuation' in existing.admitted)):
+            fingerprint = existing.admitted.get('parameter_received_inputs_sha256',
+                existing.admitted.get('arguments_received_inputs_sha256', existing.admitted.get('argument_received_inputs_sha256')))
+            if existing.submission is None and fingerprint is not None:
+                matches = digest(_serialize(execution_inputs)) == fingerprint
+            else:
+                expected_inputs = ((existing.submission or {}).get('execution_inputs', {})
+                    if any(k in existing.admitted for k in ('continuation', 'argument', 'arguments'))
+                    else existing.admitted['inputs'])
+                matches = _serialize(execution_inputs) == _serialize(expected_inputs)
+            if not matches:
+                raise SessionConflictError('Execution inputs changed on retry.')
         return _outcome(sessions, existing, answerer)
     if any(t.turn_id == turn_id for t in state.turns): raise SessionConflictError('Turn identity already used.')
     generation = state.generation if expected_generation is None else expected_generation
@@ -323,6 +364,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         captured = snapshot(sessions, state, tool_names=tool_names)
         from .scientific_dialogue import capture as dialogue_capture
         captured['dialogue'] = dialogue_capture(sessions, state, captured, predecessor_turn_id, tool_names=tool_names)
+        from .dialogue_execution import capture_prerequisite
+        pending = capture_prerequisite(state.interactions, state.active_revision_id, generation,
+                                      submission, predecessor_turn_id, execution_inputs=execution_inputs)
+        if pending is not None:
+            captured['prerequisite'] = pending
     except SessionConflictError:
         raise
     except (ValueError, RuntimeError, OSError, KeyError):
@@ -342,9 +388,17 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
                                               sessions=sessions, utterance=utterance,
                                               execution_inputs=execution_inputs)
+        from .dialogue_execution import prerequisite_public
+        pending_public = prerequisite_public(interaction, state.interactions)
+        if pending_public is not None:
+            visible['dialogue']['pending_prerequisite'] = pending_public
+        from .dialogue_execution import scientific_parameters
+        visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         decision = interpret(interpreter, utterance, visible)
+        if isinstance(decision, Execute) and (decision.argument is not None or decision.arguments) and decision.operation != 'plan':
+            raise IntentError('unsupported_intent')
         if interaction.base_revision_id is None:
-            if not (isinstance(decision, Clarify)
+            if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer))
                     or isinstance(decision, Execute) and decision.operation == 'plan'
                     or isinstance(decision, Answer) and decision.intent == 'unsupported'):
                 raise IntentError('unavailable_context')
@@ -357,7 +411,19 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
-        if isinstance(decision, Answer):
+        if isinstance(decision, SpeciesAnswer):
+            from .dialogue_execution import admit_species
+            admitted = admit_species(sessions, interaction, decision, epizoo_resources)
+        elif isinstance(decision, ParameterAnswer):
+            from .dialogue_execution import admit_parameters
+            admitted = admit_parameters(sessions, interaction, decision, epizoo_resources, execution_inputs=execution_inputs)
+            if admitted['kind'] == 'clarify':
+                reference = captured['prerequisite']
+                prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
+                prerequisite.update(binding_turn_id=interaction.turn_id, missing=admitted['choices'])
+                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', tuple(admitted['choices']), True))
+        elif isinstance(decision, Answer):
             if decision.intent == 'guidance':
                 from .scientific_guidance import admit as admit_guidance
                 admitted = admit_guidance(sessions, interaction, decision.guidance)
@@ -374,10 +440,15 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             admitted = admit_candidate(sessions, interaction, decision, execution_inputs)
         elif isinstance(decision, Execute) and decision.operation == 'plan':
             from .dialogue_execution import admit as admit_execution
-            admitted = admit_execution(sessions, interaction, decision, execution_inputs)
+            admitted = admit_execution(sessions, interaction, decision, execution_inputs,
+                                       epizoo_resources=epizoo_resources)
         else:
             admitted = admit(sessions, interaction, decision)
     except Exception as exc:
+        from .local_resources import ResourceAdmissionError
+        if isinstance(exc, ResourceAdmissionError):
+            _update(sessions, turn_id, status='failed')
+            return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
         reason = exc.reason if isinstance(exc, IntentError) else 'invalid_decision'
         return _terminal(sessions, interaction, Clarify(reason))
     _update(sessions, turn_id, admitted=admitted, status='admitted')
@@ -401,6 +472,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             return TurnOutcome('navigate', 'activated')
         if admitted.get('operation') == 'plan':
             from .dialogue_execution import execute as execute_request
+            if epizoo_resources:
+                return execute_request(sessions, interaction, admitted, interpreter, epizoo_resources=epizoo_resources)
             return execute_request(sessions, interaction, admitted, interpreter)
         return execute(sessions, interaction, admitted)
     except Exception:

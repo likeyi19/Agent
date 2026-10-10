@@ -147,6 +147,14 @@ def _finite_number(value: object, name: str) -> float:
     return result
 
 
+def validate_clustering_resolution(value: object) -> float:
+    """Normalize resolution under the existing Leiden owner's public constraints."""
+    result = _finite_number(value, "resolution")
+    if result <= 0:
+        raise ValueError("`resolution` must be strictly positive.")
+    return result
+
+
 def _ensure_output_available(path: Path, *, overwrite: bool) -> None:
     if path.exists() and not overwrite:
         raise FileExistsError(
@@ -448,9 +456,7 @@ def cluster_cells(
 
     _validate_overwrite(overwrite)
     _validate_seed(random_seed)
-    normalized_resolution = _finite_number(resolution, "resolution")
-    if normalized_resolution <= 0:
-        raise ValueError("`resolution` must be strictly positive.")
+    normalized_resolution = validate_clustering_resolution(resolution)
     resolved_input = _resolve_existing_file(
         analysis_path, "analysis_path", suffix=".h5ad"
     )

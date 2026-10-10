@@ -116,6 +116,89 @@ _MESSAGES = {
 }
 
 
+class ResourceConfigurationError(ValueError):
+    """Invalid operator configuration; never returned as client diagnostics."""
+
+
+@dataclass(frozen=True)
+class QualifiedEpiZooResource:
+    """Operator-reviewed exact resources for the existing embedding owner.
+
+    These declarations record qualification and content pins. The scientific
+    owner remains responsible for checking the resources actually consumed.
+    """
+
+    resource_id: str
+    label: str
+    species: str
+    checkpoint_path: str
+    checkpoint_sha256: str
+    frequencies_sha256: str
+    filter_indices_sha256: str
+    qualification: str
+    default: bool = False
+
+    def __post_init__(self):
+        if (type(self.resource_id) is not str
+                or re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', self.resource_id) is None):
+            raise ResourceConfigurationError('EpiZoo resource identifiers must be safe lowercase identifiers.')
+        for label in (self.label, self.qualification):
+            if (type(label) is not str or not label.strip() or len(label) > 512
+                    or any(not c.isprintable() for c in label)):
+                raise ResourceConfigurationError('Display labels must be nonempty printable text.')
+        if self.species not in ('human', 'mouse') or type(self.species) is not str:
+            raise ResourceConfigurationError('EpiZoo resources require an explicit supported species.')
+        if (type(self.checkpoint_path) is not str or not self.checkpoint_path.strip()
+                or len(self.checkpoint_path) > 4096 or '\x00' in self.checkpoint_path):
+            raise ResourceConfigurationError('EpiZoo checkpoint paths must be explicitly configured.')
+        try:
+            from agent.tools.analysis.epizoo_embedding import validate_expected_resource_identity
+            validate_expected_resource_identity(self.inputs()['expected_resource_identity'])
+        except (ValueError, TypeError) as exc:
+            raise ResourceConfigurationError('EpiZoo resource content identities must be exact approved SHA-256 pins.') from exc
+        if type(self.default) is not bool:
+            raise ResourceConfigurationError('EpiZoo default designation must be boolean.')
+
+    def choice(self):
+        return dict(resource_id=self.resource_id, display_label=self.label,
+                    species=self.species, is_default=self.default)
+
+    def inputs(self):
+        return dict(checkpoint_path=self.checkpoint_path, expected_resource_identity=dict(
+            resource_id=self.resource_id, checkpoint_sha256=self.checkpoint_sha256,
+            frequencies_sha256=self.frequencies_sha256, filter_indices_sha256=self.filter_indices_sha256))
+
+
+def qualified_epizoo_resources(resources):
+    """Validate the immutable operator resource catalog without loading science."""
+    if (type(resources) is not tuple or len(resources) > 64
+            or any(not isinstance(resource, QualifiedEpiZooResource) for resource in resources)
+            or len({resource.resource_id for resource in resources}) != len(resources)):
+        raise ResourceConfigurationError('EpiZoo resources must be a bounded unique configured tuple.')
+    return resources
+
+
+def select_epizoo_resource(inputs, selected_id, resources):
+    """Resolve exact qualified selection from typed species, without science."""
+    resources = qualified_epizoo_resources(resources)
+    species = inputs.get('species')
+    if selected_id is not None:
+        selected = next((resource for resource in resources if resource.resource_id == selected_id), None)
+        if selected is None:
+            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
+        # Retain an explicit qualified choice while species is outstanding.
+        # This choice supplies no species declaration or scientific compatibility.
+        if species is not None and species != selected.species:
+            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
+    else:
+        applicable = tuple(resource for resource in resources if resource.default and resource.species == species)
+        if len(applicable) != 1:
+            # Only actual embedding admission consumes this prerequisite.
+            return inputs, ('EPIZOO_RESOURCE_REQUIRED' if not applicable else 'EPIZOO_RESOURCE_AMBIGUOUS')
+        selected = applicable[0]
+    return {**inputs, **selected.inputs()}, None
+
+
 class ResourceAdmissionError(ValueError):
     """A sanitized application failure, distinct from scientific qualification."""
     def __init__(self, code):

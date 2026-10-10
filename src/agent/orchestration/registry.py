@@ -29,6 +29,7 @@ from agent.tools import (
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
+from agent.tools.analysis.embedding_analysis import validate_clustering_resolution
 from agent.tools.analysis.epizoo_embedding import (
     EpiZooResourceIdentityError,
     validate_expected_resource_identity,
@@ -162,6 +163,7 @@ class ArgumentPlanningSemantics:
     provenance_role: PlanningProvenanceRole | None = None
     conditional_note: str | None = None
     default_when_omitted: object = inspect.Parameter.empty
+    conversational_choice: bool = False
 
     def __post_init__(self) -> None:
         _planning_text(
@@ -187,6 +189,13 @@ class ArgumentPlanningSemantics:
             raise ValueError("`accepted_artifact_kinds` must not contain duplicates.")
         if not isinstance(self.scientific_parameter, bool):
             raise TypeError("`scientific_parameter` must be a boolean.")
+        if type(self.conversational_choice) is not bool:
+            raise TypeError("`conversational_choice` must be a boolean.")
+        if self.conversational_choice and (
+            not self.scientific_parameter or self.accepted_artifact_kinds
+            or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY
+        ):
+            raise ValueError("Conversational choices require a direct scientific declaration.")
         if self.provenance_role is not None and not isinstance(
             self.provenance_role, PlanningProvenanceRole
         ):
@@ -447,6 +456,20 @@ class _EpiZooResourceIdentityArgument(ArgumentSpec):
                 validate_expected_resource_identity(value)
             except EpiZooResourceIdentityError as exc:
                 raise ToolArgumentError("EpiZoo resource identity pins are invalid.") from exc
+
+
+class _ClusteringResolutionArgument(ArgumentSpec):
+    """Delegate the existing scalar constraints to the Leiden scientific owner."""
+
+    def validate(self, name: str, value: object) -> None:
+        super().validate(name, value)
+        from agent.schemas.prior_output import PriorOutputRef
+        if isinstance(value, (StepOutputRef, PriorOutputRef)):
+            return
+        try:
+            validate_clustering_resolution(value)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ToolArgumentError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -1582,6 +1605,7 @@ def _planning_argument(
     ),
     artifacts: tuple[ArtifactSemanticKind, ...] = (),
     scientific_parameter: bool = False,
+    conversational_choice: bool = False,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
 ) -> ArgumentSpec:
@@ -1593,6 +1617,7 @@ def _planning_argument(
             source_eligibility=source,
             accepted_artifact_kinds=artifacts,
             scientific_parameter=scientific_parameter,
+            conversational_choice=conversational_choice,
             provenance_role=provenance,
             conditional_note=conditional_note,
         ),
@@ -1772,6 +1797,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("human", "mouse"),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
                 provenance=branch,
             ),
         },
@@ -2069,11 +2095,13 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
         },
         optional_arguments={
-            "resolution": _planning_argument(
+            "resolution": _ClusteringResolutionArgument(
                 (int, float),
-                "Explicit Leiden clustering resolution.",
-                source=direct,
-                scientific_parameter=True,
+                planning=ArgumentPlanningSemantics(
+                    description="Explicit Leiden clustering resolution.",
+                    source_eligibility=direct,
+                    scientific_parameter=True,
+                ),
             ),
             "random_seed": _planning_argument(
                 (int,),

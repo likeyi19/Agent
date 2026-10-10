@@ -189,6 +189,7 @@ class Interaction:
     guidance_candidates: object = None
     submission: object = None
     presentation: object = None
+    prerequisite: object = None
 
     def __post_init__(self):
         for v in (self.turn_id, self.utterance): text(v)
@@ -209,6 +210,26 @@ class Interaction:
             if len(canonical(_serialize(frozen))) > 65536:
                 raise SessionError('Interaction submission storage limit exceeded.')
             object.__setattr__(self, 'submission', frozen)
+        if self.prerequisite is not None:
+            frozen = freeze_json_mapping(self.prerequisite, 'interaction.prerequisite')
+            legacy = set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256'} and frozen['field'] == 'species'
+            parameters = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
+                                         'binding_turn_id', 'tool', 'missing'} and frozen['field'] == 'parameters')
+            if not (legacy or parameters):
+                raise SessionError('Invalid pending scientific declaration.')
+            text(frozen['origin_turn_id'])
+            sha(frozen['resource_context_sha256'])
+            if parameters:
+                text(frozen['binding_turn_id'])
+                text(frozen['tool'])
+                missing = frozen['missing']
+                if not 1 <= len(missing) <= 8 or len(set(missing)) != len(missing):
+                    raise SessionError('Invalid missing scientific parameters.')
+                for name in missing:
+                    text(name)
+            if self.status != 'clarification':
+                raise SessionError('Pending declaration requires a clarification.')
+            object.__setattr__(self, 'prerequisite', frozen)
         if self.presentation is not None:
             frozen = freeze_json_mapping(self.presentation, 'interaction.presentation')
             if (set(frozen) != {'version', 'kind', 'status', 'text', 'clarification',
@@ -295,7 +316,8 @@ class AnalysisSession:
                     or history[interaction.base_generation] != interaction.base_revision_id):
                 raise SessionError('Invalid captured interaction base.')
             captured = _serialize(interaction.snapshot)
-            if set(captured) not in ({'relations', 'bases'}, {'relations', 'bases', 'dialogue'}):
+            if set(captured) not in ({'relations', 'bases'}, {'relations', 'bases', 'dialogue'},
+                                     {'relations', 'bases', 'dialogue', 'prerequisite'}):
                 raise SessionError('Invalid interaction snapshot.')
             expected = {} if interaction.base_revision_id is None else {'current': interaction.base_revision_id}
             parent = None if interaction.base_revision_id is None else revisions[interaction.base_revision_id].parent_revision_id
@@ -311,6 +333,8 @@ class AnalysisSession:
             if 'dialogue' in captured:
                 from .scientific_dialogue import validate_capture
                 validate_capture(self, interaction, self.interactions[:interaction_index])
+            from .dialogue_execution import validate_prerequisite
+            validate_prerequisite(interaction, self.interactions[:interaction_index])
 
     def to_dict(self):
         # MappingProxyType in frozen interaction payloads is not deepcopyable.
@@ -320,7 +344,7 @@ class AnalysisSession:
                  for f in fields(self) if f.name != 'interactions'}
         if self.interactions:
             value['interactions'] = tuple({f.name: _serialize(getattr(i, f.name)) for f in fields(i)
-                if f.name not in {'guidance_candidates', 'submission', 'presentation'}
+                if f.name not in {'guidance_candidates', 'submission', 'presentation', 'prerequisite'}
                 or getattr(i, f.name) is not None} for i in self.interactions)
         for turn in value['turns']:
             if not turn['retained_outputs']:
@@ -342,7 +366,7 @@ class AnalysisSession:
                 data = dict(data, retained_outputs=[])
             if model is Interaction and type(data) is dict:
                 data = dict(data)
-                for key in ('guidance_candidates', 'submission', 'presentation'):
+                for key in ('guidance_candidates', 'submission', 'presentation', 'prerequisite'):
                     data.setdefault(key, None)
             if type(data) is not dict or set(data) != set(model.__dataclass_fields__):
                 raise SessionError('Invalid session record shape.')

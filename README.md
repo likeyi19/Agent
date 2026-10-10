@@ -1003,21 +1003,56 @@ unchanged; inspection does not generate a new downloadable scientific dataset.
 See the [UA3.1 implementation and validation record](docs/ua3.1-web-upload.md)
 for transfer/retry bounds and multi-turn acceptance.
 
-For EpiZoo analysis, select an operator-configured H5AD companion containing an
-explicit `human` or `mouse` declaration, and an explicitly selected reviewed
-EpiZoo resource or its uniquely applicable approved default. The original
-joint human/mouse EpiZoo checkpoint is the approved foundation; the reviewed
-mouse resource configuration qualifies for a default. Ordinary embedding uses
-these weights without training. The ordinary Interpreter/Planner can select
+For EpiZoo analysis, state the selected dataset's species in the initial request,
+such as “Analyze these human scATAC-seq cells with EpiZoo, construct their neighbor
+graph, perform Leiden clustering, and compute UMAP.” The Interpreter supplies the
+explicit declaration through the shared typed binder; a model-support statement
+alone does not declare the dataset's species. An operator-configured H5AD
+companion or the missing-species answer in chat remains supported. For example,
+request “Run EpiZoo, cluster the cells, and generate UMAP,” then reply “Mouse”
+when Agent asks for species. Agent retains the original
+registered H5AD, objective and valid companions across refresh/restart and
+continues through the ordinary Planner and scientific checks. Ambiguous answers
+remain pending; changing the dataset, objective or revision cannot redirect the
+old request. The selected reviewed EpiZoo resource or its uniquely applicable
+approved default must still exist. The original
+joint human/mouse EpiZoo checkpoint is the approved foundation; reviewed original
+human and mouse auxiliary tuples use those same weights without training. Each
+deployment must explicitly admit the exact species resource tuple through
+`epizoo_resources` and designate its unique applicable default. Files on disk
+alone do not activate that mapping. The ordinary Interpreter/Planner can select
 embedding directly or the existing inspection, embedding, neighbors, Leiden and
 UMAP chain. Actual source consumption and checkpoint/auxiliary resource pins
 are checked before accepted publication; numerical defaults remain the owners'
-existing values. Typed companion parameters supply species and explicit numeric
-settings; entering those values only in prose does not capture new execution
-arguments at this stage. See the
+existing values. Leiden resolution can also be supplied naturally: “Run EpiZoo,
+perform Leiden clustering at resolution 0.7, and generate UMAP.” Agent validates
+that one operation-scoped argument and retains it if the missing species must
+first be answered in chat. Omitting resolution keeps the clustering owner's
+default of 1.0; other omitted neighbor and UMAP settings keep their owner
+defaults. Invalid values or conflicting text/typed declarations require
+correction. Accepted evidence and parameter follow-ups expose the actual
+resolution and distinguish an explicit execution argument from an omitted
+owner default, without inferring historical values from today's defaults.
+The shared conversational binder now accepts bounded, canonical registered
+scientific scalar declarations through the same Interpreter/Planner path. For a
+first Cell Selection with verified QC supplied, the existing compiler identifies
+the missing minimum QC-record depth and minimum TSS enrichment. Answer both in
+chat, or supply one and then the remaining value; valid values and the original
+task survive refresh/restart. Optional flank evidence stays disabled when omitted.
+No 1000/4/20 threshold policy is inferred. Corrections remain scoped to the pending
+operation, and accepted evidence records effective thresholds, owner defaults and
+exact user-declaration provenance. Unknown identities and ambiguous consumers
+fail closed; this does not qualify every registered parameter or live-provider
+language accuracy.
+See the [UA3.5.3 unified binding record](docs/ua3.5.3-unified-scientific-input-binding.md),
+the [UA3.5.2 parameter record](docs/ua3.5.2-leiden-resolution-defaults.md),
+the [UA3.5.1 handoff record](docs/ua3.5.1-conversational-prerequisite-handoff.md), and the
 [UA3.2.2 composition and acceptance record](docs/ua3.2.2-h5ad-composition.md)
 for the approved mouse default example, configuration procedure, provenance and
 closeout status. Configuration activation remains operator-owned.
+The [UA3.5 closeout](docs/ua3.5-closeout.md) records the accepted human workflow,
+initial-declaration admission and non-secret human deployment requirements,
+with their distinct scientific and language qualification limits.
 
 General task-specific fine-tuning is future work and must publish a separate
 qualified derived model. Existing `adapt_epizoo_species` retains its qualified

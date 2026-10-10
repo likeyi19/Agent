@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.application.local_resources import LocalResourceAdmission, ResourceAdmissionError
+from agent.application.local_resources import (LocalResourceAdmission, ResourceAdmissionError,
+    QualifiedEpiZooResource, ResourceConfigurationError, qualified_epizoo_resources, select_epizoo_resource)
 from agent.orchestration import build_default_tool_registry
 from agent.orchestration.llm_planner import LLMPlanner, PlanningWireMode
 from agent.orchestration.semantic_compiler import (
@@ -196,3 +197,66 @@ def test_first_acceptance_and_unfinished_recovery_check_actual_consumption(regis
     with pytest.raises(ResourceAdmissionError) as error:
         owner.validate_result(submission(binding), [step])
     assert error.value.code == 'H5AD_SOURCE_MISMATCH'
+
+
+def reviewed_resource(**changes):
+    values = dict(resource_id='reviewed-model', label='Reviewed mouse model', species='mouse',
+        checkpoint_path='/operator/checkpoint.pth', checkpoint_sha256='a' * 64,
+        frequencies_sha256='b' * 64, filter_indices_sha256='c' * 64,
+        qualification='Previously qualified fixture resources.', default=True)
+    return QualifiedEpiZooResource(**(values | changes))
+
+
+def test_application_resource_policy_resolves_completed_declaration_and_preserves_companions(registered):
+    owner, record, _ = registered
+    resource = reviewed_resource()
+    values, error = select_epizoo_resource({'species': 'mouse', 'resolution': 0.7}, None, (resource,))
+    assert error is None
+    binding = owner.compose_h5ad(record.resource_id, values)
+    assert binding.resource_id == record.resource_id and binding.record_sha256 == record.record_sha256
+    assert binding.execution_inputs['resolution'] == 0.7
+    assert binding.execution_inputs['expected_resource_identity'] == pins()
+    assert binding.execution_inputs['input_path'] == record.source_path
+
+
+@pytest.mark.parametrize('species,resources,code', [
+    ('human', (reviewed_resource(),), 'EPIZOO_RESOURCE_REQUIRED'),
+    ('mouse', (), 'EPIZOO_RESOURCE_REQUIRED'),
+    ('mouse', (reviewed_resource(), reviewed_resource(resource_id='second')), 'EPIZOO_RESOURCE_AMBIGUOUS'),
+])
+def test_application_resource_policy_never_falls_back_across_species_or_ambiguity(species, resources, code):
+    original = {'species': species, 'resolution': 0.7}
+    values, error = select_epizoo_resource(original, None, resources)
+    assert values == original and error == code
+    assert 'checkpoint_path' not in values
+
+
+@pytest.mark.parametrize('values,selected,code', [
+    ({'species': 'human'}, 'reviewed-model', 'EPIZOO_RESOURCE_SELECTION_INVALID'),
+    ({'species': 'mouse'}, 'unavailable', 'EPIZOO_RESOURCE_SELECTION_INVALID'),
+])
+def test_application_resource_policy_rejects_invalid_explicit_selection(values, selected, code):
+    with pytest.raises(ResourceAdmissionError) as error:
+        select_epizoo_resource(values, selected, (reviewed_resource(),))
+    assert error.value.code == code
+
+
+def test_explicit_qualified_choice_preserves_pins_without_declaring_species(registered):
+    owner, record, _ = registered
+    selected = reviewed_resource(default=False)
+    values, error = select_epizoo_resource({'resolution': 0.7}, selected.resource_id, (selected,))
+    assert error is None and 'species' not in values
+    assert values == {'resolution': 0.7} | selected.inputs()
+    binding = owner.compose_h5ad(record.resource_id, values)
+    owner.validate_plan(submission(binding), plan(PlanStep('inspect', 'inspect_scATAC',
+        dict(path=record.source_path))))
+    with pytest.raises(ResourceAdmissionError) as failed:
+        owner.validate_plan(submission(binding), plan(PlanStep('embed', 'epizoo_embed_cells',
+            dict(input_path=record.source_path, species='mouse') | selected.inputs())))
+    assert failed.value.code == 'H5AD_SPECIES_REQUIRED'
+
+
+@pytest.mark.parametrize('resources', [[], ('untrusted',), (reviewed_resource(), reviewed_resource())])
+def test_application_resource_catalog_is_typed_bounded_and_unique(resources):
+    with pytest.raises(ResourceConfigurationError):
+        qualified_epizoo_resources(resources)

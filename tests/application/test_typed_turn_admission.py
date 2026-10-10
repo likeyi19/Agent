@@ -53,7 +53,7 @@ def stop_before_planning(app, monkeypatch):
     monkeypatch.setattr(semantic_compiler, 'compile_semantic_plan', forbidden)
     monkeypatch.setattr(PlanExecutor, 'preflight', forbidden)
 
-    def stop(sessions, interaction, admitted, model):
+    def stop(sessions, interaction, admitted, model, *, epizoo_resources=()):
         reached.append((interaction, _serialize(admitted)))
         return TurnOutcome('execute', 'admitted')
 

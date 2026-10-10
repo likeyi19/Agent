@@ -258,6 +258,20 @@ def test_invalid_resolution_is_rejected(
         )
 
 
+@pytest.mark.parametrize('value', [0, -0.7, float('nan'), float('inf'), True, '0.7'])
+def test_shared_resolution_validation_has_the_same_owner_constraints(value):
+    from agent.tools.analysis.embedding_analysis import validate_clustering_resolution
+    with pytest.raises((TypeError, ValueError), match='resolution'):
+        validate_clustering_resolution(value)
+
+
+@pytest.mark.parametrize('value', [0.7, 1, 2.5])
+def test_shared_resolution_validation_normalizes_valid_owner_values(value):
+    from agent.tools.analysis.embedding_analysis import validate_clustering_resolution
+    result = validate_clustering_resolution(value)
+    assert type(result) is float and result == float(value)
+
+
 @pytest.mark.parametrize(
     ("min_dist", "spread"),
     [(-0.1, 1.0), (0.5, 0.0), (2.0, 1.0), (float("nan"), 1.0)],

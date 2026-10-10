@@ -448,8 +448,8 @@ def test_paid_supported_inspection_smoke_reuses_frozen_contract_with_zero_scienc
     assert not any(attempt["safety"].values())
     assert len(client.completion_calls) == len(checks) == 1
     assert checks[0]["validated_before_sdk"] is True
-    assert checks[0]["prompt_fingerprint"] == "b6fe597be0c48d2ecab5a86e2bad5d8da1ffd8eeaf2822528d9934290ce5af32"
-    assert checks[0]["schema_fingerprint"] == "c41aa0871d8ab90752a81f4e9b1fed0b4fc9e63f8e1a7b11e55179daa4443286"
+    assert checks[0]["prompt_fingerprint"] == "7a4d10f3e530a43408c8a3d5f19caae11cad918ae976bb11172876dab581663f"
+    assert checks[0]["schema_fingerprint"] == "795eb53cedd8983ac93d93ea5ca9fc342f92df010d5c5a21b8c29310fc7eeafb"
 
 
 def spending_request(content="Frozen prompt."):

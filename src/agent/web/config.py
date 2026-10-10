@@ -15,19 +15,20 @@ from types import MappingProxyType
 
 from agent.application import InteractiveAgentApplication
 from agent.application.interactive import _inputs
+from agent.application.local_resources import QualifiedEpiZooResource, ResourceConfigurationError
 from agent.application.workspace import ManagedWorkspace, ApplicationWorkspaceError
 from agent.orchestration import PlanningModelProfile
 from agent.providers import PlanningModelFactoryRegistry, build_default_planning_model_factory_registry
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
-from agent.tools.analysis.epizoo_embedding import validate_expected_resource_identity
 
 
 _CONFIGURATION_BYTES = 1_048_576
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
-class WebConfigurationError(ValueError):
-    """Invalid operator configuration; never returned as browser diagnostics."""
+# Preserve the established import and exception contract while resource
+# declarations are reusable by the transport-independent application.
+WebConfigurationError = ResourceConfigurationError
 
 
 def _label(value):
@@ -116,55 +117,6 @@ class ScientificInputSet:
     def inputs(self):
         """Return a fresh mapping suitable for the existing submit contract."""
         return _serialize(self.execution_inputs)
-
-
-@dataclass(frozen=True)
-class QualifiedEpiZooResource:
-    """An operator-reviewed exact resource choice for the existing embedding owner.
-
-    Configuration records a review attribution and content pins; it does not
-    qualify unfamiliar files or select auxiliary directories on the operator's
-    behalf. The scientific owner checks these pins against consumed resources.
-    """
-
-    resource_id: str
-    label: str
-    species: str
-    checkpoint_path: str
-    checkpoint_sha256: str
-    frequencies_sha256: str
-    filter_indices_sha256: str
-    qualification: str
-    default: bool = False
-
-    def __post_init__(self):
-        if type(self.resource_id) is not str or not _IDENTIFIER.fullmatch(self.resource_id):
-            raise WebConfigurationError("EpiZoo resource identifiers must be safe lowercase identifiers.")
-        _label(self.label)
-        _label(self.qualification)
-        if self.species not in ("human", "mouse") or type(self.species) is not str:
-            raise WebConfigurationError("EpiZoo resources require an explicit supported species.")
-        if (type(self.checkpoint_path) is not str or not self.checkpoint_path.strip()
-                or len(self.checkpoint_path) > 4096 or "\x00" in self.checkpoint_path):
-            raise WebConfigurationError("EpiZoo checkpoint paths must be explicitly configured.")
-        try:
-            validate_expected_resource_identity(self.inputs()['expected_resource_identity'])
-        except (ValueError, TypeError) as exc:
-            raise WebConfigurationError("EpiZoo resource content identities must be exact approved SHA-256 pins.") from exc
-        if type(self.default) is not bool:
-            raise WebConfigurationError("EpiZoo default designation must be boolean.")
-
-    def choice(self):
-        return {"resource_id": self.resource_id, "display_label": self.label,
-                "species": self.species, "is_default": self.default}
-
-    def inputs(self):
-        return {"checkpoint_path": self.checkpoint_path, "expected_resource_identity": {
-            "resource_id": self.resource_id,
-            "checkpoint_sha256": self.checkpoint_sha256,
-            "frequencies_sha256": self.frequencies_sha256,
-            "filter_indices_sha256": self.filter_indices_sha256,
-        }}
 
 
 @dataclass(frozen=True)
@@ -340,4 +292,5 @@ def build_interactive_application(configuration, *, planning_model_factory_regis
     return InteractiveAgentApplication(configuration.workspace_root,
         model_profiles=configuration.model_profiles, default_profile_id=configuration.default_profile_id,
         display_labels=configuration.display_labels, planning_model_factory_registry=factory,
-        registry=registry, executor=executor, approved_source_roots=approved_source_roots)
+        registry=registry, executor=executor, approved_source_roots=approved_source_roots,
+        epizoo_resources=configuration.epizoo_resources)

@@ -20,7 +20,8 @@ from starlette.exceptions import HTTPException
 
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
-from agent.application.local_resources import RegisteredInput, RegisteredInputCollection, ResourceAdmissionError
+from agent.application.local_resources import (RegisteredInput, RegisteredInputCollection, ResourceAdmissionError,
+    select_epizoo_resource, qualified_epizoo_resources)
 from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
@@ -117,9 +118,10 @@ class _LocalWorkers:
     all scientific checkpoints remain exclusively application-owned.
     """
 
-    def __init__(self, application, max_workers):
+    def __init__(self, application, max_workers, epizoo_resources=()):
         self.application = application
         self.max_workers = max_workers
+        self.epizoo_resources = qualified_epizoo_resources(epizoo_resources)
         self.pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='agent-turn')
         self.lock = Lock()
         self.receipts = OrderedDict()
@@ -129,6 +131,7 @@ class _LocalWorkers:
         try:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
+                epizoo_resources=self.epizoo_resources,
                 predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
@@ -150,6 +153,7 @@ class _LocalWorkers:
         # Domain validation and normalization belong to M18.2, not HTTP models.
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
+            epizoo_resources=self.epizoo_resources,
             predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
@@ -239,26 +243,8 @@ class _ScientificFileResponse(StreamingResponse):
             self.snapshot.close()
 
 
-def _epizoo_selection(inputs, selected_id, resources):
-    """Resolve exact configured selection from typed context, without science."""
-    species = inputs.get('species')
-    if selected_id is not None:
-        selected = next((r for r in resources if r.resource_id == selected_id), None)
-        if selected is None:
-            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
-        if species is None:
-            raise ResourceAdmissionError('H5AD_SPECIES_REQUIRED')
-        if species != selected.species:
-            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
-    else:
-        applicable = tuple(r for r in resources if r.default and r.species == species)
-        if len(applicable) != 1:
-            # This prerequisite is captured for admission of an actual embedding
-            # operation. Inspection remains usable with missing model resources.
-            return inputs, ('EPIZOO_RESOURCE_REQUIRED' if not applicable
-                            else 'EPIZOO_RESOURCE_AMBIGUOUS')
-        selected = applicable[0]
-    return {**inputs, **selected.inputs()}, None
+# Retain the accepted Web helper import while sharing the application policy.
+_epizoo_selection = select_epizoo_resource
 
 
 def _fragments_selection(selected, input_sets):
@@ -329,7 +315,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             or any(not isinstance(r, QualifiedEpiZooResource) for r in epizoo_resources)
             or len({r.resource_id for r in epizoo_resources}) != len(epizoo_resources)):
         raise ValueError('EpiZoo resources must be a bounded unique configured tuple.')
-    workers = _LocalWorkers(application, max_workers)
+    workers = _LocalWorkers(application, max_workers, epizoo_resources)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -591,7 +577,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if (selected_source.input_type != 'h5ad'
                     or input_set is not None and not input_set.h5ad_companion):
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-            companion_inputs, selection_error = None, None
+            companion_inputs, selection_error = {}, None
             if input_set is not None or body.epizoo_resource_id is not None:
                 companion_inputs, selection_error = _epizoo_selection(
                     {} if input_set is None else input_set.inputs(), body.epizoo_resource_id,

@@ -975,6 +975,7 @@ def compile_semantic_plan(
                     "step_id": step.step_id,
                     "tool_name": step.tool_name,
                     "target_port": missing_ports[0] if missing_ports else None,
+                    "argument_names": missing,
                 },
             )
         try:

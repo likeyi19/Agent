@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -73,6 +75,25 @@ class ExecutionProgress:
 
 ExecutionCheckpoint = Callable[[ExecutionProgress], None]
 CancellationCheck = Callable[[], str | None]
+ExecutionInputGuard = Callable[[str, Mapping[str, object]], None]
+_execution_input_guard: ContextVar[ExecutionInputGuard | None] = ContextVar(
+    'agent_execution_input_guard', default=None)
+
+
+@contextmanager
+def execution_input_guard(guard: ExecutionInputGuard | None):
+    """Repository-owned input admission scoped to one application operation.
+
+    The callback is never a plan/provider field or persistent scientific proof.
+    Registered scientific owners retain their content and source-snapshot checks.
+    """
+    if guard is not None and not callable(guard):
+        raise TypeError('Execution input guard must be callable or None.')
+    token = _execution_input_guard.set(guard)
+    try:
+        yield
+    finally:
+        _execution_input_guard.reset(token)
 
 
 class _TraceRecorder:
@@ -976,6 +997,9 @@ class PlanExecutor:
                 try:
                     with cancellation_scope(lambda: observe_cancellation(
                             'during_registered_tool',step_id=step.step_id,attempt=attempt)):
+                        input_guard = _execution_input_guard.get()
+                        if input_guard is not None:
+                            input_guard(step.tool_name, attempt_arguments)
                         from agent.tools.data.authority_context import current
                         from agent.tools.scientific_authority import supports_tool, tool_kind
                         from .durable_tool_recovery import execution_identity
@@ -987,6 +1011,8 @@ class PlanExecutor:
                                 execution_identity(durable_run_id, plan, step, spec))
                         else:
                             returned_result = spec.function(**attempt_arguments)
+                        if input_guard is not None:
+                            input_guard(step.tool_name, attempt_arguments)
                 except ToolWorkCancelled:
                     if not cancelled:
                         raise RuntimeError('Tool cancellation requires observed run cancellation.')

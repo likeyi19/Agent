@@ -4,6 +4,8 @@
 // are reconstructed from Agent whenever a session is opened or a turn completes.
 const STORAGE_KEY = "agent.web.presentation.v1";
 const RESOURCE_STORAGE_KEY = "agent.web.selected-resource.v1";
+const MULTI_RESOURCE_STORAGE_KEY = "agent.web.selected-resources.v1";
+const MAX_SELECTED_RESOURCES = 8;
 const POLL_INTERVAL_MS = 2000;
 const PRESENTATION_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATES = new Set([
@@ -25,6 +27,7 @@ const state = {
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   resources: [], resourcesEnabled: false, upload: null,
+  selectedResourceIds: [],
   fastqMembers: [], fastqCompletion: null,
   inputSets: [], epizooResources: [],
   scientificFiles: new Map(),
@@ -814,6 +817,9 @@ function updateControls() {
   const uploading = Boolean(state.upload && state.upload.status === "uploading")
     || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("resource-choice").disabled = !state.resourcesEnabled || !state.resources.length || uploading;
+  element("add-scientific-input").disabled = !element("resource-choice").value || uploading
+    || selectedResourceIds().length >= MAX_SELECTED_RESOURCES;
+  document.querySelectorAll(".remove-scientific-input").forEach((button) => { button.disabled = uploading; });
   element("upload-file").disabled = !state.resourcesEnabled || uploading;
   element("upload-type").disabled = !state.resourcesEnabled || uploading;
   element("upload-index").disabled = !state.resourcesEnabled || uploading || !state.upload;
@@ -1027,9 +1033,10 @@ function modelDescription() {
 function inputContext() {
   // Repeat the operator-admitted display label without deriving scientific context.
   const choice = element("input-choice").selectedOptions[0];
-  const resource = element("resource-choice").selectedOptions[0];
+  const resources = selectedResourceIds().map((id) => state.resources.find((choice) => choice.resource_id === id));
+  const multiple = resources.length > 1;
   const epizoo = element("epizoo-resource-choice").selectedOptions[0];
-  const labels = [resource && resource.value ? resource.textContent : "",
+  const labels = [...resources.map((resource, index) => `${multiple ? `${index + 1}. ` : ""}${resource.label}`),
     choice && choice.value ? choice.textContent : "",
     selectedResourceType() === "h5ad" && epizoo && epizoo.value ? epizoo.textContent : ""].filter(Boolean);
   const label = labels.length ? labels.join(" · ") : "none selected";
@@ -1049,21 +1056,55 @@ function inputContext() {
     ? "Choose an approved fragments declaration set with a reference, source profile and namespace. Missing prerequisites are reported when you send the request."
     : bam ? "Inspect the BAM without a producer context. To prepare fragments, choose an approved paired-ATAC source context and compatible reference."
       : fastq ? "Inspect the completed FASTQ library without producer resources. Fragment production requires an approved library context, barcode policy and compatible reference/runtime."
-        : "Choose configured inputs or declarations for an uploaded source.";
+        : multiple ? "Describe each selected input's scientific role in your message. Configured inputs may supply approved companion values."
+          : "Choose configured inputs or declarations for an uploaded source.";
   for (const option of element("input-choice").options) {
     const configured = state.inputSets.find((item) => item.input_set_id === option.value);
-    option.disabled = Boolean(option.value) && (bam && !(configured && configured.bam_companion === true)
+    option.disabled = Boolean(option.value) && (multiple && configured && (configured.h5ad_companion === true
+      || configured.fragments_companion === true || configured.bam_companion === true || configured.fastq_companion === true)
+      || bam && !(configured && configured.bam_companion === true)
       || fastq && !(configured && configured.fastq_companion === true));
     option.hidden = option.disabled;
   }
 }
 
+function selectedResourceIds() {
+  const current = element("resource-choice").value;
+  return [...state.selectedResourceIds, ...(current && !state.selectedResourceIds.includes(current) ? [current] : [])];
+}
+
+function renderSelectedResources() {
+  const list = element("selected-scientific-inputs");
+  const ids = selectedResourceIds();
+  list.hidden = !ids.length;
+  list.replaceChildren(...ids.map((id) => {
+    const resource = state.resources.find((choice) => choice.resource_id === id);
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = resource.label;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary remove-scientific-input";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${resource.label} from selected inputs`);
+    remove.addEventListener("click", () => {
+      state.selectedResourceIds = state.selectedResourceIds.filter((value) => value !== id);
+      if (element("resource-choice").value === id) element("resource-choice").value = "";
+      renderResources(element("resource-choice").value);
+    });
+    item.append(label, remove);
+    return item;
+  }));
+}
+
 function selectedResourceType() {
-  const resource = state.resources.find((choice) => choice.resource_id === element("resource-choice").value);
+  if (selectedResourceIds().length > 1) return null;
+  const resource = state.resources.find((choice) => choice.resource_id === selectedResourceIds()[0]);
   return resource ? resource.input_type : state.upload ? state.upload.inputType : null;
 }
 
 function selectedCompanion(inputType = selectedResourceType()) {
+  if (selectedResourceIds().length > 1) return false;
   return state.inputSets.some((choice) => choice.input_set_id === element("input-choice").value &&
     (inputType === "external_fragments" ? choice.fragments_companion === true :
       inputType === "h5ad" ? choice.h5ad_companion === true :
@@ -1075,6 +1116,7 @@ function selectedCompanion(inputType = selectedResourceType()) {
 function saveResourceSelection() {
   // This convenience is rechecked against the server catalog and sent per turn.
   try { localStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value); } catch (_) {}
+  try { localStorage.setItem(MULTI_RESOURCE_STORAGE_KEY, JSON.stringify(selectedResourceIds())); } catch (_) {}
 }
 
 function uploadStatus(text, failed = false) {
@@ -1091,12 +1133,14 @@ function renderResources(selectedId = "") {
     option.value = choice.resource_id;
     const role = choice.input_type === "external_fragments" ? `Fragments${choice.has_source_index === true ? " + TBI" : ""}` : choice.input_type === "bam" ? "BAM" : choice.input_type === "fastq" ? "FASTQ library" : "H5AD";
     option.textContent = `${choice.label} · ${role} · registered`;
+    option.disabled = state.selectedResourceIds.includes(choice.resource_id);
     return option;
   }));
   if (state.resources.some((choice) => choice.resource_id === selectedId)) {
     element("resource-choice").value = selectedId;
-    if (!selectedCompanion()) element("input-choice").value = "";
   }
+  if (selectedResourceIds().length === 1 && !selectedCompanion()) element("input-choice").value = "";
+  renderSelectedResources();
   saveResourceSelection();
   saveConveniences();
   inputContext();
@@ -1105,19 +1149,32 @@ function renderResources(selectedId = "") {
 
 async function loadResources() {
   let selectedId = "";
+  let savedIds = [];
   try { selectedId = localStorage.getItem(RESOURCE_STORAGE_KEY) || ""; } catch (_) {}
+  try {
+    const saved = JSON.parse(localStorage.getItem(MULTI_RESOURCE_STORAGE_KEY) || "[]");
+    if (Array.isArray(saved) && saved.length <= MAX_SELECTED_RESOURCES
+        && new Set(saved).size === saved.length && saved.every((id) => typeof id === "string")) savedIds = saved;
+  } catch (_) {}
   try {
     const catalog = await api("/resources");
     state.resourcesEnabled = catalog.enabled === true;
     state.resources = state.resourcesEnabled ? catalog.choices : [];
     state.fastqMembers = state.resourcesEnabled && Array.isArray(catalog.fastq_members) ? catalog.fastq_members : [];
+    savedIds = savedIds.filter((id) => state.resources.some((choice) => choice.resource_id === id));
+    if (savedIds.length) {
+      selectedId = savedIds[savedIds.length - 1];
+      state.selectedResourceIds = savedIds.slice(0, -1);
+    }
     renderFastqMembers();
     const selected = state.resources.find((choice) => choice.resource_id === selectedId);
-    renderResources(element("input-choice").value && !selectedCompanion(selected && selected.input_type) ? "" : selectedId);
+    renderResources(element("input-choice").value && !state.selectedResourceIds.length
+      && !selectedCompanion(selected && selected.input_type) ? "" : selectedId);
     uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "Scientific attachments are unavailable on this server.");
   } catch (error) {
     state.resourcesEnabled = false;
     state.resources = [];
+    state.selectedResourceIds = [];
     state.fastqMembers = [];
     renderFastqMembers();
     renderResources();
@@ -1329,12 +1386,25 @@ element("upload-file-button").addEventListener("click", uploadSelectedFile);
 element("clear-upload").addEventListener("click", () => clearPendingUpload());
 element("resource-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
-  if (element("resource-choice").value && !selectedCompanion()) element("input-choice").value = "";
+  if (element("resource-choice").value && !selectedCompanion()
+      && (selectedResourceIds().length === 1 || state.inputSets.some((choice) =>
+        choice.input_set_id === element("input-choice").value && (choice.h5ad_companion === true
+          || choice.fragments_companion === true || choice.bam_companion === true || choice.fastq_companion === true)))) {
+    element("input-choice").value = "";
+  }
   if (selectedResourceType() !== "h5ad") element("epizoo-resource-choice").value = "";
+  renderSelectedResources();
   saveResourceSelection();
   saveConveniences();
   inputContext();
   updateControls();
+});
+element("add-scientific-input").addEventListener("click", () => {
+  const current = element("resource-choice").value;
+  if (!current || selectedResourceIds().length >= MAX_SELECTED_RESOURCES) return;
+  state.selectedResourceIds = selectedResourceIds();
+  element("resource-choice").value = "";
+  renderResources();
 });
 
 element("new-session").addEventListener("click", async () => {
@@ -1375,7 +1445,13 @@ function submitRequest(utterance, predecessorTurnId = null) {
     utterance, profile_id: element("model-choice").value,
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
-  if (element("resource-choice").value) {
+  const selectedIds = selectedResourceIds();
+  if (selectedIds.length > 1) {
+    body.resource_ids = Object.freeze(selectedIds);
+    if (element("input-choice").value) body.input_set_id = element("input-choice").value;
+  }
+  else if (selectedIds.length) {
+    if (!element("resource-choice").value) element("resource-choice").value = selectedIds[0];
     body.resource_id = element("resource-choice").value;
     if (selectedCompanion()) body.input_set_id = element("input-choice").value;
     if (selectedResourceType() === "h5ad" && element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
@@ -1430,9 +1506,13 @@ element("model-choice").addEventListener("change", modelDescription);
 element("input-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
   if (element("input-choice").value && !selectedCompanion()) {
-    element("resource-choice").value = "";
+    if (selectedResourceIds().length < 2) {
+      state.selectedResourceIds = [];
+      element("resource-choice").value = "";
+    }
     element("epizoo-resource-choice").value = "";
   }
+  renderSelectedResources();
   saveResourceSelection();
   saveConveniences();
   inputContext();

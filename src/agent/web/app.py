@@ -15,12 +15,12 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator, model_validator
 from starlette.exceptions import HTTPException
 
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
-from agent.application.local_resources import (RegisteredInput, RegisteredInputCollection, ResourceAdmissionError,
+from agent.application.local_resources import (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup, ResourceAdmissionError,
     select_epizoo_resource, qualified_epizoo_resources)
 from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
@@ -58,6 +58,7 @@ class SubmitTurn(_Body):
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
+    resource_ids: list[StrictStr] | None = Field(default=None, min_length=2, max_length=8)
     epizoo_resource_id: StrictStr | None = Field(default=None, min_length=1, max_length=64,
                                                pattern=r'^[a-z][a-z0-9_-]*$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
@@ -66,6 +67,23 @@ class SubmitTurn(_Body):
     @classmethod
     def route_identity(cls, value):
         return _route_identity(value)
+
+    @field_validator('resource_ids')
+    @classmethod
+    def selected_resources(cls, value):
+        if value is not None:
+            if (len(set(value)) != len(value)
+                    or any(len(resource) != 70 or not resource.startswith('local-')
+                           or any(character not in '0123456789abcdef' for character in resource[6:])
+                           for resource in value)):
+                raise ValueError('Select distinct registered resource identifiers.')
+        return value
+
+    @model_validator(mode='after')
+    def source_selection(self):
+        if self.resource_id is not None and self.resource_ids is not None:
+            raise ValueError('Use one registered source selection.')
+        return self
 
 
 class ActivateRevision(_Body):
@@ -146,7 +164,7 @@ class _LocalWorkers:
 
     @staticmethod
     def _input_arguments(inputs):
-        return ({'registered_input': inputs} if isinstance(inputs, (RegisteredInput, RegisteredInputCollection))
+        return ({'registered_input': inputs} if isinstance(inputs, (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup))
                 else {'execution_inputs': inputs})
 
     def submit(self, session_id, payload, inputs):
@@ -547,7 +565,14 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             input_set = inputs_by_id.get(body.input_set_id)
             if input_set is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-        if body.resource_id is not None:
+        if body.resource_ids is not None:
+            if (uploads is None or body.epizoo_resource_id is not None
+                    or input_set is not None and any((input_set.h5ad_companion,
+                        input_set.fragments_companion, input_set.bam_companion, input_set.fastq_companion))):
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+            inputs = uploads.resources.compose_group(body.resource_ids,
+                scientific_inputs=None if input_set is None else input_set.inputs(), verify_source=False)
+        elif body.resource_id is not None:
             if uploads is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
             selected_source = uploads.resources.load(body.resource_id)

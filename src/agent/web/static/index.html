@@ -73,6 +73,9 @@
         <div class="attachment-controls" aria-label="Scientific attachment">
           <label for="resource-choice">Uploaded scientific input</label>
           <select id="resource-choice" disabled><option value="">No uploaded input selected</option></select>
+          <button id="add-scientific-input" class="secondary" type="button" disabled>Add another input</button>
+          <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>
+          <p class="muted small">Select inputs in order, then describe their roles in your message. Selecting inputs does not start an analysis.</p>
           <label for="input-choice">Scientific inputs and declarations</label>
           <select id="input-choice" disabled><option value="">No structured inputs</option></select>
           <p id="input-choice-help" class="muted small">Choose configured inputs or declarations for an uploaded source.</p>

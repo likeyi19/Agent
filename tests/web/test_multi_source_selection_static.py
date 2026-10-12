@@ -1,0 +1,48 @@
+"""Shared composer selection remains separate from biological role admission."""
+from test_static import HierarchyPage, STATIC
+from test_upload_static import section, source
+
+
+def test_ordered_input_controls_are_small_and_stay_in_the_chat_composer():
+    page = HierarchyPage((STATIC / 'index.html').read_text())
+    tags = {attrs['id']: (tag, attrs) for tag, attrs in page.tags if 'id' in attrs}
+    assert tags['add-scientific-input'][1]['type'] == 'button'
+    assert tags['selected-scientific-inputs'][0] == 'ol'
+    for identifier in ('add-scientific-input', 'selected-scientific-inputs'):
+        assert 'turn-form' in page.ancestors[identifier]
+    assert 'Selecting inputs does not start an analysis.' in (STATIC / 'index.html').read_text()
+
+
+def test_selection_keeps_explicit_order_and_only_submits_opaque_catalog_ids():
+    code = source()
+    selected = section('function selectedResourceIds()', 'function renderSelectedResources()')
+    assert '[...state.selectedResourceIds' in selected
+    assert '.sort(' not in selected
+    add = section('element("add-scientific-input").addEventListener', 'element("new-session")')
+    assert 'state.selectedResourceIds = selectedResourceIds()' in add
+    assert 'postSubmission(' not in add and 'submitRequest(' not in add
+    rendered = section('function renderSelectedResources()', 'function selectedResourceType()')
+    assert 'label.textContent = resource.label' in rendered
+    assert 'Remove' in rendered and '.filter((value) => value !== id)' in rendered
+    assert not any(term in rendered for term in ('reference', 'query', 'ground_truth', 'innerHTML'))
+    assert 'MAX_SELECTED_RESOURCES = 8' in code
+
+
+def test_multi_source_retry_freezes_captured_selection_and_singles_keep_the_old_wire():
+    submitted = section('function submitRequest(', 'element("turn-form").addEventListener')
+    assert 'body.resource_ids = Object.freeze(selectedIds)' in submitted
+    assert 'body.resource_id = element("resource-choice").value' in submitted
+    assert 'Object.freeze(body)' in submitted
+    assert 'expected_generation: state.session.generation' in submitted
+    assert 'predecessor_turn_id = predecessorTurnId' in submitted
+    assert not any(term in submitted for term in ('source_sha256', 'record_sha256', 'roles', 'tool_name'))
+
+
+def test_reopen_checks_display_selection_against_the_catalog_without_execution():
+    loaded = section('async function loadResources()', 'function clearPendingUpload')
+    assert 'new Set(saved).size === saved.length' in loaded
+    assert 'saved.length <= MAX_SELECTED_RESOURCES' in loaded
+    assert 'savedIds.filter((id) => state.resources.some' in loaded
+    assert 'savedIds.slice(0, -1)' in loaded
+    assert 'submitRequest(' not in loaded and 'postSubmission(' not in loaded
+    assert 'checkpoint_path' not in source() and 'record_sha256' not in source()

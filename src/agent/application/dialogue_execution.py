@@ -13,7 +13,7 @@ from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument,
-    _scientific_arguments, admit_leiden_resolution, is_exact_string_argument, _object, _shape)
+    _input_roles, _scientific_arguments, admit_leiden_resolution, is_exact_string_argument, _object, _shape)
 
 
 def _resolution_input(registry):
@@ -115,11 +115,21 @@ def _select_declared_resource(values, resources):
 
 def _replay_initial_inputs(registry, interaction, declarations):
     """Replay captured application policy; it grants no scientific authority."""
-    from .local_resources import QualifiedEpiZooResource, RegisteredInput, qualified_epizoo_resources
+    from .local_resources import (LocalResourceAdmission, QualifiedEpiZooResource, RegisteredInput,
+        RegisteredInputGroup, group_role_inputs, qualified_epizoo_resources)
     admitted = _serialize(interaction.admitted)
     received = _serialize(interaction.submission)['execution_inputs']
-    values = _bind_arguments(registry, interaction.utterance, received, declarations)
     original = interaction.submission.get('registered_input', {})
+    if original.get('composition') == 'scientific-role-selection.v1':
+        binding = LocalResourceAdmission._submission_binding(interaction.submission)
+        roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
+        values = _bind_arguments(registry, interaction.utterance,
+            group_role_inputs(binding, roles, registry), declarations)
+        expected = RegisteredInputGroup(binding.members, values, roles=roles).attribution()
+        if _serialize(admitted.get('registered_input')) != expected:
+            raise ValueError('Scientific input role attribution changed.')
+        return values
+    values = _bind_arguments(registry, interaction.utterance, received, declarations)
     choice = any(isinstance(d, ScalarChoiceArgument) for d in declarations)
     needs_resource = (choice and original.get('tool_name') == 'inspect_scATAC'
         and original.get('composition') in (None, 'h5ad-science.v1'))
@@ -207,7 +217,14 @@ def _validate_argument_record(interaction):
                 and admitted.get('operation') == 'plan' and 'continuation' not in admitted
                 and 'argument' not in admitted and 'selected_candidate' not in admitted
                 and _serialize(admitted.get('inputs')) != _serialize(interaction.submission['execution_inputs'])):
-            raise SessionError('Missing persisted scientific argument declaration.')
+            if 'roles' not in admitted:
+                raise SessionError('Missing persisted scientific argument declaration.')
+            try:
+                from agent.orchestration.registry import build_default_tool_registry
+                if _replay_initial_inputs(build_default_tool_registry(), interaction, ()) != _serialize(admitted['inputs']):
+                    raise ValueError('Role binding changed inputs.')
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise SessionError('Invalid persisted scientific input roles.') from exc
         return
     try:
         from agent.orchestration.registry import build_default_tool_registry
@@ -268,6 +285,35 @@ def _missing_parameters(error, admitted, registry):
     return tool_name, list(names)
 
 
+def _validate_input_role_record(interaction):
+    """Replay captured associations without current sources or scientific reads."""
+    from .session_state import SessionError
+    admitted = interaction.admitted or {}
+    received = (interaction.submission or {}).get('registered_input', {})
+    grouped = received.get('composition') == 'scientific-role-selection.v1'
+    if not grouped and 'roles' not in admitted:
+        return
+    if 'continuation' in admitted or 'parameter_continuation' in admitted:
+        # Exact origin/last-binding checks are owned by parameter continuation.
+        return
+    if admitted.get('operation') != 'plan':
+        if 'roles' in admitted:
+            raise SessionError('Scientific input roles require admitted planning.')
+        return
+    try:
+        from agent.orchestration.registry import build_default_tool_registry
+        if not grouped or not _input_roles(_serialize(admitted.get('roles', []))):
+            raise ValueError('Missing captured scientific input roles.')
+        declarations = _scientific_arguments(_serialize(admitted.get('arguments', [])))
+        if 'argument' in admitted:
+            declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
+        expected = _replay_initial_inputs(build_default_tool_registry(), interaction, declarations)
+        if expected != _serialize(admitted['inputs']):
+            raise ValueError('Scientific role inputs differ from captured source identities.')
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise SessionError('Invalid persisted scientific input roles.') from exc
+
+
 def _parameter_source(reference, preceding):
     """Resolve the exact last accepted pending binding, never scan for a value."""
     origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
@@ -317,8 +363,12 @@ def _validate_parameter_prerequisite(interaction, preceding):
         expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True)
         if expected != _serialize(admitted['inputs']):
             raise ValueError('Parameter continuation changed inputs.')
-        if 'registered_input' in admitted and admitted['registered_input'] != (origin.submission or {}).get('registered_input'):
+        if ('registered_input' in admitted
+                and _serialize(admitted['registered_input']) !=
+                    _serialize((execution_submission(origin) or {}).get('registered_input'))):
             raise ValueError('Parameter continuation changed registered source.')
+        if admitted.get('roles', ()) != (origin.admitted or {}).get('roles', ()):
+            raise ValueError('Parameter continuation changed scientific input roles.')
         missing = [name for name in origin.prerequisite['missing']
                    if _parameter_input(registry, reference['tool'], name)[0] not in expected]
         if admitted.get('kind') == 'clarify':
@@ -377,6 +427,12 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
                             decision.arguments, replace_existing=True)
     if origin.submission is not None and 'registered_input' in origin.submission:
         from .local_resources import LocalResourceAdmission
+        original_metadata = origin.submission['registered_input']
+        current_metadata = (interaction.submission or {}).get('registered_input')
+        if (current_metadata is not None
+                and original_metadata.get('composition') == 'scientific-role-selection.v1'
+                and _serialize(current_metadata) != _serialize(original_metadata)):
+            raise IntentError('invalid_prerequisite')
         LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry).validate_submission(
             execution_submission(origin))
     missing = [name for name in origin.prerequisite['missing']
@@ -389,12 +445,16 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     if origin.admitted.get('context') == 'current':
         admitted['context'] = 'current'
     if origin.submission is not None and 'registered_input' in origin.submission:
-        admitted['registered_input'] = _serialize(origin.submission['registered_input'])
+        admitted['registered_input'] = _serialize(execution_submission(origin)['registered_input'])
+    if origin.admitted.get('roles'):
+        admitted['roles'] = _serialize(origin.admitted['roles'])
     if missing:
         admitted = dict(kind='clarify', reason='missing_parameter_value', choices=missing, value_required=True,
             inputs=values, arguments=admitted['arguments'], parameter_continuation=continuation)
         if origin.admitted.get('context') == 'current':
             admitted['context'] = 'current'
+        if origin.admitted.get('roles'):
+            admitted['roles'] = _serialize(origin.admitted['roles'])
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
     return admitted
@@ -533,6 +593,7 @@ def validate_prerequisite(interaction, preceding):
         origin = next((i for i in preceding if i.turn_id == continuation['origin_turn_id']), None)
         if origin is not None and (origin.admitted or {}).get('context') != admitted.get('context'):
             raise SessionError('Pending execution context changed.')
+    _validate_input_role_record(interaction)
     _validate_resolution_record(interaction)
     _validate_argument_record(interaction)
     captured = _serialize(interaction.snapshot)
@@ -708,7 +769,7 @@ def admit_species(sessions, interaction, decision, resources):
 def execution_submission(interaction):
     """Use the admitted binding for continuation, preserving the received turn."""
     admitted = interaction.admitted or {}
-    if 'continuation' not in admitted and 'argument' not in admitted and 'arguments' not in admitted:
+    if not any(key in admitted for key in ('continuation', 'argument', 'arguments', 'roles')):
         return interaction.submission
     submission = dict(_serialize(interaction.submission) or {}, execution_inputs=_serialize(admitted['inputs']))
     if 'registered_input' in admitted:
@@ -731,6 +792,22 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     admitted = dict(kind='execute', operation='plan', tool=decision.target, revision_id=interaction.base_revision_id,
                 request_id='turn-' + digest(dict(session=sessions._interaction_session_id, turn=interaction.turn_id)),
                 inputs=values)
+    grouped = (interaction.submission is not None
+        and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
+    if grouped:
+        from .local_resources import LocalResourceAdmission, ResourceAdmissionError
+        if not decision.roles:
+            raise IntentError('ambiguous_subject')
+        owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
+        original = owner._submission_binding(interaction.submission)
+        if _serialize(original.execution_inputs) != values:
+            raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
+        roles = [asdict(item) for item in decision.roles]
+        completed = owner.bind_group(original, roles, verify_source=True)
+        values = _serialize(completed.execution_inputs)
+        admitted.update(inputs=values, roles=roles, registered_input=completed.attribution())
+    elif decision.roles:
+        raise IntentError('unsupported_intent')
     if decision.context == 'current':
         context, _ = sessions.planning_context_for_interaction(
             sessions._interaction_session_id, interaction.turn_id, integrity=False)
@@ -757,7 +834,11 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
             original = owner._submission_binding(interaction.submission)
             owner.validate_binding(original)
-            if original.tool_name == 'inspect_scATAC' and original.composition in (None, 'h5ad-science.v1'):
+            if grouped:
+                # Scalar declarations add values; exact selected membership and
+                # Registry consumer associations remain the admitted group.
+                pass
+            elif original.tool_name == 'inspect_scATAC' and original.composition in (None, 'h5ad-science.v1'):
                 selection_error = original.resource_selection_error
                 if any(isinstance(d, ScalarChoiceArgument) for d in decision.arguments):
                     values, selection_error = _select_declared_resource(values, epizoo_resources)
@@ -927,7 +1008,12 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     execution_app = ResearchAgentApplication(app.workspace_root,
         planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)
     from agent.orchestration.active_context import planning_context
-    with planning_context(context) if context is not None else nullcontext():
+    from agent.orchestration.executor import execution_input_guard
+    grouped = (registered and interaction.submission['registered_input'].get('composition')
+        == 'scientific-role-selection.v1')
+    guard = (lambda tool, arguments: resources.validate_group_consumer(
+        interaction.submission, tool, arguments)) if grouped else None
+    with execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
         result = execution_app.run(request)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):

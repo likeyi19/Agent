@@ -28,6 +28,16 @@ MAX_COLLECTION_MEMBERS = 128
 MAX_COLLECTION_BYTES = 32_768
 MAX_DISCOVERY_RECORDS = 1024
 MAX_DISCOVERY_CHOICES = 128
+MAX_GROUP_MEMBERS = 8
+_GROUP_COMPOSITION = 'scientific-role-selection.v1'
+# Reviewed source ports only; their aliases, roles and types remain Registry facts.
+_GROUP_PORTS = (
+    ('cluster_cells', 'analysis'),
+    ('evaluate_cell_clustering', 'analysis'),
+    ('evaluate_cell_clustering', 'ground_truth_dataset'),
+    ('transfer_cell_labels', 'reference_dataset'),
+    ('transfer_cell_labels', 'query_dataset'),
+)
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
@@ -72,6 +82,8 @@ _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path'}
 _RESOURCE_SELECTION_ERRORS = ('EPIZOO_RESOURCE_REQUIRED', 'EPIZOO_RESOURCE_AMBIGUOUS')
 _MESSAGES = {
+    'MULTI_INPUT_ROLE_INVALID': 'The selected inputs need distinct, supported scientific roles.',
+    'MULTI_INPUT_SOURCE_MISMATCH': 'The plan does not consume the exact selected inputs in their declared scientific roles.',
     'LOCAL_RESOURCE_UNAVAILABLE': 'The registered local resource is unavailable.',
     'LOCAL_RESOURCE_ACCESS_INVALID': 'The local source is unavailable or outside the approved source policy.',
     'LOCAL_RESOURCE_INTEGRITY_INVALID': 'The local source no longer matches its registered byte identity.',
@@ -370,6 +382,150 @@ class RegisteredInput:
         if self.resource_selection_error is not None:
             result['resource_selection_error'] = self.resource_selection_error
         return result
+
+
+@dataclass(frozen=True)
+class RegisteredInputGroup:
+    """Ordered independent records captured in the existing turn, not a library.
+
+    Private source locators allow exact immutable replay without reopening files.
+    Only detached opaque handles, positions and safe labels reach the Interpreter.
+    """
+
+    members: object
+    execution_inputs: object
+    roles: object = ()
+    composition: str = _GROUP_COMPOSITION
+
+    def __post_init__(self):
+        try:
+            if self.composition != _GROUP_COMPOSITION or not 2 <= len(self.members) <= MAX_GROUP_MEMBERS:
+                raise ValueError('Invalid source selection.')
+            members = []
+            for member in self.members:
+                if (not isinstance(member, Mapping) or set(member) != {
+                        'resource_id', 'record_sha256', 'source_path', 'input_type', 'label'}):
+                    raise ValueError('Invalid selected record.')
+                _identifier(member['resource_id'])
+                if type(member['record_sha256']) is not str or _SHA.fullmatch(member['record_sha256']) is None:
+                    raise ValueError('Invalid record identity.')
+                if member['input_type'] != 'h5ad':
+                    raise ValueError('Unsupported selected source kind.')
+                _source_text(member['source_path'])
+                _text(member['label'], 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
+                members.append(dict(member))
+            if (len({m['resource_id'] for m in members}) != len(members)
+                    or len({m['source_path'] for m in members}) != len(members)):
+                raise ValueError('Repeated source selection.')
+            roles = _group_roles(self.roles, len(members))
+            object.__setattr__(self, 'members', tuple(freeze_json_mapping(m, 'member') for m in members))
+            object.__setattr__(self, 'roles', tuple(freeze_json_mapping(r, 'role') for r in roles))
+            object.__setattr__(self, 'execution_inputs', freeze_json_mapping(
+                _input_mapping(self.execution_inputs), 'execution_inputs'))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
+
+    def attribution(self):
+        return dict(composition=self.composition, members=_serialize(self.members), roles=_serialize(self.roles))
+
+
+def _group_roles(values, member_count):
+    if not isinstance(values, (tuple, list)) or len(values) > MAX_GROUP_MEMBERS:
+        raise ValueError('Invalid roles.')
+    roles = []
+    for role in values:
+        if (not isinstance(role, Mapping) or set(role) != {'tool', 'port', 'source'}
+                or (role['tool'], role['port']) not in _GROUP_PORTS
+                or role['source'] not in {f'source.{i}' for i in range(member_count)}):
+            raise ValueError('Unsupported source role.')
+        roles.append(dict(role))
+    if (len({(r['tool'], r['port']) for r in roles}) != len(roles)
+            or len({r['source'] for r in roles}) != len(roles)):
+        raise ValueError('Duplicate or conflicting roles.')
+    return sorted(roles, key=lambda r: (r['tool'], r['port']))
+
+
+def _group_port(registry, tool_name, port_name):
+    """One explicitly reviewed singleton source contract, never first-match."""
+    if (tool_name, port_name) not in _GROUP_PORTS:
+        raise _fail('MULTI_INPUT_ROLE_INVALID')
+    spec = registry.get(tool_name)
+    ports = [p for p in spec.semantic_planning.consumer_ports if p.name == port_name]
+    if len(ports) != 1 or len(ports[0].members) != 1:
+        raise _fail('MULTI_INPUT_ROLE_INVALID')
+    port = ports[0]
+    member = port.members[0]
+    sources = [s for s in port.request_sources if len(s.members) == 1 and s.members[0].name == member.name]
+    exact = [s for s in sources if s.members[0].input_name == member.field_name]
+    choices = exact if exact else sources
+    if len(choices) != 1:
+        raise _fail('MULTI_INPUT_ROLE_INVALID')
+    argument = (dict(spec.required_arguments) | dict(spec.optional_arguments))[member.field_name]
+    if argument.planning is None or not argument.planning.accepted_artifact_kinds:
+        raise _fail('MULTI_INPUT_ROLE_INVALID')
+    return port, choices[0], argument
+
+
+def group_choices(binding, registry):
+    """Safe conditional Interpreter projection from captured ordered membership."""
+    if type(binding) is not RegisteredInputGroup:
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    roles = []
+    for tool, name in _GROUP_PORTS:
+        _, source, argument = _group_port(registry, tool, name)
+        role = source.lineage or argument.planning.provenance_role
+        roles.append(dict(tool=tool, port=name, role=role.value if role is not None else None))
+    return dict(sources=[dict(source=f'source.{i}', position=i + 1,
+        label=m['label'], input_type=m['input_type']) for i, m in enumerate(binding.members)], roles=roles)
+
+
+def _group_declarations(registry):
+    """Existing Registry companion fields; selected dataset paths are excluded."""
+    aliases = set()
+    for tool, port_name in _GROUP_PORTS:
+        port, _, _ = _group_port(registry, tool, port_name)
+        aliases.update(m.input_name for s in port.request_sources for m in s.members)
+        aliases.update(m.field_name for m in port.members)
+    declarations = {}
+    for tool in sorted({tool for tool, _ in _GROUP_PORTS}):
+        spec = registry.get(tool)
+        arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
+        for port in spec.semantic_planning.consumer_ports:
+            fields = {m.name: m.field_name for m in port.members}
+            for source in port.request_sources:
+                for member in source.members:
+                    if member.input_name not in aliases and fields[member.name] != 'output_dir':
+                        declarations.setdefault(member.input_name, []).append(arguments[fields[member.name]])
+    return aliases, declarations
+
+
+def group_role_inputs(binding, roles, registry):
+    """Pure exact role replay; content qualification stays with scientific owners."""
+    try:
+        roles = _group_roles(roles, len(binding.members))
+        if roles and {r['source'] for r in roles} != {f'source.{i}' for i in range(len(binding.members))}:
+            raise ValueError('Unassigned selected input.')
+        aliases, declarations = _group_declarations(registry)
+        values = _serialize(binding.execution_inputs)
+        existing = {key for role in binding.roles for key in (
+            _group_port(registry, role['tool'], role['port'])[1].members[0].input_name,)}
+        companions = {key: value for key, value in values.items() if key not in existing}
+        if set(companions) - set(declarations):
+            raise ValueError('Unsupported companion input or substituted dataset path.')
+        for key, value in companions.items():
+            for argument in declarations[key]:
+                argument.validate(key, value)
+        for role in roles:
+            _, source, argument = _group_port(registry, role['tool'], role['port'])
+            key = source.members[0].input_name
+            path = binding.members[int(role['source'].split('.')[1])]['source_path']
+            argument.validate(key, path)
+            if key in companions:
+                raise ValueError('Conflicting consumer source aliases.')
+            companions[key] = path
+        return companions
+    except (ValueError, TypeError, KeyError, LookupError) as exc:
+        raise _fail('MULTI_INPUT_ROLE_INVALID') from exc
 
 
 def _members(values):
@@ -1177,9 +1333,50 @@ class LocalResourceAdmission:
         except (ValueError, OSError, RuntimeError) as exc:
             raise _fail('LOCAL_RESOURCE_INTEGRITY_INVALID') from exc
 
-    def validate_binding(self, binding, *, verify_source=True):
-        if type(binding) not in (RegisteredInput, RegisteredInputCollection) or type(verify_source) is not bool:
+    def _group_registry(self):
+        if self._registry is None:
+            from agent.orchestration.registry import build_default_tool_registry
+            self._registry = build_default_tool_registry()
+        return self._registry
+
+    def compose_group(self, resource_ids, scientific_inputs=None, *, verify_source=True):
+        """Capture ordered existing records; selection alone proposes no roles."""
+        if type(resource_ids) not in (tuple, list) or not 2 <= len(resource_ids) <= MAX_GROUP_MEMBERS:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        records = [self.load(resource_id) for resource_id in resource_ids]
+        if any(type(record) is not LocalResourceRecord or record.input_type != 'h5ad' for record in records):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        members = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
+            source_path=r.source_path, input_type=r.input_type, label=r.label) for r in records]
+        binding = RegisteredInputGroup(members, _input_mapping(scientific_inputs))
+        self.validate_binding(binding, verify_source=verify_source)
+        return binding
+
+    def group_choices(self, binding):
+        return group_choices(binding, self._group_registry())
+
+    def bind_group(self, binding, roles, *, verify_source=False):
+        self.validate_binding(binding, verify_source=verify_source)
+        values = group_role_inputs(binding, roles, self._group_registry())
+        result = RegisteredInputGroup(binding.members, values, roles)
+        self.validate_binding(result, verify_source=False)
+        return result
+
+    def validate_binding(self, binding, *, verify_source=True):
+        if type(binding) not in (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup) or type(verify_source) is not bool:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if type(binding) is RegisteredInputGroup:
+            records = [self.load(member['resource_id']) for member in binding.members]
+            expected = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
+                source_path=r.source_path, input_type=r.input_type, label=r.label) for r in records]
+            if expected != _serialize(binding.members):
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            values = group_role_inputs(binding, binding.roles, self._group_registry())
+            if values != _serialize(binding.execution_inputs):
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            if verify_source:
+                self._verify_records(records)
+            return values
         if type(binding) is RegisteredInputCollection:
             return self._validate_collection(binding, verify_source=verify_source)
         record = self.load(binding.resource_id)
@@ -1218,7 +1415,9 @@ class LocalResourceAdmission:
         try:
             metadata = submission['registered_input']
             scalar = {'resource_id', 'record_sha256', 'tool_name'}
-            if (set(metadata) == scalar or
+            if set(metadata) == {'composition', 'members', 'roles'}:
+                binding_type = RegisteredInputGroup
+            elif (set(metadata) == scalar or
                     (scalar | {'composition'} <= set(metadata)
                      and set(metadata) <= scalar | {'composition', 'resource_selection_error'})):
                 binding_type = RegisteredInput
@@ -1352,6 +1551,59 @@ class LocalResourceAdmission:
         if not consumed:
             raise _fail('FASTQ_SOURCE_MISMATCH')
 
+    def _validate_group_consumption(self, binding, steps, *, resolved=False):
+        if not binding.roles:
+            raise _fail('MULTI_INPUT_ROLE_INVALID')
+        registry = self._group_registry()
+        authorized = {}
+        for role in binding.roles:
+            port, _, _ = _group_port(registry, role['tool'], role['port'])
+            path = binding.members[int(role['source'].split('.')[1])]['source_path']
+            authorized[(role['tool'], role['port'])] = path
+            consumers = [s for s in steps if s.tool_name == role['tool']]
+            if len(consumers) != 1:
+                raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+            arguments = consumers[0].resolved_arguments if resolved else consumers[0].arguments
+            if arguments.get(port.members[0].field_name) != path:
+                raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+        selected_paths = {m['source_path'] for m in binding.members}
+        for step in steps:
+            spec = registry.get(step.tool_name)
+            arguments = step.resolved_arguments if resolved else step.arguments
+            for port in spec.semantic_planning.consumer_ports:
+                for member in port.members:
+                    actual = arguments.get(member.field_name)
+                    if type(actual) is str and actual in selected_paths:
+                        if authorized.get((step.tool_name, port.name)) != actual:
+                            raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+                    elif (not resolved and (step.tool_name, port.name) in _GROUP_PORTS
+                            and type(actual) is str):
+                        # Unassigned dataset consumers must use explicit semantic
+                        # dependencies, never an unregistered literal companion.
+                        raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+
+    def validate_group_consumer(self, submission, tool_name, arguments):
+        """Check registration bytes at each actual new source consumption.
+
+        This callback is operation-local execution admission, not scientific
+        validation or durable authority. Historical presentation never calls it.
+        """
+        binding = self._submission_binding(submission)
+        if type(binding) is not RegisteredInputGroup:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        self.validate_binding(binding, verify_source=False)
+        records = []
+        for role in binding.roles:
+            if role['tool'] != tool_name:
+                continue
+            port, _, _ = _group_port(self._group_registry(), role['tool'], role['port'])
+            member = binding.members[int(role['source'].split('.')[1])]
+            if arguments.get(port.members[0].field_name) != member['source_path']:
+                raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+            records.append(self.load(member['resource_id']))
+        if records:
+            self._verify_records(records)
+
     def validate_plan(self, submission, plan):
         """Check exact registered-source/resource consumption before execution.
 
@@ -1361,6 +1613,9 @@ class LocalResourceAdmission:
         from agent.schemas.orchestration import StepOutputRef
         binding = self._submission_binding(submission)
         values = self.validate_binding(binding)
+        if type(binding) is RegisteredInputGroup:
+            self._validate_group_consumption(binding, plan.steps)
+            return
         if type(binding) is RegisteredInputCollection and binding.composition == _FASTQ_COMPOSITION:
             self._validate_fastq_plan(binding, values, plan)
             return
@@ -1430,6 +1685,13 @@ class LocalResourceAdmission:
         Completed historical turns do not call this guard.
         """
         binding = self._submission_binding(submission)
+        if type(binding) is RegisteredInputGroup:
+            # This API runs only at first Session acceptance. Recheck the pins
+            # after owner verification/presentation too; terminal history reads
+            # never call this guard and may outlive source availability.
+            self.validate_binding(binding, verify_source=True)
+            self._validate_group_consumption(binding, steps, resolved=True)
+            return
         if type(binding) is RegisteredInput:
             record = self.load(binding.resource_id)
             if record.input_type == 'bam':

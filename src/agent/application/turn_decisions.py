@@ -77,6 +77,28 @@ def _validate_arguments(arguments, argument=None):
 
 
 @dataclass(frozen=True)
+class InputRole:
+    """One Registry consumer associated with an opaque captured source."""
+
+    tool: str
+    port: str
+    source: str
+
+    def __post_init__(self):
+        if (type(self.tool) is not str or not 0 < len(self.tool) <= 128 or not self.tool.isidentifier()
+                or type(self.port) is not str or not 0 < len(self.port) <= 128 or not self.port.isidentifier()
+                or type(self.source) is not str or re.fullmatch(r'source\.[0-7]', self.source) is None):
+            raise ValueError('Invalid captured scientific input role.')
+
+
+def _validate_roles(roles):
+    if (type(roles) is not tuple or len(roles) > 8
+            or any(not isinstance(item, InputRole) for item in roles)
+            or len({(item.tool, item.port) for item in roles}) != len(roles)):
+        raise ValueError('Invalid bounded scientific input roles.')
+
+
+@dataclass(frozen=True)
 class Execute:
     base: str
     operation: str
@@ -85,6 +107,7 @@ class Execute:
     argument: LeidenResolution | None = None
     arguments: tuple[ScopedArgument, ...] = ()
     context: str = 'none'
+    roles: tuple[InputRole, ...] = ()
 
     def __post_init__(self):
         if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
@@ -92,6 +115,9 @@ class Execute:
         if self.argument is not None and not isinstance(self.argument, LeidenResolution):
             raise ValueError('Invalid explicit scientific declaration.')
         _validate_arguments(self.arguments, self.argument)
+        _validate_roles(self.roles)
+        if self.roles and self.operation != 'plan':
+            raise ValueError('Scientific input roles require ordinary planning.')
 
 
 @dataclass(frozen=True)
@@ -254,6 +280,16 @@ def _scientific_arguments(value):
     return tuple(result)
 
 
+def _input_roles(value):
+    if type(value) is not list or len(value) > 8:
+        raise IntentError('invalid_decision')
+    result = []
+    for item in value:
+        _shape(item, ('tool', 'port', 'source'))
+        result.append(InputRole(**item))
+    return tuple(result)
+
+
 def parse_decision(raw):
     def pairs(items):
         result = {}
@@ -297,13 +333,13 @@ def parse_decision(raw):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
                 return Execute('current', 'plan', value['target'], None,
                                _leiden_argument(value.get('argument')),
                                _scientific_arguments(value.get('arguments', [])),
-                               value.get('context', 'none'))
+                               value.get('context', 'none'), _input_roles(value.get('roles', [])))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -397,6 +433,13 @@ def decision_schema(public):
             execution['context'] = enum(('none', 'current'))
         if identities:
             execution['arguments'] = declarations
+        selected_sources = public['dialogue'].get('selected_sources', ())
+        input_roles = public['dialogue'].get('input_roles', ())
+        if selected_sources and input_roles:
+            execution['roles'] = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
+                _object(dict(tool=enum((item['tool'],)), port=enum((item['port'],)),
+                             source=enum(source['source'] for source in selected_sources)))
+                for item in input_roles]}}
         variants.append(_object(execution))
         candidates = public['dialogue'].get('execution_candidates', ())
         if candidates:
@@ -435,6 +478,8 @@ def interpret(model, utterance, public):
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
             'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
+            *(['dialogue.selected_sources is the exact ordered selection for this turn; source handles identify only those captured registrations. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate the explicitly selected inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve every selected source and the declared scientific role. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. Clarify ambiguous, conflicting or missing role associations with ambiguous_subject. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
+              if public.get('dialogue', {}).get('selected_sources') else []),
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
             'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no prior-discussion focus; captured result groups and result_referents remain available. Clarify unresolved short references instead of inventing a topic.',
@@ -487,7 +532,8 @@ def interpret(model, utterance, public):
             'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
             'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else [])},
-        sort_keys=True, separators=(',', ':'))
+        sort_keys=True, separators=(',', ':'),
+        ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
     return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)))
 
 

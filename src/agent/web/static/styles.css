@@ -115,6 +115,9 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .turn-error { color: #862e31; margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .composer label { margin-top: 12px; }
 .attachment-controls { margin-top: 12px; padding-bottom: 12px; border-bottom: 1px solid #e2e8ed; }
+.selected-scientific-inputs { margin: 8px 0; padding-left: 24px; }
+.selected-scientific-inputs li { margin: 6px 0; overflow-wrap: anywhere; }
+.selected-scientific-inputs button { margin-left: 10px; padding: 4px 8px; }
 .attachment-upload { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
 .attachment-file { flex: 1 1 240px; min-width: 0; }
 .attachment-file input { font-size: 13px; }

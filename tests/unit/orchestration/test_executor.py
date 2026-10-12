@@ -5,8 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from unittest.mock import Mock
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
+
+from agent.orchestration.executor import execution_input_guard
 
 from agent.orchestration import (
     AgentPlan,
@@ -74,6 +78,67 @@ def test_valid_one_step_execution() -> None:
     assert step_result.verification is not None
     assert step_result.verification.passed
     assert not outcome.errors
+
+
+def test_input_guard_rejects_before_science_and_does_not_leak() -> None:
+    tool = Mock(return_value={"value": "done"})
+    executor = PlanExecutor(ToolRegistry((_spec("echo", tool),)))
+    plan = _plan(PlanStep("one", "echo", {}))
+    def reject(name, arguments):
+        raise ValueError("Source no longer has its admitted identity.")
+    with execution_input_guard(reject):
+        outcome = executor.execute(plan)
+    assert outcome.step_results[0].status is StepStatus.FAILED
+    tool.assert_not_called()
+    assert executor.execute(plan).step_results[0].status is StepStatus.SUCCEEDED
+    tool.assert_called_once()
+
+
+def test_input_guard_rechecks_after_body_before_acceptance() -> None:
+    tool = Mock(return_value={"value": "done"})
+    executor = PlanExecutor(ToolRegistry((_spec("echo", tool),)))
+    checks = []
+    def guard(name, arguments):
+        checks.append(name)
+        if tool.called:
+            raise ValueError("Source changed during the registered attempt.")
+    with execution_input_guard(guard):
+        outcome = executor.execute(_plan(PlanStep("one", "echo", {})))
+    tool.assert_called_once()
+    assert checks == ["echo", "echo"]
+    assert outcome.step_results[0].status is StepStatus.FAILED
+    assert outcome.step_results[0].verification is None
+
+
+def test_input_guard_rechecks_before_same_argument_retry() -> None:
+    tool = Mock(side_effect=[TransientToolError("Temporary failure"), {"value": "done"}])
+    executor = PlanExecutor(ToolRegistry((_spec("echo", tool, retryable=frozenset({"TRANSIENT"})),)))
+    def guard(name, arguments):
+        if tool.called:
+            raise ValueError("Source changed before retry.")
+    with execution_input_guard(guard):
+        outcome = executor.execute(_plan(PlanStep("one", "echo", {})))
+    assert tool.call_count == 1
+    assert outcome.step_results[0].status is StepStatus.FAILED
+    assert outcome.step_results[0].attempt_count == 2
+
+
+def test_concurrent_execution_input_guards_keep_distinct_admissions() -> None:
+    barrier = Barrier(2)
+    seen = {"first": [], "second": []}
+    def operation(label):
+        def tool():
+            barrier.wait(timeout=10)
+            return {"value": label}
+        executor = PlanExecutor(ToolRegistry((_spec("echo", tool),)))
+        def guard(name, arguments):
+            seen[label].append(label)
+        with execution_input_guard(guard):
+            return executor.execute(_plan(PlanStep("one", "echo", {})))
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        outcomes = tuple(workers.map(operation, ("first", "second")))
+    assert all(outcome.step_results[0].status is StepStatus.SUCCEEDED for outcome in outcomes)
+    assert seen == {"first": ["first", "first"], "second": ["second", "second"]}
 
 
 def test_valid_multi_step_execution_and_reference_resolution() -> None:

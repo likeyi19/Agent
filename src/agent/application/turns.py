@@ -350,7 +350,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 matches = digest(_serialize(execution_inputs)) == fingerprint
             else:
                 expected_inputs = ((existing.submission or {}).get('execution_inputs', {})
-                    if any(k in existing.admitted for k in ('continuation', 'argument', 'arguments'))
+                    if any(k in existing.admitted for k in ('continuation', 'argument', 'arguments', 'roles'))
                     else existing.admitted['inputs'])
                 matches = _serialize(execution_inputs) == _serialize(expected_inputs)
             if not matches:
@@ -394,6 +394,13 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             visible['dialogue']['pending_prerequisite'] = pending_public
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
+        if (submission is not None
+                and submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1'):
+            from .local_resources import LocalResourceAdmission, group_choices
+            binding = LocalResourceAdmission._submission_binding(submission)
+            choices = group_choices(binding, sessions._application.registry)
+            visible['dialogue']['selected_sources'] = choices['sources']
+            visible['dialogue']['input_roles'] = choices['roles']
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         if context is not None:
             visible['dialogue']['planning_context'] = list(context.public_items())

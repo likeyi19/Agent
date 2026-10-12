@@ -791,28 +791,7 @@ class AgentRuntime:
         if state.plan is None:
             return self._fail_interrupted_planning(state)
 
-        if state.request.mode is RunMode.EXECUTE:
-            if (
-                state.source_schema_version < RUN_STATE_SCHEMA_VERSION
-                or state.recovery_policy_snapshot is None
-            ):
-                raise RecoveryPolicyUnknownError(
-                    "Legacy nonterminal EXECUTE run has no authoritative recovery "
-                    "policy provenance; use the historical runtime or reconcile it "
-                    "manually."
-                )
-            current_policy = build_recovery_policy_snapshot(
-                state.plan,
-                self._registry,
-                max_attempts_per_step=(
-                    self._executor.recovery_policy.max_attempts_per_step
-                ),
-            )
-            if current_policy.fingerprint != state.recovery_policy_snapshot.fingerprint:
-                raise RecoveryPolicyIncompatibleError(
-                    "Durable run recovery policy is incompatible with this runtime; "
-                    "resume with the original compatible policy."
-                )
+        self._validate_resume_policy(state)
 
         trace = _TraceRecorder()
         trace.extend(state.trace)
@@ -860,6 +839,44 @@ class AgentRuntime:
             state,
             completed_steps=completed_steps,
         )
+
+    def _validate_resume_policy(self, state: PersistedRunState) -> None:
+        if state.request.mode is not RunMode.EXECUTE or state.plan is None:
+            return
+        if (state.source_schema_version < RUN_STATE_SCHEMA_VERSION
+                or state.recovery_policy_snapshot is None):
+            raise RecoveryPolicyUnknownError(
+                "Legacy nonterminal EXECUTE run has no authoritative recovery "
+                "policy provenance; use the historical runtime or reconcile it "
+                "manually."
+            )
+        current_policy = build_recovery_policy_snapshot(state.plan, self._registry,
+            max_attempts_per_step=self._executor.recovery_policy.max_attempts_per_step)
+        if current_policy.fingerprint != state.recovery_policy_snapshot.fingerprint:
+            raise RecoveryPolicyIncompatibleError(
+                "Durable run recovery policy is incompatible with this runtime; "
+                "resume with the original compatible policy."
+            )
+
+    def _fail_authority_restoration(self, state: PersistedRunState, exception: Exception) -> AgentRunResult:
+        """Stop a hook-owned resume whose accepted publication cannot be restored."""
+        self._validate_resume_policy(state)
+        error = classified_agent_error(category=ErrorCategory.VERIFICATION_ERROR,
+            code='PERSISTED_STEP_REVALIDATION_FAILED', exception_type=type(exception).__name__,
+            safe_fallback_message='Accepted scientific publication failed integrity revalidation; no tools were invoked.')
+        if any(step.status is StepStatus.RUNNING for step in state.steps):
+            return self._fail_stale_running_step(state, recovery_error=error)
+        trace = _TraceRecorder()
+        trace.extend(state.trace)
+        trace.add(TraceEventType.RECOVERY,
+            'Accepted scientific authority could not be restored; no tools invoked.',
+            details={'error_code': error.code, 'resume': True})
+        trace.add(TraceEventType.RUN_COMPLETION,
+            'Durable run failed accepted-publication revalidation.', details={'status': 'FAILED'})
+        return self._persist_terminal(state, AgentRunResult(run_id=state.run_id,
+            request_id=state.request.request_id, status=RunStatus.FAILED,
+            planning_only=state.request.mode is RunMode.PLAN_ONLY, plan=state.plan,
+            errors=(error,), trace=trace.events))
 
     def _fail_interrupted_planning(
         self, state: PersistedRunState

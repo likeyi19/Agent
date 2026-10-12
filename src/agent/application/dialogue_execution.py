@@ -386,11 +386,15 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         revision_id=interaction.base_revision_id,
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
         inputs=values, arguments=[asdict(d) for d in decision.arguments], continuation=continuation)
+    if origin.admitted.get('context') == 'current':
+        admitted['context'] = 'current'
     if origin.submission is not None and 'registered_input' in origin.submission:
         admitted['registered_input'] = _serialize(origin.submission['registered_input'])
     if missing:
         admitted = dict(kind='clarify', reason='missing_parameter_value', choices=missing, value_required=True,
             inputs=values, arguments=admitted['arguments'], parameter_continuation=continuation)
+        if origin.admitted.get('context') == 'current':
+            admitted['context'] = 'current'
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
     return admitted
@@ -512,6 +516,23 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
 def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
+    admitted = interaction.admitted or {}
+    if 'context' in admitted:
+        captured = interaction.snapshot
+        if (admitted['context'] != 'current' or interaction.base_revision_id is None
+                or captured['relations'].get('current') != interaction.base_revision_id
+                or not (admitted.get('operation') == 'plan' or 'parameter_continuation' in admitted)):
+            raise SessionError('Invalid captured execution context.')
+        continuation = admitted.get('parameter_continuation', admitted.get('continuation'))
+        if continuation is not None:
+            origin = next((i for i in preceding if i.turn_id == continuation['origin_turn_id']), None)
+            if origin is None or (origin.admitted or {}).get('context') != 'current':
+                raise SessionError('Pending execution context changed.')
+    continuation = admitted.get('parameter_continuation', admitted.get('continuation'))
+    if continuation is not None:
+        origin = next((i for i in preceding if i.turn_id == continuation['origin_turn_id']), None)
+        if origin is not None and (origin.admitted or {}).get('context') != admitted.get('context'):
+            raise SessionError('Pending execution context changed.')
     _validate_resolution_record(interaction)
     _validate_argument_record(interaction)
     captured = _serialize(interaction.snapshot)
@@ -675,6 +696,8 @@ def admit_species(sessions, interaction, decision, resources):
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
         inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution(),
         continuation=dict(origin_turn_id=origin.turn_id, species=decision.species))
+    if origin.admitted.get('context') == 'current':
+        admitted['context'] = 'current'
     if decision.argument is not None:
         admitted['argument'] = asdict(decision.argument)
     if decision.arguments:
@@ -708,6 +731,12 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     admitted = dict(kind='execute', operation='plan', tool=decision.target, revision_id=interaction.base_revision_id,
                 request_id='turn-' + digest(dict(session=sessions._interaction_session_id, turn=interaction.turn_id)),
                 inputs=values)
+    if decision.context == 'current':
+        context, _ = sessions.planning_context_for_interaction(
+            sessions._interaction_session_id, interaction.turn_id, integrity=False)
+        if context is None:
+            raise IntentError('unavailable_context')
+        admitted['context'] = 'current'
     if _arguments(decision):
         values = _bind_arguments(sessions._application.registry, interaction.utterance, values, _arguments(decision))
         admitted.update(inputs=values)
@@ -764,6 +793,10 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         from .guidance_selection import execution_context, planning_intent
         context = execution_context(sessions, interaction, admitted)
         intent = planning_intent(sessions, interaction, admitted, context)
+    elif admitted.get('context') == 'current':
+        context, context_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id)
+        if context is None:
+            raise IntentError('unavailable_context')
     request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
     registered = interaction.submission is not None and 'registered_input' in interaction.submission
     resources = LocalResourceAdmission(app._workspace, registry=app.registry) if registered else None
@@ -789,7 +822,19 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                         outputs=list(app.registry.get(s.tool_name).result_contract.required_fields)) for s in plan.steps]
         schema = _object(dict(outputs={'type':'array','minItems':1,'maxItems':32,
             'items':_object(dict(name={'type':'string'}, step_id={'type':'string'}, output_key={'type':'string'}))}))
-        raw_choice = model.complete(prompt=json.dumps(dict(output_selection_schema_version=1,
+        retention = {}
+        retained_offer = []
+        if not selected and context is not None:
+            for item in context.items:
+                for locator in context_locators[item.handle]:
+                    handle = 'retain.' + str(len(retention))
+                    retention[handle] = locator
+                    retained_offer.append(dict(handle=handle, context_handle=item.handle,
+                        semantic_type=item.binding.semantic_type, producer_tool=item.binding.tool_name,
+                        source_port=item.binding.source_port))
+            schema = _object(dict(**schema['properties'], retain={'type':'array','maxItems':32,
+                'items':{'type':'string','enum':list(retention)}}))
+        selection_prompt = dict(output_selection_schema_version=2 if retained_offer else 1,
             question=intent, steps=offered,
             instructions=(
                 'Select a relevant subset of 1 to 32 outputs of this actual plan to retain in the new revision. '
@@ -799,11 +844,18 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 'Never invent or repair step identities, output keys, scientific products or output relationships. '
                 'Each name is a nonblank string label and must be unique across all selections for the new revision, '
                 'including when different steps expose the same output_key. Names need not equal output keys; '
-                'use meaningful labels that distinguish the selected results. Do not infer or append scientific steps.'))),
-            response_schema=schema)
+                'use meaningful labels that distinguish the selected results. Do not infer or append scientific steps.'))
+        if retained_offer:
+            selection_prompt['retained_outputs'] = retained_offer
+            selection_prompt['instructions'] += (
+                ' Select retain handles explicitly for applicable captured upstream results needed in the continued analysis. '
+                'Do not retain everything, stale descendants or unrelated results. Return [] when no historical result should be kept. '
+                'Multiple handles for one context artifact are distinct named selections; do not choose an alias by first match. '
+                'Retention does not grant scientific authority to a new result. New and retained selections total at most 32.')
+        raw_choice = model.complete(prompt=json.dumps(selection_prompt), response_schema=schema)
         try:
             choice = _json(raw_choice)
-            _shape(choice, ('outputs',))
+            _shape(choice, ('outputs', 'retain') if retained_offer else ('outputs',))
             if type(choice['outputs']) is not list or not 1 <= len(choice['outputs']) <= 32:
                 raise IntentError('planning_failed')
             selections = []
@@ -814,6 +866,18 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                     raise IntentError('planning_failed')
                 selections.append(OutputSelection(**item))
             if len({o.name for o in selections}) != len(selections): raise IntentError('planning_failed')
+            retained = ()
+            if retained_offer:
+                handles = choice['retain']
+                if (type(handles) is not list
+                        or any(type(h) is not str or h not in retention for h in handles)
+                        or len(set(handles)) != len(handles)
+                        or len(handles) + len(selections) > 32):
+                    raise IntentError('planning_failed')
+                retained = tuple(retention[h] for h in handles)
+                if ({o.name for o in selections}.intersection(o.name for o in retained)
+                        or len({o.name for o in retained}) != len(retained)):
+                    raise IntentError('planning_failed')
         except ValueError as exc:
             from agent.orchestration.planner import PlannerError
             from agent.schemas import ErrorCategory
@@ -821,6 +885,10 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                                category=ErrorCategory.INTERNAL_AGENT_ERROR) from exc
         if selected:
             execution_context(sessions, interaction, admitted)
+        elif context is not None:
+            checked_context, checked_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id)
+            if checked_context != context or checked_locators != context_locators:
+                raise IntentError('unavailable_context')
         if registered:
             # The last provider call has completed. Check application byte identity
             # before execution; scientific compatibility still belongs to the tools.
@@ -843,10 +911,15 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             if selected and (state.active_revision_id != interaction.base_revision_id
                              or state.generation != interaction.base_generation):
                 raise SessionConflictError('Selected candidate state changed before submission.')
+            if context is not None and not selected and (
+                    state.active_revision_id != interaction.base_revision_id
+                    or state.generation != interaction.base_generation):
+                raise SessionConflictError('Captured planning state changed before submission.')
             if any(t.turn_id == interaction.turn_id for t in state.turns):
                 raise SessionConflictError('Turn already submitted.')
             turn = SessionTurn(interaction.turn_id, interaction.base_revision_id, interaction.base_generation,
-                request.request_id, digest(effective.to_dict()), request.request_id + ':run', 'linked', tuple(selections))
+                request.request_id, digest(effective.to_dict()), request.request_id + ':run', 'linked', tuple(selections),
+                retained_outputs=retained)
             return replace(state, turns=state.turns+(turn,))
         sessions._store._update(sid, link)
         _update(sessions, interaction.turn_id, status='submitted')

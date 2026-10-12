@@ -131,10 +131,10 @@ def fragment_body(resource, *, turn='import', generation=0, companion='declared'
     return body | changes
 
 
-def execute(client, body):
+def execute(client, body, *, timeout=20):
     response = client.post('/api/v1/sessions/analysis/turns', json=body)
     assert response.status_code == 202, response.text
-    return wait_turn(client, body['turn_id'], session='analysis')
+    return wait_turn(client, body['turn_id'], session='analysis', timeout=timeout)
 
 
 @pytest.mark.parametrize('encoding,species', [('plain', 'human'), ('gzip', 'mouse'), ('bgzf', 'human')])
@@ -391,7 +391,9 @@ def test_ordinary_provider_plan_composes_explicit_downstream_resources_and_prese
             assert not work.snapshot() and not backend.models
             client.post('/api/v1/sessions', json={'session_id': 'analysis'})
             body = fragment_body(resource, utterance='Import these fragments, perform QC, select cells using the supplied thresholds, and construct a cell-by-cCRE matrix.')
-            view = execute(client, body)
+            # Four genuine owners and accepted presentation exceed the baseline
+            # transport test deadline; retries keep the ordinary helper default.
+            view = execute(client, body, timeout=60)
             assert view['status'] == 'succeeded', view
             run = backend.service._application.run_store.load(view['run_id'])
             assert [step.tool_name for step in run.steps] == ['import_scATAC_fragments', 'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre']

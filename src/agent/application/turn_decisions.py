@@ -84,8 +84,11 @@ class Execute:
     delta: IntentDelta | None
     argument: LeidenResolution | None = None
     arguments: tuple[ScopedArgument, ...] = ()
+    context: str = 'none'
 
     def __post_init__(self):
+        if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
+            raise ValueError('Invalid bounded execution context.')
         if self.argument is not None and not isinstance(self.argument, LeidenResolution):
             raise ValueError('Invalid explicit scientific declaration.')
         _validate_arguments(self.arguments, self.argument)
@@ -294,12 +297,13 @@ def parse_decision(raw):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
                 return Execute('current', 'plan', value['target'], None,
                                _leiden_argument(value.get('argument')),
-                               _scientific_arguments(value.get('arguments', [])))
+                               _scientific_arguments(value.get('arguments', [])),
+                               value.get('context', 'none'))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -389,6 +393,8 @@ def decision_schema(public):
             targets={'type':'array', 'maxItems':4, 'items':target},
             candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
         execution = dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']), argument=argument)
+        if public['dialogue'].get('planning_context'):
+            execution['context'] = enum(('none', 'current'))
         if identities:
             execution['arguments'] = declarations
         variants.append(_object(execution))
@@ -466,6 +472,10 @@ def interpret(model, utterance, public):
             'Default parameter changes to selection only. Matrix requires an explicit rebuild request.',
             'Keep selection and rebuild matrix uses delta=null and target=matrix.',
         ] + ([
+            'dialogue.planning_context offers opaque, recorded owner-qualified artifacts from the captured current Revision, not present-day integrity or unrestricted memory. Only scientific execution revalidates their authority and bytes.',
+            'For execute_plan choose context=current only when the requested new computation explicitly uses or modifies that captured analysis. The Planner selects exact compatible offered artifacts; clarify an unresolved historical subject rather than choosing the first item.',
+            'Choose context=none for an independent new task or changed scientific input. Do not transfer prior source-specific declarations or parameters. Questions remain read-only answers, navigation remains navigation, and pending answers continue only their exact captured original request.',
+        ] if public.get('dialogue', {}).get('planning_context') else []) + ([
             'dialogue.pending_prerequisite describes one captured scientific request awaiting an explicit human/mouse species declaration. Its objective and selected dataset remain fixed; this context is not scientific compatibility evidence.',
             'Choose answer_prerequisite only when this utterance unambiguously answers that specifically pending species question for the same request and selected dataset. Use its exact offered pending handle and normalize the explicit declaration to the offered human or mouse value. Meaning is yours to interpret; never infer species from filenames, dimensions, features, available checkpoints or unrelated datasets.',
             'Uncertainty or ambiguous species requires clarify/ambiguous_species; another species requires clarify/unsupported_species; a conflicting declaration requires clarify/conflicting_species. Do not guess or emit arbitrary scientific input dictionaries.',

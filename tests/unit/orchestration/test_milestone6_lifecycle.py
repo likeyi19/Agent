@@ -23,7 +23,6 @@ from agent.orchestration import (
     ToolRegistry,
     build_default_tool_registry,
 )
-from agent.tools import build_cell_neighbors
 
 
 class SimulatedProcessExit(BaseException):
@@ -195,6 +194,40 @@ def test_missing_neighbors_checkpoint_is_rejected_before_downstream_resume(
     )
     assert neighbor_call.call_count == 1
     cluster_call.assert_not_called()
+    failed = store.load("request-1:run")
+    assert failed.lifecycle_status is RunLifecycleStatus.FAILED
+    assert tuple(step.status for step in failed.steps) == (
+        StepStatus.SUCCEEDED, StepStatus.SKIPPED, StepStatus.SKIPPED,
+    )
+    assert failed.steps[0].verification.artifact_authority == state.steps[0].verification.artifact_authority
+
+
+def test_corrupt_owner_receipt_fails_resume_without_fresh_scientific_verification(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.analysis import neighbors_publication
+    plan, registry, store, neighbor_call = _interrupted_after_neighbors(tmp_path)
+    state = store.load("request-1:run")
+    authority = state.steps[0].verification.artifact_authority
+    receipt = next(Path(entry['path']) for entry in authority['files']
+                   if entry['path'].endswith('.receipt.json'))
+    receipt.write_bytes(receipt.read_bytes() + b'corrupt')
+    scientific = Mock(side_effect=AssertionError('corrupt resume repeated scientific verification'))
+    monkeypatch.setattr(neighbors_publication, 'verify_neighbors_publication', scientific)
+    downstream = Mock(side_effect=AssertionError('corrupt resume invoked downstream science'))
+    guarded = ToolRegistry(tuple(replace(registry.get(name), function=downstream)
+        if name in ('cluster_cells', 'compute_cell_umap') else registry.get(name)
+        for name in registry.names()))
+    result = AgentRuntime(planner=FixedPlanner(plan), registry=guarded, run_store=store).resume('request-1:run')
+    assert result.status is RunStatus.FAILED
+    assert any(error.code == 'PERSISTED_STEP_REVALIDATION_FAILED' for error in result.errors)
+    assert tuple(step.status for step in result.steps) == (
+        StepStatus.SUCCEEDED, StepStatus.SKIPPED, StepStatus.SKIPPED,
+    )
+    assert store.load('request-1:run').steps[0].verification.artifact_authority == authority
+    assert neighbor_call.call_count == 1
+    scientific.assert_not_called()
+    downstream.assert_not_called()
 
 
 def test_new_tool_policy_snapshot_and_version_drift_are_authoritative(
@@ -236,16 +269,14 @@ def test_cancellation_after_neighbors_prevents_next_downstream_stage(
 ) -> None:
     embedding_path, cell_ids_path = _embedding_artifacts(tmp_path)
     plan = _plan(tmp_path, embedding_path, cell_ids_path)
-    prepared = build_cell_neighbors(
-        embedding_path, cell_ids_path, tmp_path / "prepared"
-    )
     store = FileRunStore(tmp_path / "store")
+    default = build_default_tool_registry()
 
     def cancel_after_neighbor(**kwargs):
+        produced = default.get("build_cell_neighbors").function(**kwargs)
         store.request_cancellation("request-1:run")
-        return prepared
+        return produced
 
-    default = build_default_tool_registry()
     cluster_call = Mock(side_effect=AssertionError("cancelled run invoked clustering"))
     umap_call = Mock(side_effect=AssertionError("cancelled run invoked UMAP"))
     registry = ToolRegistry(

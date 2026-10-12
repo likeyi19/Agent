@@ -19,7 +19,8 @@ def _qualified_records(store, run_id):
     return {} if loader is None else loader(run_id)
 
 
-def _accepted(store, run_id, step_id):
+def _accepted_step(store, run_id, step_id):
+    """Read the accepted execution anchor without granting artifact authority."""
     state = store.load(run_id)
     if state.run_id != run_id or state.plan is None:
         raise AuthorityError('Missing accepted execution.')
@@ -34,9 +35,14 @@ def _accepted(store, run_id, step_id):
             or verification is None or not verification.passed or verification.target_type != 'step'
             or verification.target_id != step_id):
         raise AuthorityError('No recorded scientific authority; legacy qualification is not implicit.')
+    return stored, step, state
+
+
+def _accepted(store, run_id, step_id):
+    stored, step, state = _accepted_step(store, run_id, step_id)
     spec = build_default_tool_registry().get(step.tool_name)
     identity = execution_identity(run_id, state.plan, step, spec)
-    original = verification.artifact_authority
+    original = stored.verification.artifact_authority
     qualified = _qualified_records(store, run_id).get(step_id)
     if original is not None:
         previous = VerifiedArtifactAuthority(original)
@@ -337,6 +343,8 @@ def resume_annotation_authorities(function):
     from functools import wraps
     @wraps(function)
     def resume(runtime, run_id):
+        from contextlib import ExitStack
+        from .run_store import RunStoreError
         from agent.schemas.run_state import RunLifecycleStatus
         store = runtime._required_run_store()
         state = store.load(run_id)
@@ -345,11 +353,24 @@ def resume_annotation_authorities(function):
             with accepted_authorities(store, run_id):
                 return function(runtime, run_id)
         from agent.tools.scientific_authority import hooks_for_tool
-        if (state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
-                RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}
-                or not any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
-                    or hooks_for_tool(s.tool_name, runtime._registry) is not None for s in state.steps)):
+        if state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
+                RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}:
             return function(runtime, run_id)
-        with accepted_authorities(store, run_id):
+        if any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+               for s in state.steps):
+            with accepted_authorities(store, run_id):
+                return function(runtime, run_id)
+        if not any(hooks_for_tool(s.tool_name, runtime._registry) is not None for s in state.steps):
+            return function(runtime, run_id)
+        # Restore failures belong to completed-step revalidation. Catch only
+        # entry failures; execution and final authority checks retain their own
+        # error boundaries, and no failed restoration permits fresh science.
+        with ExitStack() as restored:
+            try:
+                restored.enter_context(accepted_authorities(store, run_id))
+            except RunStoreError:
+                raise
+            except (ValueError, OSError, RuntimeError) as exc:
+                return runtime._fail_authority_restoration(state, exc)
             return function(runtime, run_id)
     return resume

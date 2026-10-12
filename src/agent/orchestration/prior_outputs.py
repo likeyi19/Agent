@@ -199,6 +199,46 @@ def binding_for_locator(locator, store, registry):
     return bind_output(store, registry, locator.run_id, locator.step_id, ports[0].name)
 
 
+def _optional_member_binding(run_id, step_id, output_key, anchor, store, registry):
+    """Classify accepted metadata before using the existing strict binding path.
+
+    Unsupported ports and accepted outputs without current authority remain
+    readable history. Recorded authorities are validated even when their output
+    member is not executable; a broken record never becomes ordinary absence.
+    """
+    from .verification_authority import _accepted, _accepted_step, _qualified_records
+    state = store.load(run_id)
+    if state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
+        raise AuthorityError('Historical source run is not terminal successful.')
+    stored, _, _ = _accepted_step(store, run_id, step_id)
+    if accepted_step_digest(stored) != anchor or output_key not in stored.result:
+        raise AuthorityError('Active locator accepted-step anchor changed.')
+    qualified = _qualified_records(store, run_id)
+    if not set(qualified) <= {source.step_id for source in state.steps}:
+        raise AuthorityError('Qualification refers to an unknown accepted step.')
+    authority = None
+    if stored.verification.artifact_authority is not None or step_id in qualified:
+        _, authority, _, _ = _accepted(store, run_id, step_id)
+    semantic = registry.get(stored.tool_name).semantic_planning
+    ports = [] if semantic is None else [port for port in semantic.producer_ports
+        if output_key in {member.field_name for member in port.members}]
+    if len(ports) > 1:
+        raise AuthorityError('Active locator does not identify a unique semantic artifact.')
+    from agent.tools.scientific_authority import qualified_port
+    if (not ports or not qualified_port(stored.tool_name, ports[0].name, registry)
+            or authority is None or authority.record['schema_version'] != 2):
+        if accepted_step_digest(_accepted_step(store, run_id, step_id)[0]) != anchor:
+            raise AuthorityError('Active locator accepted-step anchor changed.')
+        return None
+    return bind_output(store, registry, run_id, step_id, ports[0].name)
+
+
+def optional_binding_for_locator(locator, store, registry):
+    """Return absence only for a valid accepted, non-reusable output member."""
+    return _optional_member_binding(locator.run_id, locator.step_id, locator.output_key,
+                                    locator.accepted_step_sha256, store, registry)
+
+
 def validate_active_outputs(locators, store, registry):
     """Check explicit active publications against owner-described dependency closure.
 
@@ -208,13 +248,20 @@ def validate_active_outputs(locators, store, registry):
     from pathlib import Path
     from agent.tools.data.authority_context import VerificationContext
     from agent.tools.scientific_authority import tool_kind
-    from .verification_authority import _accepted, _load_context
+    from agent.schemas import StepOutputRef
+    from agent.schemas.verification_authority import digest
+    from .verification_authority import _accepted, _accepted_step, _load_context
+    from .executor import PlanExecutor, _TraceRecorder
     context = VerificationContext()
     active = {}
     selected = []
+    nonreusable = []
     loaded = set()
     for locator in locators:
-        binding = binding_for_locator(locator, store, registry)
+        binding = optional_binding_for_locator(locator, store, registry)
+        if binding is None:
+            nonreusable.append(locator)
+            continue
         if binding.run_id not in loaded:
             merge_context(context, _load_context(store, binding.run_id, 'historical_verified_sources.v1'))
             loaded.add(binding.run_id)
@@ -238,4 +285,53 @@ def validate_active_outputs(locators, store, registry):
             check(dep['kind'], dep['manifest_path'], dep['manifest_sha256'])
     for item in selected:
         check(*item)
+    # Reporting results may lack reusable owner authority. Their exact accepted
+    # plans still bind consumed qualified sources, including same-plan chains.
+    # Follow argument references only; control dependencies imply no lineage.
+    walked = set()
+    walking = set()
+    executor = PlanExecutor(registry)
+
+    def checked_binding(binding):
+        validate_binding(binding, store=store, registry=registry)
+        if binding.run_id not in loaded:
+            merge_context(context, _load_context(store, binding.run_id, 'historical_verified_sources.v1'))
+            loaded.add(binding.run_id)
+        _, authority, _, _ = _accepted(store, binding.run_id, binding.step_id)
+        check(tool_kind(binding.tool_name, registry), authority.record['publication_path'],
+              authority.record['manifest_sha256'])
+
+    def walk_step(run_id, step_id):
+        key = (run_id, step_id)
+        if key in walking:
+            raise AuthorityError('Cyclic accepted output dependency closure.')
+        if key in walked:
+            return
+        walking.add(key)
+        state = store.load(run_id)
+        if state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
+            raise AuthorityError('Historical source run is not terminal successful.')
+        stored, step, _ = _accepted_step(store, run_id, step_id)
+        validate_step_references(step, registry)
+        for argument in step.arguments.values():
+            if isinstance(argument, PriorOutputRef):
+                checked_binding(argument.binding)
+            elif isinstance(argument, StepOutputRef):
+                source, _, _ = _accepted_step(store, run_id, argument.step_id)
+                binding = _optional_member_binding(run_id, argument.step_id, argument.output_key,
+                    accepted_step_digest(source), store, registry)
+                if binding is not None:
+                    checked_binding(binding)
+                walk_step(run_id, argument.step_id)
+        resolved = executor._resolve_arguments(step,
+            {source.step_id: source.result for source in state.steps if source.result is not None},
+            _TraceRecorder())
+        if digest(resolved) != digest(stored.resolved_arguments):
+            raise AuthorityError('Accepted scientific reference differs from its resolved identity.')
+        walking.remove(key)
+        walked.add(key)
+
+    with prior_output_store(store):
+        for locator in nonreusable:
+            walk_step(locator.run_id, locator.step_id)
     context.validate_anchors()

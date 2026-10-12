@@ -6,6 +6,7 @@ Completing unfinished presentation is a separate explicit operation.
 from dataclasses import replace
 import hashlib
 from pathlib import Path
+from types import MappingProxyType
 
 from agent.orchestration.run_store import RunNotFoundError
 from agent.schemas import AgentRequest, RunMode, RunStatus, StepStatus
@@ -429,3 +430,50 @@ class AnalysisSessions:
                 items.append(ActiveContextItem(f'ctx.{len(items)}', binding))
                 bindings.add(binding)
         return ActivePlanningContext(session_id, revision.revision_id, turn.base_generation, tuple(items))
+
+    def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True):
+        """Project exact captured executable outputs before a SessionTurn exists.
+
+        Metadata projection grants no scientific readiness. Execution requests
+        additionally validate the existing publication closure, without rebuilding
+        science. The captured base is never replaced by the mutable active pointer.
+        """
+        from agent.orchestration.active_context import ActivePlanningContext, ActiveContextItem
+        from agent.orchestration.prior_outputs import optional_binding_for_locator, validate_binding
+        from agent.schemas.orchestration import _serialize
+        if type(integrity) is not bool:
+            raise TypeError('Planning context integrity policy must be boolean.')
+        state = self.load(session_id)
+        matches = [item for item in state.interactions if item.turn_id == turn_id]
+        if len(matches) != 1:
+            raise SessionError('Unknown captured interaction for planning context.')
+        interaction = matches[0]
+        if interaction.base_revision_id is None:
+            return None, MappingProxyType({})
+        revision = next((item for item in state.revisions
+                         if item.revision_id == interaction.base_revision_id), None)
+        captured = _serialize(interaction.snapshot)
+        base = captured['bases'].get(interaction.base_revision_id)
+        from dataclasses import asdict
+        if (revision is None or captured['relations'].get('current') != revision.revision_id
+                or base is None or base.get('revision_id') != revision.revision_id
+                or base.get('outputs') != [asdict(output) for output in revision.outputs]):
+            raise SessionError('Planning context differs from its captured Session revision.')
+        bindings = {}
+        for output in revision.outputs:
+            binding = optional_binding_for_locator(output, self._application.run_store,
+                                                   self._application.registry)
+            if binding is None:
+                continue
+            if binding not in bindings:
+                if integrity:
+                    validate_binding(binding, store=self._application.run_store,
+                                     registry=self._application.registry, integrity=True)
+                bindings[binding] = []
+            bindings[binding].append(output)
+        if not bindings:
+            return None, MappingProxyType({})
+        items = tuple(ActiveContextItem(f'ctx.{index}', binding)
+                      for index, binding in enumerate(bindings))
+        locators = MappingProxyType({item.handle: tuple(bindings[item.binding]) for item in items})
+        return ActivePlanningContext(session_id, revision.revision_id, interaction.base_generation, items), locators

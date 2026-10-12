@@ -394,6 +394,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             visible['dialogue']['pending_prerequisite'] = pending_public
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
+        context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
+        if context is not None:
+            visible['dialogue']['planning_context'] = list(context.public_items())
         decision = interpret(interpreter, utterance, visible)
         if isinstance(decision, Execute) and (decision.argument is not None or decision.arguments) and decision.operation != 'plan':
             raise IntentError('unsupported_intent')

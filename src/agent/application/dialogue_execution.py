@@ -125,7 +125,8 @@ def _replay_initial_inputs(registry, interaction, declarations):
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
             group_role_inputs(binding, roles, registry), declarations)
-        expected = RegisteredInputGroup(binding.members, values, roles=roles).attribution()
+        expected = RegisteredInputGroup(binding.members, values, roles=roles,
+            resource_choice=binding.resource_choice).attribution()
         if _serialize(admitted.get('registered_input')) != expected:
             raise ValueError('Scientific input role attribution changed.')
         return values
@@ -144,7 +145,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
             raise ValueError('Captured resource catalog changed.')
         values, error = _select_declared_resource(values, resources)
         binding = RegisteredInput(original['resource_id'], original['record_sha256'], original['tool_name'],
-            values, 'h5ad-science.v1', error)
+            values, 'h5ad-science.v1', error, original.get('resource_choice'))
         if _serialize(admitted.get('registered_input')) != binding.attribution():
             raise ValueError('Resource selection changed registered attribution.')
     elif receipt is not None:
@@ -191,7 +192,7 @@ def _validate_resolution_record(interaction):
                     raise ValueError('Declaration changed other received inputs.')
                 original = interaction.submission.get('registered_input')
                 if original is not None and any(admitted.get('registered_input', {}).get(k) != original.get(k)
-                        for k in ('resource_id', 'record_sha256', 'tool_name')):
+                        for k in ('resource_id', 'record_sha256', 'tool_name', 'resource_choice')):
                     raise ValueError('Declaration changed the registered source.')
             else:
                 values = _serialize(admitted['inputs'])
@@ -247,7 +248,8 @@ def _validate_argument_record(interaction):
                     # H5AD composition changes its binding digest, never source identities.
                     before = interaction.submission.get('registered_input', {})
                     after = admitted['registered_input']
-                    if any(before.get(k) != after.get(k) for k in ('resource_id', 'record_sha256', 'tool_name')):
+                    if any(before.get(k) != after.get(k)
+                           for k in ('resource_id', 'record_sha256', 'tool_name', 'resource_choice')):
                         raise ValueError('Argument changed registered source.')
             else:
                 names = {_parameter_input(registry, d.tool, d.argument)[0] for d in declarations}
@@ -430,7 +432,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         original_metadata = origin.submission['registered_input']
         current_metadata = (interaction.submission or {}).get('registered_input')
         if (current_metadata is not None
-                and original_metadata.get('composition') == 'scientific-role-selection.v1'
+                and (original_metadata.get('composition') == 'scientific-role-selection.v1'
+                     or 'resource_choice' in original_metadata or 'resource_choice' in current_metadata)
                 and _serialize(current_metadata) != _serialize(original_metadata)):
             raise IntentError('invalid_prerequisite')
         LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry).validate_submission(
@@ -637,6 +640,11 @@ def validate_prerequisite(interaction, preceding):
         origin = next(i for i in preceding if i.turn_id == continuation['origin_turn_id'])
         original = execution_submission(origin)
         metadata = admitted.get('registered_input', {})
+        original_choice = original['registered_input'].get('resource_choice')
+        received_choice = (interaction.submission or {}).get('registered_input', {}).get('resource_choice')
+        expected_choice = received_choice if received_choice is not None else original_choice
+        if metadata.get('resource_choice') != expected_choice:
+            raise SessionError('Continuation changed its captured resource choice.')
         if ('resolution' in admitted.get('inputs', {}) and 'argument' not in admitted and 'arguments' not in admitted
                 and 'resolution' not in original['execution_inputs']):
             from agent.orchestration.registry import build_default_tool_registry
@@ -707,6 +715,8 @@ def admit_species(sessions, interaction, decision, resources):
             or not any(_missing_species(error, original) for error in run.errors)):
         raise IntentError('invalid_prerequisite')
     current = {} if interaction.submission is None else _serialize(interaction.submission)
+    original_choice = original['registered_input'].get('resource_choice')
+    received_choice = current.get('registered_input', {}).get('resource_choice')
     typed_species = current.get('execution_inputs', {}).get('species')
     if typed_species is not None and typed_species != decision.species:
         raise IntentError('conflicting_species')
@@ -751,7 +761,9 @@ def admit_species(sessions, interaction, decision, resources):
                    for k in ('checkpoint_path', 'expected_resource_identity') if k in current_inputs)):
         raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
     completed = owner.compose_h5ad(binding.resource_id, declarations,
-                                  resource_selection_error=selection_error)
+                                  resource_selection_error=selection_error,
+                                  resource_choice=(received_choice if received_choice is not None
+                                                   else binding.resource_choice))
     admitted = dict(kind='execute', operation='plan', tool=origin.admitted['tool'],
         revision_id=interaction.base_revision_id,
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
@@ -846,7 +858,8 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
                         resource_context_sha256=resource_context_digest(epizoo_resources))
                 completed = owner.compose_h5ad(original.resource_id,
                     {k: v for k, v in values.items() if k != 'input_path'},
-                    resource_selection_error=selection_error)
+                    resource_selection_error=selection_error,
+                    resource_choice=original.resource_choice)
                 admitted.update(inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution())
             else:
                 # Other registered-input categories keep their exact resource

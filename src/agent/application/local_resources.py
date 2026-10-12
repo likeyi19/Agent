@@ -91,6 +91,7 @@ _MESSAGES = {
     'LOCAL_RESOURCE_RECORD_INVALID': 'The local resource record is incomplete, corrupt, or invalid.',
     'LOCAL_RESOURCE_CONFLICT': 'This registration identity already belongs to a different source record.',
     'LOCAL_RESOURCE_BINDING_INVALID': 'The registered input binding or its explicit scientific declarations are invalid.',
+    'LOCAL_RESOURCE_CONSUMPTION_MISMATCH': 'The plan does not consume the exact selected scientific resource bindings.',
     'LOCAL_RESOURCE_OPERATION_UNSUPPORTED': 'This operation is not supported by the local resource binding boundary.',
     'LOCAL_RESOURCE_DECLARATION_REQUIRED': 'Required explicit scientific input declarations are missing.',
     'LOCAL_RESOURCE_DISCOVERY_LIMIT': 'The registered resource listing exceeds its supported bound.',
@@ -351,6 +352,7 @@ class RegisteredInput:
     execution_inputs: object
     composition: str | None = None
     resource_selection_error: str | None = None
+    resource_choice: object = None
 
     def __post_init__(self):
         if type(self.tool_name) is not str or self.tool_name not in _OPERATION_TYPES:
@@ -371,6 +373,7 @@ class RegisteredInput:
                 raise ValueError('Invalid record digest.')
             values = _input_mapping(self.execution_inputs)
             object.__setattr__(self, 'execution_inputs', freeze_json_mapping(values, 'execution_inputs'))
+            object.__setattr__(self, 'resource_choice', _resource_choice(self.resource_choice))
         except (ValueError, TypeError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
@@ -381,7 +384,27 @@ class RegisteredInput:
             result['composition'] = self.composition
         if self.resource_selection_error is not None:
             result['resource_selection_error'] = self.resource_selection_error
+        if self.resource_choice is not None:
+            result['resource_choice'] = _serialize(self.resource_choice)
         return result
+
+
+def _resource_choice(value):
+    """Capture operator choice identity; this token grants no scientific authority.
+
+    The trusted composition boundary supplies the definition digest. Scientific
+    paths and resource pins remain in the existing typed execution inputs.
+    """
+    if value is None:
+        return None
+    if (not isinstance(value, Mapping)
+            or set(value) != {'input_set_id', 'definition_sha256'}
+            or type(value['input_set_id']) is not str
+            or re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', value['input_set_id']) is None
+            or type(value['definition_sha256']) is not str
+            or _SHA.fullmatch(value['definition_sha256']) is None):
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    return freeze_json_mapping(dict(value), 'resource_choice')
 
 
 @dataclass(frozen=True)
@@ -396,6 +419,7 @@ class RegisteredInputGroup:
     execution_inputs: object
     roles: object = ()
     composition: str = _GROUP_COMPOSITION
+    resource_choice: object = None
 
     def __post_init__(self):
         try:
@@ -422,11 +446,15 @@ class RegisteredInputGroup:
             object.__setattr__(self, 'roles', tuple(freeze_json_mapping(r, 'role') for r in roles))
             object.__setattr__(self, 'execution_inputs', freeze_json_mapping(
                 _input_mapping(self.execution_inputs), 'execution_inputs'))
+            object.__setattr__(self, 'resource_choice', _resource_choice(self.resource_choice))
         except (ValueError, TypeError, KeyError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
     def attribution(self):
-        return dict(composition=self.composition, members=_serialize(self.members), roles=_serialize(self.roles))
+        result = dict(composition=self.composition, members=_serialize(self.members), roles=_serialize(self.roles))
+        if self.resource_choice is not None:
+            result['resource_choice'] = _serialize(self.resource_choice)
+        return result
 
 
 def _group_roles(values, member_count):
@@ -597,6 +625,7 @@ class RegisteredInputCollection:
     execution_inputs: object
     composition: str | None = None
     resource_selection_error: str | None = None
+    resource_choice: object = None
 
     def __post_init__(self):
         if type(self.tool_name) is not str or self.tool_name not in _COLLECTION_OPERATIONS:
@@ -613,6 +642,7 @@ class RegisteredInputCollection:
         object.__setattr__(self, 'members', tuple(freeze_json_mapping(member, 'member') for member in members))
         values = _input_mapping(self.execution_inputs)
         object.__setattr__(self, 'execution_inputs', freeze_json_mapping(values, 'execution_inputs'))
+        object.__setattr__(self, 'resource_choice', _resource_choice(self.resource_choice))
         if len(canonical(self.attribution())) > MAX_COLLECTION_BYTES:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
 
@@ -623,6 +653,8 @@ class RegisteredInputCollection:
             result['composition'] = self.composition
         if self.resource_selection_error is not None:
             result['resource_selection_error'] = self.resource_selection_error
+        if self.resource_choice is not None:
+            result['resource_choice'] = _serialize(self.resource_choice)
         return result
 
 
@@ -1069,10 +1101,12 @@ class LocalResourceAdmission:
         except (ValueError, TypeError, OSError, KeyError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
-    def resolve(self, resource_id, *, tool_name, scientific_inputs=None, verify_source=True):
+    def resolve(self, resource_id, *, tool_name, scientific_inputs=None,
+                resource_choice=None, verify_source=True):
         record = self.load(resource_id)
         inputs = self._binding_inputs(record, tool_name, scientific_inputs)
-        binding = RegisteredInput(record.resource_id, record.record_sha256, tool_name, inputs)
+        binding = RegisteredInput(record.resource_id, record.record_sha256, tool_name, inputs,
+                                  resource_choice=resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1120,7 +1154,7 @@ class LocalResourceAdmission:
         return values | dict(input_path=record.source_path)
 
     def compose_h5ad(self, resource_id, scientific_inputs=None, *,
-                     resource_selection_error=None, verify_source=True):
+                     resource_selection_error=None, resource_choice=None, verify_source=True):
         """One registered H5AD plus explicitly typed focused analysis companions.
 
         No operation is selected here. Required declarations/resources are checked
@@ -1131,7 +1165,7 @@ class LocalResourceAdmission:
         if resource_selection_error is not None and 'expected_resource_identity' in inputs:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         binding = RegisteredInput(record.resource_id, record.record_sha256, 'inspect_scATAC', inputs,
-                                  _H5AD_COMPOSITION, resource_selection_error)
+                                  _H5AD_COMPOSITION, resource_selection_error, resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1178,7 +1212,7 @@ class LocalResourceAdmission:
                           source_index_sha256=record.source_index['sha256'])
         return values | source
 
-    def compose_fragments(self, resource_id, scientific_inputs, *, verify_source=True):
+    def compose_fragments(self, resource_id, scientific_inputs, *, resource_choice=None, verify_source=True):
         """One registered source with explicit import/QC/selection/matrix inputs.
 
         This mapping selects no scientific steps and fills no missing downstream
@@ -1186,7 +1220,8 @@ class LocalResourceAdmission:
         """
         record = self.load(resource_id)
         binding = RegisteredInput(record.resource_id, record.record_sha256, 'import_scATAC_fragments',
-            self._fragments_inputs(record, scientific_inputs), _FRAGMENTS_COMPOSITION)
+            self._fragments_inputs(record, scientific_inputs), _FRAGMENTS_COMPOSITION,
+            resource_choice=resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1227,19 +1262,21 @@ class LocalResourceAdmission:
                              source_path=record.source_path, source_sha256=record.source_sha256)
 
     def compose_bam(self, resource_id, scientific_inputs=None, *,
-                    resource_selection_error=None, verify_source=True):
+                    resource_selection_error=None, resource_choice=None, verify_source=True):
         """One BAM with explicit inspection/producer/downstream request inputs."""
         record = self.load(resource_id)
         binding = RegisteredInput(record.resource_id, record.record_sha256, 'inspect_raw_scATAC',
-            self._bam_inputs(record, scientific_inputs), _BAM_COMPOSITION, resource_selection_error)
+            self._bam_inputs(record, scientific_inputs), _BAM_COMPOSITION, resource_selection_error,
+            resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
-    def resolve_collection(self, members, *, tool_name, scientific_inputs=None):
+    def resolve_collection(self, members, *, tool_name, scientific_inputs=None, resource_choice=None):
         members = _members(members)
         records = self._collection_records(members)
         inputs = self._collection_inputs(records, tool_name, scientific_inputs)
-        binding = RegisteredInputCollection(members, _collection_sha256(members), tool_name, inputs)
+        binding = RegisteredInputCollection(members, _collection_sha256(members), tool_name, inputs,
+                                           resource_choice=resource_choice)
         self.validate_binding(binding)
         return binding
 
@@ -1277,14 +1314,14 @@ class LocalResourceAdmission:
             raw_assay='TENX_ATAC', fastq_layout=records[0].fastq_member['fastq_layout'])
 
     def compose_fastq_collection(self, resource_id, scientific_inputs=None, *,
-                                resource_selection_error=None, verify_source=True):
+                                resource_selection_error=None, resource_choice=None, verify_source=True):
         collection = self.load(resource_id)
         if type(collection) is not LocalResourceCollectionRecord:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         records = self._collection_records(collection.members)
         binding = RegisteredInputCollection(collection.members, collection.collection_sha256,
             'inspect_raw_scATAC', self._fastq_inputs(records, scientific_inputs),
-            _FASTQ_COMPOSITION, resource_selection_error)
+            _FASTQ_COMPOSITION, resource_selection_error, resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1339,7 +1376,7 @@ class LocalResourceAdmission:
             self._registry = build_default_tool_registry()
         return self._registry
 
-    def compose_group(self, resource_ids, scientific_inputs=None, *, verify_source=True):
+    def compose_group(self, resource_ids, scientific_inputs=None, *, resource_choice=None, verify_source=True):
         """Capture ordered existing records; selection alone proposes no roles."""
         if type(resource_ids) not in (tuple, list) or not 2 <= len(resource_ids) <= MAX_GROUP_MEMBERS:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
@@ -1348,7 +1385,8 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         members = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
             source_path=r.source_path, input_type=r.input_type, label=r.label) for r in records]
-        binding = RegisteredInputGroup(members, _input_mapping(scientific_inputs))
+        binding = RegisteredInputGroup(members, _input_mapping(scientific_inputs),
+                                       resource_choice=resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1358,7 +1396,7 @@ class LocalResourceAdmission:
     def bind_group(self, binding, roles, *, verify_source=False):
         self.validate_binding(binding, verify_source=verify_source)
         values = group_role_inputs(binding, roles, self._group_registry())
-        result = RegisteredInputGroup(binding.members, values, roles)
+        result = RegisteredInputGroup(binding.members, values, roles, resource_choice=binding.resource_choice)
         self.validate_binding(result, verify_source=False)
         return result
 
@@ -1414,16 +1452,17 @@ class LocalResourceAdmission:
     def _submission_binding(submission):
         try:
             metadata = submission['registered_input']
+            fields = set(metadata) - {'resource_choice'}
             scalar = {'resource_id', 'record_sha256', 'tool_name'}
-            if set(metadata) == {'composition', 'members', 'roles'}:
+            if fields == {'composition', 'members', 'roles'}:
                 binding_type = RegisteredInputGroup
-            elif (set(metadata) == scalar or
-                    (scalar | {'composition'} <= set(metadata)
-                     and set(metadata) <= scalar | {'composition', 'resource_selection_error'})):
+            elif (fields == scalar or
+                    (scalar | {'composition'} <= fields
+                     and fields <= scalar | {'composition', 'resource_selection_error'})):
                 binding_type = RegisteredInput
-            elif (set(metadata) == {'members', 'collection_sha256', 'tool_name'} or
-                    ({'members', 'collection_sha256', 'tool_name', 'composition'} <= set(metadata)
-                     and set(metadata) <= {'members', 'collection_sha256', 'tool_name',
+            elif (fields == {'members', 'collection_sha256', 'tool_name'} or
+                    ({'members', 'collection_sha256', 'tool_name', 'composition'} <= fields
+                     and fields <= {'members', 'collection_sha256', 'tool_name',
                                             'composition', 'resource_selection_error'})):
                 binding_type = RegisteredInputCollection
             else:
@@ -1604,6 +1643,47 @@ class LocalResourceAdmission:
         if records:
             self._verify_records(records)
 
+    def _validate_resource_choice_consumption(self, binding, steps, *, resolved=False):
+        """Check selected request-resource identities through existing Registry ports.
+
+        This association check opens no resource and issues no scientific proof.
+        Ports allowing upstream resources retain the compiler's exact dependency
+        contract; request-only resource ports must consume their captured members.
+        """
+        if binding.resource_choice is None:
+            return
+        from agent.orchestration.registry import ArtifactSemanticKind
+        kinds = {ArtifactSemanticKind.SCATAC_REFERENCE_BUNDLE,
+                 ArtifactSemanticKind.SCATAC_QC_REFERENCE,
+                 ArtifactSemanticKind.SCATAC_LIBRARY_CONTEXT}
+        values = _serialize(binding.execution_inputs)
+        registry = self._group_registry()
+        for step in steps:
+            specification = registry.get(step.tool_name)
+            if specification.semantic_planning is None:
+                continue
+            declared = dict(specification.required_arguments) | dict(specification.optional_arguments)
+            arguments = step.resolved_arguments if resolved else step.arguments
+            for port in specification.semantic_planning.consumer_ports:
+                if port.accepted_upstream_types or not any(
+                    declared[member.field_name].planning is not None
+                    and kinds.intersection(declared[member.field_name].planning.accepted_artifact_kinds)
+                    for member in port.members
+                ):
+                    continue
+                sources = [source for source in port.request_sources
+                           if all(member.input_name in values for member in source.members)]
+                if not sources:
+                    continue
+                if len(sources) != 1:
+                    raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
+                fields = {member.name: member.field_name for member in port.members}
+                if not port.required and all(arguments.get(field) is None for field in fields.values()):
+                    continue
+                if any(arguments.get(fields[member.name]) != values[member.input_name]
+                       for member in sources[0].members):
+                    raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
+
     def validate_plan(self, submission, plan):
         """Check exact registered-source/resource consumption before execution.
 
@@ -1613,6 +1693,7 @@ class LocalResourceAdmission:
         from agent.schemas.orchestration import StepOutputRef
         binding = self._submission_binding(submission)
         values = self.validate_binding(binding)
+        self._validate_resource_choice_consumption(binding, plan.steps)
         if type(binding) is RegisteredInputGroup:
             self._validate_group_consumption(binding, plan.steps)
             return
@@ -1685,6 +1766,7 @@ class LocalResourceAdmission:
         Completed historical turns do not call this guard.
         """
         binding = self._submission_binding(submission)
+        self._validate_resource_choice_consumption(binding, steps, resolved=True)
         if type(binding) is RegisteredInputGroup:
             # This API runs only at first Session acceptance. Recheck the pins
             # after owner verification/presentation too; terminal history reads

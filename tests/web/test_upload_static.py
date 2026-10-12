@@ -172,7 +172,7 @@ def test_bam_has_one_source_and_context_selection_keeps_inspection_available():
     assert 'bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : ".h5ad"' in upload
     assert 'element("upload-index-fields").hidden = !fragments' in upload
     context = section('function inputContext()', 'function selectedResourceType()')
-    assert 'No qualified BAM context — inspection available' in context
+    assert 'Choose approved BAM context or inspect' in context
     assert 'item.bam_default === true' in context
     assert 'configured.bam_companion === true' in context
     companion = section('function selectedCompanion(', 'function saveResourceSelection()')
@@ -180,6 +180,15 @@ def test_bam_has_one_source_and_context_selection_keeps_inspection_available():
     assert not any(value in upload + context + companion for value in (
         'inspect_raw_scATAC', 'prepare_scATAC_bam_fragments', 'source_sha256', 'library_context_path',
     ))
+
+
+def test_raw_resource_selector_filters_candidates_without_claiming_scientific_qualification():
+    context = section('function inputContext()', 'function selectedResourceType()')
+    for family in ('fragments', 'bam', 'fastq'):
+        assert f'{family} && !(configured && configured.{family}_companion === true)' in context
+    assert 'No qualified' not in context
+    assert 'Missing prerequisites are reported when you send the request.' in context
+    assert 'library_context_path' not in context and 'reference_bundle_path' not in context
 
 
 def test_fastq_attribution_and_completion_stay_in_the_existing_composer():
@@ -238,4 +247,4 @@ def test_fastq_completion_sends_opaque_members_and_does_not_select_a_workflow():
     context = section('function inputContext()', 'function selectedResourceType()')
     assert 'item.fastq_default === true' in context
     assert 'configured.fastq_companion === true' in context
-    assert 'No qualified FASTQ producer context — inspection available' in context
+    assert 'Choose approved FASTQ context or inspect' in context

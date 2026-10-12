@@ -1049,8 +1049,8 @@ function inputContext() {
   const fastqDefaults = state.inputSets.filter((item) => item.fastq_default === true);
   element("input-choice").options[0].textContent = fragments
     ? configuredDefaults.length === 1 ? "Use explicitly configured fragments default" : "Choose approved fragments declarations"
-    : bam ? bamDefaults.length === 1 ? "Use explicitly configured BAM context" : "No qualified BAM context — inspection available"
-      : fastq ? fastqDefaults.length === 1 ? "Use explicitly configured FASTQ context" : "No qualified FASTQ producer context — inspection available"
+    : bam ? bamDefaults.length === 1 ? "Use explicitly configured BAM context" : "Choose approved BAM context or inspect"
+      : fastq ? fastqDefaults.length === 1 ? "Use explicitly configured FASTQ context" : "Choose approved FASTQ context or inspect"
         : "No structured inputs";
   element("input-choice-help").textContent = fragments
     ? "Choose an approved fragments declaration set with a reference, source profile and namespace. Missing prerequisites are reported when you send the request."
@@ -1062,6 +1062,7 @@ function inputContext() {
     const configured = state.inputSets.find((item) => item.input_set_id === option.value);
     option.disabled = Boolean(option.value) && (multiple && configured && (configured.h5ad_companion === true
       || configured.fragments_companion === true || configured.bam_companion === true || configured.fastq_companion === true)
+      || fragments && !(configured && configured.fragments_companion === true)
       || bam && !(configured && configured.bam_companion === true)
       || fastq && !(configured && configured.fastq_companion === true));
     option.hidden = option.disabled;

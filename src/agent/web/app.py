@@ -313,6 +313,20 @@ def _fastq_selection(selected, input_sets):
     return selected.inputs(), None
 
 
+def _input_set_choice(selected, input_sets, family=None):
+    """Capture configured choice identity after the existing selection policy.
+
+    This records operator configuration, never scientific qualification. A
+    default is captured only when its family policy offers exactly one.
+    """
+    if selected is None and family is not None:
+        defaults = tuple(choice for choice in input_sets
+            if getattr(choice, family + '_companion') and getattr(choice, family + '_default'))
+        if len(defaults) == 1:
+            selected = defaults[0]
+    return None if selected is None else selected.resource_choice()
+
+
 def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2,
                uploads=None, epizoo_resources=()):
     """Compose a single lab-host server around one configured domain facade."""
@@ -571,7 +585,8 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                         input_set.fragments_companion, input_set.bam_companion, input_set.fastq_companion))):
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
             inputs = uploads.resources.compose_group(body.resource_ids,
-                scientific_inputs=None if input_set is None else input_set.inputs(), verify_source=False)
+                scientific_inputs=None if input_set is None else input_set.inputs(),
+                resource_choice=_input_set_choice(input_set, input_sets), verify_source=False)
         elif body.resource_id is not None:
             if uploads is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
@@ -581,7 +596,8 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                     raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
                 companion_inputs, selection_error = _fastq_selection(input_set, input_sets)
                 inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
-                    resource_selection_error=selection_error, verify_source=False)
+                    resource_selection_error=selection_error,
+                    resource_choice=_input_set_choice(input_set, input_sets, 'fastq'), verify_source=False)
                 workers.submit(session_id, body, inputs)
                 return {'session_id': session_id, 'turn_id': body.turn_id}
             if selected_source.input_type == 'bam':
@@ -589,14 +605,16 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                     raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
                 companion_inputs, selection_error = _bam_selection(input_set, input_sets)
                 inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
-                    resource_selection_error=selection_error, verify_source=False)
+                    resource_selection_error=selection_error,
+                    resource_choice=_input_set_choice(input_set, input_sets, 'bam'), verify_source=False)
                 workers.submit(session_id, body, inputs)
                 return {'session_id': session_id, 'turn_id': body.turn_id}
             if selected_source.input_type == 'external_fragments':
                 if body.epizoo_resource_id is not None:
                     raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
                 inputs = uploads.resolve(body.resource_id,
-                    scientific_inputs=_fragments_selection(input_set, input_sets), verify_source=False)
+                    scientific_inputs=_fragments_selection(input_set, input_sets),
+                    resource_choice=_input_set_choice(input_set, input_sets, 'fragments'), verify_source=False)
                 workers.submit(session_id, body, inputs)
                 return {'session_id': session_id, 'turn_id': body.turn_id}
             if (selected_source.input_type != 'h5ad'
@@ -612,7 +630,8 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             # Changed operator inputs/pins retain the facade's exact retry
             # conflict behavior; captured scientific work is never replayed.
             inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
-                resource_selection_error=selection_error, verify_source=False)
+                resource_selection_error=selection_error,
+                resource_choice=_input_set_choice(input_set, input_sets), verify_source=False)
         else:
             if input_set is not None and input_set.fastq_companion:
                 raise ResourceAdmissionError('FASTQ_SOURCE_REQUIRED')

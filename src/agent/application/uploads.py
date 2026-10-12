@@ -214,27 +214,31 @@ class H5ADUploadAdmission:
             member_ids, label=label, attribution=_FASTQ_COLLECTION_ATTRIBUTION)
 
     def resolve(self, resource_id, *, scientific_inputs=None,
-                resource_selection_error=None, verify_source=True):
+                resource_selection_error=None, resource_choice=None, verify_source=True):
         record = self._owned(self.resources.load(resource_id))
         # The facade owns new-consumption versus completed-retry lifetime checks.
         # Metadata-only transport resolution must not reopen a historical source.
         if isinstance(record, LocalResourceCollectionRecord):
             return self.resources.compose_fastq_collection(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error, verify_source=verify_source)
+                resource_selection_error=resource_selection_error, resource_choice=resource_choice,
+                verify_source=verify_source)
         if record.input_type == 'fastq':
             raise ResourceAdmissionError('FASTQ_COLLECTION_REQUIRED')
         if record.input_type == 'external_fragments':
             if resource_selection_error is not None:
                 raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
             return self.resources.compose_fragments(resource_id, scientific_inputs,
-                                                   verify_source=verify_source)
+                resource_choice=resource_choice, verify_source=verify_source)
         if record.input_type == 'bam':
             return self.resources.compose_bam(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error, verify_source=verify_source)
+                resource_selection_error=resource_selection_error, resource_choice=resource_choice,
+                verify_source=verify_source)
         if scientific_inputs is not None or resource_selection_error is not None:
             return self.resources.compose_h5ad(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error, verify_source=verify_source)
-        return self.resources.resolve(resource_id, tool_name='inspect_scATAC', verify_source=verify_source)
+                resource_selection_error=resource_selection_error, resource_choice=resource_choice,
+                verify_source=verify_source)
+        return self.resources.resolve(resource_id, tool_name='inspect_scATAC',
+            resource_choice=resource_choice, verify_source=verify_source)
 
     async def receive(self, upload_id, filename, chunks, *, expected_size=None,
                       input_type='h5ad', index_filename=None, source_size=None, fastq_member=None):

@@ -15,6 +15,7 @@ from types import MappingProxyType
 
 from agent.application import InteractiveAgentApplication
 from agent.application.interactive import _inputs
+from agent.application.session_state import digest
 from agent.application.local_resources import QualifiedEpiZooResource, ResourceConfigurationError
 from agent.application.workspace import ManagedWorkspace, ApplicationWorkspaceError
 from agent.orchestration import PlanningModelProfile
@@ -117,6 +118,15 @@ class ScientificInputSet:
     def inputs(self):
         """Return a fresh mapping suitable for the existing submit contract."""
         return _serialize(self.execution_inputs)
+
+    def resource_choice(self):
+        """Return exact operator choice identity, separate from scientific inputs.
+
+        The definition digest captures all declarations and selection policy. It
+        records a configured choice and does not qualify that choice scientifically.
+        """
+        definition = {name: _serialize(getattr(self, name)) for name in self.__dataclass_fields__}
+        return dict(input_set_id=self.input_set_id, definition_sha256=digest(definition))
 
 
 @dataclass(frozen=True)

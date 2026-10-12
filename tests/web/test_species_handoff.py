@@ -108,6 +108,8 @@ def test_mouse_answer_continues_original_requested_analysis_and_accepted_present
         state = harness.service._application.sessions.load('session')
         assert state.generation == 1 and len(state.revisions) == 1
         original, resumed = state.interactions
+        assert _serialize(original.submission['registered_input']['resource_choice']) == inputs[0].resource_choice()
+        assert _serialize(resumed.admitted['registered_input']['resource_choice']) == inputs[0].resource_choice()
         assert original.utterance == objective and resumed.utterance == 'Mouse.'
         assert resumed.admitted['inputs']['species'] == 'mouse'
         assert resumed.admitted['inputs']['input_path'] == original.submission['execution_inputs']['input_path']
@@ -305,6 +307,8 @@ def test_matching_typed_mouse_and_explicit_model_selection_can_complete_pending_
             epizoo_resource_id='mouse-explicit')
         assert result['status'] == 'succeeded', result
         continued = harness.service._application.sessions.load('session').interactions[-1]
+        assert _serialize(continued.submission['registered_input']['resource_choice']) == inputs[-1].resource_choice()
+        assert _serialize(continued.admitted['registered_input']['resource_choice']) == inputs[-1].resource_choice()
         assert continued.admitted['inputs']['species'] == 'mouse'
         assert continued.admitted['inputs']['expected_resource_identity']['resource_id'] == 'mouse-explicit'
         assert harness.science_calls == ['epizoo_embed_cells'] and len(harness.inference_calls) == 1

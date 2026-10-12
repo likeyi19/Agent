@@ -1,6 +1,6 @@
-"""Fail-closed persistence and exact-source checks for shared numeric bindings."""
+"""Fail-closed persistence and exact-source checks for shared declarations."""
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -8,11 +8,19 @@ import pytest
 
 from agent.application import ResearchAgentApplication
 from agent.application.dialogue_execution import (
-    _parameter_input, _validate_argument_record, _validate_resolution_record,
+    _bind_arguments, _check_parameter_plan, _parameter_input,
+    _validate_argument_record, _validate_resolution_record,
 )
-from agent.application.session_state import Interaction, SessionConflictError, SessionError, digest
+from agent.application.session_state import (
+    AnalysisSession, Interaction, SessionConflictError, SessionError, digest,
+)
 from agent.application.turn_decisions import IntentError, LeidenResolution, ScopedArgument
 from agent.orchestration import build_default_tool_registry
+from agent.orchestration.registry import (
+    PlanningProvenanceRole, SemanticPortMember, SemanticRequestMember,
+    SemanticRequestSourceSpec, ToolRegistry,
+)
+from agent.schemas import AgentPlan, PlanStep
 
 from test_scientific_parameter_continuation import (
     BOTH, DEPTH, OBJECTIVE, PROFILE, REQUIRED, TOOL, TSS, SelectionModel,
@@ -193,3 +201,181 @@ def test_pending_received_parameter_cannot_silently_change_or_disappear_without_
         completed = submit(harness, 'remaining', TSS)
     assert calls == {'production': 1, 'verification': 1}
     accepted_step(harness, completed, depth=1)
+
+
+STRING_PAIRS = (
+    ('evaluate_cell_clustering', 'label_key'),
+    ('transfer_cell_labels', 'reference_label_key'),
+    ('evaluate_cell_annotation', 'ground_truth_label_key'),
+)
+
+
+def string_declaration(tool, name, literal='Cell Type_α'):
+    utterance = '🧬 Use the declared column "' + literal + '".'
+    start = utterance.index(literal)
+    return utterance, ScopedArgument(tool, name, literal, start, start + len(literal))
+
+
+def registry_with_tool(registry, changed):
+    return ToolRegistry(tuple(changed if name == changed.name else registry.get(name)
+        for name in registry.names()))
+
+
+@pytest.mark.parametrize('tool,name', STRING_PAIRS)
+def test_string_binding_adds_only_the_declared_canonical_request_input(tool, name):
+    registry = build_default_tool_registry()
+    utterance, candidate = string_declaration(tool, name)
+    received = dict(reference_h5ad_path='/trusted/reference.h5ad',
+        query_h5ad_path='/trusted/query.h5ad', ground_truth_h5ad_path='/trusted/truth.h5ad',
+        resource_context_sha256='a' * 64)
+    before = dict(received)
+    assert _bind_arguments(registry, utterance, received, (candidate,)) == received | {name: candidate.literal}
+    assert received == before
+    with pytest.raises(IntentError, match='conflicting_scientific_parameter'):
+        _bind_arguments(registry, utterance, received | {name: 'Different Column'}, (candidate,))
+
+
+@pytest.mark.parametrize('tool,name', STRING_PAIRS)
+def test_string_declarations_round_trip_exact_source_attribution_without_science(tool, name):
+    utterance, candidate = string_declaration(tool, name)
+    received = dict(reference_h5ad_path='/trusted/reference.h5ad', resource_context_sha256='a' * 64)
+    admitted = dict(kind='execute', operation='plan', tool=tool,
+        inputs=received | {name: candidate.literal}, arguments=[asdict(candidate)])
+    interaction = Interaction('string', utterance, None, 0, dict(relations={}, bases={}),
+        status='admitted', submission=dict(execution_inputs=received), admitted=admitted)
+    state = AnalysisSession('session', interactions=(interaction,))
+    recovered = AnalysisSession.from_dict(json.loads(json.dumps(state.to_dict())))
+    record, = recovered.interactions
+    assert record.utterance == utterance
+    assert dict(record.admitted['arguments'][0]) == asdict(candidate)
+    assert record.admitted['inputs'][name] == candidate.literal
+    _validate_argument_record(record)
+
+
+@pytest.mark.parametrize('mutation', ['literal', 'case', 'span', 'operation', 'source', 'resource_context'])
+def test_string_record_replay_rejects_changed_literal_identity_and_unrelated_source_inputs(mutation):
+    tool, name = STRING_PAIRS[0]
+    utterance, candidate = string_declaration(tool, name)
+    received = dict(reference_h5ad_path='/trusted/reference.h5ad', resource_context_sha256='a' * 64)
+    admitted = dict(kind='execute', operation='plan', tool=tool,
+        inputs=received | {name: candidate.literal}, arguments=[asdict(candidate)])
+    if mutation == 'literal':
+        admitted['arguments'][0]['literal'] = 'Different Column'
+    elif mutation == 'case':
+        admitted['inputs'][name] = candidate.literal.lower()
+    elif mutation == 'span':
+        admitted['arguments'][0]['start'] += 1
+    elif mutation == 'operation':
+        admitted['arguments'][0]['tool'] = 'transfer_cell_labels'
+    elif mutation == 'source':
+        admitted['inputs']['reference_h5ad_path'] = '/unrelated/source.h5ad'
+    else:
+        admitted['inputs']['resource_context_sha256'] = 'b' * 64
+    interaction = Interaction('string', utterance, None, 0, dict(relations={}, bases={}),
+        status='admitted', submission=dict(execution_inputs=received), admitted=admitted)
+    with pytest.raises(SessionError, match='Invalid persisted scientific arguments'):
+        _validate_argument_record(interaction)
+
+
+def test_string_binding_uses_the_registered_request_identity_instead_of_argument_name():
+    registry = build_default_tool_registry()
+    tool, name = STRING_PAIRS[0]
+    spec = registry.get(tool)
+    ports = tuple(replace(port, request_sources=(SemanticRequestSourceSpec('declared_truth_column',
+        (SemanticRequestMember(port.members[0].name, 'declared_truth_column'),)),))
+        if port.name == name else port for port in spec.semantic_planning.consumer_ports)
+    registry = registry_with_tool(registry, replace(spec,
+        semantic_planning=replace(spec.semantic_planning, consumer_ports=ports)))
+    utterance, candidate = string_declaration(tool, name)
+    assert _parameter_input(registry, tool, name)[0] == 'declared_truth_column'
+    assert _bind_arguments(registry, utterance, {}, (candidate,)) == {'declared_truth_column': candidate.literal}
+
+
+@pytest.mark.parametrize('mode', ['alternate_input', 'grouped_source', 'upstream_alternative'])
+def test_string_binding_requires_one_singleton_direct_consumer_source(mode):
+    registry = build_default_tool_registry()
+    tool, name = STRING_PAIRS[0]
+    spec = registry.get(tool)
+    port, = [p for p in spec.semantic_planning.consumer_ports if p.name == name]
+    if mode == 'alternate_input':
+        changed = replace(port, request_sources=port.request_sources + (SemanticRequestSourceSpec(
+            'alternate_truth_column', (SemanticRequestMember(port.members[0].name, 'alternate_truth_column'),)),))
+    elif mode == 'grouped_source':
+        changed = replace(port, members=port.members + (SemanticPortMember('destination', 'output_dir'),),
+            request_sources=(SemanticRequestSourceSpec(name,
+                (SemanticRequestMember(port.members[0].name, name), SemanticRequestMember('destination', 'output_dir'))),))
+    else:
+        changed = replace(port, accepted_upstream_types=('unreviewed-label-column.v1',))
+    ports = tuple(changed if p.name == name else p for p in spec.semantic_planning.consumer_ports
+        if mode != 'grouped_source' or p.name != 'output_dir')
+    registry = registry_with_tool(registry, replace(spec,
+        semantic_planning=replace(spec.semantic_planning, consumer_ports=ports)))
+    with pytest.raises(IntentError):
+        _parameter_input(registry, tool, name)
+
+
+@pytest.mark.parametrize('role', [None, PlanningProvenanceRole.QUERY, PlanningProvenanceRole.BRANCH_PRESERVING])
+def test_string_binding_cannot_treat_query_or_unspecified_roles_as_reference_labels(role):
+    registry = build_default_tool_registry()
+    tool, name = STRING_PAIRS[1]
+    spec = registry.get(tool)
+    arguments = dict(spec.required_arguments)
+    argument_spec = arguments[name]
+    arguments[name] = replace(argument_spec, planning=replace(argument_spec.planning, provenance_role=role))
+    registry = registry_with_tool(registry, replace(spec, required_arguments=arguments))
+    with pytest.raises(IntentError, match='unsupported_intent'):
+        _parameter_input(registry, tool, name)
+
+
+@pytest.mark.parametrize('tool,name', [
+    ('transfer_cell_labels', 'label_key'),
+    ('evaluate_cell_clustering', 'reference_label_key'),
+    ('evaluate_cell_annotation', 'reference_label_key'),
+    ('transfer_cell_labels', 'ground_truth_label_key'),
+])
+def test_reference_and_ground_truth_argument_identities_are_never_interchanged(tool, name):
+    utterance, candidate = string_declaration(tool, name)
+    with pytest.raises(IntentError, match='unsupported_intent'):
+        _bind_arguments(build_default_tool_registry(), utterance, {}, (candidate,))
+
+
+@pytest.mark.parametrize('tool,name', STRING_PAIRS)
+@pytest.mark.parametrize('count', [0, 2])
+def test_string_plan_declaration_never_chooses_first_or_infers_missing_consumer(tool, name, count):
+    utterance, candidate = string_declaration(tool, name)
+    steps = tuple(PlanStep('consumer_' + str(index), tool, {name: candidate.literal}) for index in range(count))
+    plan = AgentPlan('plan', 'request', 'Evaluate the captured scientific result.', steps)
+    admitted = dict(inputs={name: candidate.literal}, arguments=[asdict(candidate)])
+    with pytest.raises(IntentError, match='ambiguous_parameter'):
+        _check_parameter_plan(build_default_tool_registry(), plan, admitted, ())
+
+
+@pytest.mark.parametrize('tool,name', STRING_PAIRS)
+def test_string_plan_consumer_requires_the_exact_accepted_column(tool, name):
+    utterance, candidate = string_declaration(tool, name)
+    accepted = PlanStep('consumer', tool, {name: candidate.literal})
+    plan = AgentPlan('plan', 'request', 'Evaluate the captured scientific result.', (accepted,))
+    admitted = dict(inputs={name: candidate.literal}, arguments=[asdict(candidate)])
+    registry = build_default_tool_registry()
+    _check_parameter_plan(registry, plan, admitted, ())
+    with pytest.raises(IntentError, match='planning_failed'):
+        _check_parameter_plan(registry, replace(plan, steps=(replace(accepted,
+            arguments={name: candidate.literal.lower()}),)), admitted, ())
+
+
+def test_shared_string_request_input_cannot_fan_out_to_reference_and_ground_truth_consumers():
+    registry = build_default_tool_registry()
+    transfer = registry.get('transfer_cell_labels')
+    ports = tuple(replace(port, request_sources=(SemanticRequestSourceSpec('label_key',
+        (SemanticRequestMember(port.members[0].name, 'label_key'),)),))
+        if port.name == 'reference_label_key' else port for port in transfer.semantic_planning.consumer_ports)
+    registry = registry_with_tool(registry, replace(transfer,
+        semantic_planning=replace(transfer.semantic_planning, consumer_ports=ports)))
+    utterance, candidate = string_declaration('evaluate_cell_clustering', 'label_key')
+    plan = AgentPlan('plan', 'request', 'Evaluate and transfer the captured scientific result.', (
+        PlanStep('evaluate', 'evaluate_cell_clustering', {'label_key': candidate.literal}),
+        PlanStep('transfer', 'transfer_cell_labels', {'reference_label_key': candidate.literal}),
+    ))
+    admitted = dict(inputs={'label_key': candidate.literal}, arguments=[asdict(candidate)])
+    with pytest.raises(IntentError, match='ambiguous_parameter'):
+        _check_parameter_plan(registry, plan, admitted, ())

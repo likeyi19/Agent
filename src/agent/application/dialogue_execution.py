@@ -13,7 +13,7 @@ from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument,
-    _scientific_arguments, admit_leiden_resolution, _object, _shape)
+    _scientific_arguments, admit_leiden_resolution, is_exact_string_argument, _object, _shape)
 
 
 def _resolution_input(registry):
@@ -31,10 +31,21 @@ def _parameter_input(registry, tool_name, argument_name):
         and argument.planning.conversational_choice and argument.accepted_types == (str,)
         and bool(argument.choices) and all(type(v) is str and v.strip() for v in argument.choices)
         and not argument.planning.accepted_artifact_kinds)
+    exact_string = argument is not None and is_exact_string_argument(argument)
     if (argument is None or argument.planning is None or not argument.planning.scientific_parameter
-            or not (choice or any(t in argument.accepted_types for t in (int, float)))
+            or not (choice or exact_string or any(t in argument.accepted_types for t in (int, float)))
             or tool.semantic_planning is None):
         raise IntentError('unsupported_intent')
+    if exact_string:
+        ports = [port for port in tool.semantic_planning.consumer_ports
+                 if any(member.field_name == argument_name for member in port.members)]
+        if (len(ports) != 1 or len(ports[0].members) != 1
+                or ports[0].accepted_upstream_types or len(ports[0].request_sources) != 1):
+            raise IntentError('ambiguous_parameter')
+        source = ports[0].request_sources[0]
+        if len(source.members) != 1 or source.members[0].name != ports[0].members[0].name:
+            raise IntentError('ambiguous_parameter')
+        return source.members[0].input_name, argument
     inputs = {member.input_name for port in tool.semantic_planning.consumer_ports
               for source in port.request_sources for member in source.members
               if len(source.members) == 1 and any(field.name == member.name
@@ -58,6 +69,8 @@ def scientific_parameters(registry):
                         description=spec.planning.description)
             if spec.planning.conversational_choice:
                 item['choices'] = list(spec.choices)
+            elif is_exact_string_argument(spec):
+                item.update(exact_string=True, provenance_role=spec.planning.provenance_role.value)
             offered.append(item)
     return offered
 
@@ -277,8 +290,8 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 raise ValueError('No originating execution.')
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
-            required = {name for name in tool.required_arguments
-                        if tool.required_arguments[name].planning.scientific_parameter}
+            required = {item['argument'] for item in scientific_parameters(registry)
+                        if item['tool'] == tool.name and item['required']}
             missing = sorted(name for name in required if _parameter_input(registry, tool.name, name)[0] not in values)
             if list(pending['missing']) != missing:
                 raise ValueError('Missing requirements changed.')

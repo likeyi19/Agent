@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import json
 import re
+import unicodedata
 
 
 class IntentError(ValueError):
@@ -122,7 +123,7 @@ class SpeciesAnswer:
 
 @dataclass(frozen=True)
 class ParameterAnswer:
-    """Numeric declarations answering one exact pending scientific request."""
+    """Exact scalar declarations answering one pending scientific request."""
 
     pending: str
     arguments: tuple[ScopedArgument, ...]
@@ -132,7 +133,7 @@ class ParameterAnswer:
             raise ValueError('Invalid pending scientific parameter answer.')
         _validate_arguments(self.arguments)
         if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
-            raise ValueError('Parameter answers require numeric declarations.')
+            raise ValueError('Parameter answers require exact scalar declarations.')
 
 
 @dataclass(frozen=True)
@@ -363,8 +364,8 @@ def decision_schema(public):
         return _object(properties)
     declarations = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
         declaration_schema(item) for item in parameters]}}
-    numeric = [item for item in parameters if 'choices' not in item]
-    numeric_declarations = declarations | {'items': {'anyOf': [declaration_schema(item) for item in numeric]}}
+    exact = [item for item in parameters if 'choices' not in item]
+    exact_declarations = declarations | {'items': {'anyOf': [declaration_schema(item) for item in exact]}}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
     pending = public.get('dialogue', {}).get('pending_prerequisite')
@@ -399,12 +400,17 @@ def decision_schema(public):
         if pending is not None and pending.get('field', 'species') == 'species':
             answer = dict(kind=enum(('answer_prerequisite',)),
                 pending=enum((pending['handle'],)), species=enum(pending['choices']), argument=argument)
-            if numeric:
-                answer['arguments'] = numeric_declarations
+            if exact:
+                answer['arguments'] = exact_declarations
             variants.append(_object(answer))
-        elif pending is not None and pending.get('field') == 'parameters' and numeric:
-            variants.append(_object(dict(kind=enum(('answer_parameters',)),
-                pending=enum((pending['handle'],)), arguments=numeric_declarations | {'minItems': 1})))
+        elif pending is not None and pending.get('field') == 'parameters' and exact:
+            # Admission already fixes the pending operation. Reflect that scope
+            # here instead of duplicating every unrelated tool's declarations.
+            scoped = [item for item in exact if item['tool'] == pending.get('tool', item['tool'])]
+            if scoped:
+                variants.append(_object(dict(kind=enum(('answer_parameters',)),
+                    pending=enum((pending['handle'],)), arguments=exact_declarations | {'minItems': 1,
+                        'items': {'anyOf': [declaration_schema(item) for item in scoped]}})))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
@@ -436,6 +442,8 @@ def interpret(model, utterance, public):
             'For an otherwise supported new scientific command with a selected input, an omitted or unresolved required dataset declaration is not unsupported intent and is not a direct missing-prerequisite answer. Choose execute_plan and omit that declaration from arguments. The existing Planner/compiler determines the exact missing prerequisite and the Application creates its durable clarification. Use missing_species only while answering an offered pending species prerequisite; never fabricate a pending request. Do not guess a value or bypass genuinely unsupported capabilities, input identity ambiguity or conflicting explicit declarations.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'execute_plan.argument is the historical nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim and give start/end zero-based Unicode character offsets in this utterance. Do not repeat an identity across argument and arguments.',
+            *(['For an offered exact_string parameter, literal is the explicitly named observation column, with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
+              if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
             'Use argument=null when resolution is omitted; the scientific owner retains its existing default. A number alone does not request an operation. Explanatory questions about resolution remain answers, never execution or edits to a pending request. Clarify ambiguous argument association or conflicting explicit values; do not guess, invent an amount or replace an invalid value with a default.',
             'Use arguments=[] for omitted scientific parameters. Registered owners and existing compiler/resource contracts decide requirements and defaults; never invent a numeric default, infer scientific input identity, or create arbitrary execution dictionaries. Exact decimal or rational threshold literals stay exact; do not approximate them with floating point values.',
@@ -466,11 +474,26 @@ def interpret(model, utterance, public):
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field', 'species') == 'species'
               and public.get('dialogue', {}).get('pending_prerequisite') is not None else []) + ([
             'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',
-            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
+            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
             'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else [])},
         sort_keys=True, separators=(',', ':'))
     return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)))
+
+
+def is_exact_string_argument(argument_spec):
+    """Reviewed column declarations identified by existing Registry semantics.
+
+    Port uniqueness is checked separately by the shared request-input resolver.
+    Scientific parameter status alone never authorizes a free-text operand.
+    """
+    from agent.orchestration.registry import PlanningProvenanceRole, PlanningSourceEligibility
+    planning = argument_spec.planning
+    return (argument_spec.accepted_types == (str,) and not argument_spec.choices
+        and planning is not None and planning.scientific_parameter
+        and not planning.conversational_choice and not planning.accepted_artifact_kinds
+        and planning.source_eligibility == PlanningSourceEligibility.REQUEST_INPUT_ONLY
+        and planning.provenance_role in (PlanningProvenanceRole.REFERENCE, PlanningProvenanceRole.GROUND_TRUTH))
 
 
 def admit_scientific_argument(declaration, utterance, argument_spec):
@@ -493,6 +516,52 @@ def admit_scientific_argument(declaration, utterance, argument_spec):
         except (ValueError, TypeError) as exc:
             raise IntentError('invalid_parameter_value') from exc
         return declaration.value
+    if is_exact_string_argument(argument_spec):
+        if not literal.strip():
+            raise IntentError('invalid_parameter_value')
+        # Quotation delimiters belong to the utterance, not the column value.
+        # These are lexical span checks, not natural-language interpretation.
+        quotes = {'"': '"', "'": "'", '`': '`', '“': '”', '‘': '’', '「': '」', '『': '』'}
+        if len(literal) >= 2 and quotes.get(literal[0]) == literal[-1]:
+            raise IntentError('invalid_parameter_value')
+        before = utterance[start - 1] if start else ''
+        after = utterance[end] if end < len(utterance) else ''
+        if (before in quotes or after in quotes.values()) and quotes.get(before) != after:
+            raise IntentError('ungrounded_operand')
+        if before not in quotes:
+            # A directly paired span already identifies the complete quoted
+            # value, including inside quoted prose. Otherwise reject an interior
+            # fragment of quoted content. Scan families independently so an
+            # unrelated unmatched delimiter cannot conceal that content.
+            for opener, closer in quotes.items():
+                opening = None
+                for index, character in enumerate(utterance):
+                    if opening is None:
+                        if character != opener:
+                            continue
+                        if opener == "'" and index and utterance[index - 1].isalnum():
+                            continue
+                        opening = index
+                    elif character == closer:
+                        if opening < start and end <= index:
+                            raise IntentError('ungrounded_operand')
+                        opening = None
+                if opening is not None:
+                    raise IntentError('ungrounded_operand')
+        sentence_period = (after == '.'
+            and (end + 1 == len(utterance) or utterance[end + 1].isspace()))
+        if (before.isalnum() or before in ('.', '_', '+', '-', '/')
+                or after.isalnum() or after in ('_', '+', '-', '/')
+                or after == '.' and not sentence_period
+                or any(c and unicodedata.category(c).startswith('M') for c in (before, after))):
+            raise IntentError('ungrounded_operand')
+        try:
+            argument_spec.validate(declaration.argument, literal)
+        except (ValueError, TypeError) as exc:
+            raise IntentError('invalid_parameter_value') from exc
+        return literal
+    if not any(t in argument_spec.accepted_types for t in (int, float)):
+        raise IntentError('unsupported_intent')
     # These are numeric-token boundaries, not a classifier for scientific intent
     # or a language parser. The Interpreter owns both assignment and association.
     if start and (utterance[start - 1].isalnum() or utterance[start - 1] in '.+-/_%'):

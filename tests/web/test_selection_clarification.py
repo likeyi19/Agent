@@ -111,3 +111,64 @@ def test_stale_web_response_is_rejected_before_model_construction(tmp_path, sele
         assert calls == (len(harness.calls), len(harness.constructions))
         assert client.get('/api/v1/sessions/session/turns/first').json() == pending
         assert not harness.service._application.sessions.load('session').revisions
+
+
+from test_string_scientific_execution import (
+    CLUSTER_KEY, STRING_OBJECTIVE, STRING_ANSWER, string_answer, string_argument,
+    string_harness, string_inputs, accepted_evaluation,
+)
+from test_scientific_binding import string_web, string_post
+
+
+def test_missing_exact_string_http_refresh_and_fresh_server_resume_original_captured_task(tmp_path, string_inputs):
+    workspace = tmp_path / 'workspace'
+    invalid = 'Use the ground-truth column "invented".'
+    declarations = [string_argument(invalid, 'invented') | dict(literal='fabricated')]
+    decisions = {invalid: string_answer(invalid, declarations)}
+    harness = string_harness(workspace, decisions=decisions)
+    with TestClient(string_web(harness, string_inputs)) as client:
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        pending, _ = string_post(client, 'first', STRING_OBJECTIVE, selected=True)
+        assert_pending(pending, CLUSTER_KEY)
+        rejected, _ = string_post(client, 'invalid', invalid)
+        assert rejected['response']['clarification']['reason'] == 'ungrounded_operand', rejected
+        assert client.get('/api/v1/sessions/session/turns/first').json() == pending
+        assert not harness.service._application.sessions.load('session').revisions
+    restarted = string_harness(workspace, decisions=decisions)
+    with TestClient(string_web(restarted, string_inputs)) as client:
+        assert client.get('/api/v1/sessions/session/turns/first').json() == pending
+        assert client.get('/api/v1/sessions/session/turns/invalid').json() == rejected
+        assert not restarted.calls and not restarted.constructions
+        completed, answer_body = string_post(client, 'answer', STRING_ANSWER)
+        accepted_evaluation(restarted, completed, string_inputs)
+        run = restarted.service._application.run_store.load(completed['run_id'])
+        assert run.request.prompt == STRING_OBJECTIVE
+        assert client.get('/api/v1/sessions/session').json()['generation'] == 1
+        assert client.get('/api/v1/sessions/session/turns/first').json() == pending
+        counts = len(restarted.calls), len(restarted.constructions)
+        assert client.post('/api/v1/sessions/session/turns', json=answer_body).status_code == 202
+        assert wait_turn(client, 'answer') == completed
+        assert counts == (len(restarted.calls), len(restarted.constructions))
+
+
+def test_stale_or_changed_string_http_answer_cannot_redirect_pending_task(tmp_path, string_inputs):
+    harness = string_harness(tmp_path / 'workspace')
+    other = ScientificInputSet('other-ground-truth', 'Different synthetic ground truth',
+        string_inputs | dict(reference_h5ad_path='/unqualified/other-truth.h5ad'))
+    with TestClient(string_web(harness, string_inputs, (other,))) as client:
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        pending, _ = string_post(client, 'first', STRING_OBJECTIVE, selected=True)
+        assert_pending(pending, CLUSTER_KEY)
+        counts = len(harness.calls), len(harness.constructions)
+        stale = client.post('/api/v1/sessions/session/turns', json=dict(
+            turn_id='stale', expected_generation=1, utterance=STRING_ANSWER))
+        assert stale.status_code == 409, stale.text
+        assert stale.json()['error']['code'] == 'INTERACTIVE_GENERATION_CONFLICT'
+        assert counts == (len(harness.calls), len(harness.constructions))
+        changed = dict(turn_id='changed', expected_generation=0, utterance=STRING_ANSWER,
+            input_set_id='other-ground-truth')
+        assert client.post('/api/v1/sessions/session/turns', json=changed).status_code == 202
+        rejected = wait_turn(client, 'changed')
+        assert rejected['response']['clarification']['reason'] == 'invalid_prerequisite', rejected
+        assert client.get('/api/v1/sessions/session/turns/first').json() == pending
+        assert not harness.service._application.sessions.load('session').revisions

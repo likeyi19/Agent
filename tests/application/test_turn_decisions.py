@@ -280,3 +280,77 @@ def test_planner_effect_guard_preserves_parameters_sources_and_arbitrary_step_id
                     args|{'barcode_qc_manifest_path':PriorOutputRef(replace(binding,run_id='other'),'manifest_path')}):
         with pytest.raises(PlannerError):
             _check_plan(replace(plan,steps=(replace(plan.steps[0],arguments=changed),)),admitted,parameters,{'qc':binding},registry)
+
+
+def string_public(*, pending=False):
+    from agent.application.dialogue_execution import scientific_parameters
+
+    value = dict(bases={}, relations=[], dialogue=dict(outputs=[],
+        tools=['evaluate_cell_clustering', 'transfer_cell_labels', 'evaluate_cell_annotation'],
+        scientific_parameters=scientific_parameters(build_default_tool_registry())))
+    if pending:
+        value['dialogue']['pending_prerequisite'] = dict(handle='@parameters', field='parameters',
+            objective='Evaluate the fixed clustering against the supplied ground-truth dataset.',
+            missing=['label_key'])
+    return value
+
+
+@pytest.mark.parametrize('tool,name,role,utterance,literal', [
+    ('evaluate_cell_clustering', 'label_key', 'ground_truth',
+     'Evaluate the clustering using the ground-truth column "cell_type".', 'cell_type'),
+    ('transfer_cell_labels', 'reference_label_key', 'reference',
+     'Transfer labels from the reference dataset using the column "major_type".', 'major_type'),
+    ('evaluate_cell_annotation', 'ground_truth_label_key', 'ground_truth',
+     'Evaluate annotations using the ground-truth column "manual_annotation".', 'manual_annotation'),
+])
+def test_interpreter_owns_operation_and_source_role_association_for_exact_strings(tool, name, role, utterance, literal):
+    start = utterance.index(literal)
+    argument = ScopedArgument(tool, name, literal, start, start + len(literal))
+
+    class Model:
+        def complete(self, *, prompt, response_schema):
+            captured = json.loads(prompt)
+            offered, = [item for item in captured['dialogue']['scientific_parameters']
+                if (item['tool'], item['argument']) == (tool, name)]
+            assert offered['exact_string'] is True and offered['provenance_role'] == role
+            rule, = [item for item in captured['instructions'] if item.startswith('For an offered exact_string')]
+            for phrase in ('surrounding quotation marks excluded', 'Preserve case, Unicode',
+                           'do not normalize', 'infer a column from metadata', 'provenance_role',
+                           'ambiguous or conflicting declarations require clarification'):
+                assert phrase in rule
+            return decision_wire(dict(kind='execute_plan', target=tool, arguments=[asdict(argument)]))
+
+    parsed = interpret(Model(), utterance, string_public())
+    assert parsed == Execute('current', 'plan', tool, None, arguments=(argument,))
+
+
+def test_pending_string_answer_uses_the_same_interpreter_and_keeps_original_scope_constraints():
+    utterance = 'Use the exact column “细胞 类型”.'
+    literal = '细胞 类型'
+    start = utterance.index(literal)
+    argument = ScopedArgument('evaluate_cell_clustering', 'label_key', literal, start, start + len(literal))
+
+    class Model:
+        def complete(self, *, prompt, response_schema):
+            captured = json.loads(prompt)
+            assert captured['utterance'] == utterance
+            assert captured['dialogue']['pending_prerequisite'] == string_public(pending=True)['dialogue']['pending_prerequisite']
+            rule, = [item for item in captured['instructions'] if item.startswith('Choose answer_parameters only')]
+            assert 'numeric or exact_string literals' in rule
+            assert 'never invent the remaining values or add operations' in rule
+            assert any('original objective, inputs and operation scope remain fixed' in item
+                for item in captured['instructions'])
+            return decision_wire(dict(kind='answer_parameters', pending='@parameters', arguments=[asdict(argument)]))
+
+    assert interpret(Model(), utterance, string_public(pending=True)) == ParameterAnswer('@parameters', (argument,))
+
+
+def test_ambiguous_column_association_keeps_provider_authored_clarification():
+    utterance = 'Transfer labels and evaluate them using either "cell_type" or "manual_type".'
+
+    class Model:
+        def complete(self, *, prompt, response_schema):
+            assert json.loads(prompt)['utterance'] == utterance
+            return decision_wire(dict(kind='clarify', reason='ambiguous_parameter'))
+
+    assert interpret(Model(), utterance, string_public()) == Clarify('ambiguous_parameter')

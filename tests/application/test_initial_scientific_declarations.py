@@ -174,7 +174,13 @@ def test_only_reviewed_species_choice_is_offered_in_closed_schema():
     assert len(choices) == 1
     assert choices[0]['tool'] == 'epizoo_embed_cells' and choices[0]['argument'] == 'species'
     assert choices[0]['choices'] == ['human', 'mouse'] or choices[0]['choices'] == ('human', 'mouse')
-    assert len(parameters) == 15
+    assert len(parameters) == 18
+    assert len([row for row in parameters if not row.get('choices') and not row.get('exact_string')]) == 14
+    assert {(row['tool'], row['argument']) for row in parameters if row.get('exact_string')} == {
+        ('evaluate_cell_clustering', 'label_key'),
+        ('transfer_cell_labels', 'reference_label_key'),
+        ('evaluate_cell_annotation', 'ground_truth_label_key'),
+    }
     execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
         if row['properties']['kind']['enum'] == ['execute_plan'])
     members = execution['properties']['arguments']['items']['anyOf']
@@ -295,7 +301,7 @@ def test_historical_missing_species_wire_remains_parseable_without_adding_pendin
 
 
 @pytest.mark.parametrize('field,kind', [('species', 'answer_prerequisite'), ('parameters', 'answer_parameters')])
-def test_existing_pending_numeric_schema_stays_exact_and_excludes_initial_choices(field, kind):
+def test_pending_exact_scalar_schema_preserves_numeric_pairs_and_excludes_choices(field, kind):
     context = public()
     context['dialogue']['pending_prerequisite'] = dict(handle='@species' if field == 'species' else '@parameters',
         field=field, choices=['human', 'mouse'], objective=OMITTED)
@@ -307,7 +313,9 @@ def test_existing_pending_numeric_schema_stays_exact_and_excludes_initial_choice
         if 'choices' not in row}
     actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
         for row in members}
-    assert actual == expected and len(actual) == 14
+    assert actual == expected and len(actual) == 17
+    assert len([row for row in context['dialogue']['scientific_parameters']
+                if not row.get('choices') and not row.get('exact_string')]) == 14
     assert arguments['maxItems'] == 8
     assert all('value' not in row['properties'] and row['additionalProperties'] is False for row in members)
     if field == 'parameters':

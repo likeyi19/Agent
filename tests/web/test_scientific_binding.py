@@ -78,3 +78,77 @@ def test_species_reply_cannot_add_an_operation_to_bind_an_unrelated_parameter(tm
         assert result['revision_id'] is None and result['status'] != 'succeeded', result
         assert not harness.science_calls and not harness.inference_calls
         assert not harness.service._application.sessions.load('session').revisions
+
+
+from pathlib import Path
+import json
+import sys
+
+from agent.web.app import create_app
+from agent.web.config import ScientificInputSet
+from helpers import wait_turn
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'application'))
+from test_string_scientific_execution import (
+    CLUSTER_TOOL, STRING_OBJECTIVE, STRING_LITERAL, STRING_ANSWER,
+    accepted_evaluation, string_argument, string_harness, string_inputs,
+)
+
+
+def string_web(harness, inputs, additional=()):
+    return create_app(harness.service, input_sets=(ScientificInputSet(
+        'evaluation-fixture', 'Synthetic fixed clustering and ordered ground truth', inputs), *additional))
+
+
+def string_post(client, turn, utterance, *, selected=False, generation=0):
+    body = dict(turn_id=turn, expected_generation=generation, utterance=utterance)
+    if selected:
+        body['input_set_id'] = 'evaluation-fixture'
+    response = client.post('/api/v1/sessions/session/turns', json=body)
+    assert response.status_code == 202, response.text
+    return wait_turn(client, turn), body
+
+
+def test_http_exact_string_declaration_executes_verified_evaluation_and_retains_unicode_provenance(tmp_path, string_inputs):
+    utterance = STRING_OBJECTIVE + ' ' + STRING_ANSWER
+    declaration = string_argument(utterance)
+    harness = string_harness(tmp_path / 'workspace', decisions={utterance:
+        dict(kind='execute_plan', target=CLUSTER_TOOL, arguments=[declaration])})
+    with TestClient(string_web(harness, string_inputs)) as client:
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        choices = client.get('/api/v1/input-sets').json()
+        assert choices['choices'] == [dict(input_set_id='evaluation-fixture',
+            display_label='Synthetic fixed clustering and ordered ground truth')]
+        assert not harness.calls and not harness.constructions
+        view, payload = string_post(client, 'first', utterance, selected=True)
+        accepted_evaluation(harness, view, string_inputs)
+        state = harness.service._application.sessions.load('session')
+        assert state.interactions[-1].admitted['inputs']['label_key'] == STRING_LITERAL
+        assert state.interactions[-1].admitted['arguments'][0]['literal'] == STRING_LITERAL
+        assert state.interactions[-1].utterance[declaration['start']:declaration['end']] == STRING_LITERAL
+        evidence = client.get(f"/api/v1/sessions/session/revisions/{view['revision_id']}/evidence",
+            params={'output_name': 'evaluation'})
+        assert evidence.status_code == 200, evidence.text
+        facts = {item['field']: item for item in evidence.json()['facts']}
+        assert facts['explicit_user_parameters']['value'] == dict(tool=CLUSTER_TOOL,
+            step_id='evaluation', parameters={'label_key': 'explicit_user_instruction'})
+        assert str(tmp_path) not in json.dumps([choices, view, evidence.json()])
+        counts = len(harness.calls), len(harness.constructions)
+        assert client.post('/api/v1/sessions/session/turns', json=payload).status_code == 202
+        assert wait_turn(client, 'first') == view
+        assert counts == (len(harness.calls), len(harness.constructions))
+        assert len(harness.service._application.sessions.load('session').revisions) == 1
+
+
+def test_http_nonexistent_exact_column_reaches_existing_owner_rejection(tmp_path, string_inputs):
+    utterance = 'Evaluate the clustering using ground-truth column "Missing_Column".'
+    harness = string_harness(tmp_path / 'workspace', decisions={utterance: dict(
+        kind='execute_plan', target=CLUSTER_TOOL, arguments=[string_argument(utterance, 'Missing_Column')])})
+    with TestClient(string_web(harness, string_inputs)) as client:
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        view, _ = string_post(client, 'first', utterance, selected=True)
+        assert view['response']['status'] == 'failed' and view['revision_id'] is None
+        run = harness.service._application.run_store.load(view['run_id'])
+        assert any(error.code == 'INVALID_ARGUMENT' and error.tool_name == CLUSTER_TOOL for error in run.errors)
+        assert run.plan.steps[0].arguments['label_key'] == 'Missing_Column'
+        assert not harness.service._application.sessions.load('session').revisions

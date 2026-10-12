@@ -469,3 +469,268 @@ def test_new_task_does_not_inherit_old_pending_parameter(tmp_path, selection_inp
             inputs=selection_inputs | dict(min_qc_fragment_records=3, min_tss_enrichment='0.5'))
     accepted_step(harness, completed, depth=3)
     assert calls == {'production': 1, 'verification': 1}
+
+
+# The string cases reuse the same pending mechanism and existing owner fixture;
+# transfer/annotation placeholders below qualify semantic admission only.
+from test_string_scientific_execution import (
+    CLUSTER_TOOL, CLUSTER_KEY, STRING_ARGUMENTS, STRING_OBJECTIVE, STRING_LITERAL,
+    STRING_ANSWER, accepted_evaluation, evaluation_work, semantic_string_inputs,
+    string_answer, string_argument, string_harness, string_inputs, submit_string,
+)
+from test_dialogue_evidence import app
+
+
+@pytest.mark.parametrize('tool', tuple(STRING_ARGUMENTS))
+def test_missing_reviewed_string_uses_existing_compiler_grounded_pending_shape(tmp_path, string_inputs, tool):
+    inputs = string_inputs if tool == CLUSTER_TOOL else semantic_string_inputs(tool)
+    harness = string_harness(tmp_path / 'workspace', tool=tool)
+    harness.service.create_session('session')
+    with evaluation_work() as calls:
+        pending = submit_string(harness, inputs=inputs)
+    assert_pending(pending, STRING_ARGUMENTS[tool])
+    assert not calls and not harness.service._application.sessions.load('session').revisions
+    state = harness.service._application.sessions.load('session')
+    interaction, = state.interactions
+    assert interaction.prerequisite['field'] == 'parameters'
+    assert interaction.prerequisite['tool'] == tool
+    assert tuple(interaction.prerequisite['missing']) == (STRING_ARGUMENTS[tool],)
+    assert interaction.admitted['inputs'] == inputs
+    run = harness.service._application.run_store.load(interaction.admitted['request_id'] + ':run')
+    assert not run.steps
+    assert run.errors[-1].details['argument_names'] == (STRING_ARGUMENTS[tool],)
+
+
+def test_exact_string_pending_restart_executes_original_objective_once_and_pins_provenance(tmp_path, string_inputs):
+    workspace = tmp_path / 'workspace'
+    harness = string_harness(workspace)
+    harness.service.create_session('session')
+    with evaluation_work() as calls:
+        pending = submit_string(harness, inputs=string_inputs)
+    assert_pending(pending, CLUSTER_KEY)
+    assert not calls
+    snapshot = harness.service._application.sessions.load('session').to_dict()
+    restarted = string_harness(workspace)
+    with evaluation_work() as calls:
+        assert restarted.service.turn('session', 'first').to_dict() == pending
+        assert restarted.service._application.sessions.load('session').to_dict() == snapshot
+    assert not calls and not restarted.calls and not restarted.constructions
+    with evaluation_work() as calls:
+        done = submit_string(restarted, 'answer', STRING_ANSWER)
+    assert calls['production'] == 1 and calls['verification'] >= 1
+    assert calls['source_reinspection'] == calls['verification'] + 1
+    accepted_evaluation(restarted, done, string_inputs)
+    run = restarted.service._application.run_store.load(done['run_id'])
+    assert run.request.prompt == STRING_OBJECTIVE
+    state = restarted.service._application.sessions.load('session')
+    first, resumed = state.interactions
+    assert first.submission['execution_inputs'] == string_inputs
+    assert not resumed.submission['execution_inputs']
+    assert _serialize(resumed.admitted['arguments']) == [string_argument(STRING_ANSWER)]
+    assert resumed.admitted['continuation'] == dict(origin_turn_id='first', binding_turn_id='first', field='parameters')
+    evidence = restarted.service.evidence('session', done['revision_id'], 'evaluation')
+    fact = next(item for item in evidence.facts if item.field == 'explicit_user_parameters')
+    assert _serialize(fact.value) == dict(tool=CLUSTER_TOOL, step_id='evaluation',
+        parameters={CLUSTER_KEY: 'explicit_user_instruction'})
+    counts = len(restarted.calls), len(restarted.constructions)
+    with evaluation_work() as calls:
+        assert submit_string(restarted, 'answer', STRING_ANSWER) == done
+    assert calls['production'] == 0 and counts == (len(restarted.calls), len(restarted.constructions))
+    again = string_harness(workspace)
+    with evaluation_work() as calls:
+        assert again.service.turn('session', 'answer').to_dict() == done
+        after = again.service.evidence('session', done['revision_id'], 'evaluation')
+    assert calls['production'] == 0 and not again.calls and not again.constructions
+    origin_after = next(item for item in after.facts if item.field == 'explicit_user_parameters')
+    assert origin_after == fact
+
+
+def test_exact_string_answer_survives_an_actual_fresh_process(tmp_path, string_inputs):
+    workspace = tmp_path / 'workspace'
+    harness = string_harness(workspace)
+    harness.service.create_session('session')
+    assert_pending(submit_string(harness, inputs=string_inputs), CLUSTER_KEY)
+    script = '''
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / 'tests/application'))
+from test_string_scientific_execution import (STRING_ANSWER, string_harness, submit_string,
+    evaluation_work, accepted_evaluation, string_argument)
+from agent.schemas.orchestration import _serialize
+harness = string_harness(sys.argv[1])
+assert harness.service.turn('session', 'first').to_dict()['response']['kind'] == 'clarify'
+assert not harness.calls and not harness.constructions
+with evaluation_work() as calls:
+    result = submit_string(harness, 'fresh-process', STRING_ANSWER)
+assert calls['production'] == 1 and calls['verification'] >= 1, calls
+assert calls['source_reinspection'] == calls['verification'] + 1, calls
+accepted_evaluation(harness, result, json.loads(sys.argv[2]))
+interaction = harness.service._application.sessions.load('session').interactions[-1]
+assert _serialize(interaction.admitted['arguments']) == [string_argument(STRING_ANSWER)]
+counts = len(harness.calls), len(harness.constructions)
+with evaluation_work() as calls:
+    assert submit_string(harness, 'fresh-process', STRING_ANSWER) == result
+assert calls['production'] == 0 and counts == (len(harness.calls), len(harness.constructions))
+print(json.dumps(result))
+'''
+    child = subprocess.run([sys.executable, '-c', script, str(workspace), json.dumps(string_inputs)],
+        capture_output=True, text=True, env=os.environ.copy(), timeout=90)
+    assert child.returncode == 0, child.stdout + child.stderr
+    accepted_evaluation(harness, json.loads(child.stdout), string_inputs)
+
+
+def test_transfer_numeric_partial_and_mixed_invalid_string_correction_remain_atomic(tmp_path):
+    tool = 'transfer_cell_labels'
+    partial = 'Use 2 reference neighbors.'
+    corrected = 'Correct this to 3 reference neighbors.'
+    invalid = f'Use the reference label column "{STRING_LITERAL}" and 2.5 reference neighbors.'
+    final = f'Use the reference label column "{STRING_LITERAL}".'
+    numerical = lambda text, token: string_argument(text, token, tool=tool, argument='n_neighbors')
+    decisions = {partial: string_answer(partial, [numerical(partial, '2')]),
+        corrected: string_answer(corrected, [numerical(corrected, '3')]),
+        invalid: string_answer(invalid, [string_argument(invalid, tool=tool), numerical(invalid, '2.5')]),
+        final: string_answer(final, [string_argument(final, tool=tool)])}
+    workspace = tmp_path / 'workspace'
+    harness = string_harness(workspace, tool=tool, decisions=decisions)
+    harness.service.create_session('session')
+    assert_pending(submit_string(harness, inputs=semantic_string_inputs(tool)), 'reference_label_key')
+    assert_pending(submit_string(harness, 'partial', partial), 'reference_label_key')
+    with evaluation_work() as calls:
+        rejected = submit_string(harness, 'invalid', invalid)
+    assert not calls and rejected['response']['clarification']['reason'] == 'invalid_parameter_value', rejected
+    state = harness.service._application.sessions.load('session')
+    assert state.interactions[-1].prerequisite['binding_turn_id'] == 'partial'
+    assert state.interactions[1].admitted['inputs']['n_neighbors'] == 2
+    assert 'reference_label_key' not in state.interactions[1].admitted['inputs']
+    assert_pending(submit_string(harness, 'corrected', corrected), 'reference_label_key')
+    restarted = string_harness(workspace, tool=tool, decisions=decisions)
+    assert restarted.service._application.sessions.load('session').interactions[-1].admitted['inputs']['n_neighbors'] == 3
+    with evaluation_work() as calls:
+        result = submit_string(restarted, 'final', final)
+    assert not calls and result['revision_id'] is None
+    # Semantic completion resumes the captured objective with both exact values.
+    # The unqualified placeholder sources fail owner admission, as intended.
+    state = restarted.service._application.sessions.load('session')
+    admitted = state.interactions[-1].admitted
+    assert admitted['kind'] == 'execute'
+    assert admitted['inputs']['reference_label_key'] == STRING_LITERAL
+    assert admitted['inputs']['n_neighbors'] == 3
+    run = restarted.service._application.run_store.load(result['run_id'])
+    assert run.request.prompt == STRING_OBJECTIVE
+    assert len(run.plan.steps) == 1 and run.plan.steps[0].tool_name == tool
+    assert run.plan.steps[0].arguments['reference_label_key'] == STRING_LITERAL
+    assert run.plan.steps[0].arguments['n_neighbors'] == 3
+    assert result['response']['status'] == 'failed'
+    counts = len(restarted.calls), len(restarted.constructions)
+    assert submit_string(restarted, 'final', final) == result
+    assert counts == (len(restarted.calls), len(restarted.constructions))
+
+
+@pytest.mark.parametrize('failure', ['source', 'stale_generation', 'wrong_operation', 'repeated'])
+def test_exact_string_pending_cannot_change_source_generation_or_operation(tmp_path, string_inputs, failure):
+    harness = string_harness(tmp_path / 'workspace', plan_variant='repeated' if failure == 'repeated' else None)
+    harness.service.create_session('session')
+    assert_pending(submit_string(harness, inputs=string_inputs), CLUSTER_KEY)
+    if failure == 'source':
+        changes = dict(inputs=string_inputs | dict(reference_h5ad_path='/other/truth.h5ad'))
+    elif failure == 'wrong_operation':
+        harness.decisions[STRING_ANSWER] = string_answer(STRING_ANSWER, [string_argument(
+            STRING_ANSWER, tool='evaluate_cell_annotation')])
+        changes = {}
+    elif failure == 'stale_generation':
+        changes = dict(generation=1)
+    else:
+        changes = {}
+    counts = len(harness.calls), len(harness.constructions)
+    with evaluation_work() as calls:
+        if failure == 'stale_generation':
+            with pytest.raises(InteractiveBoundaryError) as error:
+                submit_string(harness, 'invalid', STRING_ANSWER, **changes)
+            assert error.value.error.code == 'INTERACTIVE_GENERATION_CONFLICT'
+            assert counts == (len(harness.calls), len(harness.constructions))
+        else:
+            rejected = submit_string(harness, 'invalid', STRING_ANSWER, **changes)
+            assert rejected['response']['kind'] == 'clarify', rejected
+            assert rejected['revision_id'] is None
+            assert rejected['response']['clarification']['reason'] == (
+                'invalid_prerequisite' if failure == 'source' else 'ambiguous_parameter')
+    assert not calls and not harness.service._application.sessions.load('session').revisions
+
+
+def test_missing_nonstring_scientific_source_does_not_become_a_column_question(tmp_path, string_inputs):
+    harness = string_harness(tmp_path / 'workspace')
+    harness.service.create_session('session')
+    with evaluation_work() as calls:
+        view = submit_string(harness, inputs={'analysis_path': string_inputs['analysis_path']})
+    assert not calls and view['response']['status'] == 'failed', view
+    assert view['response']['clarification'] is None
+    assert harness.service._application.sessions.load('session').interactions[0].prerequisite is None
+
+
+def test_selected_guidance_candidate_missing_string_retains_existing_failure_contract(app, string_inputs):
+    from agent.application import ResearchAgentApplication
+    from test_dialogue_evidence import accepted
+    from test_guidance_selection import Selection, offer
+    from test_scientific_guidance import ask
+    from test_string_scientific_execution import StringModel
+
+    accepted(app, 'inspect_scATAC')  # Existing accepted metadata fixture, not science.
+    candidate = offer(app, tools=(CLUSTER_TOOL,))
+    model = StringModel({}, [])
+    continued = ResearchAgentApplication(app.workspace_root, planner=LLMPlanner(model))
+    with evaluation_work() as calls:
+        result = ask(continued, 'selected', 'Run option 1.', Selection(candidate, 'Run option 1.'),
+            execution_inputs=string_inputs)
+    assert not calls and result.status == 'failed'
+    assert result.clarification is None
+    state = continued.sessions.load('session')
+    interaction = state.interactions[-1]
+    assert interaction.admitted['selected_candidate']['capability'] == CLUSTER_TOOL
+    assert interaction.prerequisite is None
+    run = continued.run_store.load(interaction.admitted['request_id'] + ':run')
+    assert not run.steps and run.errors[-1].code == 'MISSING_REQUIRED_SOURCE'
+    assert run.errors[-1].details['argument_names'] == (CLUSTER_KEY,)
+
+
+def test_new_scientific_request_starts_its_own_string_pending_without_inheriting_partial_values(tmp_path):
+    tool = 'transfer_cell_labels'
+    partial = 'Use 2 reference neighbors.'
+    fresh = 'Start a separate label-transfer task with these supplied inputs.'
+    harness = string_harness(tmp_path / 'workspace', tool=tool, decisions={
+        partial: string_answer(partial, [string_argument(partial, '2', tool=tool, argument='n_neighbors')]),
+        fresh: dict(kind='execute_plan', target=tool)})
+    inputs = semantic_string_inputs(tool)
+    harness.service.create_session('session')
+    assert_pending(submit_string(harness, inputs=inputs), 'reference_label_key')
+    assert_pending(submit_string(harness, 'partial', partial), 'reference_label_key')
+    with evaluation_work() as calls:
+        independent = submit_string(harness, 'fresh', fresh, inputs=inputs)
+    assert not calls
+    assert_pending(independent, 'reference_label_key')
+    interaction = harness.service._application.sessions.load('session').interactions[-1]
+    assert interaction.prerequisite['origin_turn_id'] == 'fresh'
+    assert interaction.prerequisite['binding_turn_id'] == 'fresh'
+    assert 'n_neighbors' not in interaction.admitted['inputs']
+    assert 'continuation' not in interaction.admitted
+
+
+def test_pending_string_answer_rejects_changed_captured_resource_catalog_without_loading_it(tmp_path, string_inputs):
+    from agent.application.local_resources import QualifiedEpiZooResource
+
+    harness = string_harness(tmp_path / 'workspace')
+    harness.service.create_session('session')
+    assert_pending(submit_string(harness, inputs=string_inputs), CLUSTER_KEY)
+    # Pure catalog metadata simulates a policy change. No checkpoint is created,
+    # hashed or consumed; clustering evaluation uses neither this model nor it.
+    changed = QualifiedEpiZooResource('synthetic-context', 'Synthetic catalog context', 'mouse',
+        '/unqualified/model.pth', '1' * 64, '2' * 64, '3' * 64,
+        'Context-digest test only; no scientific resource qualification.')
+    with evaluation_work() as calls:
+        rejected = harness.service.submit_turn('session', 'changed-context', STRING_ANSWER,
+            expected_generation=0, epizoo_resources=(changed,)).to_dict()
+    assert not calls
+    assert rejected['response']['clarification']['reason'] == 'invalid_prerequisite', rejected
+    state = harness.service._application.sessions.load('session')
+    assert not state.revisions
+    assert state.interactions[-1].prerequisite['binding_turn_id'] == 'first'
+    assert CLUSTER_KEY not in state.interactions[0].admitted['inputs']

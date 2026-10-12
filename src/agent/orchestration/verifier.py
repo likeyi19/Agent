@@ -476,16 +476,6 @@ def _verify_neighbors(
         "Neighbor result backend identity is not Scanpy.",
         "TOOL_IDENTITY_MISMATCH",
     )
-    for field_name in ("embedding_path", "cell_ids_path"):
-        checks.add(
-            f"{field_name}_matches",
-            _path_corresponds(
-                result.get(field_name), resolved_arguments.get(field_name)
-            ),
-            f"Neighbor result {field_name} matches its resolved input.",
-            f"Neighbor result {field_name} does not match its resolved input.",
-            "RESULT_PATH_MISMATCH",
-        )
     checks.add(
         "reported_invariants",
         result.get("finite") is True
@@ -499,6 +489,32 @@ def _verify_neighbors(
     path = _analysis_artifact_exists(result, checks)
     if path is None:
         return
+    publication_fields = ('artifact_type', 'contract_version', 'manifest_path', 'manifest_sha256')
+    if any(name in result for name in publication_fields):
+        try:
+            from agent.tools.analysis.neighbors_publication import verify_result
+            verify_result(resolved_arguments, result)
+        except Exception as exc:
+            checks.add('neighbors_owner_publication', False,
+                'Neighbor publication has owner-qualified scientific provenance.',
+                'Neighbor publication is incomplete or scientifically inconsistent.',
+                getattr(exc, 'code', 'VERIFICATION_AUTHORITY_INVALID'))
+        else:
+            checks.add('neighbors_owner_publication', True,
+                'Neighbor publication has owner-qualified scientific provenance.',
+                'Neighbor publication is incomplete or scientifically inconsistent.',
+                'VERIFICATION_AUTHORITY_INVALID')
+        return
+    for field_name in ("embedding_path", "cell_ids_path"):
+        checks.add(
+            f"{field_name}_matches",
+            _path_corresponds(
+                result.get(field_name), resolved_arguments.get(field_name)
+            ),
+            f"Neighbor result {field_name} matches its resolved input.",
+            f"Neighbor result {field_name} does not match its resolved input.",
+            "RESULT_PATH_MISMATCH",
+        )
     try:
         artifact = _read_analysis(path)
         artifact_ids, distances, connectivities = _validate_neighbors_artifact(
@@ -2173,11 +2189,11 @@ def verify_step(
         verification = replace(verification, artifact_authority=artifact_authority)
     if verification.passed and authority_execution_identity is not None:
         from agent.tools.data.authority_context import current
-        from agent.tools.data.scientific_authority import issue, TOOLS
+        from agent.tools.scientific_authority import issue, supports_tool
         context = current()
-        if context is not None and step.tool_name in TOOLS:
+        if context is not None and supports_tool(step.tool_name, registry):
             try:
-                authority = issue(context, step.tool_name, resolved_arguments, plain_result, authority_execution_identity)
+                authority = issue(context, step.tool_name, resolved_arguments, plain_result, authority_execution_identity, registry=registry)
             except Exception as exc:
                 checks.add('scientific_authority_publication', False,
                     'Scientific authority matches accepted publication.',

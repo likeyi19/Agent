@@ -10,7 +10,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from typing import Callable, Literal, TypedDict
+from typing import Callable, Literal, NotRequired, TypedDict
 
 import anndata as ad
 import numpy as np
@@ -46,6 +46,10 @@ class CellNeighborsToolResult(TypedDict):
     cell_order_preserved: bool
     backend: str
     software_versions: dict[str, str]
+    artifact_type: NotRequired[str]
+    contract_version: NotRequired[str]
+    manifest_path: NotRequired[str]
+    manifest_sha256: NotRequired[str]
 
 
 class CellClusteringToolResult(TypedDict):
@@ -363,6 +367,10 @@ def build_cell_neighbors(
     resolved_cell_ids = _resolve_existing_file(
         cell_ids_path, "cell_ids_path", suffix=".txt"
     )
+    from . import neighbors_publication
+    sources, source_snapshots = neighbors_publication.capture_inputs(
+        resolved_embedding, resolved_cell_ids
+    )
     embeddings = _load_embeddings(resolved_embedding)
     cell_ids = _load_cell_ids(resolved_cell_ids)
     if len(cell_ids) != embeddings.shape[0]:
@@ -375,6 +383,10 @@ def build_cell_neighbors(
     resolved_output_dir = _resolve_output_dir(output_dir)
     output_path = resolved_output_dir / f"{resolved_embedding.stem}.neighbors.h5ad"
     _ensure_output_available(output_path, overwrite=overwrite)
+    for suffix in (".manifest.json", ".receipt.json"):
+        _ensure_output_available(
+            output_path.with_suffix(suffix), overwrite=overwrite
+        )
 
     adata = ad.AnnData(obs=pd.DataFrame(index=pd.Index(cell_ids, dtype="object")))
     adata.obsm[EPIZOO_REPRESENTATION_KEY] = np.asarray(embeddings)
@@ -423,7 +435,7 @@ def build_cell_neighbors(
             written, expected_stages=frozenset({"neighbors"})
         ),
     )
-    return {
+    result = {
         "status": "success",
         "embedding_path": str(resolved_embedding),
         "cell_ids_path": str(resolved_cell_ids),
@@ -442,6 +454,12 @@ def build_cell_neighbors(
         "backend": "Scanpy",
         "software_versions": versions,
     }
+    return neighbors_publication.publish(
+        dict(embedding_path=embedding_path, cell_ids_path=cell_ids_path,
+             output_dir=str(resolved_output_dir), n_neighbors=n_neighbors, metric=metric,
+             random_seed=random_seed, overwrite=overwrite),
+        result, sources, source_snapshots,
+    )
 
 
 def cluster_cells(

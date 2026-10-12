@@ -1,8 +1,8 @@
 """Operation-local scientific proofs and accepted artifact authorities.
 
-Only orchestration opens this scope. Standalone and recovery verifiers have no
-scope and retain deep behavior. Proofs are created only after the real verifier
-returns and its complete non-source closure remains stable.
+Only orchestration opens this scope. Standalone verification remains deep;
+explicit accepted recovery may import persisted proofs. Proofs are created only
+after the real verifier returns and its complete required closure remains stable.
 """
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -86,7 +86,7 @@ class VerificationContext:
         return entries
 
     def describe(self, kind, path, sha):
-        from .scientific_authority import describe
+        from agent.tools.scientific_authority import describe
         description = describe(kind, path, sha, self)
         accepted = self.accepted.get((str(path), description['manifest_sha256']))
         if accepted is not None:
@@ -100,7 +100,9 @@ class VerificationContext:
         return description, key
 
     def verify(self, kind, function, args, kwargs):
-        from .scientific_authority import reuse_result, runtime_compatibility
+        from agent.tools.scientific_authority import (
+            reuse_result, runtime_compatibility, needs_source_snapshot, proof_metadata,
+        )
         self.validate_anchors()
         path = Path(args[0] if args else kwargs.get('path', kwargs.get('manifest_path')))
         sha = kwargs.get('expected_sha256')
@@ -115,9 +117,7 @@ class VerificationContext:
             self.validate_anchors()
             return reuse_result(kind, description, self.proofs[key], kwargs)
         # Source freshness is owned here, not by later downstream consumption.
-        from .fragments_authority_contract import CONTRACTS
-        from .external_matrix_contract import is_external
-        sources = description['historical_sources'] if kind in CONTRACTS or (kind == 'matrix' and is_external(description['manifest'])) else []
+        sources = description['historical_sources'] if needs_source_snapshot(kind, description) else []
         paths = [f['path'] for f in description['files'] + sources]
         before = {p: snapshot(p) for p in paths}
         result = function(*args, **kwargs)
@@ -125,19 +125,7 @@ class VerificationContext:
         if key != after_key or before != {p: snapshot(p) for p in paths}:
             raise AuthorityError('Scientific verification inputs changed before completion.')
         self.validate_anchors()
-        if kind == 'fastq_fragment_production':
-            _, generic_key = self.describe('generic_fragments', path, sha)
-            if generic_key not in self.proofs:
-                raise AuthorityError('Producer verification lacks canonical integrity proof.')
-            metadata = dict(contigs=self.proofs[generic_key].result_metadata['contigs'])
-        elif kind == 'generic_fragments':
-            metadata = dict(contigs=result.contigs)
-        elif kind in ('bam_fragment_production', 'external_fragment_adoption'):
-            metadata = dict(contigs=result.fragments.contigs)
-        elif kind in ('matrix', 'annotation', 'epizoo_adaptation'):
-            metadata = result
-        else:
-            metadata = {}
+        metadata = proof_metadata(kind, result, self, description=after)
         proof = ScientificProof(key, kind, freeze_json_mapping(after, 'scientific_proof'),
                                 freeze_json_mapping(metadata, 'proof_metadata'))
         self.proofs[key] = proof

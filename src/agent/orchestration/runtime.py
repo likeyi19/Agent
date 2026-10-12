@@ -908,12 +908,15 @@ class AgentRuntime:
             spec = self._registry.get(step.tool_name)
             self._registry.validate_arguments(step.tool_name, args)
             authority_options = {}
-            from agent.tools.data.scientific_authority import TOOLS
+            from agent.tools.scientific_authority import supports_tool, tool_kind, hooks_for_tool
             if (step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
-                    or (prior_references(state.plan) and step.tool_name in TOOLS)):
+                    or (hooks_for_tool(step.tool_name, self._registry) is not None
+                        and old.verification is not None and old.verification.artifact_authority is not None)
+                    or (prior_references(state.plan) and supports_tool(step.tool_name, self._registry)
+                        and hooks_for_tool(step.tool_name, self._registry) is None)):
                 from agent.tools.data.authority_context import current
                 identity = execution_identity(state.run_id, state.plan, step, spec)
-                current().register_execution(TOOLS[step.tool_name], args['output_dir'], identity)
+                current().register_execution(tool_kind(step.tool_name, self._registry), args['output_dir'], identity)
                 authority_options['authority_execution_identity'] = identity
             if old.status is StepStatus.RUNNING:
                 if recovered is not None or spec.durable_hooks is None:
@@ -1241,7 +1244,9 @@ class AgentRuntime:
                 checkpoint=checkpoint,
                 should_cancel=should_cancel,
                 **({'durable_run_id': run_id} if checkpoint is not None and (any(
-                    self._registry.get(step.tool_name).durable_hooks is not None for step in plan.steps)
+                    self._registry.get(step.tool_name).durable_hooks is not None
+                    or self._registry.get(step.tool_name).scientific_authority is not None
+                    for step in plan.steps)
                     or prior_references(plan)) else {}),
             )
         except RunStoreError:

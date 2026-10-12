@@ -697,10 +697,13 @@ class PlanExecutor:
                 }
                 authority_options = {}
                 from .prior_outputs import references
-                from agent.tools.data.scientific_authority import TOOLS
+                from agent.tools.scientific_authority import supports_tool, hooks_for_tool
+                owned = hooks_for_tool(step.tool_name, self._registry)
+                recorded = persisted.verification is not None and persisted.verification.artifact_authority is not None
                 if durable_run_id is not None and (
                     step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
-                    or (references(plan) and step.tool_name in TOOLS)
+                    or (owned is not None and recorded)
+                    or (references(plan) and supports_tool(step.tool_name, self._registry) and owned is None)
                 ):
                     from .durable_tool_recovery import execution_identity
                     authority_options['authority_execution_identity'] = execution_identity(
@@ -973,13 +976,13 @@ class PlanExecutor:
                 try:
                     with cancellation_scope(lambda: observe_cancellation(
                             'during_registered_tool',step_id=step.step_id,attempt=attempt)):
+                        from agent.tools.data.authority_context import current
+                        from agent.tools.scientific_authority import supports_tool, tool_kind
+                        from .durable_tool_recovery import execution_identity
+                        if durable_run_id is not None and current() is not None and supports_tool(step.tool_name, self._registry):
+                            current().register_execution(tool_kind(step.tool_name, self._registry), attempt_arguments['output_dir'],
+                                execution_identity(durable_run_id, plan, step, spec))
                         if durable_run_id is not None and spec.durable_hooks is not None:
-                            from .durable_tool_recovery import execution_identity
-                            from agent.tools.data.authority_context import current
-                            from agent.tools.data.scientific_authority import TOOLS
-                            if current() is not None and step.tool_name in TOOLS:
-                                current().register_execution(TOOLS[step.tool_name], attempt_arguments['output_dir'],
-                                    execution_identity(durable_run_id, plan, step, spec))
                             returned_result = spec.durable_hooks.execute(attempt_arguments,
                                 execution_identity(durable_run_id, plan, step, spec))
                         else:
@@ -1106,8 +1109,8 @@ class PlanExecutor:
                 if dependency in verified_results
             }
             authority_options = {}
-            from agent.tools.data.scientific_authority import TOOLS
-            if durable_run_id is not None and step.tool_name in TOOLS:
+            from agent.tools.scientific_authority import supports_tool
+            if durable_run_id is not None and supports_tool(step.tool_name, self._registry):
                 from .durable_tool_recovery import execution_identity
                 authority_options['authority_execution_identity'] = execution_identity(
                     durable_run_id, plan, step, self._registry.get(step.tool_name))

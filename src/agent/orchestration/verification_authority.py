@@ -54,8 +54,8 @@ def _accepted(store, run_id, step_id):
     if authority.record['schema_version'] == 1:
         contract_for_tool(step.tool_name).require(authority)
     else:
-        from agent.tools.data.scientific_authority import TOOLS
-        if step.tool_name not in TOOLS:
+        from agent.tools.scientific_authority import supports_tool
+        if not supports_tool(step.tool_name):
             raise AuthorityError('Unsupported scientific authority contract.')
     if authority.record['execution_identity'] != identity:
         raise AuthorityError('Authority belongs to a different execution.')
@@ -93,7 +93,7 @@ from .prior_outputs import source_load_guard
 @source_load_guard
 def _load_context(store, run_id, source_policy):
     from agent.tools.data.authority_context import VerificationContext, ScientificProof
-    from agent.tools.data.scientific_authority import TOOLS, _publication_record
+    from agent.tools.scientific_authority import tool_kind, _publication_record
     from agent.schemas.orchestration import freeze_json_mapping
     from pathlib import Path
     if source_policy not in ('historical_verified_sources.v1', 'current_source_freshness.v1'):
@@ -129,7 +129,7 @@ def _load_context(store, run_id, source_policy):
             expected = authority.to_dict()['historical_sources']
             if context.files(f['path'] for f in expected) != expected:
                 raise AuthorityError('Current source bytes differ from historical verified identity.')
-        kind = TOOLS[stored.tool_name]
+        kind = tool_kind(stored.tool_name)
         description, key = context.describe(kind, Path(record['publication_path']), record['manifest_sha256'])
         if _accepted(store, run_id, stored.step_id)[3] != anchor:
             raise AuthorityError('Accepted verification anchor changed.')
@@ -328,10 +328,11 @@ def bind_annotation_matrix(specification, path, sha, context):
 
 
 def resume_annotation_authorities(function):
-    """Use the existing authority operation for the new annotation resume policy.
+    """Restore accepted proofs for existing opt-in and registered owner policies.
 
     Historical raw-processing recovery policies retain their strict behavior.
-    Terminal Application consumption continues through accepted_authorities.
+    Absent owner authority is never qualified by resume. Terminal Application
+    consumption continues through accepted_authorities.
     """
     from functools import wraps
     @wraps(function)
@@ -343,9 +344,11 @@ def resume_annotation_authorities(function):
         if references(state.plan):
             with accepted_authorities(store, run_id):
                 return function(runtime, run_id)
+        from agent.tools.scientific_authority import hooks_for_tool
         if (state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
                 RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}
-                or not any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features') for s in state.steps)):
+                or not any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+                    or hooks_for_tool(s.tool_name, runtime._registry) is not None for s in state.steps)):
             return function(runtime, run_id)
         with accepted_authorities(store, run_id):
             return function(runtime, run_id)

@@ -569,6 +569,39 @@ class DurableToolHooks:
 
 
 @dataclass(frozen=True)
+class ScientificAuthorityHooks:
+    """Repository-owned scientific publication contract, never provider inputs.
+
+    The owner describes its publication, captures completed verifier metadata,
+    and reconstructs lightweight results from accepted proofs. Generic binding
+    and RunStore admission remain in orchestration.
+    """
+    kind: str
+    producer_ports: tuple[str, ...]
+    describe: Callable
+    publication_record: Callable
+    reuse_result: Callable
+    proof_metadata: Callable
+    runtime_compatibility: Callable | None = None
+    verify_sources: bool = True
+
+    def __post_init__(self):
+        if type(self.kind) is not str or not self.kind.strip():
+            raise ValueError('Scientific authority kind must be a non-empty string.')
+        if (type(self.producer_ports) is not tuple or not self.producer_ports
+                or any(type(port) is not str or not port.strip() for port in self.producer_ports)
+                or len(set(self.producer_ports)) != len(self.producer_ports)):
+            raise ValueError('Scientific authority producer ports must be a unique non-empty tuple.')
+        for name in ('describe', 'publication_record', 'reuse_result', 'proof_metadata'):
+            if not callable(getattr(self, name)):
+                raise TypeError('Scientific authority owner callbacks must be callable.')
+        if self.runtime_compatibility is not None and not callable(self.runtime_compatibility):
+            raise TypeError('Scientific authority runtime callback must be callable or None.')
+        if type(self.verify_sources) is not bool:
+            raise TypeError('Scientific authority source verification policy must be boolean.')
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """Immutable executable-tool specification owned by the registry."""
 
@@ -583,6 +616,7 @@ class ToolSpec:
     planning: ToolPlanningSemantics | None = None
     semantic_planning: SemanticToolSpec | None = None
     durable_hooks: DurableToolHooks | None = None
+    scientific_authority: ScientificAuthorityHooks | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -591,6 +625,8 @@ class ToolSpec:
             raise TypeError("ToolSpec `function` must be callable.")
         if self.durable_hooks is not None and not isinstance(self.durable_hooks, DurableToolHooks):
             raise TypeError('Invalid durable tool hooks.')
+        if self.scientific_authority is not None and not isinstance(self.scientific_authority, ScientificAuthorityHooks):
+            raise TypeError('Invalid scientific authority hooks.')
         required = dict(self.required_arguments)
         optional = dict(self.optional_arguments)
         overlap = set(required).intersection(optional)
@@ -672,6 +708,11 @@ class ToolSpec:
         )
         if self.semantic_planning is not None:
             _validate_semantic_tool_spec(self)
+        if self.scientific_authority is not None:
+            declared = set() if self.semantic_planning is None else {
+                port.name for port in self.semantic_planning.producer_ports}
+            if not set(self.scientific_authority.producer_ports) <= declared:
+                raise ValueError('Scientific authority requires explicitly declared producer ports.')
 
 
 def _unique_semantic_members(
@@ -885,6 +926,9 @@ class ToolRegistry:
             self, "_specs", MappingProxyType({spec.name: spec for spec in specs})
         )
         object.__setattr__(self, "_names", names)
+        if any(spec.scientific_authority is not None for spec in specs):
+            from agent.tools.scientific_authority import validate_registry_hooks
+            validate_registry_hooks(self)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("ToolRegistry is immutable after construction.")
@@ -1690,6 +1734,8 @@ def _semantic_argument_port(
 def build_default_tool_registry() -> ToolRegistry:
     """Build the fixed Milestone 3 allowlist from public scientific APIs."""
 
+    from agent.tools.analysis import neighbors_publication
+
     path_types = (str, Path)
     direct = PlanningSourceEligibility.REQUEST_INPUT_ONLY
     composable = PlanningSourceEligibility.REQUEST_INPUT_OR_UPSTREAM_RESULT
@@ -1948,6 +1994,14 @@ def build_default_tool_registry() -> ToolRegistry:
     neighbors_spec = ToolSpec(
         name="build_cell_neighbors",
         function=build_cell_neighbors,
+        scientific_authority=ScientificAuthorityHooks(
+            kind=neighbors_publication.KIND,
+            producer_ports=('neighbors',),
+            describe=neighbors_publication.describe,
+            publication_record=neighbors_publication.publication_record,
+            reuse_result=neighbors_publication.reuse_result,
+            proof_metadata=neighbors_publication.proof_metadata,
+        ),
         required_arguments={
             "embedding_path": _planning_argument(
                 path_types,
@@ -3490,6 +3544,7 @@ __all__ = [
     "ArgumentSpec",
     "ErrorClassification",
     "ResultContract",
+    "ScientificAuthorityHooks",
     "SemanticConsumerPortSpec",
     "SemanticLineage",
     "SemanticPortMember",

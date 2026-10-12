@@ -81,6 +81,9 @@ def bind_output(store, registry, run_id, step_id, port_name):
     stored, authority, _, _ = _accepted(store, run_id, step_id)
     if authority.record['schema_version'] != 2:
         raise AuthorityError('Historical execution requires reusable schema-2 authority.')
+    from agent.tools.scientific_authority import qualified_port
+    if not qualified_port(stored.tool_name, port_name, registry):
+        raise AuthorityError('Historical output port lacks owner-qualified scientific authority.')
     port = source_port(registry, stored.tool_name, port_name)
     if any(m.field_name not in stored.result for m in port.members):
         raise AuthorityError('Historical output is missing a semantic member.')
@@ -204,7 +207,7 @@ def validate_active_outputs(locators, store, registry):
     """
     from pathlib import Path
     from agent.tools.data.authority_context import VerificationContext
-    from agent.tools.data.scientific_authority import TOOLS
+    from agent.tools.scientific_authority import tool_kind
     from .verification_authority import _accepted, _load_context
     context = VerificationContext()
     active = {}
@@ -216,7 +219,7 @@ def validate_active_outputs(locators, store, registry):
             merge_context(context, _load_context(store, binding.run_id, 'historical_verified_sources.v1'))
             loaded.add(binding.run_id)
         _, authority, _, _ = _accepted(store, binding.run_id, binding.step_id)
-        kind = TOOLS[binding.tool_name]
+        kind = tool_kind(binding.tool_name, registry)
         identity = (authority.record['publication_path'], binding.manifest_sha256)
         if kind in active and active[kind] != identity:
             raise AuthorityError('Multiple active publications require explicit distinct scientific roles.')

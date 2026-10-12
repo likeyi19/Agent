@@ -32,6 +32,7 @@ class Descriptor:
 class Snapshot:
     def __init__(self):
         self.sha256 = hashlib.sha256(b'abcd').hexdigest()
+        self.source_sha256 = self.sha256
         self.size_bytes = 4
         self.filename = 'matrix.h5ad'
         self.content_type = 'application/octet-stream'

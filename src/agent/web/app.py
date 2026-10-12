@@ -227,7 +227,7 @@ class _ScientificFileResponse(StreamingResponse):
             super().__init__(snapshot.iter_chunks(), media_type=snapshot.content_type, headers={
                 'Content-Disposition': f'attachment; filename="{snapshot.filename}"',
                 'Content-Length': str(snapshot.size_bytes),
-                'X-Artifact-Source-SHA256': snapshot.sha256,
+                'X-Artifact-Source-SHA256': snapshot.source_sha256,
                 'X-Artifact-Content-SHA256': snapshot.sha256,
             })
         except BaseException:

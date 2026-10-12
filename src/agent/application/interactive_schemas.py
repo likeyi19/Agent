@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 import json
 
 from agent.schemas.orchestration import _JsonModel, freeze_json_mapping
@@ -392,6 +393,7 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_qc_table', 'lengths.tsv.gz', 'Fragment length distribution'),
             ('scientific_selection_table', 'decisions.tsv.gz', 'Cell-selection decisions'),
             ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
+            ('scientific_analysis', 'neighbors.h5ad', 'Cell neighbors — safe export'),
         }
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):
@@ -407,6 +409,7 @@ class EvidenceView(DialogueEvidence):
     their existing meanings; this adds no evidence authority or reconstruction.
     """
     supported_details: tuple[str, ...] = ()
+    field_labels: Mapping[str, str] = dataclass_field(default_factory=dict)
 
     def __post_init__(self):
         for name in ('session_id', 'revision_id', 'output_name', 'evidence_scope'):
@@ -426,6 +429,13 @@ class EvidenceView(DialogueEvidence):
         if (type(self.supported_details) is not tuple or len(self.supported_details) > 2
                 or any(s not in ('annotation_rationale', 'length_histogram') for s in self.supported_details)):
             raise ValueError('Invalid supported evidence detail inventory.')
+        available = {fact.field for name in ('facts', 'coverage', 'detail') for fact in getattr(self, name)}
+        if not isinstance(self.field_labels, Mapping) or set(self.field_labels) - available:
+            raise ValueError('Invalid evidence field labels.')
+        for name, label in self.field_labels.items():
+            _identifier(name, 'evidence field')
+            _text(label, 'evidence label', 4096)
+        object.__setattr__(self, 'field_labels', freeze_json_mapping(self.field_labels, 'field_labels'))
         if len(json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False).encode('utf-8')) > 131_072:
             raise ValueError('Interactive evidence exceeds the client byte limit.')
 

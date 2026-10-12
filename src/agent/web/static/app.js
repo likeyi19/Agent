@@ -298,8 +298,13 @@ async function loadRevision(revisionId) {
 function renderRevision(revision) {
   element("scientific-empty").hidden = true;
   element("revision-view").hidden = false;
-  element("result-heading").textContent = `${revision.is_active ? "Active" : "Historical"} result · Revision ${shortIdentity(revision.revision_id)} · ${revision.status}`;
+  element("result-heading").textContent = `${revision.is_active ? "Current" : "Historical"} result · ${statusLabel(revision.status)}`;
   element("result-heading").title = revision.revision_id;
+  const originatingTurn = state.session.turns.find((turn) => turn.turn_id === revision.turn_id);
+  element("result-origin").textContent = originatingTurn && originatingTurn.utterance
+    ? `Requested in this turn: ${originatingTurn.utterance}`
+    : "Originating analysis identifiers are available in Revision details.";
+  element("result-origin").title = `Originating turn: ${revision.turn_id}. Viewing this result does not change the active revision.`;
   element("result-panel-heading").textContent = revision.is_active ? "Current result" : "Historical result";
   element("result-output-summary").textContent = `${revision.outputs.length} accepted outputs${revision.outputs.length ? `: ${revision.outputs.join(", ")}` : ""}`;
   element("viewed-revision").textContent = revision.revision_id;
@@ -311,6 +316,11 @@ function renderRevision(revision) {
   ]));
   element("activate-revision").hidden = revision.is_active;
   element("result-presentation").textContent = revision.result ? revision.result.text : "Stored result presentation is unavailable.";
+  element("result-operations").replaceChildren(...(revision.steps || []).map((step) => {
+    const item = document.createElement("li");
+    item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
+    return item;
+  }));
   const retained = new Set(revision.retained_outputs);
   element("revision-outputs").replaceChildren(...revision.outputs.map((output) => {
     const item = document.createElement("li");
@@ -321,7 +331,7 @@ function renderRevision(revision) {
   element("evidence-output").replaceChildren(...revision.evidence_outputs.map((output) => {
     const option = document.createElement("option");
     option.value = output;
-    option.textContent = output;
+    option.textContent = readableLabel(output);
     return option;
   }));
   element("evidence-output").disabled = !revision.evidence_outputs.length;
@@ -354,6 +364,7 @@ function supportedScientificFile(artifact) {
       "decisions.tsv.gz": "Cell-selection decisions",
       "selected.tsv.gz": "Selected cells",
     },
+    scientific_analysis: { "neighbors.h5ad": "Cell neighbors — safe export" },
   };
   return Object.hasOwn(files, artifact.artifact_type)
     && Object.hasOwn(files[artifact.artifact_type], artifact.filename)
@@ -372,6 +383,12 @@ function scientificFileNode(sessionId, artifact) {
   download.setAttribute("aria-label", `Download ${artifact.filename}`);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
   row.append(title, download);
+  if (artifact.artifact_type === "scientific_analysis") {
+    const note = document.createElement("span");
+    note.className = "scientific-export-note";
+    note.textContent = "Privacy-safe export; accepted source remains unchanged.";
+    row.append(note);
+  }
   return row;
 }
 
@@ -442,8 +459,14 @@ function renderArtifacts(revision) {
   }
   if (!nodes.length) {
     const empty = document.createElement("li");
-    empty.textContent = "No accepted reports or figures are available.";
+    empty.textContent = "No accepted reports, figures or eligible scientific downloads are available.";
     nodes.push(empty);
+  }
+  if (!revision.artifacts.some((artifact) => artifact.artifact_type === "analysis_figure")) {
+    const note = document.createElement("li");
+    note.className = "muted small";
+    note.textContent = "No reviewed figure is available for this result. Figure availability is separate from analysis success.";
+    nodes.push(note);
   }
   element("artifact-inventory").replaceChildren(...nodes);
 }
@@ -485,14 +508,67 @@ async function viewArtifact(sessionId, revisionId, artifact) {
   }
 }
 
-function evidenceFactNodes(facts) {
+function readableLabel(value) {
+  const label = String(value).replace(/_/g, " ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function statusLabel(status) {
+  const labels = {
+    activated: "Analysis completed", succeeded: "Analysis completed",
+    stale: "Analysis completed · Historical result", failed: "Analysis failed",
+    cancelled: "Cancelled", clarification: "Clarification needed",
+    answered: "Answer available", navigated: "Revision selected",
+    unavailable: "Result unavailable", running: "Analysis in progress",
+    planning: "Planning", validated: "Ready for execution", submitted: "Request received",
+    planned: "Plan prepared", interrupted: "Interrupted",
+  };
+  return labels[status] || readableLabel(status || "Unavailable");
+}
+
+function evidenceValueNode(value) {
+  if (Array.isArray(value)) {
+    const list = document.createElement("ul");
+    list.className = "compact-list";
+    for (const entry of value) {
+      const item = document.createElement("li");
+      item.append(evidenceValueNode(entry));
+      list.append(item);
+    }
+    return list;
+  }
+  if (value !== null && typeof value === "object") {
+    const list = document.createElement("dl");
+    list.className = "fact-values";
+    for (const [key, entry] of Object.entries(value)) {
+      const label = document.createElement("dt");
+      label.textContent = readableLabel(key);
+      const content = document.createElement("dd");
+      content.append(evidenceValueNode(entry));
+      list.append(label, content);
+    }
+    return list;
+  }
+  const content = document.createElement("span");
+  const origins = {
+    explicit_user_instruction: "Explicit user instruction",
+    explicit_execution_argument: "Explicit execution argument; user origin is not established by this fact",
+    existing_owner_default: "Existing scientific owner default",
+  };
+  content.textContent = typeof value === "string" && Object.hasOwn(origins, value)
+    ? origins[value] : value === null ? "Recorded null" : String(value);
+  return content;
+}
+
+function evidenceFactNodes(facts, fieldLabels = {}) {
   return (facts || []).map((fact) => {
-    const item = document.createElement("details");
-    const title = document.createElement("summary");
-    title.textContent = `${fact.field} · ${fact.status}`;
-    const content = document.createElement("pre");
-    content.className = "evidence-value";
-    content.textContent = fact.status === "available" ? JSON.stringify(fact.value, null, 2) : fact.reason || "No accepted value is available.";
+    const technical = fact.field.endsWith("_sha256") || fact.field.includes("contract");
+    const item = document.createElement(technical ? "details" : "section");
+    item.className = "scientific-fact";
+    const title = document.createElement(technical ? "summary" : "h4");
+    title.textContent = `${fieldLabels[fact.field] || readableLabel(fact.field)}${fact.status === "available" ? "" : ` · ${fact.status}`}`;
+    const content = fact.status === "available" ? evidenceValueNode(fact.value) : document.createElement("p");
+    if (fact.status !== "available") content.textContent = fact.reason || "No accepted value is available.";
     item.append(title, content);
     return item;
   });
@@ -503,11 +579,29 @@ function renderEvidence(view, target) {
   status.className = "small";
   status.textContent = `Availability: ${view.status}${view.reason ? ` · ${view.reason}` : ""}\nScope: ${view.evidence_scope} · Generation: ${view.generation === null ? "Unavailable" : view.generation}`;
   const nodes = [status];
+  if (view.status === "available" && view.source) {
+    const operation = document.createElement("p");
+    operation.className = "accepted-operation";
+    operation.textContent = `Accepted operation: ${readableLabel(view.source.tool_name)}.`;
+    nodes.push(operation);
+    for (const prior of view.source.prior_outputs) {
+      const reused = document.createElement("p");
+      reused.className = "accepted-reuse";
+      reused.textContent = `Prior accepted input consumed: ${readableLabel(prior.argument)}. This binding identifies historical input reuse.`;
+      nodes.push(reused);
+    }
+    if (view.source.authority_sha256 === null) {
+      const authority = document.createElement("p");
+      authority.className = "muted small";
+      authority.textContent = "Reusable scientific authority is unavailable for this accepted result.";
+      nodes.push(authority);
+    }
+  }
   for (const [heading, facts] of [["Coverage", view.coverage], ["Accepted bounded facts", view.facts], ["Detailed evidence", view.detail]]) {
     if (!facts.length) continue;
     const title = document.createElement("h3");
     title.textContent = heading;
-    nodes.push(title, ...evidenceFactNodes(facts));
+    nodes.push(title, ...evidenceFactNodes(facts, view.field_labels || {}));
   }
   if (view.source) {
     const provenance = document.createElement("details");
@@ -646,7 +740,7 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = `${turn.status}${turn.profile_id ? ` · ${turn.profile_id}` : ""}`;
+    status.textContent = `${statusLabel(turn.status)}${turn.profile_id ? ` · ${turn.profile_id}` : ""}`;
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     const metadataLabel = document.createElement("summary");
@@ -682,6 +776,8 @@ function renderHistory() {
         ? `View created result revision ${turn.revision_id}` : `View revision ${turn.revision_id}`;
       result.addEventListener("click", () => {
         element("result-panel").open = true;
+        element("evidence-panel").open = true;
+        element("artifact-panel").open = true;
         loadRevision(turn.revision_id);
         const details = element("scientific-details");
         details.scrollIntoView({ block: "start" });
@@ -738,14 +834,14 @@ function updateControls() {
 }
 
 function renderExecution() {
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? `${state.activeTurn.status}${state.activeTurn.profile_id ? ` · ${state.activeTurn.profile_id}` : ""}` : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? `${statusLabel(state.activeTurn.status)}${state.activeTurn.profile_id ? ` · ${state.activeTurn.profile_id}` : ""}` : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
   list.hidden = !steps.length;
   list.replaceChildren(...steps.map((step) => {
     const item = document.createElement("li");
-    item.textContent = `${step.step_id} · ${step.tool_name} · ${step.status.toLowerCase()}`;
+    item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
     return item;
   }));
   updateControls();

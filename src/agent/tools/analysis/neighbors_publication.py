@@ -109,6 +109,13 @@ def read_json(path, sha=None):
     _path(str(path))
     with path.open('rb') as handle:
         raw = handle.read(MAX_BYTES + 1)
+    return read_json_bytes(raw, sha)
+
+
+def read_json_bytes(raw, sha=None):
+    """Parse bounded owner metadata from a caller's securely opened snapshot."""
+    if type(raw) is not bytes:
+        raise AuthorityError('Neighbor publication metadata must be bytes.')
     if len(raw) > MAX_BYTES:
         raise AuthorityError('Neighbor publication metadata exceeds its bound.')
     actual = hashlib.sha256(raw).hexdigest()
@@ -124,6 +131,18 @@ def read_json(path, sha=None):
 
 def load_manifest(path, sha=None):
     value, actual = read_json(path, sha)
+    return _validate_manifest(value, actual, path)
+
+
+def load_manifest_bytes(raw, path, sha=None):
+    """Apply the same closed owner contract without reopening a locator."""
+    path = Path(path)
+    _path(str(path))
+    value, actual = read_json_bytes(raw, sha)
+    return _validate_manifest(value, actual, path)
+
+
+def _validate_manifest(value, actual, path):
     _shape(value, ('artifact_type', 'schema_version', 'contract_version', 'profile_sha256',
                    'arguments', 'execution_identity', 'sources', 'analysis',
                    'cell_order_sha256', 'summary'))

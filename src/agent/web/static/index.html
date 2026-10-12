@@ -139,6 +139,7 @@
       <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
       <div id="revision-view" hidden>
         <p id="result-heading" class="result-heading"></p>
+        <p id="result-origin" class="muted small"></p>
         <p id="result-output-summary" class="muted small"></p>
         <div class="revision-actions">
           <button id="activate-revision" class="secondary" type="button">Switch to this revision</button>
@@ -148,11 +149,13 @@
         <details id="result-panel">
           <summary id="result-panel-heading">Current result</summary>
           <p id="result-presentation" class="message-text small"></p>
+          <h3>Scientific operations</h3>
+          <ul id="result-operations" class="compact-list"></ul>
           <h3>Accepted output names</h3>
           <ul id="revision-outputs" class="compact-list"></ul>
         </details>
         <details id="artifact-panel">
-          <summary>Reports &amp; figures</summary>
+          <summary>Figures, reports &amp; downloads</summary>
           <ul id="artifact-inventory" class="compact-list"></ul>
           <div id="artifact-viewer" hidden>
             <h3 id="artifact-title"></h3>

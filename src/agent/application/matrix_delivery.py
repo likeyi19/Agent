@@ -274,12 +274,13 @@ class VerifiedMatrixSnapshot:
     content_type = 'application/octet-stream'
 
     def __init__(self, stream, *, size_bytes, sha256, release,
-                 filename='matrix.h5ad', content_type='application/octet-stream'):
+                 filename='matrix.h5ad', content_type='application/octet-stream', source_sha256=None):
         self._stream = stream
         self._release = release
         self._close_lock = Lock()
         self.size_bytes = size_bytes
         self.sha256 = sha256
+        self.source_sha256 = sha256 if source_sha256 is None else source_sha256
         self.filename = filename
         self.content_type = content_type
 
@@ -344,13 +345,18 @@ class MatrixDownloadPreparer:
             self._reserved_bytes -= size
 
     def prepare(self, artifact):
-        """Copy/hash bounded chunks, validate that same snapshot, then release it."""
+        """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
+        from agent.tools.analysis import neighbors_delivery
+        processed = (artifact.contract == neighbors_delivery.CONTRACT
+                     and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
+        elif processed:
+            filename, content_type = neighbors_delivery.FILENAME, 'application/octet-stream'
         else:
             table_roles = {
                 ('scatac-barcode-qc.v1', 'table'): 'barcodes.tsv.gz',
@@ -369,9 +375,13 @@ class MatrixDownloadPreparer:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_LIMIT')
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
-        reserved, snapshot = False, None
+        delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, MAX_MATRIX_BYTES)
+        # A derivative temporarily owns both source and destination snapshots.
+        # Reserve both under the same transfer slot and disk admission policy.
+        reservation = size + delivered_limit if processed else size
+        reserved, snapshot, derivative = False, None, None
         try:
-            self._reserve(size)
+            self._reserve(reservation)
             reserved = True
             # TemporaryFile is 0600 and anonymous/unlinked on this Linux host.
             # Retaining this descriptor avoids reopening either source or temp.
@@ -398,12 +408,31 @@ class MatrixDownloadPreparer:
             snapshot.seek(0)
             if matrix:
                 validate_matrix_h5ad(snapshot, artifact.contract, artifact.manifest)
+            elif processed:
+                derivative = tempfile.TemporaryFile(mode='w+b')
+                neighbors_delivery.create_neighbors_export(snapshot, derivative, artifact.manifest,
+                    source_sha256=artifact.sha256, source_size_bytes=size,
+                    manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)
+                derivative.flush()
+                derivative.seek(0)
+                checksum, delivered_size = hashlib.sha256(), 0
+                while chunk := derivative.read(MATRIX_CHUNK_BYTES):
+                    delivered_size += len(chunk)
+                    if delivered_size > delivered_limit:
+                        raise ValueError('Export exceeds the delivery bound.')
+                    checksum.update(chunk)
+                if delivered_size < 1:
+                    raise ValueError('Empty scientific export.')
+                snapshot.close()
+                snapshot, derivative = derivative, None
             else:
                 from .table_delivery import validate_scientific_table
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
-            resource = VerifiedMatrixSnapshot(snapshot, size_bytes=size,
-                sha256=artifact.sha256, release=lambda: self._release(size),
+            resource = VerifiedMatrixSnapshot(snapshot,
+                size_bytes=delivered_size if processed else size,
+                sha256=checksum.hexdigest() if processed else artifact.sha256,
+                source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False
             return resource
@@ -415,8 +444,12 @@ class MatrixDownloadPreparer:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE') from exc
         finally:
             try:
-                if snapshot is not None:
-                    snapshot.close()
+                try:
+                    if snapshot is not None:
+                        snapshot.close()
+                finally:
+                    if derivative is not None:
+                        derivative.close()
             finally:
                 if reserved:
-                    self._release(size)
+                    self._release(reservation)

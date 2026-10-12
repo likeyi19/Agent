@@ -79,6 +79,13 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .scientific-file span { overflow-wrap: anywhere; }
 .scientific-file a { color: #276b85; font-weight: 600; }
 .scientific-file a:focus-visible { outline: 3px solid #c4e0ef; outline-offset: 2px; }
+.scientific-export-note { flex-basis: 100%; color: #586b79; font-size: 12px; }
+.scientific-fact { margin: 10px 0; padding: 10px 12px; background: #f4f7f9; border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.scientific-fact h4 { margin: 0 0 6px; font-size: 13px; }
+.fact-values { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr); gap: 6px 12px; margin: 6px 0; }
+.fact-values dt { color: #586b79; }
+.fact-values dd { margin: 0; overflow-wrap: anywhere; }
+.accepted-operation, .accepted-reuse { font-size: 13px; color: #36576a; }
 .report-content, .evidence-value { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; max-height: 420px; overflow: auto; }
 .report-content { padding: 10px; background: #f4f6f8; border-radius: 6px; }
 .analysis-figure { display: block; max-width: 100%; height: auto; margin-top: 10px; }

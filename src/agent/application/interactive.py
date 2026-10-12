@@ -75,6 +75,7 @@ class _ScientificMatrixArtifact:
     contract: str
     manifest: Mapping
     role: str = 'matrix'
+    manifest_sha256: str | None = None
 
 
 class InteractiveBoundaryError(ValueError):
@@ -365,8 +366,20 @@ class InteractiveAgentApplication:
                 values['limitations'] += ('Path or private configuration fields are explicitly omitted from this client view.',)
             sections = {'annotate_scATAC_cell_types': ('annotation_rationale',),
                         'compute_scATAC_qc': ('length_histogram',)}
+            # Reuse the labels already reviewed for reporting. Facts and their
+            # provenance remain the existing evidence owner's exact projection.
+            from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
+            labels = dict(clustering_parameters='Clustering parameters',
+                clustering_resolution_origin='Leiden resolution origin',
+                selection_threshold_origins='Selection threshold origins',
+                explicit_user_parameters='Explicit user parameters')
+            if original.source is not None:
+                labels.update({field: _FIELD_LABELS[field]
+                    for field in _REPORT_FIELDS.get(original.source.tool_name, ()) if field in _FIELD_LABELS})
+            labels = {fact.field: labels[fact.field] for name in ('facts', 'coverage', 'detail')
+                for fact in values[name] if fact.field in labels}
             return EvidenceView(**values, supported_details=() if original.source is None
-                else sections.get(original.source.tool_name, ()))
+                else sections.get(original.source.tool_name, ()), field_labels=labels)
         except (ValueError, TypeError, RecursionError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
@@ -715,6 +728,12 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
+                elif step.tool_name == 'build_cell_neighbors':
+                    try:
+                        items.append(self._accepted_neighbors(session_id, revision, origin,
+                            None if output.run_id == origin.run_id else output, step_id=output.step_id))
+                    except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                        pass
                 represented.add((output.run_id, output.step_id))
             # The captured run-result digest includes its exact plan and every
             # accepted step. It establishes current-request membership without
@@ -732,6 +751,12 @@ class InteractiveAgentApplication:
                 elif planned.tool_name in _TABLE_TOOLS:
                     try:
                         items.extend(self._accepted_tables(session_id, revision, origin, None,
+                            step_id=planned.step_id))
+                    except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                        pass
+                elif planned.tool_name == 'build_cell_neighbors':
+                    try:
+                        items.append(self._accepted_neighbors(session_id, revision, origin, None,
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
@@ -842,6 +867,87 @@ class InteractiveAgentApplication:
         return _ScientificMatrixArtifact(reference, payload, root, reference.sha256,
             reference.size_bytes, manifest['contract_version'], manifest)
 
+    def _accepted_neighbors(self, session_id, revision, origin, output, *, step_id=None):
+        """Select the qualified source of a reviewed export, never its private original."""
+        from agent.orchestration.prior_outputs import accepted_step_digest
+        from agent.orchestration.verification_authority import _accepted
+        from agent.tools.analysis import neighbors_publication as owner, neighbors_delivery as delivery
+        from .matrix_delivery import _open_matrix_source
+
+        store = self._application.run_store
+        run_id = revision.run_id if output is None else output.run_id
+        step_id = step_id if output is None else output.step_id
+        step, authority, execution, anchor = _accepted(store, run_id, step_id)
+        result, record = _serialize(step.result), authority.to_dict()
+        if (store.load(run_id).lifecycle_status.value != 'SUCCEEDED'
+                or step.tool_name != 'build_cell_neighbors'
+                or output is not None and accepted_step_digest(step) != output.accepted_step_sha256
+                or record['schema_version'] != 2 or record['scope'] != 'scientific_correctness.v1'
+                or record['completion'] != 'succeeded' or record['artifact_type'] != owner.ARTIFACT
+                or record['artifact_contract'] != owner.CONTRACT or record['science_profile'] != owner.PROFILE_SHA256
+                or record['verifier'] != owner.VERIFIER):
+            raise ValueError('Unsupported accepted processed authority.')
+        spec = self._application.registry.get(step.tool_name)
+        spec.result_contract.validate(result)
+        output_key = 'analysis_path' if output is None else output.output_key
+        ports = [port for port in spec.semantic_planning.producer_ports
+            if output_key in {member.field_name for member in port.members}]
+        from agent.tools.scientific_authority import qualified_port
+        if len(ports) != 1 or ports[0].name != 'neighbors' or not qualified_port(step.tool_name, ports[0].name, self._application.registry):
+            raise ValueError('Output does not select the qualified processed artifact port.')
+        workspace = self._application._workspace
+        root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
+        path = Path(result['manifest_path'])
+        output_dir = Path(step.resolved_arguments['output_dir'])
+        for location in (root, output_dir, path):
+            if not location.is_absolute() or location != location.resolve():
+                raise ValueError('Unsafe processed publication path.')
+            location.relative_to(root)
+        if path.parent != output_dir:
+            raise ValueError('Processed publication differs from the managed output directory.')
+        with _open_matrix_source(path, root) as stream:
+            raw = stream.read(owner.MAX_BYTES + 1)
+        sha = hashlib.sha256(raw).hexdigest()
+        if sha != result['manifest_sha256']:
+            raise ValueError('Changed processed manifest.')
+        manifest, _ = owner.load_manifest_bytes(raw, path, sha)
+        args, _, stem, token = owner._publication(step.resolved_arguments, execution, sources=manifest['sources'])
+        receipt_path = path.parent / (stem + '.receipt.json')
+        with _open_matrix_source(receipt_path, root) as stream:
+            receipt_bytes = stream.read(owner.MAX_BYTES + 1)
+        receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+        receipt, _ = owner.read_json_bytes(receipt_bytes)
+        payload = path.parent / manifest['analysis']['path']
+        expected_result = owner._summary(manifest, path, sha)
+        resources = record['resources']
+        if (path.name != stem + '.manifest.json' or record['publication_path'] != str(path)
+                or record['manifest_sha256'] != sha or manifest['arguments'] != args
+                or manifest['execution_identity'] != execution or record['arguments_sha256'] != owner.digest(args)
+                or record['receipt_sha256'] != receipt_sha
+                or receipt != owner._receipt_value(args, execution, token, sha)
+                or result != expected_result or set(resources) != {'scientific_proof_sha256', 'manifest_identity', 'result_metadata'}
+                or resources['manifest_identity'] != manifest or resources['result_metadata'] != result
+                or record['historical_sources'] != sorted(manifest['sources'].values(), key=lambda entry: entry['path'])):
+            raise ValueError('Accepted processed result, manifest, receipt and authority differ.')
+        files = {entry['path']: entry for entry in record['files']}
+        expected = [dict(path=str(path), sha256=sha, size_bytes=len(raw)),
+            dict(path=str(receipt_path), sha256=receipt_sha, size_bytes=len(receipt_bytes)),
+            dict(manifest['analysis'], path=str(payload))]
+        if len(files) != 3 or any(files.get(entry['path']) != entry for entry in expected):
+            raise ValueError('Authority does not pin the complete processed publication.')
+        if _accepted(store, run_id, step_id)[3] != anchor:
+            raise ValueError('Accepted processed anchor changed during inventory.')
+        identity = dict(session_id=session_id, revision_id=revision.revision_id, turn_id=origin.turn_id,
+            output=None if output is None else asdict(output),
+            accepted_step=dict(run_id=run_id, step_id=step_id, accepted_step_sha256=accepted_step_digest(step)),
+            artifact_role=delivery.ROLE, export_contract=delivery.EXPORT_CONTRACT,
+            authority_sha256=authority.identity_sha256, manifest_sha256=sha,
+            payload_sha256=manifest['analysis']['sha256'], size_bytes=manifest['analysis']['size_bytes'])
+        reference = ScientificArtifactHandle(digest(identity), 'scientific_analysis', manifest['analysis']['sha256'],
+            revision.revision_id, origin.turn_id, manifest['analysis']['size_bytes'], delivery.FILENAME, delivery.LABEL)
+        return _ScientificMatrixArtifact(reference, payload, root, reference.sha256,
+            reference.size_bytes, owner.CONTRACT, manifest, delivery.ROLE, sha)
+
     def _accepted_tables(self, session_id, revision, origin, output, *, step_id=None):
         """Resolve the two closed owner roles from their pinned manifest only."""
         from agent.orchestration.prior_outputs import accepted_step_digest
@@ -935,7 +1041,7 @@ class InteractiveAgentApplication:
         return matches[0]
 
     def prepare_scientific_artifact(self, session_id, revision_id, handle):
-        """Prepare bounded verified original bytes without provider or science."""
+        """Prepare the reviewed role's verified payload without provider or science."""
         return self._matrix_downloads.prepare(self._scientific_artifact(session_id, revision_id, handle))
 
     def artifact_handles(self, session_id, revision_id):

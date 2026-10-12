@@ -556,6 +556,47 @@ def group_role_inputs(binding, roles, registry):
         raise _fail('MULTI_INPUT_ROLE_INVALID') from exc
 
 
+def validate_group_roles(binding, roles, registry, required_roles, *, complete=False):
+    """Validate a captured partial association without making executable inputs.
+
+    Requirements name reviewed Registry consumers, not inferred workflow steps.
+    The existing complete group binder remains the sole source-path resolver.
+    """
+    from .turn_decisions import InputRole, RoleRequirement
+    try:
+        if type(binding) is not RegisteredInputGroup or type(complete) is not bool:
+            raise ValueError('Invalid captured selection.')
+        if (not isinstance(required_roles, (tuple, list))
+                or len(required_roles) != len(binding.members)):
+            raise ValueError('Invalid required scientific role count.')
+        required = []
+        for item in required_roles:
+            value = dict(tool=item.tool, port=item.port) if isinstance(item, RoleRequirement) else item
+            if not isinstance(value, Mapping) or set(value) != {'tool', 'port'}:
+                raise ValueError('Invalid scientific role requirement.')
+            required.append((value['tool'], value['port']))
+        if len(set(required)) != len(required):
+            raise ValueError('Duplicate scientific role requirements.')
+        aliases = []
+        for tool, port in required:
+            _, source, _ = _group_port(registry, tool, port)
+            aliases.append(source.members[0].input_name)
+        if len(set(aliases)) != len(aliases):
+            raise ValueError('Conflicting required scientific source aliases.')
+        if not isinstance(roles, (tuple, list)):
+            raise ValueError('Invalid scientific role associations.')
+        values = _group_roles([dict(tool=r.tool, port=r.port, source=r.source)
+                              if isinstance(r, InputRole) else r for r in roles], len(binding.members))
+        if not {(r['tool'], r['port']) for r in values} <= set(required):
+            raise ValueError('Unoffered required scientific role.')
+        if complete and (len(values) != len(required)
+                or {r['source'] for r in values} != {f'source.{i}' for i in range(len(binding.members))}):
+            raise ValueError('Incomplete scientific source associations.')
+        return tuple(InputRole(**role) for role in values)
+    except (ValueError, TypeError, KeyError, LookupError) as exc:
+        raise _fail('MULTI_INPUT_ROLE_INVALID') from exc
+
+
 def _members(values):
     """Canonical exact references, without biological grouping or path discovery."""
     try:

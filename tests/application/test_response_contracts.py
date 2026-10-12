@@ -78,3 +78,14 @@ def test_no_previous_revision_does_not_offer_nonexistent_choices():
     outcome = answer_outcome(sessions,'analysis',Answer('comparison','previous'))
     assert outcome.text == UNAVAILABLE and not outcome.clarification.choices
     assert clarification_text(Clarify('ambiguous_revision')) == UNAVAILABLE
+
+
+def test_missing_input_roles_asks_for_exact_captured_roles_without_scientific_guesses():
+    text = clarification_text(Clarify('missing_input_roles', (
+        'cluster_cells.analysis', 'evaluate_cell_clustering.ground_truth_dataset'), True))
+    assert 'analysis for cluster cells' in text
+    assert 'ground truth dataset for evaluate cell clustering' in text
+    assert 'cluster_cells.analysis' not in text
+    assert 'selection positions' in text
+    assert 'original request and selected files are preserved' in text
+    assert 'first dataset is' not in text and 'qualified' not in text

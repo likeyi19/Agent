@@ -81,6 +81,15 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if clarification.reason == 'missing_input_roles':
+        roles = ', '.join(
+            (choice.partition('.')[2].replace('_', ' ') + ' for '
+             + choice.partition('.')[0].replace('_', ' ')) if '.' in choice
+            else choice.replace('_', ' ') for choice in clarification.choices)
+        return ('Please identify which selected dataset supplies each scientific role'
+                + (': ' + roles if roles else '')
+                + '. You can refer to the displayed selection positions. '
+                  'Your original request and selected files are preserved.')
     if clarification.reason == 'conflicting_scientific_parameter':
         return 'The explicit scientific parameter values conflict. Please provide one consistent value.'
     if clarification.reason == 'missing_species':

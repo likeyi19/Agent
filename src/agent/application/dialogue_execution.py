@@ -365,9 +365,10 @@ def _validate_parameter_prerequisite(interaction, preceding):
         expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True)
         if expected != _serialize(admitted['inputs']):
             raise ValueError('Parameter continuation changed inputs.')
-        if ('registered_input' in admitted
-                and _serialize(admitted['registered_input']) !=
-                    _serialize((execution_submission(origin) or {}).get('registered_input'))):
+        expected_metadata = (execution_submission(origin) or {}).get('registered_input')
+        require_metadata = (admitted.get('kind') == 'execute' or 'registered_input' in admitted
+            or (_received_origin(origin, preceding).admitted or {}).get('kind') == 'request_roles')
+        if require_metadata and _serialize(admitted.get('registered_input')) != _serialize(expected_metadata):
             raise ValueError('Parameter continuation changed registered source.')
         if admitted.get('roles', ()) != (origin.admitted or {}).get('roles', ()):
             raise ValueError('Parameter continuation changed scientific input roles.')
@@ -404,7 +405,7 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     original_error = next((e for e in stored.errors
         if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
            (reference['tool'], list(origin.prerequisite['missing']))), None)
-    if (stored.steps or stored.request.prompt != origin.utterance or original_error is None
+    if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
             or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):
         raise IntentError('invalid_prerequisite')
     current = (_serialize(interaction.submission)['execution_inputs'] if interaction.submission is not None
@@ -427,9 +428,12 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     _bind_arguments(sessions._application.registry, interaction.utterance, current, decision.arguments)
     values = _bind_arguments(sessions._application.registry, interaction.utterance, values,
                             decision.arguments, replace_existing=True)
-    if origin.submission is not None and 'registered_input' in origin.submission:
+    original_submission = execution_submission(origin) or {}
+    if 'registered_input' in original_submission:
         from .local_resources import LocalResourceAdmission
-        original_metadata = origin.submission['registered_input']
+        original_metadata = (origin.submission or {}).get('registered_input')
+        if original_metadata is None:
+            original_metadata = _received_origin(origin, state.interactions).submission['registered_input']
         current_metadata = (interaction.submission or {}).get('registered_input')
         if (current_metadata is not None
                 and (original_metadata.get('composition') == 'scientific-role-selection.v1'
@@ -447,8 +451,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         inputs=values, arguments=[asdict(d) for d in decision.arguments], continuation=continuation)
     if origin.admitted.get('context') == 'current':
         admitted['context'] = 'current'
-    if origin.submission is not None and 'registered_input' in origin.submission:
-        admitted['registered_input'] = _serialize(execution_submission(origin)['registered_input'])
+    if 'registered_input' in original_submission:
+        admitted['registered_input'] = _serialize(original_submission['registered_input'])
     if origin.admitted.get('roles'):
         admitted['roles'] = _serialize(origin.admitted['roles'])
     if missing:
@@ -458,6 +462,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
             admitted['context'] = 'current'
         if origin.admitted.get('roles'):
             admitted['roles'] = _serialize(origin.admitted['roles'])
+        if 'registered_input' in original_submission:
+            admitted['registered_input'] = _serialize(original_submission['registered_input'])
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
     return admitted
@@ -466,23 +472,23 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
 def _parameter_identities(admitted, interactions):
     """Read only explicitly linked declarations and originally missing identities."""
     identities = set()
-    records = [admitted]
-    continuation = admitted.get('continuation', {})
-    if continuation:
-        by_id = {i.turn_id: i for i in interactions}
+    records = []
+    queue = [admitted]
+    by_id = {i.turn_id: i for i in interactions}
+    visited = set()
+    while queue:
+        record = queue.pop()
+        records.append(record)
+        continuation = record.get('parameter_continuation', record.get('continuation'))
+        if continuation is None:
+            continue
         origin = by_id[continuation['origin_turn_id']]
-        records.append(origin.admitted)
         if continuation.get('field') == 'parameters':
             identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
-            pointer = continuation['binding_turn_id']
-            visited = set()
-            while pointer != origin.turn_id:
-                if pointer in visited:
-                    raise IntentError('invalid_prerequisite')
+        for pointer in dict.fromkeys(continuation.get(k) for k in ('origin_turn_id', 'binding_turn_id')):
+            if pointer is not None and pointer not in visited:
                 visited.add(pointer)
-                record = by_id[pointer].admitted
-                records.append(record)
-                pointer = record['parameter_continuation']['binding_turn_id']
+                queue.append(by_id[pointer].admitted)
     for record in records:
         declarations = list(record.get('arguments', ()))
         if 'argument' in record:
@@ -533,6 +539,180 @@ def _missing_species(error, submission):
         and 'species' not in submission['execution_inputs'])
 
 
+def _role_source(reference, preceding):
+    origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
+    source = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
+    return origin, source
+
+
+def _role_completion(registry, origin, source, interaction, roles, declarations):
+    """Replay explicit associations and declarations against one captured group."""
+    from .local_resources import (LocalResourceAdmission, RegisteredInputGroup,
+        validate_group_roles, group_role_inputs)
+    binding = LocalResourceAdmission._submission_binding(origin.submission)
+    required = _serialize(origin.admitted['required_roles'])
+    previous = () if source is None else _input_roles(_serialize(source.admitted['roles']))
+    merged = { (r.tool, r.port): r for r in previous }
+    for role in roles:
+        key = (role.tool, role.port)
+        if key in merged and merged[key] != role:
+            raise IntentError('invalid_prerequisite')
+        merged[key] = role
+    captured_roles = validate_group_roles(binding, tuple(merged.values()), registry, required)
+    base = (_serialize(binding.execution_inputs) if source is None else _serialize(source.admitted['inputs']))
+    values = _bind_arguments(registry, interaction.utterance, base, declarations)
+    missing = [r for r in required if (r['tool'], r['port']) not in merged]
+    metadata = _serialize(origin.submission['registered_input'])
+    metadata['roles'] = [asdict(r) for r in captured_roles]
+    if not missing:
+        validate_group_roles(binding, captured_roles, registry, required, complete=True)
+        values = dict(group_role_inputs(binding, [asdict(r) for r in captured_roles], registry), **values)
+        metadata = RegisteredInputGroup(binding.members, values, roles=[asdict(r) for r in captured_roles],
+            resource_choice=binding.resource_choice).attribution()
+    return values, [asdict(r) for r in captured_roles], missing, metadata
+
+
+def _validate_role_prerequisite(interaction, preceding):
+    """Check durable pending role bindings using captured bytes only."""
+    from .session_state import SessionError
+    from agent.orchestration.registry import build_default_tool_registry
+    registry = build_default_tool_registry()
+    admitted = interaction.admitted or {}
+    pending = interaction.prerequisite if (interaction.prerequisite or {}).get('field') == 'roles' else None
+    reference = interaction.snapshot.get('prerequisite')
+    try:
+        initial = admitted.get('kind') == 'request_roles'
+        if initial:
+            if (reference is not None and pending is None or pending is None
+                    or pending['field'] != 'roles' or pending['origin_turn_id'] != interaction.turn_id
+                    or pending['binding_turn_id'] != interaction.turn_id
+                    or admitted['tool'] not in registry.names()
+                    or pending['tool'] != admitted['tool']
+                    or _serialize(pending['required_roles']) != _serialize(admitted['required_roles'])
+                    or admitted['revision_id'] != interaction.base_revision_id):
+                raise ValueError('No captured role request.')
+            required = admitted['required_roles']
+            if admitted['tool'] not in {r['tool'] for r in required}:
+                raise ValueError('Role request has no registered target.')
+            origin, source = interaction, None
+            additions = _input_roles(_serialize(admitted['roles']))
+        else:
+            if reference is None or reference['field'] != 'roles':
+                raise ValueError('No captured pending role request.')
+            origin, source = _role_source(reference, preceding)
+            continuation = admitted.get('continuation')
+            if continuation is None:
+                wanted = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
+                if pending is not None and (admitted.get('kind') != 'clarify' or _serialize(pending) != wanted):
+                    raise ValueError('Role question lost its captured task.')
+                return
+            if (set(continuation) != {'origin_turn_id', 'binding_turn_id', 'field'}
+                    or any(continuation[k] != reference[k] for k in continuation)
+                    or admitted.get('tool') != origin.admitted['tool']
+                    or admitted.get('revision_id') != interaction.base_revision_id
+                    or admitted.get('context') != origin.admitted.get('context')
+                    or _serialize(admitted['required_roles']) != _serialize(origin.admitted['required_roles'])):
+                raise ValueError('Role continuation changed scope.')
+            additions = _input_roles(_serialize(admitted['roles']))
+        declarations = _scientific_arguments(_serialize(admitted.get('arguments', [])))
+        if 'argument' in admitted:
+            declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
+        from .turn_decisions import _validate_arguments
+        _validate_arguments(declarations)
+        values, roles, missing, metadata = _role_completion(registry, origin, source,
+            interaction, additions, declarations)
+        if (values != _serialize(admitted['inputs']) or roles != _serialize(admitted['roles'])
+                or metadata != _serialize(admitted['registered_input'])):
+            raise ValueError('Captured scientific role binding changed.')
+        if admitted.get('context') == 'current' and (interaction.base_revision_id is None
+                or interaction.snapshot['relations'].get('current') != interaction.base_revision_id):
+            raise ValueError('Captured current context changed.')
+        if missing:
+            wanted = (dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
+                field='roles', tool=admitted['tool'], required_roles=_serialize(admitted['required_roles']),
+                resource_context_sha256=pending['resource_context_sha256']) if initial else
+                {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'})
+            wanted['binding_turn_id'] = interaction.turn_id
+            choices = [r['tool'] + '.' + r['port'] for r in missing]
+            if (_serialize(pending) != wanted or (not initial and
+                    (admitted.get('kind') != 'clarify' or admitted.get('reason') != 'missing_input_roles'
+                     or list(admitted.get('choices', ())) != choices or admitted.get('value_required') is not True))):
+                raise ValueError('Partial role answer changed requirements.')
+        elif initial or admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan' or pending is not None:
+            raise ValueError('Invalid completed scientific role request.')
+    except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
+        raise SessionError('Invalid pending scientific role binding.') from exc
+
+
+def admit_role_request(sessions, interaction, decision, resources):
+    """Capture a known registered objective without creating a Run or Plan."""
+    from .local_resources import LocalResourceAdmission
+    registry = sessions._application.registry
+    if decision.target not in registry.names() or interaction.submission is None:
+        raise IntentError('unsupported_intent')
+    owner = LocalResourceAdmission(sessions._application._workspace, registry=registry)
+    binding = owner._submission_binding(interaction.submission)
+    owner.validate_binding(binding)
+    admitted = dict(kind='request_roles', tool=decision.target, revision_id=interaction.base_revision_id,
+        required_roles=[asdict(r) for r in decision.required_roles], roles=[asdict(r) for r in decision.roles])
+    prototype = replace(interaction, admitted=admitted)
+    values, roles, missing, metadata = _role_completion(registry, prototype, None, interaction,
+        decision.roles, _arguments(decision))
+    if not missing:
+        raise IntentError('invalid_prerequisite')
+    admitted.update(inputs=values, roles=roles, registered_input=metadata)
+    if decision.argument is not None:
+        admitted['argument'] = asdict(decision.argument)
+    if decision.arguments:
+        admitted['arguments'] = [asdict(d) for d in decision.arguments]
+    if decision.context == 'current':
+        context, _ = sessions.planning_context_for_interaction(sessions._interaction_session_id,
+            interaction.turn_id, integrity=False)
+        if context is None:
+            raise IntentError('unavailable_context')
+        admitted['context'] = 'current'
+    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
+        field='roles', tool=decision.target, required_roles=admitted['required_roles'],
+        resource_context_sha256=resource_context_digest(resources))
+    return admitted, pending, tuple(r['tool'] + '.' + r['port'] for r in missing)
+
+
+def admit_roles(sessions, interaction, decision, resources):
+    """Continue only the exact offered pending task and ordered registered inputs."""
+    from .local_resources import LocalResourceAdmission
+    state = sessions.load(sessions._interaction_session_id)
+    reference = interaction.snapshot.get('prerequisite')
+    if (decision.pending != '@roles' or reference is None or reference['field'] != 'roles'
+            or state.generation != interaction.base_generation or state.active_revision_id != interaction.base_revision_id
+            or state.interactions[-1].turn_id != interaction.turn_id
+            or resource_context_digest(resources) != reference['resource_context_sha256']):
+        raise IntentError('invalid_prerequisite')
+    validate_prerequisite(interaction, state.interactions[:-1])
+    origin, source = _role_source(reference, state.interactions[:-1])
+    owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
+    owner.validate_binding(owner._submission_binding(origin.submission))
+    values, roles, missing, metadata = _role_completion(sessions._application.registry, origin,
+        source, interaction, decision.roles, decision.arguments)
+    admitted = dict(kind='clarify' if missing else 'execute', tool=origin.admitted['tool'],
+        revision_id=interaction.base_revision_id, inputs=values, roles=roles,
+        required_roles=_serialize(origin.admitted['required_roles']), registered_input=metadata,
+        continuation={k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')})
+    if origin.admitted.get('context') == 'current':
+        admitted['context'] = 'current'
+    if decision.arguments:
+        admitted['arguments'] = [asdict(d) for d in decision.arguments]
+    pending = None
+    if missing:
+        choices = [r['tool'] + '.' + r['port'] for r in missing]
+        admitted.update(reason='missing_input_roles', choices=choices, value_required=True)
+        pending = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
+        pending['binding_turn_id'] = interaction.turn_id
+    else:
+        admitted.update(operation='plan', request_id='turn-' + digest(dict(session=state.session_id,
+            turn=interaction.turn_id)))
+    return admitted, pending
+
+
 def capture_prerequisite(preceding, revision_id, generation, submission, predecessor=None, *, execution_inputs=None):
     """Offer only the immediately pending request in the same captured scope."""
     if not preceding or predecessor is not None:
@@ -548,12 +728,23 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
     origin = origins[0]
     current = dict(execution_inputs=_serialize(execution_inputs or {})) if submission is None else _serialize(submission)
     selected = current.get('registered_input')
+    if pending['field'] == 'roles':
+        if selected is not None and selected != _serialize(origin.submission['registered_input']):
+            return None
+        original_values = _serialize(origin.submission['execution_inputs'])
+        if any(key not in original_values or original_values[key] != value
+               for key, value in current.get('execution_inputs', {}).items()):
+            return None
+        return dict(**pending, predecessor_turn_id=prior.turn_id)
     if pending['field'] == 'parameters':
         from agent.orchestration.registry import build_default_tool_registry
         registry = build_default_tool_registry()
         original = dict(execution_inputs=_serialize(origin.admitted['inputs']))
-        if origin.submission is not None:
-            original.update(_serialize(origin.submission))
+        metadata = (origin.submission or {}).get('registered_input')
+        if metadata is None:
+            metadata = (_received_origin(origin, preceding).submission or {}).get('registered_input')
+        if metadata is not None:
+            original['registered_input'] = _serialize(metadata)
         if selected is not None and selected != original.get('registered_input'):
             return None
         permitted = {_parameter_input(registry, pending['tool'], item['argument'])[0]
@@ -580,6 +771,24 @@ def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    role_continuation = admitted.get('continuation', {}).get('field') == 'roles'
+    if (admitted.get('kind') == 'request_roles' or role_continuation
+            or (interaction.prerequisite or {}).get('field') == 'roles'
+            or (interaction.snapshot.get('prerequisite') or {}).get('field') == 'roles'):
+        captured = _serialize(interaction.snapshot)
+        expected = capture_prerequisite(preceding, interaction.base_revision_id,
+            interaction.base_generation, interaction.submission,
+            captured.get('dialogue', {}).get('requested_predecessor'))
+        if captured.get('prerequisite') != expected:
+            raise SessionError('Pending declaration capture changed.')
+        _validate_role_prerequisite(interaction, preceding)
+        if (interaction.prerequisite or {}).get('field') == 'parameters':
+            _validate_parameter_prerequisite(interaction, preceding)
+        elif not role_continuation and admitted.get('kind') != 'request_roles':
+            _validate_input_role_record(interaction)
+            _validate_resolution_record(interaction)
+            _validate_argument_record(interaction)
+        return
     if 'context' in admitted:
         captured = interaction.snapshot
         if (admitted['context'] != 'current' or interaction.base_revision_id is None
@@ -683,9 +892,18 @@ def prerequisite_public(interaction, preceding):
     if reference is None:
         return None
     origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
+    if reference['field'] == 'roles':
+        _, source = _role_source(reference, preceding)
+        roles = _serialize(source.admitted['roles'])
+        assigned = {(r['tool'], r['port']) for r in roles}
+        required = _serialize(reference['required_roles'])
+        return dict(handle='@roles', field='roles', tool=reference['tool'],
+            required_roles=required, roles=roles,
+            missing_roles=[r for r in required if (r['tool'], r['port']) not in assigned],
+            objective=origin.utterance)
     if reference['field'] == 'parameters':
         return dict(handle='@parameters', field='parameters', tool=reference['tool'],
-                    missing=list(reference['missing']), objective=origin.utterance)
+                    missing=list(reference['missing']), objective=_execution_objective(origin, preceding))
     return dict(handle='@species', field='species', choices=['human', 'mouse'],
                 objective=origin.utterance)
 
@@ -796,6 +1014,25 @@ def is_execution_command(utterance):
     return bool(re.match(r'^(?:run|compute|perform|test|reannotate|annotate|inspect|build|prepare|evaluate|adapt|transfer|select)\b', command, re.I))
 
 
+def _received_origin(interaction, interactions):
+    """Follow exact persisted links to the original received request."""
+    by_id = {i.turn_id: i for i in interactions}
+    visited = set()
+    while True:
+        if interaction.turn_id in visited:
+            raise IntentError('invalid_prerequisite')
+        visited.add(interaction.turn_id)
+        admitted = interaction.admitted or {}
+        continuation = admitted.get('parameter_continuation', admitted.get('continuation'))
+        if continuation is None:
+            return interaction
+        interaction = by_id[continuation['origin_turn_id']]
+
+
+def _execution_objective(interaction, interactions):
+    return _received_origin(interaction, interactions).utterance
+
+
 def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     if (decision.base != 'current' or decision.delta is not None
             or decision.target not in sessions._application.registry.names()):
@@ -880,7 +1117,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     if 'continuation' in admitted:
         state = sessions.load(sid)
         origin = next(i for i in state.interactions if i.turn_id == admitted['continuation']['origin_turn_id'])
-        intent = origin.utterance
+        intent = _execution_objective(origin, state.interactions)
     interaction = replace(interaction, admitted=admitted, submission=execution_submission(
         replace(interaction, admitted=admitted)))
     if selected:

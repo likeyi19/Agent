@@ -99,6 +99,68 @@ def _validate_roles(roles):
 
 
 @dataclass(frozen=True)
+class RoleRequirement:
+    """One offered Registry consumer awaiting an exact source association."""
+
+    tool: str
+    port: str
+
+    def __post_init__(self):
+        if (type(self.tool) is not str or not 0 < len(self.tool) <= 128 or not self.tool.isidentifier()
+                or type(self.port) is not str or not 0 < len(self.port) <= 128 or not self.port.isidentifier()):
+            raise ValueError('Invalid captured scientific role requirement.')
+
+
+def _validate_role_requirements(requirements):
+    if (type(requirements) is not tuple or not 2 <= len(requirements) <= 8
+            or any(not isinstance(item, RoleRequirement) for item in requirements)
+            or len({(item.tool, item.port) for item in requirements}) != len(requirements)):
+        raise ValueError('Invalid bounded scientific role requirements.')
+
+
+@dataclass(frozen=True)
+class RequestRoles:
+    """Capture an identified scientific objective without an executable plan."""
+
+    target: str
+    required_roles: tuple[RoleRequirement, ...]
+    roles: tuple[InputRole, ...] = ()
+    argument: LeidenResolution | None = None
+    arguments: tuple[ScopedArgument, ...] = ()
+    context: str = 'none'
+
+    def __post_init__(self):
+        if self.argument is not None and not isinstance(self.argument, LeidenResolution):
+            raise ValueError('Invalid explicit scientific declaration.')
+        _validate_role_requirements(self.required_roles)
+        _validate_roles(self.roles)
+        _validate_arguments(self.arguments, self.argument)
+        if (type(self.target) is not str or self.target not in {r.tool for r in self.required_roles}
+                or self.context not in ('none', 'current')
+                or not {(r.tool, r.port) for r in self.roles} < {
+                    (r.tool, r.port) for r in self.required_roles}):
+            raise ValueError('Invalid missing scientific role request.')
+
+
+@dataclass(frozen=True)
+class RoleAnswer:
+    """A bounded association or exact declaration for one pending objective."""
+
+    pending: str
+    roles: tuple[InputRole, ...]
+    arguments: tuple[ScopedArgument, ...] = ()
+
+    def __post_init__(self):
+        if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
+                or not (self.roles or self.arguments)):
+            raise ValueError('Invalid pending scientific role answer.')
+        _validate_roles(self.roles)
+        _validate_arguments(self.arguments)
+        if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
+            raise ValueError('Role answers require exact scientific declarations.')
+
+
+@dataclass(frozen=True)
 class Execute:
     base: str
     operation: str
@@ -237,7 +299,7 @@ class Answer:
             raise ValueError('Guidance answers require a structured question.')
 
 
-TurnDecision = Execute | ExecuteCandidate | SpeciesAnswer | ParameterAnswer | Navigate | Clarify | Answer
+TurnDecision = Execute | ExecuteCandidate | SpeciesAnswer | ParameterAnswer | RequestRoles | RoleAnswer | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
@@ -290,6 +352,16 @@ def _input_roles(value):
     return tuple(result)
 
 
+def _role_requirements(value):
+    if type(value) is not list or not 2 <= len(value) <= 8:
+        raise IntentError('invalid_decision')
+    result = []
+    for item in value:
+        _shape(item, ('tool', 'port'))
+        result.append(RoleRequirement(**item))
+    return tuple(result)
+
+
 def parse_decision(raw):
     def pairs(items):
         result = {}
@@ -317,6 +389,17 @@ def parse_decision(raw):
         if kind == 'answer_parameters':
             _shape(value, ('kind', 'pending', 'arguments'))
             return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
+        if kind == 'request_roles':
+            _shape(value, ('kind', 'target', 'required_roles', 'roles') + tuple(
+                key for key in ('argument', 'arguments', 'context') if key in value))
+            return RequestRoles(value['target'], _role_requirements(value['required_roles']),
+                                _input_roles(value['roles']), _leiden_argument(value.get('argument')),
+                                _scientific_arguments(value.get('arguments', [])), value.get('context', 'none'))
+        if kind == 'answer_roles':
+            _shape(value, ('kind', 'pending', 'roles') + tuple(
+                key for key in ('arguments',) if key in value))
+            return RoleAnswer(value['pending'], _input_roles(value['roles']),
+                              _scientific_arguments(value.get('arguments', [])))
         if kind == 'answer_guidance':
             _shape(value, ('kind', 'targets', 'candidate'))
             if type(value['targets']) is not list: raise IntentError('invalid_decision')
@@ -435,11 +518,17 @@ def decision_schema(public):
             execution['arguments'] = declarations
         selected_sources = public['dialogue'].get('selected_sources', ())
         input_roles = public['dialogue'].get('input_roles', ())
-        if selected_sources and input_roles:
-            execution['roles'] = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
+        def role_schema(offers):
+            return {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
                 _object(dict(tool=enum((item['tool'],)), port=enum((item['port'],)),
                              source=enum(source['source'] for source in selected_sources)))
-                for item in input_roles]}}
+                for item in offers]}}
+        if selected_sources and input_roles:
+            execution['roles'] = role_schema(input_roles)
+            variants.append(_object(execution | dict(kind=enum(('request_roles',)),
+                required_roles={'type': 'array', 'minItems': 2, 'maxItems': 8,
+                    'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
+                        port=enum((item['port'],)))) for item in input_roles]}})))
         variants.append(_object(execution))
         candidates = public['dialogue'].get('execution_candidates', ())
         if candidates:
@@ -460,6 +549,16 @@ def decision_schema(public):
                 variants.append(_object(dict(kind=enum(('answer_parameters',)),
                     pending=enum((pending['handle'],)), arguments=exact_declarations | {'minItems': 1,
                         'items': {'anyOf': [declaration_schema(item) for item in scoped]}})))
+        elif (pending is not None and pending.get('field') == 'roles'
+                and selected_sources and pending.get('required_roles')):
+            required = pending['required_roles']
+            answer = dict(kind=enum(('answer_roles',)), pending=enum((pending['handle'],)),
+                          roles=role_schema(required))
+            scoped = [item for item in exact if item['tool'] in {role['tool'] for role in required}]
+            if scoped:
+                answer['arguments'] = exact_declarations | {
+                    'items': {'anyOf': [declaration_schema(item) for item in scoped]}}
+            variants.append(_object(answer))
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
@@ -478,7 +577,7 @@ def interpret(model, utterance, public):
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
             'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
-            *(['dialogue.selected_sources is the exact ordered selection for this turn; source handles identify only those captured registrations. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate the explicitly selected inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve every selected source and the declared scientific role. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. Clarify ambiguous, conflicting or missing role associations with ambiguous_subject. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
+            *(['dialogue.selected_sources is the exact ordered selection for this turn; source handles identify only those captured registrations. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate the explicitly selected inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve every selected source and the declared scientific role. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one distinct source each. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
               if public.get('dialogue', {}).get('selected_sources') else []),
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
@@ -531,7 +630,11 @@ def interpret(model, utterance, public):
             'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',
             'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
             'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
-        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else [])},
+        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else []) + ([
+            'dialogue.pending_prerequisite describes the exact original scientific objective awaiting the offered required_roles. The captured selected_sources, admitted roles, scientific declarations and resource choices remain fixed; this context grants no scientific qualification.',
+            'Choose answer_roles only when this utterance answers that specific pending question. Use its exact pending handle and offered tool/port/source associations. A partial answer may provide only some missing roles or an exact offered scientific argument; omit unresolved roles instead of assigning by order or guessing. Previously admitted roles cannot be reassigned. Positional references apply only to the captured ordered selection and an explicit role association in this reply.',
+            'Contradictory or ambiguous associations require clarify/ambiguous_subject. Unrelated tasks, explanations, uncertainty and cancellation use their ordinary decisions, never answer_roles. An answer continues only the original task; do not add operations or claim resource authority from conversational assertions.',
+        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'roles' else [])},
         sort_keys=True, separators=(',', ':'),
         ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
     return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)))

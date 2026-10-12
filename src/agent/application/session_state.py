@@ -215,13 +215,22 @@ class Interaction:
             legacy = set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256'} and frozen['field'] == 'species'
             parameters = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
                                          'binding_turn_id', 'tool', 'missing'} and frozen['field'] == 'parameters')
-            if not (legacy or parameters):
+            roles = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
+                                    'binding_turn_id', 'tool', 'required_roles'} and frozen['field'] == 'roles')
+            if not (legacy or parameters or roles):
                 raise SessionError('Invalid pending scientific declaration.')
             text(frozen['origin_turn_id'])
             sha(frozen['resource_context_sha256'])
-            if parameters:
+            if parameters or roles:
                 text(frozen['binding_turn_id'])
                 text(frozen['tool'])
+            if roles:
+                from .turn_decisions import _role_requirements
+                try:
+                    _role_requirements(_serialize(frozen['required_roles']))
+                except (ValueError, TypeError) as exc:
+                    raise SessionError('Invalid missing scientific roles.') from exc
+            if parameters:
                 missing = frozen['missing']
                 if not 1 <= len(missing) <= 8 or len(set(missing)) != len(missing):
                     raise SessionError('Invalid missing scientific parameters.')

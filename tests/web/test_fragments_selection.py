@@ -5,12 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent.application import InteractiveBoundaryError
-from agent.application.local_resources import LocalResourceAdmission, ResourceAdmissionError
+from agent.application.local_resources import LocalResourceAdmission
 from agent.application.uploads import H5ADUploadAdmission
 from agent.web.app import _fragments_selection, create_app
 from agent.web.config import ScientificInputSet
 
-from helpers import harness, submission
+from helpers import harness, submission, wait_turn
 
 
 def context(identifier='reviewed', *, default=False, **inputs):
@@ -25,41 +25,31 @@ def context(identifier='reviewed', *, default=False, **inputs):
     (context('first', default=True), context('second', default=True))])
 def test_explicit_context_has_priority_over_any_default_configuration(defaults):
     explicit = context('selected', reference_bundle_sha256='b' * 64)
-    assert _fragments_selection(explicit, defaults + (explicit,)) == explicit.inputs()
+    assert _fragments_selection(explicit, defaults + (explicit,)) == (explicit.inputs(), None)
 
 
 def test_unique_configured_default_supplies_only_declared_values():
     chosen = context('default', default=True)
     other = context('other')
-    assert _fragments_selection(None, (chosen, other)) == chosen.inputs()
-    assert set(_fragments_selection(None, (chosen,))) == set(chosen.execution_inputs)
+    assert _fragments_selection(None, (chosen, other)) == (chosen.inputs(), None)
+    assert set(_fragments_selection(None, (chosen,))[0]) == set(chosen.execution_inputs)
 
 
 @pytest.mark.parametrize('contexts,code', [
-    ((), 'FRAGMENTS_RESOURCE_REQUIRED'),
-    ((context('nondefault'),), 'FRAGMENTS_RESOURCE_REQUIRED'),
+    ((), None),
+    ((context('nondefault'),), None),
     ((context('first', default=True), context('second', default=True)), 'FRAGMENTS_RESOURCE_AMBIGUOUS'),
 ])
-def test_missing_or_ambiguous_defaults_have_precise_safe_errors(contexts, code):
-    with pytest.raises(ResourceAdmissionError) as error:
-        _fragments_selection(None, contexts)
-    assert error.value.code == code
-    assert '/operator' not in str(error.value)
+def test_missing_or_ambiguous_defaults_remain_available_for_interpretation(contexts, code):
+    assert _fragments_selection(None, contexts) == ({}, code)
 
 
-@pytest.mark.parametrize('field,code', [
-    ('reference_bundle_path', 'FRAGMENTS_REFERENCE_REQUIRED'),
-    ('reference_bundle_sha256', 'FRAGMENTS_REFERENCE_REQUIRED'),
-    ('source_profile', 'FRAGMENTS_PROFILE_REQUIRED'),
-    ('namespace', 'FRAGMENTS_NAMESPACE_REQUIRED'),
-])
-def test_genuinely_missing_declarations_do_not_use_other_context_defaults(field, code):
+@pytest.mark.parametrize('field', ['reference_bundle_path', 'reference_bundle_sha256', 'source_profile', 'namespace'])
+def test_genuinely_missing_declarations_do_not_use_other_context_defaults(field):
     values = context('chosen').inputs()
     del values[field]
     incomplete = ScientificInputSet('chosen', 'Chosen declarations', values, fragments_companion=True)
-    with pytest.raises(ResourceAdmissionError) as error:
-        _fragments_selection(incomplete, (incomplete, context('default', default=True)))
-    assert error.value.code == code
+    assert _fragments_selection(incomplete, (incomplete, context('default', default=True))) == (values, None)
 
 
 def test_h5ad_context_does_not_become_fragments_context():
@@ -117,12 +107,16 @@ def test_http_pair_uses_one_registration_with_exact_private_identities(uploaded_
         content=source + index, headers={'Content-Type': 'application/octet-stream'})
     assert retried.status_code == 201 and retried.json() == public
     client.post('/api/v1/sessions', json={'session_id': 'session'})
-    before = backend.service._application.sessions.load('session')
     missing = client.post('/api/v1/sessions/session/turns',
-        json=submission(resource_id=public['resource_id'], input_set_id=None))
-    assert missing.status_code == 400 and missing.json()['error']['code'] == 'FRAGMENTS_RESOURCE_REQUIRED'
-    assert backend.service._application.sessions.load('session') == before
-    assert not backend.models and not backend.science_calls
+        json=submission(resource_id=public['resource_id'], input_set_id=None, utterance='Clarify what is needed to process this source.'))
+    assert missing.status_code == 202, missing.text
+    view = wait_turn(client)
+    assert view['status'] == 'clarification' and view['run_id'] is None
+    state = backend.service._application.sessions.load('session')
+    assert state.generation == 0 and not state.revisions
+    assert state.interactions[0].submission['registered_input']['record_sha256'] == record.record_sha256
+    assert len(backend.models) == 1 and len(backend.models[0].calls) == 1
+    assert not backend.science_calls
 
 
 @pytest.mark.parametrize('params,status', [

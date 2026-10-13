@@ -1298,35 +1298,35 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             resource_context_sha256=resource_context_digest(epizoo_resources))
         _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
         return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', tuple(names), True))
-    if (registered and interaction.submission['registered_input'].get('composition') == 'bam-science.v1'
-            and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
-            and error.details.get('tool_name') == 'prepare_scATAC_bam_fragments'):
-        # Present only the compiler's exact missing prerequisite. Inspection has
-        # no producer requirements, and this does not add or repair plan inputs.
-        prerequisites = {
-            'library_context': (('library_context_path', 'library_context_sha256'), 'BAM_LIBRARY_CONTEXT_REQUIRED'),
-            'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'BAM_REFERENCE_REQUIRED'),
-            'source_profile': (('source_profile',), 'BAM_PROFILE_REQUIRED'),
-            'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'BAM_INTAKE_REQUIRED'),
-        }
-        missing = prerequisites.get(error.details.get('target_port'))
-        if missing is not None and any(key not in interaction.submission['execution_inputs'] for key in missing[0]):
-            selection_error = interaction.submission['registered_input'].get('resource_selection_error')
-            code = 'BAM_RESOURCE_AMBIGUOUS' if selection_error == 'BAM_RESOURCE_AMBIGUOUS' else missing[1]
-            error = ResourceAdmissionError(code).error
-    if (registered and interaction.submission['registered_input'].get('composition') == 'fastq-science.v1'
-            and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
-            and error.details.get('tool_name') == 'prepare_scATAC_fragments'):
-        prerequisites = {
-            'library_context': (('library_context_path', 'library_context_sha256'), 'FASTQ_LIBRARY_CONTEXT_REQUIRED'),
-            'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'FASTQ_REFERENCE_REQUIRED'),
-            'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'FASTQ_INTAKE_REQUIRED'),
-        }
-        missing = prerequisites.get(error.details.get('target_port'))
-        if missing is not None and any(key not in interaction.submission['execution_inputs'] for key in missing[0]):
-            selection_error = interaction.submission['registered_input'].get('resource_selection_error')
-            code = 'FASTQ_RESOURCE_AMBIGUOUS' if selection_error == 'FASTQ_RESOURCE_AMBIGUOUS' else missing[1]
-            error = ResourceAdmissionError(code).error
+    if (registered and error is not None
+            and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}):
+        # Present only compiler-owned missing-port facts. This neither supplies
+        # scientific inputs nor creates pending authority for a resource choice.
+        context = {
+            'bam-science.v1': ('prepare_scATAC_bam_fragments', 'BAM', {
+                'library_context': (('library_context_path', 'library_context_sha256'), 'LIBRARY_CONTEXT_REQUIRED'),
+                'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'REFERENCE_REQUIRED'),
+                'source_profile': (('source_profile',), 'PROFILE_REQUIRED'),
+                'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'INTAKE_REQUIRED'),
+            }),
+            'fastq-science.v1': ('prepare_scATAC_fragments', 'FASTQ', {
+                'library_context': (('library_context_path', 'library_context_sha256'), 'LIBRARY_CONTEXT_REQUIRED'),
+                'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'REFERENCE_REQUIRED'),
+                'intake': (('intake_manifest_path', 'intake_manifest_sha256'), 'INTAKE_REQUIRED'),
+            }),
+            'external-fragments-science.v1': ('import_scATAC_fragments', 'FRAGMENTS', {
+                'reference': (('reference_bundle_path', 'reference_bundle_sha256'), 'REFERENCE_REQUIRED'),
+                'source_profile': (('source_profile',), 'PROFILE_REQUIRED'),
+                'namespace': (('namespace',), 'NAMESPACE_REQUIRED'),
+            }),
+        }.get(interaction.submission['registered_input'].get('composition'))
+        if context is not None and error.details.get('tool_name') == context[0]:
+            missing = context[2].get(error.details.get('target_port'))
+            if missing is not None and any(key not in interaction.submission['execution_inputs'] for key in missing[0]):
+                selection_error = interaction.submission['registered_input'].get('resource_selection_error')
+                ambiguous = context[1] + '_RESOURCE_AMBIGUOUS'
+                code = ambiguous if selection_error == ambiguous else context[1] + '_' + missing[1]
+                error = ResourceAdmissionError(code).error
     _update(sessions, interaction.turn_id, status='failed')
     return TurnOutcome('execute', 'failed', error=error,
         text=error.message if error is not None else

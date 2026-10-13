@@ -287,31 +287,86 @@ def test_upload_byte_registration_preserves_scientific_owner_findings(
         assert calls == {'production': int(problem != 'reference'), 'verification': 0}
 
 
-@pytest.mark.parametrize('missing,code', [
-    ('reference_bundle_path', 'FRAGMENTS_REFERENCE_REQUIRED'),
-    ('reference_bundle_sha256', 'FRAGMENTS_REFERENCE_REQUIRED'),
-    ('source_profile', 'FRAGMENTS_PROFILE_REQUIRED'),
-    ('namespace', 'FRAGMENTS_NAMESPACE_REQUIRED'),
+class AvailableInputsModel(ScriptedModel):
+    """Select import while referring only to inputs actually offered to Planner."""
+    def complete(self, *, prompt, response_schema):
+        result = json.loads(super().complete(prompt=prompt, response_schema=response_schema))
+        if result.get('schema_version') == 4:
+            offered = json.loads(prompt)['catalog']['request_inputs']
+            for step in result['decision']['steps']:
+                step['sources'] = [s for s in step['sources'] if s['source']['input'] in offered]
+        return json.dumps(result)
+
+
+class MissingContextModel(UnsupportedModel):
+    def complete(self, *, prompt, response_schema):
+        result = json.loads(super().complete(prompt=prompt, response_schema=response_schema))
+        result['decision']['reason'] = 'missing_parameter_value'
+        return json.dumps(result)
+
+
+@pytest.mark.parametrize('missing,code,partial', [
+    ('reference_bundle_path', 'FRAGMENTS_REFERENCE_REQUIRED', False),
+    ('reference_bundle_path', 'UNAUTHORIZED_REQUEST_INPUT', True),
+    ('reference_bundle_sha256', 'MISSING_REQUEST_SOURCE_MEMBER', True),
+    ('source_profile', 'FRAGMENTS_PROFILE_REQUIRED', False),
+    ('namespace', 'FRAGMENTS_NAMESPACE_REQUIRED', False),
 ])
-def test_missing_typed_fragments_prerequisite_has_safe_specific_feedback_before_provider(
-        fragment_source_factory, tmp_path, monkeypatch, missing, code):
+def test_missing_typed_fragments_prerequisite_reaches_interpreter_but_blocks_science(
+        fragment_source_factory, tmp_path, monkeypatch, missing, code, partial):
     arguments = fragment_source_factory()
     values = fragment_companion(arguments).inputs()
     values.pop(missing)
+    if missing.endswith('_path') and not partial:
+        values.pop(missing[:-4] + 'sha256')
     companion = ScientificInputSet('incomplete', 'Incomplete operator declarations', values,
                                   fragments_companion=True)
-    backend = web_fragments(tmp_path, arguments, companions=(companion,))
+    backend = web_fragments(tmp_path, arguments, companions=(companion,), model_type=AvailableInputsModel)
     calls = count_fragment_science(monkeypatch)
     with TestClient(backend.app) as client:
         resource = upload_fragments(client, arguments)
         client.post('/api/v1/sessions', json={'session_id': 'analysis'})
-        response = client.post('/api/v1/sessions/analysis/turns',
-            json=fragment_body(resource, companion='incomplete'))
-        assert response.status_code == 400 and response.json()['error']['code'] == code
-        assert str(tmp_path) not in response.text and 'sha256' not in response.json()['error']['message']
-        assert not backend.models and calls == {'production': 0, 'verification': 0}
+        view = execute(client, fragment_body(resource, companion='incomplete'))
+        assert view['status'] == 'failed' and view['error']['code'] == code
+        assert str(tmp_path) not in json.dumps(view) and 'sha256' not in view['error']['message']
+        assert backend.models and calls == {'production': 0, 'verification': 0}
         state = backend.service._application.sessions.load('analysis')
-        assert state.generation == 0 and not state.turns and not state.interactions
+        assert state.generation == 0 and not state.turns and len(state.interactions) == 1
+        record = backend.uploads.resources.load(resource['resource_id'])
+        assert state.interactions[0].submission['registered_input']['record_sha256'] == record.record_sha256
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+@pytest.mark.parametrize('clarify', [False, True])
+def test_no_context_or_ambiguous_context_reaches_interpretation_without_guessing(
+        fragment_source_factory, tmp_path, monkeypatch, ambiguous, clarify):
+    arguments = fragment_source_factory()
+    companions = tuple(fragment_companion(arguments, input_set_id=name, default=True)
+                       for name in ('first', 'second')) if ambiguous else ()
+    backend = web_fragments(tmp_path, arguments, companions=companions,
+        model_type=MissingContextModel if clarify else AvailableInputsModel)
+    calls = count_fragment_science(monkeypatch)
+    with TestClient(backend.app) as client:
+        resource = upload_fragments(client, arguments)
+        client.post('/api/v1/sessions', json={'session_id': 'analysis'})
+        body = fragment_body(resource, companion=None)
+        view = execute(client, body)
+        assert view['status'] == ('clarification' if clarify else 'failed'), view
+        if not clarify:
+            assert view['error']['code'] == ('FRAGMENTS_RESOURCE_AMBIGUOUS' if ambiguous
+                                             else 'FRAGMENTS_NAMESPACE_REQUIRED')
+        state = backend.service._application.sessions.load('analysis')
+        interaction, = state.interactions
+        metadata = interaction.submission['registered_input']
+        assert metadata.get('resource_selection_error') == ('FRAGMENTS_RESOURCE_AMBIGUOUS' if ambiguous else None)
+        assert metadata.get('resource_choice') is None
+        assert 'reference_bundle_path' not in interaction.submission['execution_inputs']
+        assert interaction.utterance == body['utterance']
+        assert not state.revisions and state.generation == 0
+        before = sum(len(m.calls) for m in backend.models)
+        assert execute(client, body) == view
+        assert sum(len(m.calls) for m in backend.models) == before
+        assert calls == {'production': 0, 'verification': 0}
 
 
 class DownstreamModel(ScriptedModel):

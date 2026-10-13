@@ -103,12 +103,7 @@ def test_capture_uses_exact_explicit_or_unique_configured_default(family, select
     assert _input_set_choice(selected, (selected, other), family) == selected.resource_choice()
     assert _input_set_choice(None, (selected, other), family) is None
     assert _input_set_choice(None, (replace(selected, **{family + '_default': False}),), family) is None
-    if family == 'fragments':
-        with pytest.raises(ResourceAdmissionError) as denied:
-            selection(None, (selected, other))
-        assert denied.value.code == 'FRAGMENTS_RESOURCE_AMBIGUOUS'
-    else:
-        assert selection(None, (selected, other)) == ({}, family.upper() + '_RESOURCE_AMBIGUOUS')
+    assert selection(None, (selected, other)) == ({}, family.upper() + '_RESOURCE_AMBIGUOUS')
     with pytest.raises(InteractiveBoundaryError):
         selection(matrix_choice(), (selected,))
 

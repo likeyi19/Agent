@@ -225,9 +225,8 @@ class H5ADUploadAdmission:
         if record.input_type == 'fastq':
             raise ResourceAdmissionError('FASTQ_COLLECTION_REQUIRED')
         if record.input_type == 'external_fragments':
-            if resource_selection_error is not None:
-                raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
             return self.resources.compose_fragments(resource_id, scientific_inputs,
+                resource_selection_error=resource_selection_error,
                 resource_choice=resource_choice, verify_source=verify_source)
         if record.input_type == 'bam':
             return self.resources.compose_bam(resource_id, scientific_inputs,

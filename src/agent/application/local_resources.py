@@ -365,7 +365,9 @@ class RegisteredInput:
                     and not (self.composition == _H5AD_COMPOSITION
                              and self.resource_selection_error in _RESOURCE_SELECTION_ERRORS
                              or self.composition == _BAM_COMPOSITION
-                             and self.resource_selection_error in _BAM_SELECTION_ERRORS))):
+                             and self.resource_selection_error in _BAM_SELECTION_ERRORS
+                             or self.composition == _FRAGMENTS_COMPOSITION
+                             and self.resource_selection_error == 'FRAGMENTS_RESOURCE_AMBIGUOUS'))):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         try:
             _identifier(self.resource_id)
@@ -1239,12 +1241,6 @@ class LocalResourceAdmission:
             for key, value in values.items():
                 for argument in declarations[key]:
                     argument.validate(key, value)
-            imported = self._registry.get('import_scATAC_fragments')
-            required = set(imported.required_arguments) - _FRAGMENTS_SOURCE_ARGUMENTS
-            if required - set(values):
-                raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
-        except ResourceAdmissionError:
-            raise
         except (ValueError, TypeError, LookupError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
         source = dict(source_path=record.source_path, source_sha256=record.source_sha256)
@@ -1253,7 +1249,8 @@ class LocalResourceAdmission:
                           source_index_sha256=record.source_index['sha256'])
         return values | source
 
-    def compose_fragments(self, resource_id, scientific_inputs, *, resource_choice=None, verify_source=True):
+    def compose_fragments(self, resource_id, scientific_inputs=None, *,
+                          resource_selection_error=None, resource_choice=None, verify_source=True):
         """One registered source with explicit import/QC/selection/matrix inputs.
 
         This mapping selects no scientific steps and fills no missing downstream
@@ -1262,9 +1259,18 @@ class LocalResourceAdmission:
         record = self.load(resource_id)
         binding = RegisteredInput(record.resource_id, record.record_sha256, 'import_scATAC_fragments',
             self._fragments_inputs(record, scientific_inputs), _FRAGMENTS_COMPOSITION,
-            resource_choice=resource_choice)
+            resource_selection_error, resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
+
+    def _validate_fragments_requirements(self, binding, values):
+        """Require declared import context at execution and first acceptance only."""
+        if binding.resource_selection_error is not None:
+            raise _fail(binding.resource_selection_error)
+        imported = self._group_registry().get('import_scATAC_fragments')
+        required = set(imported.required_arguments) - _FRAGMENTS_SOURCE_ARGUMENTS
+        if required - set(values):
+            raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
 
     def _bam_inputs(self, record, scientific_inputs):
         """Offer exact source identity and supplied declarations, without a workflow."""
@@ -1748,6 +1754,7 @@ class LocalResourceAdmission:
                 self._validate_bam_plan(binding, record, source, plan)
                 return
         if type(binding) is RegisteredInput and binding.tool_name == 'import_scATAC_fragments':
+            self._validate_fragments_requirements(binding, values)
             imports = [step for step in plan.steps if step.tool_name == binding.tool_name]
             if not imports:
                 raise _fail('FRAGMENTS_SOURCE_MISMATCH')
@@ -1850,6 +1857,7 @@ class LocalResourceAdmission:
             return
         if imports:
             values = _serialize(binding.execution_inputs)
+            self._validate_fragments_requirements(binding, values)
             keys = ('source_path', 'source_sha256', 'reference_bundle_path',
                     'reference_bundle_sha256', 'source_profile', 'namespace',
                     'source_index_path', 'source_index_sha256')

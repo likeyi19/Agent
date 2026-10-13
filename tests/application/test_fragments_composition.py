@@ -174,3 +174,39 @@ def test_source_selection_cannot_be_bypassed_by_an_unrelated_plan(registered, tm
         owner.validate_plan(submission(binding), AgentPlan('plan', 'request', 'scripted',
             (PlanStep('unrelated', 'inspect_scATAC', dict(path=record.source_path)),)))
     assert error.value.code == 'FRAGMENTS_SOURCE_MISMATCH'
+
+
+@pytest.mark.parametrize('field', ['reference_bundle_path', 'reference_bundle_sha256', 'source_profile', 'namespace'])
+def test_incomplete_context_can_be_interpreted_but_not_consumed(registered, tmp_path, field):
+    owner, record, _ = registered
+    values = declarations(tmp_path)
+    del values[field]
+    binding = owner.compose_fragments(record.resource_id, values)
+    assert owner._submission_binding(submission(binding)) == binding
+    assert owner.validate_binding(binding)['source_sha256'] == record.source_sha256
+    arguments = _serialize(binding.execution_inputs) | dict(output_dir=str(tmp_path / 'out'))
+    # Even bypassing the compiler cannot turn matching absent fields into admission.
+    with pytest.raises(ResourceAdmissionError) as error:
+        owner.validate_plan(submission(binding), AgentPlan('plan', 'request', 'scripted',
+            (PlanStep('import', 'import_scATAC_fragments', arguments),)))
+    assert error.value.code == 'LOCAL_RESOURCE_DECLARATION_REQUIRED'
+    with pytest.raises(ResourceAdmissionError) as error:
+        owner.validate_result(submission(binding), [SimpleNamespace(
+            tool_name='import_scATAC_fragments', resolved_arguments=arguments, result={})])
+    assert error.value.code == 'LOCAL_RESOURCE_DECLARATION_REQUIRED'
+
+
+def test_ambiguous_context_is_preserved_and_cannot_authorize_import(registered, tmp_path):
+    owner, record, _ = registered
+    binding = owner.compose_fragments(record.resource_id, declarations(tmp_path),
+        resource_selection_error='FRAGMENTS_RESOURCE_AMBIGUOUS')
+    assert owner._submission_binding(submission(binding)) == binding
+    arguments = _serialize(binding.execution_inputs) | dict(output_dir=str(tmp_path / 'out'))
+    with pytest.raises(ResourceAdmissionError) as error:
+        owner.validate_plan(submission(binding), AgentPlan('plan', 'request', 'scripted',
+            (PlanStep('import', 'import_scATAC_fragments', arguments),)))
+    assert error.value.code == 'FRAGMENTS_RESOURCE_AMBIGUOUS'
+    with pytest.raises(ResourceAdmissionError) as error:
+        owner.validate_result(submission(binding), [SimpleNamespace(
+            tool_name='import_scATAC_fragments', resolved_arguments=arguments, result={})])
+    assert error.value.code == 'FRAGMENTS_RESOURCE_AMBIGUOUS'

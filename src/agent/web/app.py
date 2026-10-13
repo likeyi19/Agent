@@ -265,52 +265,30 @@ class _ScientificFileResponse(StreamingResponse):
 _epizoo_selection = select_epizoo_resource
 
 
-def _fragments_selection(selected, input_sets):
-    """Choose one explicit operator context; scientific owners qualify its use."""
+def _raw_selection(selected, input_sets, family):
+    """Capture configured context; missing science inputs do not veto dialogue."""
     if selected is not None:
-        if not selected.fragments_companion:
+        if not getattr(selected, family + '_companion'):
             raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
     else:
-        defaults = tuple(s for s in input_sets if s.fragments_companion and s.fragments_default)
+        defaults = tuple(s for s in input_sets if getattr(s, family + '_companion')
+                         and getattr(s, family + '_default'))
         if len(defaults) != 1:
-            raise ResourceAdmissionError('FRAGMENTS_RESOURCE_REQUIRED' if not defaults
-                                         else 'FRAGMENTS_RESOURCE_AMBIGUOUS')
+            return {}, family.upper() + '_RESOURCE_AMBIGUOUS' if defaults else None
         selected = defaults[0]
-    inputs = selected.inputs()
-    for fields, code in (
-        (('reference_bundle_path', 'reference_bundle_sha256'), 'FRAGMENTS_REFERENCE_REQUIRED'),
-        (('source_profile',), 'FRAGMENTS_PROFILE_REQUIRED'),
-        (('namespace',), 'FRAGMENTS_NAMESPACE_REQUIRED'),
-    ):
-        if any(field not in inputs for field in fields):
-            raise ResourceAdmissionError(code)
-    return inputs
+    return selected.inputs(), None
+
+
+def _fragments_selection(selected, input_sets):
+    return _raw_selection(selected, input_sets, 'fragments')
 
 
 def _bam_selection(selected, input_sets):
-    """Offer only an explicit context; inspection also works without one."""
-    if selected is not None:
-        if not selected.bam_companion:
-            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-    else:
-        defaults = tuple(s for s in input_sets if s.bam_companion and s.bam_default)
-        if len(defaults) != 1:
-            return {}, 'BAM_RESOURCE_AMBIGUOUS' if defaults else None
-        selected = defaults[0]
-    return selected.inputs(), None
+    return _raw_selection(selected, input_sets, 'bam')
 
 
 def _fastq_selection(selected, input_sets):
-    """Inspection remains usable without producer-only prerequisites."""
-    if selected is not None:
-        if not selected.fastq_companion:
-            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-    else:
-        defaults = tuple(s for s in input_sets if s.fastq_companion and s.fastq_default)
-        if len(defaults) != 1:
-            return {}, 'FASTQ_RESOURCE_AMBIGUOUS' if defaults else None
-        selected = defaults[0]
-    return selected.inputs(), None
+    return _raw_selection(selected, input_sets, 'fastq')
 
 
 def _input_set_choice(selected, input_sets, family=None):
@@ -612,8 +590,9 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if selected_source.input_type == 'external_fragments':
                 if body.epizoo_resource_id is not None:
                     raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+                companion_inputs, selection_error = _fragments_selection(input_set, input_sets)
                 inputs = uploads.resolve(body.resource_id,
-                    scientific_inputs=_fragments_selection(input_set, input_sets),
+                    scientific_inputs=companion_inputs, resource_selection_error=selection_error,
                     resource_choice=_input_set_choice(input_set, input_sets, 'fragments'), verify_source=False)
                 workers.submit(session_id, body, inputs)
                 return {'session_id': session_id, 'turn_id': body.turn_id}

@@ -569,7 +569,7 @@ def validate_group_roles(binding, roles, registry, required_roles, *, complete=F
         if type(binding) is not RegisteredInputGroup or type(complete) is not bool:
             raise ValueError('Invalid captured selection.')
         if (not isinstance(required_roles, (tuple, list))
-                or len(required_roles) != len(binding.members)):
+                or not len(binding.members) <= len(required_roles) <= MAX_GROUP_MEMBERS):
             raise ValueError('Invalid required scientific role count.')
         required = []
         for item in required_roles:

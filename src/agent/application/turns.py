@@ -11,7 +11,7 @@ from agent.orchestration.prior_outputs import binding_for_locator, validate_bind
 from agent.orchestration.planner import PlannerError
 from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
-from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, IntentDelta, IntentError, interpret, clauses,
+from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer, IntentDelta, IntentError, interpret, clauses,
                              resolve_relation, admit_delta)
 
 
@@ -46,10 +46,13 @@ def _terminal(sessions, interaction, clarification):
     species_reason = clarification.reason in {'missing_species', 'ambiguous_species', 'unsupported_species', 'conflicting_species'}
     parameter_reason = clarification.reason in {'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'}
     reference = captured.get('prerequisite')
-    if reference is not None and reference['field'] in {'parameters', 'roles'}:
+    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources'}:
         prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
         if reference['field'] == 'parameters':
             choices = tuple(reference['missing'])
+        elif reference['field'] == 'resources':
+            from .resource_continuation import public
+            choices = tuple(c['label'] for c in public(interaction, sessions.load(sessions_id(sessions)).interactions)['choices'])
         else:
             from .dialogue_execution import prerequisite_public
             pending = prerequisite_public(interaction, sessions.load(sessions_id(sessions)).interactions)
@@ -76,7 +79,7 @@ def _terminal(sessions, interaction, clarification):
         if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
                             value_required=clarification.reason in {'missing_parameter_value', 'missing_species', 'ambiguous_species',
-                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles'})
+                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources'})
     admitted = dict(kind='clarify', **asdict(clarification))
     def change(state):
         turns = state.turns
@@ -118,6 +121,12 @@ def _outcome(sessions, interaction, answerer=None):
         from .responses import admitted_answer
         return admitted_answer(sessions, sessions_id(sessions), admitted)
     if interaction.status == 'clarification':
+        if admitted.get('kind') == 'request_resources':
+            from .resource_continuation import offers
+            from .input_sets import ScientificInputSet
+            choices = tuple(c['label'] for c in offers(interaction.submission,
+                tuple(ScientificInputSet(**_serialize(r)) for r in admitted['resource_catalog'])))
+            return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', choices, True))
         if admitted.get('kind') == 'request_roles':
             assigned = {(r['tool'], r['port']) for r in admitted['roles']}
             choices = tuple(r['tool'] + '.' + r['port'] for r in admitted['required_roles']
@@ -132,6 +141,12 @@ def _outcome(sessions, interaction, answerer=None):
             return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter',
                 parameter_scope_choices(admitted, state.interactions)))
         if interaction.prerequisite is not None and admitted.get('kind') == 'execute':
+            if interaction.prerequisite['field'] == 'resources':
+                from .resource_continuation import offers
+                from .input_sets import ScientificInputSet
+                choices = tuple(c['label'] for c in offers(interaction.submission,
+                    tuple(ScientificInputSet(**_serialize(r)) for r in admitted['resource_catalog'])))
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', choices, True))
             if interaction.prerequisite['field'] == 'parameters':
                 return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value',
                     tuple(interaction.prerequisite['missing']), True))
@@ -334,7 +349,7 @@ def execute(sessions, interaction, admitted):
 
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
             answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
-            epizoo_resources=()):
+            epizoo_resources=(), input_sets=()):
     # Each property access returns its own facade; no process-global turn context.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
@@ -402,12 +417,20 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         pending_public = prerequisite_public(interaction, state.interactions)
         if pending_public is not None:
             visible['dialogue']['pending_prerequisite'] = pending_public
+        from .resource_continuation import offers, COMPOSITIONS, catalog
+        catalog(input_sets)
+        visible['dialogue']['resource_choices'] = offers(submission, input_sets)
+        visible['dialogue']['resource_source'] = COMPOSITIONS.get((submission or {}).get('registered_input', {}).get('composition'))
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
         if pending_public is not None and pending_public['field'] == 'roles':
             reference = interaction.snapshot['prerequisite']
-            role_submission = next(i.submission for i in state.interactions if i.turn_id == reference['origin_turn_id'])
+            from .dialogue_execution import _role_source, _role_binding
+            origin, source = _role_source(reference, state.interactions)
+            binding = _role_binding(origin, source, interaction)
+            role_submission = dict(execution_inputs=_serialize(binding.execution_inputs),
+                                   registered_input=binding.attribution())
         if (role_submission is not None
                 and role_submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1'):
             from .local_resources import LocalResourceAdmission, group_choices
@@ -422,11 +445,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if isinstance(decision, Execute) and (decision.argument is not None or decision.arguments) and decision.operation != 'plan':
             raise IntentError('unsupported_intent')
         if interaction.base_revision_id is None:
-            if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer))
+            if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
                     or isinstance(decision, Execute) and decision.operation == 'plan'
                     or isinstance(decision, Answer) and decision.intent == 'unsupported'):
                 raise IntentError('unavailable_context')
-        if isinstance(decision, (Execute, RequestRoles)):
+        if isinstance(decision, (Execute, RequestRoles, RequestResources)):
             from .scientific_guidance import references_candidate
             from .guidance_selection import candidates
             refs = candidates(state.interactions, captured)
@@ -435,7 +458,16 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
-        if isinstance(decision, RequestRoles):
+        if isinstance(decision, RequestResources):
+            from .resource_continuation import request, offers
+            admitted, prerequisite = request(sessions, interaction, decision, input_sets)
+            _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+            choices = tuple(c['label'] for c in offers(submission, input_sets))
+            return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', choices, True))
+        elif isinstance(decision, ResourceAnswer):
+            from .resource_continuation import answer
+            admitted = answer(sessions, interaction, decision, input_sets)
+        elif isinstance(decision, RequestRoles):
             from .dialogue_execution import admit_role_request
             admitted, prerequisite, choices = admit_role_request(sessions, interaction, decision, epizoo_resources)
             _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
@@ -477,6 +509,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .dialogue_execution import admit as admit_execution
             admitted = admit_execution(sessions, interaction, decision, execution_inputs,
                                        epizoo_resources=epizoo_resources)
+            if visible['dialogue'].get('resource_source'):
+                from .resource_continuation import catalog
+                admitted['resource_catalog'] = catalog(input_sets)
         else:
             admitted = admit(sessions, interaction, decision)
     except Exception as exc:

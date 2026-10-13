@@ -234,12 +234,13 @@ def test_semantic_association_and_partial_answer_meaning_belong_to_existing_inte
     assert interpret(Model(), utterance, public(pending=True)) == ParameterAnswer('@parameters', (candidate,))
 
 
-def test_existing_registry_metadata_offers_exactly_the_three_reviewed_free_text_declarations(registry):
+def test_registry_metadata_offers_only_reviewed_free_text_declarations(registry):
     from agent.application.dialogue_execution import scientific_parameters
     from agent.application.turn_decisions import is_exact_string_argument
 
     offered = {(item['tool'], item['argument']) for item in scientific_parameters(registry)}
     reviewed = {(tool, name) for tool, name, _ in STRING_DECLARATIONS}
+    reviewed.add(('import_scATAC_fragments', 'namespace'))
     eligible = set()
     unreviewed = set()
     for tool_name in registry.names():
@@ -305,11 +306,10 @@ def test_arbitrary_scientific_strings_and_query_operands_do_not_gain_declaration
     ('evaluate_cell_clustering', 'output_dir'),
     ('validate_scATAC_feature_space', 'genome_assembly'),
     ('build_replicate_pseudobulk', 'condition_key'),
-    ('import_scATAC_fragments', 'namespace'),
     ('build_scATAC_cell_by_ccre', 'reference_manifest_sha256'),
     ('adopt_scATAC_cell_by_ccre', 'assembly'),
 ])
-def test_paths_devices_design_columns_namespaces_assemblies_and_digests_stay_excluded(registry, tool, name):
+def test_paths_devices_design_columns_assemblies_and_digests_stay_excluded(registry, tool, name):
     from agent.application.dialogue_execution import _parameter_input, scientific_parameters
     from agent.application.turn_decisions import is_exact_string_argument
 

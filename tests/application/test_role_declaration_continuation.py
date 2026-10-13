@@ -74,12 +74,17 @@ class TransferRoleContinuationModel(TransferBindingModel):
         return super().complete(prompt=prompt, response_schema=response_schema)
 
 
-def transfer_continuation_harness(tmp_path, *, decisions=None, variant=None, before_interpret=None):
+def transfer_continuation_harness(tmp_path, *, decisions=None, variant=None, before_interpret=None, uploads=False):
     original, records, group, executor, calls, companions = transfer_binding_harness(tmp_path)
+    roots = (tmp_path / 'approved',)
+    if uploads:
+        upload_root = tmp_path / 'workspace' / 'uploads'
+        upload_root.mkdir()
+        roots += (upload_root,)
     app = InteractiveAgentApplication(original._application.workspace_root,
         model_profiles=(PROFILE,), default_profile_id=PROFILE.profile_id,
         registry=original._application.registry, executor=executor,
-        approved_source_roots=(tmp_path / 'approved',),
+        approved_source_roots=roots,
         planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': lambda _:
             TransferRoleContinuationModel(calls, decisions=decisions, variant=variant,
                                           before_interpret=before_interpret)}))
@@ -387,3 +392,45 @@ def test_persisted_role_binding_corruption_rejects_during_session_decode(tmp_pat
     with pytest.raises(SessionError):
         AnalysisSession.from_dict(value)
     assert not executor.plans
+
+
+def test_pending_roles_accept_only_appended_required_registration(tmp_path):
+    """A further registered file can fill a missing role in the same objective.
+
+    This is bounded admission coverage; no new scientific qualification is claimed.
+    """
+    from fastapi.testclient import TestClient
+    from agent.application.uploads import H5ADUploadAdmission
+    from agent.web.app import create_app
+    from agent.application.dialogue_execution import _role_binding
+    from types import SimpleNamespace
+    extra_required = dict(tool='evaluate_cell_clustering', port='ground_truth_dataset')
+    decisions = {OBJECTIVE: request(required=REQUIRED_ROLES + [extra_required])}
+    app, records, group, executor, calls, companions = transfer_continuation_harness(
+        tmp_path, decisions=decisions, uploads=True)
+    origin = pending(app, submit(app, group=group), missing=REQUIRED_ROLES + [extra_required])
+    # Upload after the objective is pending; original registrations remain exact.
+    uploads = H5ADUploadAdmission(app.resources, tmp_path / 'workspace' / 'uploads')
+    with TestClient(create_app(app, uploads=uploads)) as client:
+        response = client.put('/api/v1/uploads/additional',
+            params={'filename': 'simulated-additional-ground-truth.h5ad'},
+            content=Path(records[0].source_path).read_bytes(),
+            headers={'Content-Type': 'application/octet-stream'})
+        assert response.status_code == 201, response.text
+        extra = app.resources.load(response.json()['resource_id'])
+    extended = app.resources.compose_group([*(r.resource_id for r in records), extra.resource_id], companions)
+    current = SimpleNamespace(submission=dict(execution_inputs=_serialize(extended.execution_inputs),
+        registered_input=extended.attribution()))
+    binding = _role_binding(origin, origin, current)
+    assert len(binding.members) == 3 and binding.members[:2] == group.members
+    # The ordinary capture projects the appended file with a new opaque position.
+    reply = submit(app, turn='answer', utterance=REFERENCE_ANSWER, group=extended)
+    latest = pending(app, reply, turn='answer', missing=[{k: QUERY[k] for k in ('tool', 'port')}, extra_required])
+    assert len(latest.admitted['registered_input']['members']) == 3
+    prompt = next(c['value'] for c in reversed(calls) if 'turn_schema_version' in c['value'])
+    assert [s['source'] for s in prompt['dialogue']['selected_sources']] == ['source.0', 'source.1', 'source.2']
+    assert not executor.plans
+    reordered = app.resources.compose_group([extra.resource_id, *(r.resource_id for r in records)], companions)
+    with pytest.raises(ValueError):
+        _role_binding(origin, latest, SimpleNamespace(submission=dict(
+            execution_inputs=_serialize(reordered.execution_inputs), registered_input=reordered.attribution())))

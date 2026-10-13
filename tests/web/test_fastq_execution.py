@@ -384,7 +384,7 @@ def test_fastq_restart_history_and_completed_retry_ignore_deleted_members(tiny, 
     ('library_context', 'FASTQ_LIBRARY_CONTEXT_REQUIRED'),
     ('reference_bundle', 'FASTQ_REFERENCE_REQUIRED'),
 ])
-def test_fastq_prepare_missing_typed_prerequisites_fail_before_scientific_intake(
+def test_fastq_prepare_missing_typed_prerequisites_clarify_before_scientific_intake(
         tiny, reads, monkeypatch, missing, code):
     group, whitelist = reads([(100, 200, BC, 1)])
     registry, calls = instrument(monkeypatch)
@@ -400,9 +400,9 @@ def test_fastq_prepare_missing_typed_prerequisites_fail_before_scientific_intake
         client.post('/api/v1/sessions', json=dict(session_id='analysis'))
         body = turn_body(resource, companion='incomplete', utterance='Prepare fragments from this FASTQ library.')
         view = execute(client, body)
-        assert view['status'] == 'failed' and view['revision_id'] is None, view
-        assert view['error']['code'] == code
-        assert str(tiny['root']) not in json.dumps(view) and 'sha256' not in view['error']['message']
+        assert view['status'] == 'clarification' and view['revision_id'] is None, view
+        assert view['response']['clarification']['reason'] == 'missing_resources'
+        assert str(tiny['root']) not in json.dumps(view)
         assert calls == dict(intake=0, production=0, verification=0, alignment=0)
         before = len(web.models)
         assert execute(client, body) == view and len(web.models) == before

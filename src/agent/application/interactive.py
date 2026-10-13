@@ -441,7 +441,7 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, epizoo_resources=None):
+                            registered_input=None, epizoo_resources=None, input_sets=()):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
@@ -459,7 +459,7 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, epizoo_resources=None):
+                    registered_input=None, epizoo_resources=None, input_sets=()):
         resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
@@ -495,7 +495,7 @@ class InteractiveAgentApplication:
                     outcome = app.sessions.respond(session_id, turn_id, utterance,
                         interpreter=model, answerer=model, expected_generation=expected_generation,
                         execution_inputs=inputs, predecessor_turn_id=predecessor_turn_id,
-                        submission=submission, epizoo_resources=resources)
+                        submission=submission, epizoo_resources=resources, input_sets=input_sets)
                     presentation = _present(outcome, self._load(session_id), turn_id=turn_id)
                 except SessionConflictError as exc:
                     code = ('INTERACTIVE_GENERATION_CONFLICT'

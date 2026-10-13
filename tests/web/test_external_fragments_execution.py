@@ -327,8 +327,13 @@ def test_missing_typed_fragments_prerequisite_reaches_interpreter_but_blocks_sci
         resource = upload_fragments(client, arguments)
         client.post('/api/v1/sessions', json={'session_id': 'analysis'})
         view = execute(client, fragment_body(resource, companion='incomplete'))
-        assert view['status'] == 'failed' and view['error']['code'] == code
-        assert str(tmp_path) not in json.dumps(view) and 'sha256' not in view['error']['message']
+        if partial:
+            assert view['status'] == 'failed' and view['error']['code'] == code
+            assert 'sha256' not in view['error']['message']
+        else:
+            assert view['status'] == 'clarification'
+            assert view['response']['clarification']['reason'] in {'missing_resources', 'missing_parameter_value'}
+        assert str(tmp_path) not in json.dumps(view)
         assert backend.models and calls == {'production': 0, 'verification': 0}
         state = backend.service._application.sessions.load('analysis')
         assert state.generation == 0 and not state.turns and len(state.interactions) == 1
@@ -351,10 +356,9 @@ def test_no_context_or_ambiguous_context_reaches_interpretation_without_guessing
         client.post('/api/v1/sessions', json={'session_id': 'analysis'})
         body = fragment_body(resource, companion=None)
         view = execute(client, body)
-        assert view['status'] == ('clarification' if clarify else 'failed'), view
+        assert view['status'] == 'clarification', view
         if not clarify:
-            assert view['error']['code'] == ('FRAGMENTS_RESOURCE_AMBIGUOUS' if ambiguous
-                                             else 'FRAGMENTS_NAMESPACE_REQUIRED')
+            assert view['response']['clarification']['reason'] in {'missing_resources', 'missing_parameter_value'}
         state = backend.service._application.sessions.load('analysis')
         interaction, = state.interactions
         metadata = interaction.submission['registered_input']

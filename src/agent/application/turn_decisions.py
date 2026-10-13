@@ -228,6 +228,29 @@ class ParameterAnswer:
 
 
 @dataclass(frozen=True)
+class RequestResources:
+    target: str
+    arguments: tuple[ScopedArgument, ...] = ()
+
+    def __post_init__(self):
+        if type(self.target) is not str or not self.target:
+            raise ValueError('Invalid resource request target.')
+        _validate_arguments(self.arguments)
+
+
+@dataclass(frozen=True)
+class ResourceAnswer:
+    pending: str
+    choice: str
+    arguments: tuple[ScopedArgument, ...] = ()
+
+    def __post_init__(self):
+        if self.pending != '@resources' or type(self.choice) is not str or not self.choice.startswith('resource.'):
+            raise ValueError('Invalid resource choice answer.')
+        _validate_arguments(self.arguments)
+
+
+@dataclass(frozen=True)
 class Navigate:
     relation: str
 
@@ -299,14 +322,14 @@ class Answer:
             raise ValueError('Guidance answers require a structured question.')
 
 
-TurnDecision = Execute | ExecuteCandidate | SpeciesAnswer | ParameterAnswer | RequestRoles | RoleAnswer | Navigate | Clarify | Answer
+TurnDecision = RequestResources | ResourceAnswer | Execute | ExecuteCandidate | SpeciesAnswer | ParameterAnswer | RequestRoles | RoleAnswer | Navigate | Clarify | Answer
 RELATIONS = ('current', 'parent', 'previous_active', 'previous')
 REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision',
            'unsupported_intent', 'invalid_parameter_value', 'ungrounded_operand',
            'unavailable_context', 'invalid_decision', 'planning_failed', 'ambiguous_subject',
            'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution',
            'missing_species', 'ambiguous_species', 'unsupported_species',
-           'conflicting_species', 'invalid_prerequisite', 'conflicting_scientific_parameter')
+           'conflicting_species', 'missing_resources', 'invalid_prerequisite', 'conflicting_scientific_parameter')
 # These are language aliases, not scientific types/ranges/defaults. Those stay
 # exclusively in the registered ArgumentSpecs. Initial interaction scope is QC selection.
 ALIASES = {
@@ -386,6 +409,12 @@ def parse_decision(raw):
             return SpeciesAnswer(value['pending'], value['species'],
                                  _leiden_argument(value.get('argument')),
                                  _scientific_arguments(value.get('arguments', [])))
+        if kind == 'request_resources':
+            _shape(value, ('kind', 'target', 'arguments'))
+            return RequestResources(value['target'], _scientific_arguments(value['arguments']))
+        if kind == 'answer_resources':
+            _shape(value, ('kind', 'pending', 'choice', 'arguments'))
+            return ResourceAnswer(value['pending'], value['choice'], _scientific_arguments(value['arguments']))
         if kind == 'answer_parameters':
             _shape(value, ('kind', 'pending', 'arguments'))
             return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
@@ -534,6 +563,13 @@ def decision_schema(public):
         if candidates:
             variants.append(_object(dict(kind=enum(('execute_candidate',)),
                 candidate=enum(c['candidate'] for c in candidates), evidence={'type':'string','maxLength':4096})))
+        if public['dialogue'].get('resource_source'):
+            variants.append(_object(dict(kind=enum(('request_resources',)),
+                target=enum(public['dialogue']['tools']), arguments=declarations)))
+        if pending is not None and pending.get('field') == 'resources' and pending.get('choices'):
+            variants.append(_object(dict(kind=enum(('answer_resources',)),
+                pending=enum((pending['handle'],)),
+                choice=enum(c['handle'] for c in pending['choices']), arguments=declarations)))
         pending = public['dialogue'].get('pending_prerequisite')
         if pending is not None and pending.get('field', 'species') == 'species':
             answer = dict(kind=enum(('answer_prerequisite',)),
@@ -589,10 +625,11 @@ def interpret(model, utterance, public):
             'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
+            'For a selected raw scientific source, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. If no choice is available, the operator must provision a qualified resource; do not fabricate one.',
             'For an otherwise supported new scientific command with a selected input, an omitted or unresolved required dataset declaration is not unsupported intent and is not a direct missing-prerequisite answer. Choose execute_plan and omit that declaration from arguments. The existing Planner/compiler determines the exact missing prerequisite and the Application creates its durable clarification. Use missing_species only while answering an offered pending species prerequisite; never fabricate a pending request. Do not guess a value or bypass genuinely unsupported capabilities, input identity ambiguity or conflicting explicit declarations.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'execute_plan.argument is the historical nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim and give start/end zero-based Unicode character offsets in this utterance. Do not repeat an identity across argument and arguments.',
-            *(['For an offered exact_string parameter, literal is the explicitly named observation column, with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
+            *(['For an offered exact_string parameter, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
             'Use argument=null when resolution is omitted; the scientific owner retains its existing default. A number alone does not request an operation. Explanatory questions about resolution remain answers, never execution or edits to a pending request. Clarify ambiguous argument association or conflicting explicit values; do not guess, invent an amount or replace an invalid value with a default.',
@@ -631,7 +668,7 @@ def interpret(model, utterance, public):
             'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
             'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else []) + ([
-            'dialogue.pending_prerequisite describes the exact original scientific objective awaiting the offered required_roles. The captured selected_sources, admitted roles, scientific declarations and resource choices remain fixed; this context grants no scientific qualification.',
+            'dialogue.pending_prerequisite describes the exact original scientific objective awaiting the offered required_roles. Captured sources retain their exact order and identity. Explicitly selected newly registered files may be appended only to fill the offered missing roles; previously admitted roles, scientific declarations and resource choices remain fixed; this context grants no scientific qualification.',
             'Choose answer_roles only when this utterance answers that specific pending question. Use its exact pending handle and offered tool/port/source associations. A partial answer may provide only some missing roles or an exact offered scientific argument; omit unresolved roles instead of assigning by order or guessing. Previously admitted roles cannot be reassigned. Positional references apply only to the captured ordered selection and an explicit role association in this reply.',
             'Contradictory or ambiguous associations require clarify/ambiguous_subject. Unrelated tasks, explanations, uncertainty and cancellation use their ordinary decisions, never answer_roles. An answer continues only the original task; do not add operations or claim resource authority from conversational assertions.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'roles' else [])},
@@ -652,7 +689,8 @@ def is_exact_string_argument(argument_spec):
         and planning is not None and planning.scientific_parameter
         and not planning.conversational_choice and not planning.accepted_artifact_kinds
         and planning.source_eligibility == PlanningSourceEligibility.REQUEST_INPUT_ONLY
-        and planning.provenance_role in (PlanningProvenanceRole.REFERENCE, PlanningProvenanceRole.GROUND_TRUTH))
+        and (planning.conversational_exact_string or planning.provenance_role in
+             (PlanningProvenanceRole.REFERENCE, PlanningProvenanceRole.GROUND_TRUTH)))
 
 
 def admit_scientific_argument(declaration, utterance, argument_spec):

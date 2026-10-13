@@ -45,13 +45,13 @@ class AnalysisSessions:
 
     def respond(self, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
                 answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
-                epizoo_resources=()):
+                epizoo_resources=(), input_sets=()):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
         outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation, answerer=answerer,
                        predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
-                       submission=submission, epizoo_resources=epizoo_resources)
+                       submission=submission, epizoo_resources=epizoo_resources, input_sets=input_sets)
         from .responses import summarize
         return summarize(self, session_id, turn_id, outcome)
 

@@ -81,6 +81,12 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if clarification.reason == 'missing_resources':
+        return ('Which reference and source declarations should be used? Available choices: '
+                + '; '.join(clarification.choices) + '. Your original request and file are preserved.'
+                if clarification.choices else
+                'Your original request and file are preserved. No reviewed resource choice is available; '
+                'an operator must provision the required reference and source declarations before execution.')
     if clarification.reason == 'missing_input_roles':
         roles = ', '.join(
             (choice.partition('.')[2].replace('_', ' ') + ' for '

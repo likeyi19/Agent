@@ -299,3 +299,352 @@ no demonstrated scientific execution defect from this task requires blocking it.
 Do not mark UA3.6.4b complete or imply three-family real acceptance. Preserve the
 explicit resource/deployment and public-scope prerequisites above. No UA3.6.4c/d
 work was started, and no further provider or scientific execution is scheduled.
+
+
+## Work Unit A continuation — 2026-10-13
+
+This section supplements, and does not replace, the historical conclusions above.
+**Work Unit A is PARTIAL:** the shared continuation implementation and bounded
+software acceptance are distinct from live-provider task completion. The sole
+live OpenRouter response used an invalid character span for a researcher-supplied
+threshold and correctly failed admission. It produced no scientific Run or
+Revision. No favorable-answer retry or semantic repair was attempted. A separate,
+visibly scripted-provider Session exercises the real-data scientific path below;
+it does not qualify live language understanding. Work Unit B has not begun.
+
+### A. Baseline and preservation
+
+HEAD, local main, origin/main and remote main were aligned at
+`4c485c183e19dead17b7c94cdc373f45e2a5d496` (`Simplify unified scientific admission
+and raw resource selection`). HTTPS `git ls-remote` and the GitHub connector
+confirmed remote main; an initial SSH connection failed. The tracked worktree
+and index were clean. The 981 pre-existing nonignored untracked files were all
+under `evals/`. No reset, clean, fetch, pull, stage, commit or push was performed.
+
+New evidence, acquired resources, managed uploads, operator configurations and
+scientific workspaces live outside Git at
+`/home/likeyi/program/ua364b-fragments-aad_21w8` (abbreviated **R** below).
+`baseline.json` records repository state. `protected-before.json` captures 86,124
+existing files: size/mtime/mode for all and SHA-256 for files at most 2 MiB. This is
+bounded preservation evidence, not a new full hash of large scientific assets.
+
+### B. Shared implementation and permanent policy
+
+The existing Session prerequisite gains a typed `resources` field and paired
+`request_resources` / `answer_resources` interpreter decisions. The original
+objective, registered source/index, explicit declarations, chosen InputSet
+identity, generation and predecessor remain captured. Providers receive opaque
+choice handles and labels; exact existing operator InputSet values remain private.
+No resource registry, pending-task engine, scientific algorithm or Planner was
+added. `ScientificInputSet` moved to the application layer with its established
+web import preserved. Existing compiler, preflight and scientific owners admit
+and verify execution. Existing exact-string/categorical declarations now expose
+the external-fragments namespace, source profile and source selection.
+
+A resource answer may complete an existing reviewed InputSet with explicit
+spanned declarations. Ordinary clarification retains the pending objective.
+Changed source/index, stale generation, altered catalog, forged choice and
+conflicting captured declarations fail closed. Compiler-reported missing raw
+resources now produce a durable clarification. Catalog changes during a pending
+request are rejected rather than silently adopting a replacement definition.
+
+The existing pending role boundary additionally permits explicit append of
+registered H5AD members up to the captured required-role count. Captured members,
+order, roles and resource choice remain fixed. Focused coverage uploads an
+additional file through the HTTP endpoint after a Session objective is pending,
+then binds its opaque position through the ordinary role continuation. This is
+bounded admission coverage, not full arbitrary-file or scientific-role acceptance.
+
+`AGENTS.md` now records the authorized public-resource acquisition and simulated
+fixture policy and the permanent user-centered continuation principle. This does
+not change production configuration or relax scientific qualification.
+
+### C. Genuine source and bounded acquisition
+
+The [official 500 PBMC Next GEM dataset](https://www.10xgenomics.com/datasets/500-peripheral-blood-mononuclear-cells-pbm-cs-from-a-healthy-donor-next-gem-v-1-1-1-1-standard-2-0-0)
+provides Cell Ranger ATAC 2.0.0 fragments, index and summary. The exact source
+headers and summary identify `refdata-cellranger-arc-GRCh38-2020-A-2.0.0`.
+The [fragments specification](https://www.10xgenomics.com/support/software/cell-ranger-atac/latest/analysis/outputs/fragments-file)
+documents zero-based half-open Tn5-adjusted coordinates, corrected barcode/GEM
+suffix and read-pair support. Historical alignment and barcode correction remain
+producer declarations, not independently reconstructed history.
+
+`resources/acquisition.json` records all five downloads with URL, release,
+size, SHA-256, role and date. Cumulative download: **116,976,405 bytes**. The
+largest file is **110,797,499 bytes**; both task limits are respected. No published
+checksum was found; the multipart ETag was not treated as a checksum. The source
+index is 874,165 bytes and summary 2,590,764 bytes. A bounded urllib GET returned
+403; a subsequent bounded curl transfer succeeded. Two small 1.2.0 metadata/index
+files were also inspected, but that release's actual source assembly is hg19;
+no 1.2.0 fragments were downloaded or used. Release versions were not conflated.
+
+The original 2.0.0 fragment file includes 15 scaffold names absent from the
+existing qualified UCSC-style reference. No alias repair was performed. Under the
+existing supported `subset_export` contract, `prepare_subset.py` prepared a
+primary-nuclear subset using the qualified QC reference's complete ordered
+classification (24 primary nuclear contigs). Of **10,891,721** source records,
+**10,889,126** were retained byte-for-byte and **2,595** scaffold records excluded.
+A separate full source/output pass verified every retained record and order.
+This is explicitly documented acquisition preparation, not fabricated Agent
+producer history or neutral primary-preparation authority.
+
+`resources/subset-provenance.json` binds source, classification and output:
+subset BGZF 110,850,431 bytes,
+SHA-256 `03a6d40d3a8a934c550fb4a4b86362585d11d8a99835ba73f96683b6fb23ac9a`;
+index 879,539 bytes,
+SHA-256 `b64a3a7a4fc024fbecaea83810ac081571e8523cd8098f750d47667af34282aa`.
+Source namespace is explicitly `pbmc500`; profile is
+`10x-atac-fragments.v1`; source selection is `subset_export`.
+
+### D. Qualified reference and researcher criteria
+
+The isolated operator InputSet uses the existing human hg38 parent reference
+`agent-resources/parents/human-hg38/m116-r1/reference.json`, SHA-256
+`20681078b31446df31c689992191d842d4110435004a5e547efea9696b59d7c4`, and QC
+`agent-resources/qc/human-hg38/gencode-49-chr/m116-r1/manifest.json`, SHA-256
+`e9037c7a80964495e5b3aaea4aa6d634035d05cf7aaf5a36d8cff27bb21afbd5`.
+The existing operator QC catalog and `/usr/bin/bedtools` are used unchanged.
+The full canonical ordered **1,355,445-feature** axis is retained. No reference,
+QC, selection or matrix scientific algorithm changed; Registry remains 23.
+
+The researcher explicitly authorized exploratory acceptance criteria:
+QC fragment records ≥ **1,000**, TSS enrichment ≥ **4**, TSS flank evidence ≥
+**20**, then TSS enrichment ≥ **5** with all other thresholds preserved. These
+are not calibrated cell-calling, purity or biological-quality standards. No
+threshold adjustment is authorized because of unexpectedly few selected cells.
+
+Before execution, `execution-estimate.json` recorded disk/memory and stage costs,
+including independent verification. Available disk was approximately 15 TiB under
+`/home` and 44 GiB under `/tmp`; CPU execution needs no GPU or dense full matrix.
+
+### E. Live-provider outcome and cumulative budget
+
+The predecessor UA3.6.4b ledger had zero paid calls and zero reserved spending;
+`provider/predecessor.json` pins that observation. The inherited task allowance
+remains 18 calls, six per turn, USD 5 conservative reservation and 4,096 output
+tokens, with SDK retries and fallback disabled. Offline guard tests pass 11 checks.
+
+Native Firefox uploaded the real subset pair and submitted the full scientific
+request in Session `1d22c0c2-6d85-4a55-bea6-41868ba2b76a`. The actual model
+`openai/gpt-5.6-sol` returned `request_resources` with three explicit thresholds.
+Its flank-evidence literal `20` had incorrect offsets `202:204` (the actual
+span is `203:205`; the supplied span contains ` 2`); exact argument
+binding returned `ungrounded_operand`. The user-visible response requested a
+valid explicit value. No pending objective, Run, Revision or science was admitted
+for this invalid decision. Exact prompt/schema and provider response are retained
+in `provider/request-01.json` and `provider/response-01.json`.
+
+**One paid completion**, **USD 0.132598 reserved**, provider-reported
+**USD 0.0303085**; no second attempt, model substitution or deterministic span
+repair. This is an observed live operand-grounding failure, not evidence that the full
+live workflow passes. The scripted Session below cannot change that conclusion.
+
+### F. Separate scripted-provider, genuine-data acceptance
+
+The second native Firefox Session is
+`893096c5-b397-4753-a930-ae40d8714db6`, using isolated
+`operator-technical.json` / `technical-workspace` and the visible profile label
+**SCRIPTED technical acceptance — not a live model**. The uploaded bytes are the
+genuine PBMC subset pair above. Only interpreter/Planner decisions are scripted;
+compiler, preflight, scientific production, independent owners, authority,
+publication, evidence, reports and Web workers are the production implementations.
+`technical_model.py` and `technical-provider.jsonl` preserve all eight scripted
+responses. They are not paid calls or evidence of live semantic quality.
+
+The initial resource request preserves the full original objective and the three
+researcher thresholds. A subsequent ordinary reference/profile/namespace answer
+resolves the offered InputSet, without reupload or internal path/hash entry. The
+normal four-step plan imports fragments, computes QC, selects cells and builds
+the matrix. QC covers **219,745 observed barcodes**. Every owner accepts schema-2
+scientific authority; selection remains `none / not_assessed` for cell calling.
+
+| Criterion / artifact | Initial result | Continued result |
+| --- | --- | --- |
+| Minimum QC fragment records | 1,000 | 1,000 |
+| Minimum TSS enrichment | 4 | 5 |
+| Minimum TSS flank evidence | 20 | 20 |
+| Actual retained candidates | **568** | **567** |
+| H5AD shape | **568 × 1,355,445** | **567 × 1,355,445** |
+| CSR stored nonzeros | 6,469,402 | 6,469,014 |
+| Total canonical fragment-overlap counts | 8,712,514 | 8,712,126 |
+| Zero rows | 0 | 0 |
+
+Initial Revision:
+`c83cf34a1449b7dd455b80e245b5c519e740f7a7bff08b52d5b7b149bfeb3c22`.
+New child Revision:
+`023151006383f4873edecc7c8df8de659d76b3400d629ef883ac226fa39f7b94`.
+The continuation is the ordinary utterance **“Set TSS to 5 and rebuild the
+matrix”** with a captured, exact parameter delta. It plans only `new_selection`
+and `new_matrix`, binding the accepted original fragments and QC through exact
+prior-output references. No threshold was adjusted in response to population size.
+
+`inspect_results.py` / `technical-result-checks.json` verify both actual H5ADs:
+nonnegative int64 CSR, exact shape/nnz/sum, exact accepted file SHA-256, every
+ordered feature against the original cCRE BED, every ordered cell against its
+accepted selected-cell table, and matching manifest/axis identities. All **567
+shared cells match every sparse value exactly**; no complete matrix was densified.
+
+| Covered production / independent owner | First execution | Threshold continuation |
+| --- | --- | --- |
+| External fragments | 1 / 1 | 0 / 0 |
+| Barcode QC | 1 / 1 | 0 / 0 |
+| Cell selection | 1 / 1 | 1 / 1 |
+| Cell-by-cCRE matrix | 1 / 1 | 1 / 1 |
+
+`technical-science-observations.json` records code-frame entry/return observations
+without replacing scientific functions. These counts describe the eight named
+functions, not a claim that qualification and integrity IO were absent. In
+particular, initial QC independently reinspects the 3.32 GB existing GENCODE
+annotation through the unchanged owner boundary.
+
+Actual first-step times were import **836.94 s**, QC **2,056.47 s**, selection
+**19.25 s**, matrix **757.83 s**, including the step's existing qualification and
+verification work. **The initial QC estimate of 3–12 minutes was too optimistic;
+actual QC took 34.27 minutes under call profiling.** This overrun is retained as a
+resource-estimation limitation; it was not hidden by weakening verification or
+starting a second QC. Before the continuation, `followup-estimate.json` used the
+observed first matrix to estimate selection <1 minute and matrix ≤15 minutes,
+with no upstream production/reconstruction. The observed server peak resident set, including delivery, was **1,083,232 KiB**.
+No GPU or model checkpoint was used.
+
+Initial matrix SHA-256:
+`b380f5adab9d5e480557472d8c00ac5def14985470233d24817739ed78740650`.
+Continued matrix SHA-256:
+`637525d4d4853fdcb6d3e320d1294982c2488a5b009b67dfff51c30d52375b11`.
+Both retain ordered-feature SHA-256
+`3d04a9b92096d3ee8fc2bd533d56744647c096a35211a53c662955704c737a60`.
+
+The native observation helper reached its 60-minute wait limit while the first
+run was still correctly displayed as “Analysis in progress”. Reopening the same
+Session only resumed observation; no submission or scientific step was repeated.
+A second helper snapshot captured follow-up completion text before asynchronous
+Revision metadata refresh; generation-2 recapture corrected the observation
+without resubmission. The early snapshots and helper exceptions remain preserved.
+These are explicitly recorded harness limitations, not erased evidence.
+
+### G. Native delivery, navigation and fresh-process recovery
+
+`technical-browser-delivery.json` records five eligible scientific downloads per
+Revision: barcode QC, length distribution, decisions, selected cells and the
+actual H5AD. All **10 browser transfers returned 200** and matched their offered
+accepted SHA-256 and exact byte size. H5AD sizes are **178,679,259** and
+**178,682,287 bytes**, respectively. Delivery is original accepted matrix content,
+not a placeholder or a locally fabricated download.
+
+Both explicit report handles render readable, revision-specific safe projections
+of accepted evidence. These carry the original accepted report digest and remain
+distinct from the original Markdown report and from scientific authority.
+Evidence, executable prior-output reuse and download eligibility were exercised
+through their respective existing boundaries; one was not assumed from another.
+The first large-H5AD browser observation hit Marionette's default 30-second script
+timeout. A 180-second **observer** timeout allowed the complete transfers above;
+no product timeout, verification or download policy was relaxed.
+
+Native controls inspect both Revisions, activate the original, reactivate the new
+child, and refresh. Generation progresses **2 → 3 → 4**. Six exact conversation
+texts and both Revisions remain available. Covered scientific counts are unchanged
+through reports, evidence, downloads, navigation and refresh.
+
+The first server was then stopped cleanly. `server_readonly.py` starts the same
+application/workspace/profile with a provider factory that raises if construction
+is attempted. Native reopen, both Revision/evidence/artifact listings, the report
+and refresh pass with **zero covered science calls**, unchanged scripted-provider
+history and no provider construction. `technical-recovery.json` and
+`technical-recovery.png` record generation 4, both Revisions and the same six
+conversation texts.
+
+`workspace-before-restart.json` / `workspace-after-restart.json` match all **57
+files, 582,717,305 bytes** exactly. `technical-preservation.json` additionally
+confirms the original scientific Run bytes and original Revision are unchanged,
+and the new Revision's parent is exactly the original. Terminal recovery did not
+rebuild science, invent authority or alter accepted artifacts.
+
+The principal review artifacts in R are the two operator configurations,
+`resources/acquisition.json`, `resources/subset-provenance.json`, provider request/
+response/ledger files, `technical-provider.jsonl`, science observations, result
+checks, browser delivery/recovery records, preservation snapshots and test logs.
+Native screenshots include the resource question, accepted matrix views,
+`technical-delivery.png` and `technical-recovery.png`.
+
+### H. Focused validation and exact failures
+
+All invocations use the `agent` Python, `PYTHONPATH=src:.`, disabled bytecode,
+private caches/basetemps and no pytest cache. The recorded runner scripts remove
+all `RUN_*` gates. No full-repository suite or opt-in scientific qualification ran.
+
+- Provider budget guard: **11 passed in 1.28 s** (`provider-tests.log`).
+- Intermediate shared continuation/role tests: **38 passed in 32.24 s**.
+- Intermediate fragments/parameters/role scope: **129 passed in 242.83 s**
+  after updating old missing-resource failure expectations.
+- Broader 25-file application/web/Registry/prior-output/intent regression:
+  **744 passed, 8 failed, 6 skipped, 3 warnings in 2,174.70 s**, exit 1
+  (`regression.log`, `regression-command.json`). Seven failures were obsolete
+  expectations: five missing-resource terminal failures and two tests excluding
+  the now explicitly reviewed namespace declaration. They were updated while
+  preserving malformed identity-pair and unreviewed-string rejection.
+- The eighth failure was the gzip layout-A inspection fixture reporting
+  `INTERACTIVE_APPLICATION_FAILED` with a planning projection and no scientific
+  steps. Its exact isolated rerun passed **1 test in 3.18 s**, and the case also
+  passed in the final affected-file suite. The initiating exception is not exposed
+  by that fixture; its cause remains unqualified. Do not label it a proven timing
+  defect or claim the initial broader run passed. Its state and failed log remain.
+- Final seven affected-file suite: **280 passed, 6 skipped in 228.31 s**, exit 0
+  (`final.log`, `final-command.json`, `final-result.json`). All **489** frozen
+  source/test Python files retained their SHA-256 during this final run. This
+  includes resource continuation, actual additional HTTP upload, scalar handoff,
+  persistence tamper rejection, external-fragments execution, existing BAM/FASTQ
+  compatibility, pending roles and scientific declaration contracts. The six
+  existing opt-in Chromap cases remain skipped.
+
+Two new test-harness errors were corrected without production workarounds: an
+upload fixture initially chose a directory outside its managed workspace, and a
+scripted Planner initially referred to an unavailable namespace input instead of
+omitting it. The corrected tests passed and are included in the final suite.
+These fixtures are explicitly simulated software acceptance, not real biology.
+
+### I. Preservation and review state
+
+`preservation-result.json` compares the protected baseline, excluding only the
+explicit repository edits. Before final documentation, **86,106** protected files
+were checked, including **85,484** small-file SHA-256 comparisons, with **zero
+unexpected changes**. The final comparison checks **86,105** files with **85,483** small-file
+hashes and again finds **zero unexpected changes**; the appended report is the
+additional explicitly excluded repository edit. Final Git checks are recorded
+alongside that result. Existing operator configuration, prior UA ledgers, historical evals,
+scientific assets and EpiZoo remain preserved. `git diff --check` passes and the
+Git index remains empty. Datasets and checkpoints were not added to Git.
+
+### J. Remaining boundaries and qualification
+
+| Boundary | Demonstrated scope / limitation |
+| --- | --- |
+| Registered fragments plus an existing reviewed resource choice | Typed pending request and exact InputSet answer can resume the captured objective through normal scientific execution; native scripted real-data scope is reported separately above. |
+| Explicit scalar/categorical declarations | Existing spanned argument binding is reused. Invalid spans fail closed. An invalid initial decision does not establish a pending objective; the live failure exposed that remaining user-experience gap. |
+| Multiple clarification turns | An ordinary uncertainty answer retains the resource prerequisite; reference/profile choice followed by a separate namespace answer is covered. Profile/namespace declarations in the resource answer are covered. Arbitrary staged categorical/resource completion after selecting an incomplete InputSet remains unqualified; do not claim a general prerequisite solver. |
+| Additional uploaded file | HTTP upload during an existing Session and explicit append to a pending H5AD role group are covered. Initial groups still need at least two registered files; arbitrary zero/one-source missing-file continuation and arbitrary file types are not qualified. |
+| Missing/unqualified operator resource | The objective is preserved with an understandable provisioning request. No scientific execution occurs. Newly changing a captured catalog does not automatically repair the pending task; catalog-refresh continuation is deferred. |
+| User BED/cCRE | No new Web BED resource boundary was added. Follow-up needs bounded upload, explicit species/assembly and reference binding, existing reference-builder validation/qualification, and an opaque resulting resource choice. Default qualified canonical cCRE suffices here. |
+| Source provenance | Exact admitted subset conservation and producer-profile checks do not reconstruct historical alignment, duplicate marking or barcode correction. |
+| Biological claims | Exploratory thresholds, retained cell counts and verified count matrices do not establish cell purity, calibrated calling or general biological quality. |
+| FASTQ / BAM | Existing shared-admission compatibility tests only. Work Unit B and new real-family acceptance were not started. |
+
+**Do not mark UA3.6.4b complete.** Preserve the earlier FASTQ/BAM conclusions and
+this live-provider failure when planning subsequent work. The shortest next
+product gap is reliable typed clarification with exact operand grounding and
+retention of an actionable objective when the initial decision is invalid; this
+must not be addressed by hidden language repair or threshold guessing.
+
+### K. UA3.6.5 carryover and deployment
+
+UA3.6.4a cross-Revision live scientific dialogue remains **PARTIAL**, including
+its recorded `factual_binding / unbound_factual_literal` rejection. This task does
+not resolve factual prose entailment or its historical categorical limitation.
+No unrelated timestamp investigation or 23-tool architecture audit was undertaken.
+
+No new production default was installed. The exact existing qualified reference
+identities above and the source-specific reviewed InputSet are sufficient for
+this isolated acceptance; deploying an analogous choice requires an explicit
+operator InputSet in the desired deployment, respecting each new source's
+qualification. The acquired PBMC source is acceptance data, not a universal
+default or authority template. All implementation and documentation changes are
+unstaged; no commit or push was performed.

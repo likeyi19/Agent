@@ -63,11 +63,11 @@ def external_fragments_tool_spec():
             request_sources=(request(path, input_member('path', path), input_member('sha256', sha)),)))
     required['source_profile'] = _planning_argument((str,),
         'Explicit declaration of reviewed 10x ATAC/ARC fragment semantics, already adjusted intervals and corrected identifiers. Never infer producer from names, headers or column count.',
-        choices=(m.PROFILE_ID,), scientific_parameter=True)
-    required['namespace'] = _planning_argument((str,), 'Explicit processing namespace for this whole source; preserve barcode suffixes/case, no GEM-group splitting.', scientific_parameter=True)
+        choices=(m.PROFILE_ID,), scientific_parameter=True, conversational_choice=True)
+    required['namespace'] = _planning_argument((str,), 'Explicit processing namespace for this whole source; preserve barcode suffixes/case, no GEM-group splitting.', scientific_parameter=True, conversational_exact_string=True)
     required['output_dir'] = _planning_argument((str, Path), 'Agent-managed adoption output directory.')
     optional['source_selection'] = _planning_argument((str,), 'Declared historical export coverage; default unknown. Does not select/filter records or establish called cells.',
-        choices=tuple(m.SELECTION), scientific_parameter=True)
+        choices=tuple(m.SELECTION), scientific_parameter=True, conversational_choice=True)
     ports.extend(_semantic_argument_port(n, required=n in required) for n in ('source_profile', 'namespace', 'output_dir', 'source_selection'))
     integers = {'artifact_schema_version', 'n_libraries', 'n_fragment_records', 'total_support'}
     return ToolSpec(name='import_scATAC_fragments', function=import_scATAC_fragments,

@@ -353,9 +353,13 @@ def test_bam_producer_missing_typed_prerequisite_has_safe_operation_specific_fee
         client.post('/api/v1/sessions', json={'session_id': 'analysis'})
         body = bam_body(resource, companion='incomplete', utterance='Prepare fragments from this selected BAM using the supplied context.')
         view = execute(client, body)
-        assert view['status'] == 'failed' and view['revision_id'] is None, view
-        assert view['error']['code'] == code
-        assert str(tmp_path) not in json.dumps(view) and 'sha256' not in view['error']['message']
+        assert view['revision_id'] is None, view
+        if partial:
+            assert view['status'] == 'failed' and view['error']['code'] == code
+        else:
+            assert view['status'] == 'clarification'
+            assert view['response']['clarification']['reason'] == 'missing_resources'
+        assert str(tmp_path) not in json.dumps(view)
         assert calls == {'intake': 0, 'production': 0, 'verification': 0}
         state = backend.service._application.sessions.load('analysis')
         assert state.generation == 0 and not state.revisions

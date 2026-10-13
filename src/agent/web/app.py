@@ -136,9 +136,10 @@ class _LocalWorkers:
     all scientific checkpoints remain exclusively application-owned.
     """
 
-    def __init__(self, application, max_workers, epizoo_resources=()):
+    def __init__(self, application, max_workers, epizoo_resources=(), input_sets=()):
         self.application = application
         self.max_workers = max_workers
+        self.input_sets = input_sets
         self.epizoo_resources = qualified_epizoo_resources(epizoo_resources)
         self.pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='agent-turn')
         self.lock = Lock()
@@ -149,7 +150,7 @@ class _LocalWorkers:
         try:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-                epizoo_resources=self.epizoo_resources,
+                epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
                 predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
@@ -171,7 +172,7 @@ class _LocalWorkers:
         # Domain validation and normalization belong to M18.2, not HTTP models.
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-            epizoo_resources=self.epizoo_resources,
+            epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
             predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
@@ -325,7 +326,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             or any(not isinstance(r, QualifiedEpiZooResource) for r in epizoo_resources)
             or len({r.resource_id for r in epizoo_resources}) != len(epizoo_resources)):
         raise ValueError('EpiZoo resources must be a bounded unique configured tuple.')
-    workers = _LocalWorkers(application, max_workers, epizoo_resources)
+    workers = _LocalWorkers(application, max_workers, epizoo_resources, input_sets)
 
     @asynccontextmanager
     async def lifespan(app):

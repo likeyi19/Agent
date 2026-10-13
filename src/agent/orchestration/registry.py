@@ -164,6 +164,7 @@ class ArgumentPlanningSemantics:
     conditional_note: str | None = None
     default_when_omitted: object = inspect.Parameter.empty
     conversational_choice: bool = False
+    conversational_exact_string: bool = False
 
     def __post_init__(self) -> None:
         _planning_text(
@@ -191,6 +192,12 @@ class ArgumentPlanningSemantics:
             raise TypeError("`scientific_parameter` must be a boolean.")
         if type(self.conversational_choice) is not bool:
             raise TypeError("`conversational_choice` must be a boolean.")
+        if type(self.conversational_exact_string) is not bool:
+            raise TypeError("`conversational_exact_string` must be a boolean.")
+        if self.conversational_exact_string and (self.conversational_choice
+                or not self.scientific_parameter or self.accepted_artifact_kinds
+                or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
+            raise ValueError("Exact strings require a direct scientific declaration.")
         if self.conversational_choice and (
             not self.scientific_parameter or self.accepted_artifact_kinds
             or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY
@@ -1650,6 +1657,7 @@ def _planning_argument(
     artifacts: tuple[ArtifactSemanticKind, ...] = (),
     scientific_parameter: bool = False,
     conversational_choice: bool = False,
+    conversational_exact_string: bool = False,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
 ) -> ArgumentSpec:
@@ -1662,6 +1670,7 @@ def _planning_argument(
             accepted_artifact_kinds=artifacts,
             scientific_parameter=scientific_parameter,
             conversational_choice=conversational_choice,
+            conversational_exact_string=conversational_exact_string,
             provenance_role=provenance,
             conditional_note=conditional_note,
         ),

@@ -54,6 +54,37 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
 
+## Scientific resource acquisition and user continuation
+
+The product goal is that researchers upload scientific data, describe an analysis,
+answer necessary questions and receive verified, downloadable results with
+multi-turn continuation. Missing resolvable declarations, resources, roles or files
+should preserve the supported objective through existing typed prerequisites.
+New registrations must bind explicitly without replacing captured inputs. The LLM
+owns language interpretation; Agent owns typed admission, identity, compilation
+and lineage; scientific owners own qualification and independent verification.
+Internal authority records should not become manual user prerequisites where
+existing owners can establish them. Validation must be necessary and proportionate.
+
+The user authorizes acquiring reasonably necessary public scientific resources
+and generating clearly labelled simulated fixtures for development and acceptance.
+Prefer original providers and official releases. Record URL, publisher, release,
+species/assembly, coordinate/barcode/processing semantics, acquisition date, exact
+size, SHA-256, any published checksum, intended role and compatibility. Filenames
+and user declarations do not establish scientific eligibility. Provision resources
+outside Git and protected historical directories, using isolated configuration;
+never silently replace resources or production defaults. Check free disk space,
+stream bounded downloads with timeouts and integrity checks, and keep resource
+consumption proportionate. Report a qualified identity and explicit deployment
+step if a resource should become a production default.
+
+Simulated inputs establish bounded software correctness, never biological
+qualification, alignment or barcode-correction history, cell purity or production
+reference compatibility. Report simulated, scripted-provider and real-data scopes
+separately. For UA3.6.4b Work Unit A, new downloads are limited to 250 MiB per
+dataset file and approximately 600 MiB cumulative; an essential larger resource
+requires authorization. These acceptance limits are not permanent upload limits.
+
 ## Post-M18.2b — Conversational Context Projection & Chat-First UI
 
 [Post-M18.2b](docs/post-m18.2b-conversational-context-chat-ui.md) extends the

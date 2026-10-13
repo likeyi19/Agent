@@ -131,14 +131,16 @@ def test_comparison_scope_and_semantic_mismatch(app, monkeypatch, change):
     else: extra[change]='b'*64
     accepted(app,'select_scATAC_cells',arguments=dict(min_qc_fragment_records=1,min_tss_enrichment='4'),name='second',overrides=other,extra_facts=extra)
     response = ask(forbid_work(app,monkeypatch),'a','Compare with the parent.',Model(question(comparison=dict(output='r1',subject=None)),['n_selected']))
-    assert response.status=='unavailable'
+    assert response.status=='answered'
+    assert any('No compatible measurement pairs' in x for x in response.scientific.limitations)
 
 
 def test_other_cross_result_comparison_requires_reviewed_scope(app):
     accepted(app,'inspect_scATAC')
     accepted(app,'inspect_scATAC',name='second')
     response=ask(app,'a','Compare with the parent.',Model(question(comparison=dict(output='r1',subject=None)),['n_cells']))
-    assert response.status=='unavailable'
+    assert response.status=='answered'
+    assert any('No compatible measurement pairs' in x for x in response.scientific.limitations)
 
 
 def test_invalid_detail_bound(app):

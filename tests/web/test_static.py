@@ -1,7 +1,12 @@
 """Small contracts for the framework-free, same-origin browser client."""
 from html.parser import HTMLParser
+import json
 from pathlib import Path
 import re
+import subprocess
+import sys
+
+import pytest
 
 
 STATIC = Path(__file__).resolve().parents[2] / 'src' / 'agent' / 'web' / 'static'
@@ -105,11 +110,84 @@ def test_scientific_completion_waits_for_persisted_display_without_replay():
         'succeeded', 'planned', 'activated', 'stale', 'failed', 'cancelled',
     }
     gate = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
+    assert 'typeof turn.profile_id === "string"' in gate
     assert '!turn.response' in gate
-    assert 'Boolean(turn.run_id)' in gate
+    assert 'PRESENTATION_PENDING_STATES.has(turn.status) && !submissionFailure' in gate
     assert '!awaitingPresentation(turn) && TERMINAL_STATES.has(turn.status)' in gate
     assert 'PRESENTATION_POLL_INTERVAL_MS = 5000' in code
     assert '? PRESENTATION_POLL_INTERVAL_MS : POLL_INTERVAL_MS' in code
+
+
+def _javascript_predicates(code, turns):
+    """Evaluate the actual shared predicates in an optional system JS runtime."""
+    constants = code[code.index('const TERMINAL_STATES'):code.index('const RESPONSE_LABELS')]
+    functions = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
+    script = ('(() => {\n' + constants + '\n' + functions + '\nreturn ' + json.dumps(turns) +
+              '.map(turn => [awaitingPresentation(turn), terminal(turn)]);})()')
+    runner = '''
+import ctypes, ctypes.util, sys
+library = ctypes.util.find_library('javascriptcoregtk-4.1') or ctypes.util.find_library('javascriptcoregtk-4.0')
+if library is None:
+    raise SystemExit(77)
+try:
+    runtime = ctypes.CDLL(library)
+    runtime.jsc_context_new.restype = ctypes.c_void_p
+    runtime.jsc_context_evaluate.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_ssize_t]
+    runtime.jsc_context_evaluate.restype = ctypes.c_void_p
+    runtime.jsc_context_get_exception.argtypes = [ctypes.c_void_p]
+    runtime.jsc_context_get_exception.restype = ctypes.c_void_p
+    runtime.jsc_value_to_json.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    runtime.jsc_value_to_json.restype = ctypes.c_void_p
+except (OSError, AttributeError):
+    raise SystemExit(77)
+context = runtime.jsc_context_new()
+value = runtime.jsc_context_evaluate(context, sys.stdin.buffer.read(), -1)
+if runtime.jsc_context_get_exception(context):
+    raise RuntimeError('Production JavaScript predicates raised an exception')
+result = runtime.jsc_value_to_json(value, 0)
+if not result:
+    raise RuntimeError('Production JavaScript predicates returned no JSON')
+print(ctypes.string_at(result).decode())
+'''
+    interpreters = [sys.executable]
+    # Isolate a system JS library from a Python environment's C++ runtime.
+    system_python = Path('/usr/bin/python3')
+    if system_python.is_file() and system_python.resolve() != Path(sys.executable).resolve():
+        interpreters.append(str(system_python))
+    for interpreter in interpreters:
+        result = subprocess.run([interpreter, '-c', runner], input=script, text=True,
+                                capture_output=True, timeout=15)
+        if result.returncode == 77:
+            continue
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+    pytest.skip('Optional JavaScriptCore runtime is unavailable')
+
+
+def test_no_run_failed_answer_waits_for_display_without_waiting_on_submission_errors():
+    code = (STATIC / 'app.js').read_text()
+    pending = dict(profile_id='captured-profile', status='failed', run_id=None,
+                   response=None, error={'code': 'INTERACTIVE_PRESENTATION_UNAVAILABLE'})
+    published = dict(pending, response={'kind': 'answer', 'status': 'unavailable',
+                                     'text': 'The recorded answer.'}, error=None)
+    turns = [
+        pending,
+        published,
+        dict(pending, error=None),
+        dict(pending, status='cancelled'),
+        dict(pending, status='cancelled', error=None),
+        dict(pending, error={'code': 'INTERACTIVE_APPLICATION_FAILED'}),
+        dict(pending, status='cancelled', error={'code': 'INTERACTIVE_APPLICATION_FAILED'}),
+        dict(pending, profile_id=None),
+        dict(pending, status='cancelled', profile_id=None),
+        dict(pending, status='interrupted'),
+        dict(pending, run_id='run'),
+    ]
+    assert _javascript_predicates(code, turns) == [
+        [True, False], [False, True], [True, False], [True, False], [True, False],
+        [False, True], [False, True], [False, True], [False, True], [False, True],
+        [True, False],
+    ]
 
 
 class HierarchyPage(Page):

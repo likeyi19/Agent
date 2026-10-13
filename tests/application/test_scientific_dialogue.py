@@ -376,8 +376,9 @@ def test_incompatible_matrix_comparison_and_context_bound(app, monkeypatch):
     accepted(app,'build_scATAC_cell_by_features',overrides={'assembly':'first'})
     accepted(app,'build_scATAC_cell_by_features',name='next',overrides={'assembly':'second'})
     app = forbid_work(app,monkeypatch)
-    compared = ask(app,'comparison','Compare with the parent.',Model(question('r0',comparison=dict(output='r1',subject=None))))
-    assert compared.status == 'unavailable'
+    compared = ask(app,'comparison','Compare with the parent.',Model(question('r0',comparison=dict(output='r1',subject=None)), ['n_cells']))
+    assert compared.status == 'answered'
+    assert any('No compatible measurement pairs' in x for x in compared.scientific.limitations)
     monkeypatch.setattr(sd,'MAX_CONTEXT_BYTES',10)
     assert ask(app,'bounded','Explain this result',Model(question())).status == 'unavailable'
 

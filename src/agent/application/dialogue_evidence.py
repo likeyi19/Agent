@@ -277,6 +277,58 @@ def _clustering_parameter_facts(sessions, run, step, planned, value):
     )
 
 
+def _clustering_neighbors_facts(sessions, run, step, planned):
+    """Recorded qualified input identity, without owner work or artifact reads.
+
+    Equality means the same accepted graph publication/population, not matching
+    cluster labels. A literal path or an unqualified legacy graph supplies no
+    compatibility evidence.
+    """
+    source = _clustering_source(run, step, planned)
+    if source is None:
+        return ()
+    step, planned = source
+    reference = planned.arguments.get('analysis_path')
+    from agent.orchestration.prior_outputs import bind_output, validate_binding
+    from agent.schemas.verification_authority import AuthorityError
+    store, registry = sessions._application.run_store, sessions._application.registry
+    if isinstance(reference, StepOutputRef):
+        producer = _one([s for s in run.steps if s.step_id == reference.step_id])
+        if producer.tool_name != 'build_cell_neighbors':
+            return ()
+        if reference.step_id not in planned.depends_on or reference.output_key != 'analysis_path':
+            raise _Unavailable('clustering_neighbors_binding_mismatch')
+        # Existing unqualified results can still supply their independent facts.
+        if producer.verification.artifact_authority is None:
+            return ()
+        try:
+            binding = bind_output(store, registry, run.run_id, reference.step_id, 'neighbors')
+        except AuthorityError as exc:
+            raise _Unavailable('clustering_neighbors_authority_mismatch') from exc
+        consumption = 'same_plan_qualified_output'
+    elif isinstance(reference, PriorOutputRef):
+        binding = reference.binding
+        if (binding.tool_name != 'build_cell_neighbors' or binding.source_port != 'neighbors'
+                or reference.output_key != 'analysis_path'):
+            raise _Unavailable('clustering_neighbors_binding_mismatch')
+        try:
+            producer = validate_binding(binding, store=store, registry=registry)
+        except AuthorityError as exc:
+            raise _Unavailable('clustering_neighbors_authority_mismatch') from exc
+        consumption = 'qualified_historical_output'
+    else:
+        return ()
+    if step.resolved_arguments.get('analysis_path') != producer.result.get('analysis_path'):
+        raise _Unavailable('clustering_neighbors_binding_mismatch')
+    index = _one([i for i, s in enumerate(run.plan.steps) if s.step_id == step.step_id])
+    pointer = f'/plan/steps/{index}/arguments/analysis_path'
+    return tuple(EvidenceFact(name, 'available', value, pointer,
+        artifact_name='accepted_run_result', artifact_sha256=digest(run.to_dict()))
+        for name, value in (
+            ('clustering_neighbors_identity_sha256', digest(binding.to_dict())),
+            ('clustering_neighbors_consumption', consumption)))
+
+
 def _selection_parameter_facts(sessions, run, step, planned, evidence):
     """Attribute the pinned owner's exact thresholds without inventing defaults."""
     if step.tool_name != 'select_scATAC_cells':
@@ -404,6 +456,7 @@ def _project(sessions, state, revision, output, fields, detail):
     facts = evidence['facts']
     parameters = {fact.field: fact for fact in (
         *_clustering_parameter_facts(sessions, run, step, planned, value),
+        *_clustering_neighbors_facts(sessions, run, step, planned),
         *_selection_parameter_facts(sessions, run, step, planned, evidence),
         *_explicit_user_parameter_facts(sessions, state, run, step, planned))}
     if len(set(facts) | set(parameters)) > MAX_FIELDS:

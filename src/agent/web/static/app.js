@@ -104,10 +104,12 @@ function showError(error) {
 }
 
 function awaitingPresentation(turn) {
-  // Scientific completion and immutable displayed completion are separate
-  // checkpoints. Keep reading until display publication; never replay work.
-  return typeof turn.profile_id === "string" && !turn.response && PRESENTATION_PENDING_STATES.has(turn.status)
-    && (!["failed", "cancelled"].includes(turn.status) || Boolean(turn.run_id));
+  // Answer and scientific completion precede immutable display publication.
+  // An explicit submission failure has no display to await.
+  const submissionFailure = ["failed", "cancelled"].includes(turn.status) && !turn.run_id
+    && turn.error && turn.error.code !== "INTERACTIVE_PRESENTATION_UNAVAILABLE";
+  return typeof turn.profile_id === "string" && !turn.response
+    && PRESENTATION_PENDING_STATES.has(turn.status) && !submissionFailure;
 }
 
 function terminal(turn) {

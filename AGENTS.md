@@ -41,6 +41,11 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 - Fail closed on invalid contracts, ambiguity, corrupt artifacts, or unsupported
   provenance. Preserve exact cell/feature order where required; never silently
   align, drop, or relabel scientific inputs.
+- Preserve scientifically supported conversational flexibility: answer useful
+  supported parts with exact accepted-evidence attribution. Independent result
+  facts do not imply compatible measurements or scientific correspondence;
+  restrictions need a concrete correctness, compatibility or integrity basis.
+  See the [UA3.6.4a dialogue closeout](docs/ua3.6.4a-scientific-dialogue-closeout.md).
 - The immutable `ToolRegistry` is the executable allowlist. Providers receive no
   Python callables, filesystem access, or `RunStore` access. Arbitrary Python,
   shell, and user/planner-supplied R execution are prohibited in Agent plans;

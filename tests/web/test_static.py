@@ -85,7 +85,7 @@ def test_refresh_reopens_instead_of_replaying_and_retry_keeps_identity():
     convenience_fields = code[code.index('const value = {', code.index('function saveConveniences')):]
     convenience_fields = convenience_fields[:convenience_fields.index('};')]
     assert set(re.findall(r'^\s+(\w+):', convenience_fields, re.M)) == {
-        'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId',
+        'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
     }
 
 
@@ -171,3 +171,43 @@ def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
     assert 'scrollIntoView' in button and 'details.focus' in button
     assert 'submitRequest(' not in button and 'postSubmission(' not in button
     assert 'execution_inputs' not in code and 'innerHTML' not in code
+
+
+def test_compact_header_and_advanced_session_controls_preserve_existing_ids():
+    page = HierarchyPage((STATIC / 'index.html').read_text())
+    details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
+    assert 'open' not in details['advanced-controls']
+    for identifier in ('session-input', 'reopen-form', 'session-context', 'model-description', 'session-identities'):
+        assert 'advanced-controls' in page.ancestors[identifier]
+    for identifier in ('model-choice', 'new-session'):
+        assert 'advanced-controls' not in page.ancestors[identifier]
+    assert 'open' not in details['scientific-panel']
+    assert 'scientific-panel' in page.ancestors['scientific-details']
+
+
+def test_composer_keeps_message_selected_files_and_transfer_state_outside_disclosures():
+    page = HierarchyPage((STATIC / 'index.html').read_text())
+    ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
+    assert ids.index('selected-scientific-inputs') < ids.index('utterance') < ids.index('attachment-panel')
+    for identifier in ('utterance', 'selected-scientific-inputs', 'upload-status', 'upload-progress'):
+        assert 'turn-form' in page.ancestors[identifier]
+        assert 'attachment-panel' not in page.ancestors[identifier]
+        assert 'scientific-input-settings' not in page.ancestors[identifier]
+    for identifier in ('upload-file', 'resource-choice', 'fastq-fields'):
+        assert 'attachment-panel' in page.ancestors[identifier]
+    assert 'scientific-input-settings' in page.ancestors['input-choice']
+    assert 'scientific-input-settings' in page.ancestors['epizoo-resource-choice']
+
+
+def test_history_restores_details_and_focus_by_exact_turn_and_action_identity():
+    code = (STATIC / 'app.js').read_text()
+    capture = code[code.index('function captureConversationUi'):code.index('function renderHistory')]
+    assert 'details.closest(".turn").dataset.turnId' in capture
+    assert 'focused.dataset.actionKey' in capture
+    assert 'node.dataset.turnId === captured.focus.turnId' in capture
+    assert 'node.dataset.actionKey === captured.focus.actionKey' in capture
+    assert 'target.focus({ preventScroll: true })' in capture
+    assert 'restoreConversationUi(history, captured)' in code
+    history = code[code.index('function renderHistory'):code.index('function updateControls')]
+    assert 'status.textContent = statusLabel(turn.status)' in history
+    assert 'checkpointText(turn)' in history

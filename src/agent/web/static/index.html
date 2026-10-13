@@ -12,17 +12,21 @@
     <header class="page-header">
       <div>
         <h1>Agent</h1>
-        <p class="muted">Single-cell research workspace</p>
+        <p class="muted small">Single-cell research workspace</p>
       </div>
-      <span id="connection-state" class="connection-state" role="status">Connecting…</span>
+      <div class="header-actions">
+        <div class="model-controls">
+          <label for="model-choice">Model for next turn</label>
+          <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
+        </div>
+        <button id="new-session" type="button">New session</button>
+      </div>
     </header>
 
-    <section class="controls panel" aria-label="Session and model controls">
+    <details id="advanced-controls" class="advanced-controls">
+      <summary>Session &amp; model details <span id="connection-state" class="connection-state" role="status">Connecting…</span></summary>
+    <section class="controls" aria-label="Session and model controls">
       <div class="session-controls">
-        <div class="section-heading">
-          <h2>Session</h2>
-          <button id="new-session" type="button">New session</button>
-        </div>
         <p id="session-context" class="muted small">No session open</p>
         <form id="reopen-form" class="reopen-form">
           <label for="session-input">Reopen session ID</label>
@@ -40,14 +44,12 @@
           </dl>
         </details>
       </div>
-      <div class="model-controls">
-        <label for="model-choice">Model for next turn</label>
-        <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
+      <div class="model-diagnostics">
+        <h2>Configured model</h2>
         <p id="model-description" class="muted small"></p>
-        <label for="epizoo-resource-choice">EpiZoo resource for uploaded H5AD</label>
-        <select id="epizoo-resource-choice" disabled><option value="">Use applicable configured default</option></select>
       </div>
     </section>
+    </details>
 
     <p id="client-error" class="error-banner" role="alert" hidden></p>
 
@@ -68,18 +70,28 @@
         <button id="cancel-turn" class="secondary" type="button" hidden disabled>Cancel turn</button>
       </div>
       <ul id="step-status" class="step-status" hidden></ul>
-      <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
       <form id="turn-form">
+        <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
+        <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>
+        <label for="utterance">Ask Agent</label>
+        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Describe an analysis, ask about a result, or answer Agent’s question…" required disabled></textarea>
+        <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
+        <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
+        <div class="composer-actions">
+          <div class="input-actions">
+            <button id="toggle-attachments" class="secondary" type="button" aria-controls="attachment-panel" aria-expanded="false">Attach files</button>
+            <button id="toggle-scientific-inputs" class="secondary" type="button" aria-controls="scientific-input-settings" aria-expanded="false" hidden>Scientific inputs</button>
+          </div>
+          <div>
+            <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
+            <button id="submit-turn" type="submit" disabled>Send</button>
+          </div>
+        </div>
+        <details id="attachment-panel" class="composer-disclosure">
+          <summary>Attach files or choose registered inputs</summary>
         <div class="attachment-controls" aria-label="Scientific attachment">
-          <label for="resource-choice">Uploaded scientific input</label>
-          <select id="resource-choice" disabled><option value="">No uploaded input selected</option></select>
-          <button id="add-scientific-input" class="secondary" type="button" disabled>Add another input</button>
-          <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>
-          <p class="muted small">Select inputs in order, then describe their roles in your message. Selecting inputs does not start an analysis.</p>
-          <label for="input-choice">Scientific inputs and declarations</label>
-          <select id="input-choice" disabled><option value="">No structured inputs</option></select>
-          <p id="input-choice-help" class="muted small">Choose configured inputs or declarations for an uploaded source.</p>
-          <label for="upload-type">New attachment role</label>
+          <h3>Upload a new file</h3>
+          <label for="upload-type">Scientific file type</label>
           <select id="upload-type" disabled>
             <option value="h5ad">H5AD matrix</option>
             <option value="external_fragments">External fragments</option>
@@ -112,7 +124,7 @@
             </div>
             <button id="clear-upload-index" class="secondary" type="button" hidden>Remove index</button>
           </div>
-          <p id="fragments-input-help" class="muted small" hidden>Select approved fragment declarations and a reference above, or use an explicitly configured default. Upload registers bytes; scientific format and compatibility are checked during import.</p>
+          <p id="fragments-input-help" class="muted small" hidden>Choose approved fragment declarations and a reference in Scientific inputs, or use an explicitly configured default. Upload registers bytes; scientific format and compatibility are checked during import.</p>
           <p id="bam-input-help" class="muted small" hidden>Upload one BAM; no index is required. Inspection can establish file contents. Fragment preparation requires an approved paired-ATAC source context and compatible reference.</p>
           <div id="fastq-collection-fields" hidden>
             <label for="fastq-collection-label">Completed library label</label>
@@ -122,22 +134,34 @@
             <button id="complete-fastq-collection" class="secondary" type="button" disabled>Complete FASTQ library</button>
             <p id="fastq-collection-status" class="muted small" role="status" aria-live="polite"></p>
           </div>
-          <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
-          <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
-        </div>
-        <label for="utterance">Ask Agent</label>
-        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Ask a question or describe an analysis…" required disabled></textarea>
-        <div class="composer-actions">
-          <span class="muted small">Responses and session state are saved by Agent.</span>
-          <div>
-            <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
-            <button id="submit-turn" type="submit" disabled>Send</button>
+          <div class="registered-input-controls">
+            <h3>Choose registered inputs</h3>
+            <label for="resource-choice">Registered scientific input</label>
+            <select id="resource-choice" disabled><option value="">No uploaded input selected</option></select>
+            <button id="add-scientific-input" class="secondary" type="button" disabled>Add another H5AD</button>
+            <p class="muted small">Select inputs in order, then describe their roles in your message. Multiple inputs support 2–8 H5AD files. Selecting inputs does not start an analysis.</p>
           </div>
         </div>
+        </details>
+        <details id="scientific-input-settings" class="composer-disclosure" hidden>
+          <summary>Scientific declarations &amp; resources</summary>
+          <div id="configured-input-controls">
+            <label for="input-choice">Scientific inputs and declarations</label>
+            <select id="input-choice" disabled><option value="">No structured inputs</option></select>
+            <p id="input-choice-help" class="muted small">Choose configured inputs or declarations for an uploaded source.</p>
+          </div>
+          <div id="epizoo-resource-controls" hidden>
+            <label for="epizoo-resource-choice">EpiZoo resource for uploaded H5AD</label>
+            <select id="epizoo-resource-choice" disabled><option value="">Use applicable configured default</option></select>
+          </div>
+        </details>
+        <p class="muted small saved-note">Responses and session state are saved by Agent.</p>
       </form>
     </section>
 
-    <aside id="scientific-details" class="scientific-state panel" aria-labelledby="scientific-heading" tabindex="-1">
+    <details id="scientific-panel" class="scientific-disclosure panel">
+    <summary>Scientific details &amp; result history</summary>
+    <aside id="scientific-details" class="scientific-state" aria-labelledby="scientific-heading" tabindex="-1">
       <h2 id="scientific-heading">Scientific details</h2>
       <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
       <div id="revision-view" hidden>
@@ -196,6 +220,7 @@
         <ol id="revision-history" class="revision-history"></ol>
       </details>
     </aside>
+    </details>
     </div>
   </main>
 </body>

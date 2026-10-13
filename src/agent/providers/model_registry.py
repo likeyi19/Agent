@@ -11,7 +11,7 @@ from agent.orchestration.planning_model import PlanningModel, PlanningModelProfi
 
 
 PlanningModelFactory = Callable[[PlanningModelProfile], PlanningModel]
-BUILTIN_PLANNING_PROVIDER_IDS = ("openai", "gemini", "groq")
+BUILTIN_PLANNING_PROVIDER_IDS = ("openai", "gemini", "groq", "openrouter")
 
 
 class PlanningModelFactoryError(ValueError):
@@ -133,6 +133,15 @@ def _groq_factory(profile: PlanningModelProfile) -> PlanningModel:
     )
 
 
+def _openrouter_factory(profile: PlanningModelProfile) -> PlanningModel:
+    from .openrouter_planning import OpenRouterPlanningModel
+
+    return OpenRouterPlanningModel(
+        model=profile.model_id,
+        timeout=profile.request_timeout_seconds,
+    )
+
+
 def build_default_planning_model_factory_registry(
 ) -> PlanningModelFactoryRegistry:
     """Return the built-in provider factories without constructing any SDK client."""
@@ -142,6 +151,7 @@ def build_default_planning_model_factory_registry(
             "openai": _openai_factory,
             "gemini": _gemini_factory,
             "groq": _groq_factory,
+            "openrouter": _openrouter_factory,
         }
     )
 

@@ -12,6 +12,7 @@ import agent.application.cli as cli_module
 import agent.providers.gemini_planning as gemini_module
 import agent.providers.groq_planning as groq_module
 import agent.providers.openai_planning as openai_module
+import agent.providers.openrouter_planning as openrouter_module
 import benchmarks.planner.run_benchmark as benchmark_cli
 from agent.orchestration import (
     DeterministicPlanner,
@@ -138,6 +139,7 @@ def test_unknown_provider_is_rejected_without_fallback() -> None:
         ("openai", openai_module, "OpenAIPlanningModel"),
         ("gemini", gemini_module, "GeminiPlanningModel"),
         ("groq", groq_module, "GroqPlanningModel"),
+        ("openrouter", openrouter_module, "OpenRouterPlanningModel"),
     ],
 )
 def test_builtin_factory_constructs_only_the_selected_adapter(
@@ -193,10 +195,29 @@ def test_building_registry_does_not_construct_provider_clients(
     monkeypatch.setattr(openai_module, "_default_client", fail)
     monkeypatch.setattr(gemini_module, "_default_client", fail)
     monkeypatch.setattr(groq_module, "_default_client", fail)
+    monkeypatch.setattr(openrouter_module, "_default_client", fail)
 
     registry = build_default_planning_model_factory_registry()
 
     assert registry.provider_ids == tuple(sorted(BUILTIN_PLANNING_PROVIDER_IDS))
+
+
+def test_multiple_openrouter_profiles_share_the_factory_without_substitution(monkeypatch) -> None:
+    constructed = []
+
+    def constructor(**kwargs):
+        constructed.append(kwargs)
+        return StubPlanningModel("openrouter:" + kwargs["model"])
+
+    monkeypatch.setattr(openrouter_module, "OpenRouterPlanningModel", constructor)
+    monkeypatch.setattr(openai_module, "OpenAIPlanningModel", lambda **kwargs: pytest.fail("wrong provider"))
+    registry = build_default_planning_model_factory_registry()
+    profiles = (
+        _profile(profile_id="first", provider_id="openrouter", model_id="openai/example-model"),
+        _profile(profile_id="second", provider_id="openrouter", model_id="other/model", request_timeout_seconds=45),
+    )
+    assert [registry.create(p).model_id for p in profiles] == ["openrouter:" + p.model_id for p in profiles]
+    assert constructed == [{"model": p.model_id, "timeout": p.request_timeout_seconds} for p in profiles]
 
 
 def test_derived_profiles_are_stable_and_distinguish_models() -> None:

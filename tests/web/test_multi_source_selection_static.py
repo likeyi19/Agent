@@ -46,3 +46,32 @@ def test_reopen_checks_display_selection_against_the_catalog_without_execution()
     assert 'savedIds.slice(0, -1)' in loaded
     assert 'submitRequest(' not in loaded and 'postSubmission(' not in loaded
     assert 'checkpoint_path' not in source() and 'record_sha256' not in source()
+
+
+def test_group_add_affordance_matches_existing_h5ad_only_contract():
+    helper = section('function canAddScientificInput()', 'function renderSelectedResources()')
+    assert 'resource.input_type === "h5ad"' in helper
+    assert 'ids.length < MAX_SELECTED_RESOURCES' in helper
+    assert not any(term in helper for term in ('reference', 'query', 'ground_truth', 'species'))
+    rendered = section('function renderResources(', 'async function loadResources()')
+    assert 'state.selectedResourceIds.length > 0 && choice.input_type !== "h5ad"' in rendered
+    assert 'Multiple inputs support 2–8 H5AD files.' in (STATIC / 'index.html').read_text()
+
+
+def test_incompatible_new_registration_does_not_replace_or_extend_queued_h5ad_selection():
+    rendered = section('function renderResources(', 'async function loadResources()')
+    assert 'restoreSavedSelection || !state.selectedResourceIds.length || selected.input_type === "h5ad"' in rendered
+    assert 'return Boolean(selectedId && element("resource-choice").value === selectedId)' in rendered
+    assert rendered.index('if (selected && !canSelect) state.selectedResourceIds = selectedResourceIds()') < rendered.index('replaceChildren')
+    assert 'state.selectedResourceIds = []' not in rendered and '.sort(' not in rendered
+    loaded = section('async function loadResources()', 'function clearPendingUpload')
+    assert ': selectedId, true)' in loaded
+    uploaded = section('async function uploadSelectedFile()', 'element("upload-file").addEventListener')
+    assert 'const selected = renderResources(resource.resource_id)' in uploaded
+    assert 'registered, not selected' in uploaded
+    completed = section('async function completeFastqCollection()', 'function transferUpload(')
+    assert 'const selected = renderResources(collection.resource_id)' in completed
+    assert 'library registered, not selected' in completed
+    picker = section('element("upload-file").addEventListener', 'element("upload-type").addEventListener')
+    assert 'state.selectedResourceIds.length && state.upload.inputType !== "h5ad"' in picker
+    assert picker.index('state.selectedResourceIds = selectedResourceIds()') < picker.index('element("resource-choice").value = ""')

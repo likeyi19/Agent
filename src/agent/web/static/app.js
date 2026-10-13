@@ -57,6 +57,7 @@ function saveConveniences() {
     polledTurnId: state.activeTurn ? state.activeTurn.turn_id : "",
     draft: element("utterance").value,
     inputSetId: element("input-choice").value,
+    epizooResourceId: element("epizoo-resource-choice").value,
   };
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
 }
@@ -151,20 +152,28 @@ function guidanceNode(guidance) {
     card.className = "guidance-candidate";
     card.dataset.candidateId = candidate.candidate_id;
     const title = document.createElement("h3");
-    title.textContent = `Option ${candidate.option} · ${candidate.capability}`;
+    title.textContent = `Option ${candidate.option} · ${readableLabel(candidate.capability)}`;
     const rationale = document.createElement("p");
     rationale.textContent = candidate.text;
     const metadata = document.createElement("span");
     metadata.className = "candidate-metadata";
     metadata.textContent = `Support: ${candidate.support} · Candidate ${candidate.candidate_id} · Origin turn ${candidate.origin_turn_id}`;
-    card.append(title, rationale, metadata, textList(candidate.limitations));
+    card.append(title, rationale, textList(candidate.limitations));
     const context = document.createElement("p");
     context.className = "muted small";
     context.textContent = candidate.base_revision_id ? `Captured revision: ${candidate.base_revision_id}` : "Captured revision metadata was not stored in this historical display.";
-    card.append(context);
+    const diagnostics = document.createElement("details");
+    diagnostics.dataset.detailKey = `candidate:${candidate.candidate_id}`;
+    const diagnosticsLabel = document.createElement("summary");
+    diagnosticsLabel.textContent = "Scientific details";
+    diagnosticsLabel.dataset.actionKey = `candidate-details:${candidate.candidate_id}`;
+    diagnostics.append(diagnosticsLabel, metadata, context);
+    card.append(diagnostics);
     if (candidate.readiness) {
       const readiness = document.createElement("details");
+      readiness.dataset.detailKey = `readiness:${candidate.candidate_id}`;
       const readinessLabel = document.createElement("summary");
+      readinessLabel.dataset.actionKey = `readiness-details:${candidate.candidate_id}`;
       readinessLabel.textContent = `Technical readiness: ${candidate.readiness.readiness}`;
       const rows = document.createElement("dl");
       rows.className = "revision-summary";
@@ -186,6 +195,7 @@ function guidanceNode(guidance) {
     }
     const action = document.createElement("button");
     action.className = "guidance-select";
+    action.dataset.actionKey = `guidance:${candidate.candidate_id}`;
     action.type = "button";
     action.textContent = "Continue with this";
     action.addEventListener("click", () => {
@@ -383,6 +393,7 @@ function scientificFileNode(sessionId, artifact) {
   download.textContent = "Download";
   download.href = `/api/v1${scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)}`;
   download.download = artifact.filename;
+  download.dataset.actionKey = `scientific-download:${artifact.handle}`;
   download.setAttribute("aria-label", `Download ${artifact.filename}`);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
   row.append(title, download);
@@ -405,32 +416,57 @@ function appendScientificFiles(response, turn) {
     for (const artifact of cached.artifacts) {
       response.append(scientificFileNode(sessionId, artifact));
     }
+    if (cached.revision && cached.revision.artifacts.some((artifact) =>
+      ["analysis_report", "analysis_figure"].includes(artifact.artifact_type))) {
+      const details = document.createElement("details");
+      details.className = "message-artifacts";
+      details.dataset.detailKey = "result-artifacts";
+      const summary = document.createElement("summary");
+      summary.textContent = "Figures & report";
+      summary.dataset.actionKey = "result-artifacts";
+      const inventory = document.createElement("ul");
+      inventory.className = "compact-list";
+      renderArtifacts(cached.revision, inventory, true);
+      details.append(summary, inventory);
+      response.append(details);
+    }
     return;
   }
   const epoch = state.epoch;
-  const entry = { artifacts: [] };
+  const entry = { artifacts: [], revision: null };
   state.scientificFiles.set(key, entry);
   // Inventory is metadata only and requested once per captured result. Regular
   // conversation polling reuses this display cache; refresh reads it afresh.
-  api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`).then((view) => {
+  Promise.allSettled([
+    api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`),
+    api(revisionPath(sessionId, turn.revision_id)),
+  ]).then(([inventory, revision]) => {
     if (epoch !== state.epoch || state.scientificFiles.get(key) !== entry) return;
-    entry.artifacts = view.artifacts.filter((artifact) => supportedScientificFile(artifact)
-      && artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id);
+    if (inventory.status === "fulfilled") {
+      entry.artifacts = inventory.value.artifacts.filter((artifact) => supportedScientificFile(artifact)
+        && artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id);
+    }
+    if (revision.status === "fulfilled" && revision.value.revision_id === turn.revision_id
+        && revision.value.turn_id === turn.turn_id) entry.revision = revision.value;
     renderHistory();
   }).catch(() => {
     // Missing or unqualified historical associations expose no download.
   });
 }
 
-function renderArtifacts(revision) {
+function renderArtifacts(revision, target = element("artifact-inventory"), inConversation = false) {
   const sessionId = state.session.session_id;
-  const nodes = revision.artifacts.map((artifact) => {
+  const artifacts = inConversation ? revision.artifacts.filter((artifact) =>
+    ["analysis_report", "analysis_figure"].includes(artifact.artifact_type)) : revision.artifacts;
+  const nodes = artifacts.map((artifact) => {
     const item = document.createElement("li");
     const supported = ["analysis_report", "analysis_figure"].includes(artifact.artifact_type);
     const title = document.createElement("span");
     title.textContent = artifact.artifact_type === "analysis_report" ? "Report projection" : artifact.artifact_type === "analysis_figure" ? "PNG figure" : artifact.artifact_type;
     const metadata = document.createElement("details");
+    metadata.dataset.detailKey = `artifact:${artifact.handle}`;
     const label = document.createElement("summary");
+    label.dataset.actionKey = `artifact-identity:${artifact.handle}`;
     label.textContent = "Artifact identity";
     const identity = document.createElement("p");
     identity.className = "small";
@@ -445,16 +481,18 @@ function renderArtifacts(revision) {
       view.className = "secondary";
       view.textContent = "View";
       view.dataset.artifactHandle = artifact.handle;
+      view.dataset.actionKey = `artifact-view:${artifact.handle}`;
       view.addEventListener("click", () => viewArtifact(sessionId, revision.revision_id, artifact));
       const download = document.createElement("a");
       download.textContent = "Download";
+      download.dataset.actionKey = `artifact-download:${artifact.handle}`;
       download.href = `/api/v1${artifactPath(sessionId, revision.revision_id, artifact.handle)}?download=true`;
       actions.append(view, download);
       item.append(actions);
     }
     return item;
   });
-  for (const artifact of revision.scientific_artifacts || []) {
+  for (const artifact of inConversation ? [] : revision.scientific_artifacts || []) {
     if (!supportedScientificFile(artifact)) continue;
     const item = document.createElement("li");
     item.append(scientificFileNode(sessionId, artifact));
@@ -465,19 +503,29 @@ function renderArtifacts(revision) {
     empty.textContent = "No accepted reports, figures or eligible scientific downloads are available.";
     nodes.push(empty);
   }
-  if (!revision.artifacts.some((artifact) => artifact.artifact_type === "analysis_figure")) {
+  if (!inConversation && !revision.artifacts.some((artifact) => artifact.artifact_type === "analysis_figure")) {
     const note = document.createElement("li");
     note.className = "muted small";
     note.textContent = "No reviewed figure is available for this result. Figure availability is separate from analysis success.";
     nodes.push(note);
   }
-  element("artifact-inventory").replaceChildren(...nodes);
+  target.replaceChildren(...nodes);
 }
 
 async function viewArtifact(sessionId, revisionId, artifact) {
+  const epoch = state.epoch;
+  if (!state.session || state.session.session_id !== sessionId) return;
+  element("scientific-panel").open = true;
+  element("artifact-panel").open = true;
+  if (!state.revision || state.revision.revision_id !== revisionId) await loadRevision(revisionId);
+  if (epoch !== state.epoch) return;
+  if (!state.session || state.session.session_id !== sessionId
+      || !state.revision || state.revision.revision_id !== revisionId) {
+    if (state.session && state.session.session_id === sessionId) element("scientific-details").scrollIntoView({ block: "nearest" });
+    return;
+  }
   clearArtifactView();
   const artifactEpoch = state.artifactEpoch;
-  const epoch = state.epoch;
   const revisionEpoch = state.revisionEpoch;
   element("artifact-viewer").hidden = false;
   element("artifact-title").textContent = artifact.artifact_type === "analysis_report" ? "Client-safe report projection" : "Accepted PNG figure";
@@ -504,6 +552,7 @@ async function viewArtifact(sessionId, revisionId, artifact) {
       element("figure-content").src = state.artifactUrl;
       element("figure-content").hidden = false;
     }
+    element("artifact-viewer").scrollIntoView({ block: "nearest", behavior: "smooth" });
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || artifactEpoch !== state.artifactEpoch) return;
     element("artifact-view-error").textContent = `${error.code || "ARTIFACT_UNAVAILABLE"}: ${error instanceof ApiError ? error.message : "The accepted artifact could not be read."}`;
@@ -714,8 +763,29 @@ async function activateViewedRevision(continueFromHere = false) {
   }
 }
 
+function captureConversationUi(history) {
+  const expanded = new Set(Array.from(history.querySelectorAll("details[open][data-detail-key]")).map((details) =>
+    JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey])));
+  const focused = document.activeElement;
+  const turn = focused && history.contains(focused) && focused.closest(".turn");
+  return { expanded, focus: turn && focused.dataset.actionKey
+    ? { turnId: turn.dataset.turnId, actionKey: focused.dataset.actionKey } : null };
+}
+
+function restoreConversationUi(history, captured) {
+  for (const details of history.querySelectorAll("details[data-detail-key]")) {
+    details.open = captured.expanded.has(JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey]));
+  }
+  if (!captured.focus) return;
+  const turn = Array.from(history.children).find((node) => node.dataset.turnId === captured.focus.turnId);
+  const target = turn && Array.from(turn.querySelectorAll("[data-action-key]")).find((node) =>
+    node.dataset.actionKey === captured.focus.actionKey);
+  if (target) target.focus({ preventScroll: true });
+}
+
 function renderHistory() {
   const history = element("conversation-history");
+  const captured = captureConversationUi(history);
   const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response) : [];
   const visibleFileKeys = new Set(turns.map((turn) =>
     JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id])));
@@ -743,10 +813,12 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = `${statusLabel(turn.status)}${turn.profile_id ? ` · ${turn.profile_id}` : ""}`;
+    status.textContent = statusLabel(turn.status);
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
+    metadata.dataset.detailKey = "turn-details";
     const metadataLabel = document.createElement("summary");
+    metadataLabel.dataset.actionKey = "turn-details";
     metadataLabel.textContent = "Turn details";
     metadata.append(metadataLabel);
     const checkpoint = document.createElement("div");
@@ -774,10 +846,12 @@ function renderHistory() {
       const result = document.createElement("button");
       result.className = "secondary view-result";
       result.type = "button";
+      result.dataset.actionKey = "view-result";
       result.textContent = "View result details";
       result.title = turn.response && turn.response.kind === "execute"
         ? `View created result revision ${turn.revision_id}` : `View revision ${turn.revision_id}`;
       result.addEventListener("click", () => {
+        element("scientific-panel").open = true;
         element("result-panel").open = true;
         element("evidence-panel").open = true;
         element("artifact-panel").open = true;
@@ -798,6 +872,7 @@ function renderHistory() {
     }
     return article;
   }));
+  restoreConversationUi(history, captured);
 }
 
 function updateControls() {
@@ -817,8 +892,7 @@ function updateControls() {
   const uploading = Boolean(state.upload && state.upload.status === "uploading")
     || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("resource-choice").disabled = !state.resourcesEnabled || !state.resources.length || uploading;
-  element("add-scientific-input").disabled = !element("resource-choice").value || uploading
-    || selectedResourceIds().length >= MAX_SELECTED_RESOURCES;
+  element("add-scientific-input").disabled = !canAddScientificInput() || uploading;
   document.querySelectorAll(".remove-scientific-input").forEach((button) => { button.disabled = uploading; });
   element("upload-file").disabled = !state.resourcesEnabled || uploading;
   element("upload-type").disabled = !state.resourcesEnabled || uploading;
@@ -840,7 +914,7 @@ function updateControls() {
 }
 
 function renderExecution() {
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? `${statusLabel(state.activeTurn.status)}${state.activeTurn.profile_id ? ` · ${state.activeTurn.profile_id}` : ""}` : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
@@ -1067,11 +1141,23 @@ function inputContext() {
       || fastq && !(configured && configured.fastq_companion === true));
     option.hidden = option.disabled;
   }
+  element("configured-input-controls").hidden = !Array.from(element("input-choice").options)
+    .some((option) => option.value && !option.disabled);
+  element("epizoo-resource-controls").hidden = selectedResourceType() !== "h5ad" || !state.epizooResources.length;
+  const irrelevant = element("configured-input-controls").hidden && element("epizoo-resource-controls").hidden;
+  element("scientific-input-settings").hidden = irrelevant;
+  element("toggle-scientific-inputs").hidden = irrelevant;
 }
 
 function selectedResourceIds() {
   const current = element("resource-choice").value;
   return [...state.selectedResourceIds, ...(current && !state.selectedResourceIds.includes(current) ? [current] : [])];
+}
+
+function canAddScientificInput() {
+  const ids = selectedResourceIds();
+  return Boolean(element("resource-choice").value) && ids.length < MAX_SELECTED_RESOURCES
+    && ids.every((id) => state.resources.some((resource) => resource.resource_id === id && resource.input_type === "h5ad"));
 }
 
 function renderSelectedResources() {
@@ -1125,7 +1211,10 @@ function uploadStatus(text, failed = false) {
   element("upload-status").classList.toggle("upload-error", failed);
 }
 
-function renderResources(selectedId = "") {
+function renderResources(selectedId = "", restoreSavedSelection = false) {
+  const selected = state.resources.find((choice) => choice.resource_id === selectedId);
+  const canSelect = selected && (restoreSavedSelection || !state.selectedResourceIds.length || selected.input_type === "h5ad");
+  if (selected && !canSelect) state.selectedResourceIds = selectedResourceIds();
   const none = document.createElement("option");
   none.value = "";
   none.textContent = "No uploaded input selected";
@@ -1134,10 +1223,11 @@ function renderResources(selectedId = "") {
     option.value = choice.resource_id;
     const role = choice.input_type === "external_fragments" ? `Fragments${choice.has_source_index === true ? " + TBI" : ""}` : choice.input_type === "bam" ? "BAM" : choice.input_type === "fastq" ? "FASTQ library" : "H5AD";
     option.textContent = `${choice.label} · ${role} · registered`;
-    option.disabled = state.selectedResourceIds.includes(choice.resource_id);
+    option.disabled = state.selectedResourceIds.includes(choice.resource_id)
+      || state.selectedResourceIds.length > 0 && choice.input_type !== "h5ad";
     return option;
   }));
-  if (state.resources.some((choice) => choice.resource_id === selectedId)) {
+  if (canSelect) {
     element("resource-choice").value = selectedId;
   }
   if (selectedResourceIds().length === 1 && !selectedCompanion()) element("input-choice").value = "";
@@ -1146,6 +1236,7 @@ function renderResources(selectedId = "") {
   saveConveniences();
   inputContext();
   updateControls();
+  return Boolean(selectedId && element("resource-choice").value === selectedId);
 }
 
 async function loadResources() {
@@ -1170,7 +1261,7 @@ async function loadResources() {
     renderFastqMembers();
     const selected = state.resources.find((choice) => choice.resource_id === selectedId);
     renderResources(element("input-choice").value && !state.selectedResourceIds.length
-      && !selectedCompanion(selected && selected.input_type) ? "" : selectedId);
+      && !selectedCompanion(selected && selected.input_type) ? "" : selectedId, true);
     uploadStatus(state.resourcesEnabled ? "Attach a file or choose a registered input. Uploading does not start an analysis." : "Scientific attachments are unavailable on this server.");
   } catch (error) {
     state.resourcesEnabled = false;
@@ -1256,8 +1347,11 @@ async function completeFastqCollection() {
     if (state.fastqCompletion !== completion) return;
     state.resources = [...state.resources.filter((choice) => choice.resource_id !== collection.resource_id), collection];
     state.fastqCompletion = null;
-    renderResources(collection.resource_id);
-    fastqCollectionStatus(`${collection.label} · library registered. Describe the analysis in your message. Fragment production requires qualified context.`);
+    const selected = renderResources(collection.resource_id);
+    fastqCollectionStatus(selected
+      ? `${collection.label} · library registered. Describe the analysis in your message. Fragment production requires qualified context.`
+      : `${collection.label} · library registered, not selected. Remove the current selected inputs before choosing this library.`);
+    if (!selected) uploadStatus(`${collection.label} · library registered, not selected. Remove the current selected inputs before choosing this library.`);
   } catch (error) {
     if (state.fastqCompletion !== completion) return;
     completion.pending = false;
@@ -1329,8 +1423,10 @@ async function uploadSelectedFile() {
       renderResources();
       uploadStatus(`${resource.label} · member registered. Upload the remaining declared roles, then complete the FASTQ library.`);
     } else {
-      renderResources(resource.resource_id);
-      uploadStatus(`${resource.label} · registered. Describe what you want Agent to do, then send your message.`);
+      const selected = renderResources(resource.resource_id);
+      uploadStatus(selected
+        ? `${resource.label} · registered. Describe what you want Agent to do, then send your message.`
+        : `${resource.label} · registered, not selected. Remove the current selected inputs before choosing this file.`);
     }
   } catch (error) {
     if (state.upload !== upload) return;
@@ -1348,6 +1444,9 @@ element("upload-file").addEventListener("change", () => {
   // Selection creates a new transfer identity; Retry keeps this same File and ID.
   state.upload = { uploadId: newTurnId(), file, inputType: element("upload-type").value, index: null, status: "selected", request: null,
     fastq: element("upload-type").value === "fastq" ? fastqAttribution() : null };
+  if (state.selectedResourceIds.length && state.upload.inputType !== "h5ad") {
+    state.selectedResourceIds = selectedResourceIds();
+  }
   element("resource-choice").value = "";
   if (!selectedCompanion()) element("input-choice").value = "";
   saveResourceSelection();
@@ -1402,7 +1501,7 @@ element("resource-choice").addEventListener("change", () => {
 });
 element("add-scientific-input").addEventListener("click", () => {
   const current = element("resource-choice").value;
-  if (!current || selectedResourceIds().length >= MAX_SELECTED_RESOURCES) return;
+  if (!current || !canAddScientificInput()) return;
   state.selectedResourceIds = selectedResourceIds();
   element("resource-choice").value = "";
   renderResources();
@@ -1519,7 +1618,20 @@ element("input-choice").addEventListener("change", () => {
   inputContext();
   updateControls();
 });
-element("epizoo-resource-choice").addEventListener("change", inputContext);
+element("epizoo-resource-choice").addEventListener("change", () => {
+  inputContext();
+  saveConveniences();
+});
+for (const [buttonId, detailsId] of [["toggle-attachments", "attachment-panel"],
+  ["toggle-scientific-inputs", "scientific-input-settings"]]) {
+  element(buttonId).addEventListener("click", () => {
+    const details = element(detailsId);
+    details.open = !details.open;
+  });
+  element(detailsId).addEventListener("toggle", () => {
+    element(buttonId).setAttribute("aria-expanded", String(element(detailsId).open));
+  });
+}
 element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
@@ -1574,6 +1686,12 @@ async function initialize() {
     showError(error);
   }
   await resources;
+  if (selectedResourceType() === "h5ad" && state.epizooResources.some((choice) =>
+      choice.resource_id === conveniences.epizooResourceId)) {
+    element("epizoo-resource-choice").value = conveniences.epizooResourceId;
+  }
+  inputContext();
+  if (resources) saveConveniences();
   updateControls();
 }
 

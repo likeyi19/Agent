@@ -62,3 +62,22 @@ def test_chat_and_details_share_reviewed_matrix_qc_selection_file_allowlist():
         assert artifact_type in policy and filename in policy and label in policy
     assert 'Object.hasOwn' in policy
     assert 'supportedScientificFile(artifact)' in source[source.index('function appendScientificFiles'):]
+
+
+def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
+    source = (STATIC / 'app.js').read_text()
+    messages = source[source.index('function appendScientificFiles'):source.index('function renderArtifacts')]
+    assert 'renderArtifacts(cached.revision, inventory, true)' in messages
+    assert 'api(revisionPath(sessionId, turn.revision_id))' in messages
+    assert 'revision.value.revision_id === turn.revision_id' in messages
+    assert 'revision.value.turn_id === turn.turn_id' in messages
+    assert 'Promise.allSettled' in messages
+    renderer = source[source.index('function renderArtifacts'):source.index('async function viewArtifact')]
+    assert 'target.replaceChildren(...nodes)' in renderer
+    assert 'viewArtifact(sessionId, revision.revision_id, artifact)' in renderer
+    viewer = source[source.index('async function viewArtifact'):source.index('function readableLabel')]
+    assert 'await loadRevision(revisionId)' in viewer
+    assert viewer.index('const epoch = state.epoch') < viewer.index('await loadRevision(revisionId)')
+    assert viewer.index('await loadRevision(revisionId)') < viewer.index('if (epoch !== state.epoch) return')
+    assert 'element("scientific-panel").open = true' in viewer
+    assert '/activate' not in messages + renderer + viewer

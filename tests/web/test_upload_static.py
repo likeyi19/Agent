@@ -20,7 +20,7 @@ def test_attachment_is_optional_single_file_and_lives_in_the_chat_composer():
     assert 'turn-form' in page.ancestors['upload-file']
     assert 'turn-form' in page.ancestors['resource-choice']
     ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
-    assert ids.index('turn-form') < ids.index('upload-file') < ids.index('utterance')
+    assert ids.index('turn-form') < ids.index('utterance') < ids.index('upload-file')
     assert tags['upload-file-button'][1]['type'] == 'button'
     assert tags['clear-upload'][1]['type'] == 'button'
     assert tags['upload-status'][1]['role'] == 'status'
@@ -117,7 +117,7 @@ def test_resource_selection_is_only_a_rechecked_display_convenience():
     convenience = section('function saveResourceSelection()', 'function uploadStatus(')
     assert 'localStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value)' in convenience
     render = section('function renderResources(', 'async function loadResources()')
-    assert 'state.resources.some((choice) => choice.resource_id === selectedId)' in render
+    assert 'state.resources.find((choice) => choice.resource_id === selectedId)' in render
     initialize = source()[source().index('async function initialize()'):]
     assert 'loadResources()' in initialize
     assert 'uploadSelectedFile(' not in initialize and 'postSubmission(' not in initialize
@@ -231,6 +231,28 @@ def test_fastq_transfer_pins_explicit_attribution_without_filename_inference():
     assert not any(value in attribution + transfer for value in ('endsWith(', '.match(', 'FileReader', '.arrayBuffer('))
     edits = section('for (const id of ["fastq-library"', 'function changePairedIndex(')
     assert 'uploadId: newTurnId(), fastq: fastqAttribution()' in edits
+
+
+def test_epizoo_selection_refresh_rechecks_current_catalog_and_h5ad_selection():
+    initialize = source()[source().index('async function initialize()'):]
+    restoration = initialize[initialize.index('await resources;'):]
+    assert 'selectedResourceType() === "h5ad"' in restoration
+    assert 'state.epizooResources.some((choice)' in restoration
+    assert 'choice.resource_id === conveniences.epizooResourceId' in restoration
+    assert 'element("epizoo-resource-choice").value = conveniences.epizooResourceId' in restoration
+    assert 'epizooResourceId: element("epizoo-resource-choice").value' in source()
+    changed = section('element("epizoo-resource-choice").addEventListener', 'element("utterance").addEventListener')
+    assert 'saveConveniences()' in changed
+
+
+def test_scientific_controls_use_existing_safe_catalog_visibility_without_inference():
+    context = section('function inputContext()', 'function selectedResourceIds()')
+    assert 'option.value && !option.disabled' in context
+    assert 'element("configured-input-controls").hidden' in context
+    assert 'element("epizoo-resource-controls").hidden = selectedResourceType() !== "h5ad"' in context
+    assert 'element("scientific-input-settings").hidden = irrelevant' in context
+    assert 'element("toggle-scientific-inputs").hidden = irrelevant' in context
+    assert not any(term in context for term in ('checkpoint_path', 'source_sha256', 'utterance', 'tool_name'))
 
 
 def test_fastq_completion_sends_opaque_members_and_does_not_select_a_workflow():

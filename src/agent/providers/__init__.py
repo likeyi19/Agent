@@ -23,6 +23,11 @@ from .openai_planning import (
     OpenAIPlanningError,
     OpenAIPlanningModel,
 )
+from .openrouter_planning import (
+    OpenRouterPlanningDependencyError,
+    OpenRouterPlanningError,
+    OpenRouterPlanningModel,
+)
 
 __all__ = [
     "BUILTIN_PLANNING_PROVIDER_IDS",
@@ -35,6 +40,9 @@ __all__ = [
     "OpenAIPlanningDependencyError",
     "OpenAIPlanningError",
     "OpenAIPlanningModel",
+    "OpenRouterPlanningDependencyError",
+    "OpenRouterPlanningError",
+    "OpenRouterPlanningModel",
     "PlanningModelFactory",
     "PlanningModelFactoryError",
     "PlanningModelFactoryRegistry",

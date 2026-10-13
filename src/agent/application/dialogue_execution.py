@@ -323,6 +323,74 @@ def _parameter_source(reference, preceding):
     return origin, source, _serialize(source.admitted['inputs'])
 
 
+def _repair_declarations(raw, utterance, registry):
+    """Retain only valid declarations from a structurally valid new objective."""
+    import json
+    from .turn_decisions import (parse_decision, _ground_declaration,
+        DeclarationGroundingError, Execute)
+    try:
+        parse_decision(raw, utterance=utterance)
+    except DeclarationGroundingError:
+        pass  # The parser has checked the complete decision shape.
+    value = json.loads(raw)['decision']
+    if value['kind'] not in {'execute_plan', 'request_resources'}:
+        raise IntentError('invalid_prerequisite')
+    good, rejected = [], []
+    declarations = ([value['argument']] if value.get('argument') is not None else []) + value.get('arguments', [])
+    for item in declarations:
+        # Registry identity is checked even when the literal cannot be located.
+        _parameter_input(registry, item['tool'], item['argument'])
+        try:
+            grounded = _ground_declaration(item, utterance)
+            _bind_arguments(registry, utterance, {}, _scientific_arguments([grounded]))
+            good.append(grounded)
+        except IntentError as exc:
+            if exc.reason not in {'ungrounded_operand', 'ambiguous_parameter', 'invalid_parameter_value'}:
+                raise
+            rejected.append((item['tool'], item['argument']))
+    if not rejected or len({tool for tool, _ in rejected}) != 1:
+        raise IntentError('invalid_prerequisite')
+    clean = dict(value, arguments=good)
+    clean.pop('argument', None)
+    clean['kind'] = 'execute_plan'
+    safe = parse_decision(json.dumps(dict(turn_schema_version=1, decision=clean)))
+    if not isinstance(safe, Execute):
+        raise IntentError('invalid_prerequisite')
+    return safe, rejected
+
+
+def request_parameter_repair(sessions, interaction, raw, inputs, resources):
+    """Capture a question, never execute a rejected interpreter decision."""
+    if interaction.submission is None:
+        raise IntentError('invalid_prerequisite')
+    import json
+    from .resource_continuation import COMPOSITIONS
+    from .scientific_guidance import references_candidate
+    from .guidance_selection import candidates
+    state = sessions.load(sessions._interaction_session_id)
+    refs = candidates(state.interactions, interaction.snapshot)
+    predecessor = refs[0]['origin_turn_id'] if refs else interaction.snapshot['dialogue']['predecessor']
+    prior = next((i for i in state.interactions if i.turn_id == predecessor), None)
+    if references_candidate(interaction, prior):
+        raise IntentError('unsupported_intent')
+    if (json.loads(raw)['decision']['kind'] == 'request_resources'
+            and interaction.submission.get('registered_input', {}).get('composition') not in COMPOSITIONS):
+        raise IntentError('invalid_prerequisite')
+    registry = sessions._application.registry
+    safe, rejected = _repair_declarations(raw, interaction.utterance, registry)
+    admitted = admit(sessions, interaction, safe, inputs, epizoo_resources=resources)
+    tool = rejected[0][0]
+    missing = sorted(name for _, name in rejected)
+    # A rejected declaration must not quietly fall back to a received/default value.
+    if any(_parameter_input(registry, tool, name)[0] in admitted['inputs'] for name in missing):
+        raise IntentError('conflicting_scientific_parameter')
+    admitted['parameter_rejection'] = raw
+    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
+        field='parameters', tool=tool, missing=missing,
+        resource_context_sha256=resource_context_digest(resources))
+    return admitted, pending
+
+
 def _validate_parameter_prerequisite(interaction, preceding):
     from .session_state import SessionError
     from agent.orchestration.registry import build_default_tool_registry
@@ -338,6 +406,15 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 raise ValueError('No originating execution.')
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
+            if 'parameter_rejection' in admitted:
+                safe, rejected = _repair_declarations(admitted['parameter_rejection'], interaction.utterance, registry)
+                if (safe.target != admitted['tool'] or any(t != tool.name for t, _ in rejected)
+                        or sorted(n for _, n in rejected) != list(pending['missing'])
+                        or any(_parameter_input(registry, t, n)[0] in values for t, n in rejected)
+                        or [asdict(d) for d in safe.arguments] != _serialize(admitted.get('arguments', []))
+                        or _replay_initial_inputs(registry, interaction, safe.arguments) != _serialize(values)):
+                    raise ValueError('Rejected declaration capture changed.')
+                return
             required = {item['argument'] for item in scientific_parameters(registry)
                         if item['tool'] == tool.name and item['required'] and 'choices' not in item}
             missing = sorted(name for name in required if _parameter_input(registry, tool.name, name)[0] not in values)
@@ -401,13 +478,14 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
-    original_error = next((e for e in stored.errors
-        if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
-           (reference['tool'], list(origin.prerequisite['missing']))), None)
-    if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
-            or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):
-        raise IntentError('invalid_prerequisite')
+    if 'parameter_rejection' not in origin.admitted:
+        stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
+        original_error = next((e for e in stored.errors
+            if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
+               (reference['tool'], list(origin.prerequisite['missing']))), None)
+        if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
+                or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):
+            raise IntentError('invalid_prerequisite')
     current = (_serialize(interaction.submission)['execution_inputs'] if interaction.submission is not None
                else _serialize(execution_inputs or {}))
     declared_inputs = {_parameter_input(sessions._application.registry, d.tool, d.argument)[0]

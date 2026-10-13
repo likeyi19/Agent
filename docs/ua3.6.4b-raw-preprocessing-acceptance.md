@@ -1,5 +1,8 @@
 # UA3.6.4b — Real raw scATAC-seq preprocessing user workflow acceptance
 
+This is a chronological record. The latest assessment is the **Work Unit B**
+section below; preceding Work Unit A and blocked-stage findings remain historical.
+
 Assessment date: **2026-10-13, Asia/Shanghai**. Overall qualification is
 **BLOCKED — resource/deployment and existing public-scope prerequisites**.
 Real source transfer, fail-closed Web admission, and focused software checks pass.
@@ -648,3 +651,334 @@ operator InputSet in the desired deployment, respecting each new source's
 qualification. The acquired PBMC source is acceptance data, not a universal
 default or authority template. All implementation and documentation changes are
 unstaged; no commit or push was performed.
+
+## Work Unit B — Shared literal grounding and bounded FASTQ/BAM workflows
+
+Assessment date: **2026-10-13, Asia/Shanghai**. This section supplements, and does
+not rewrite, Work Unit A or the earlier blocked acceptance. Evidence root **B** is
+`/home/likeyi/program/ua364b-work-b-uu8i0zpu`. The bounded synthetic software
+workflows pass; **overall UA3.6.4b remains PARTIAL**, with genuine FASTQ/BAM
+production-data and complete live-provider execution qualification distinguished
+below. No UA3.6.4c/d work, commit or push is performed.
+
+### A. Exact baseline and preservation
+
+HEAD, main, origin/main and remote main all begin at
+`fdd3008cab76591fac8769e5f55507dc8c77006f`, **Add shared resource continuation and
+fragments workflow evidence**. The preceding `4c485c1` changes and Work Unit A
+are present. `git ls-remote` checks the remote without fetching. The initial
+index and tracked worktree are clean; only historical `evals/` is untracked.
+`baseline.json` and `protected-before.json` capture 102,967 existing files,
+including the entire Work Unit A tree and the previously recorded protected
+resource/operator/evaluation roots. Preservation checks use exact SHA-256 through
+2 MiB and size/mode/nanosecond mtime above that bound; this is not a new full
+byte audit of large biological inputs or checkpoints.
+
+Production changes are limited to `turn_decisions.py`, `dialogue_execution.py`
+and `turns.py`. Two new application test modules cover grounding and continuation.
+This report is the sole documentation change. Registry, scientific owners,
+EpiZoo, production operator configuration and historical scientific records are
+not edited. Final preservation checks cover **102,963** protected files, including **102,325**
+small-file SHA-256 checks, with **zero unexpected changes**. Work Unit A has no
+added or removed files. Final refs still match the starting commit and the index
+is empty. Exact checks are in `preservation-final.json` and `git-final.json`.
+
+### B. Scientific parameter grounding
+
+The retained original Work Unit A response is replayed **offline**, unchanged.
+Its `20` declaration still fails the unchanged strict span admission at
+`202:204`. The new provider-entry boundary locates its unique exact literal at
+`203:205`; all three explicit values bind. `offline-original.json` records both
+outcomes and the original response-file digest. This does not change the original
+failed live turn or count replay as a new live success.
+
+The provider schema now requests `literal` and a verbatim `evidence` clause,
+not character arithmetic. Agent requires exactly one occurrence of the evidence
+in the utterance and exactly one literal within that evidence. It then creates
+the existing strict `ScopedArgument` span. Repeated values can be associated by
+distinct exact clauses; unresolved repetitions clarify. Existing well-formed
+legacy span responses remain readable. A mismatched legacy span is normalized
+only at fresh provider ingestion and only when its exact literal is unique.
+Persisted records are never relocated or repaired on loading.
+
+All subsequent token-boundary, numeric grammar, exact ratio, string quotation,
+Unicode, choice, Registry identity/type/range, input-conflict and unique-consumer
+checks remain in force. New test cases cover negative signs, decimals, embedded
+numbers, scientific notation, repeated values/clauses, explicit correction text,
+Unicode strings, missing/forged evidence and incompatible wire fields. Existing
+negative scientific/source/authority tests remain applicable.
+
+This is textual grounding, not a deterministic natural-language entailment proof.
+The LLM still owns whether a clause is a declaration about this parameter, whether
+an explicit correction supersedes an earlier value, and whether an unrelated
+mention is irrelevant. No parameter-name parser, keyword association, first-match
+fallback or fabricated value is added. Conflicting repeated parameter identities
+are rejected structurally; arbitrary unreported semantic conflict remains part
+of provider qualification, not something claimed solved by string matching.
+
+### C. Missing information and continuation
+
+A structurally valid fresh decision with an unresolved declaration for one
+registered consumer can create the existing **parameters** prerequisite without
+planning or science. Valid declarations and original inputs are retained. The
+rejected wire is stored as diagnostic Session data and replay-checked; it is not
+scientific authority. The corrective turn supplies exact current-turn evidence,
+then follows ordinary planning and scientific admission. Restart, invalid numeric
+correction, duplicate-identity rejection and checksum-recomputed tampering are
+covered. Existing pending answers remain atomic and keep their predecessor.
+
+The new mechanism is bounded: it does not salvage arbitrary malformed decisions,
+unregistered parameters, contradictory received inputs, or simultaneous rejected
+declarations for several independent consumers. It is not a general solver for
+arbitrary interleavings of resource, species, role and parameter questions. In
+particular, completion of one prerequisite does not claim that an independently
+missing resource catalog can be provisioned or refreshed automatically.
+
+FASTQ and BAM both use Work Unit A's `request_resources` / `answer_resources`
+contract. The new software demonstrations preserve the uploaded identities,
+original full objective and all three explicit selection declarations while the
+user selects the offered source-bound InputSet. Required parameters/species,
+missing/ambiguous references, explicit choices, unique defaults, source-profile
+requirements and incompatible contexts are exercised by the affected regression
+and existing shared owners; unsupported provenance is not inferred from format.
+
+For FASTQ, the initial collection lacks **R3 genomic read 2**. Completion returns
+`FASTQ_COLLECTION_INCOMPLETE` with lane/chunk/role guidance; all uploaded members
+remain registered. Uploading R3 and resubmitting those exact member IDs completes
+the library. No replacement or inherited PBMC qualification occurs. This is
+additional-file continuation of **library assembly**. A pre-completion collection
+is not yet a selectable chat input, so this does **not** qualify a durable chat
+objective submitted before any complete library exists. The normal supported
+sequence remains upload/group/complete, then submit the analysis request. Existing
+pending H5AD-role append behavior is separate; arbitrary raw-file append to an
+already captured scientific objective is not introduced.
+
+### D. FASTQ workflow
+
+`workflows.py` generates five synchronized paired templates from the existing
+seed-112, 12,000-base `chrTiny` fixture. Layout A explicitly supplies R1 genomic
+read 1, R2 barcode, R3 genomic read 2 and I1 sample index. The two positions and
+multiplicities are `(100,200,3)` and `(2100,2200,2)`, with an explicit matching
+barcode whitelist. These are valid FASTQ records, not placeholder input. The
+existing A/B, gzip/plain, lane/chunk and membership negative cases also run.
+
+The source-bound library context is newly built against the **uploaded locators**
+through the existing intake/library owners. A fresh tiny Chromap index uses the
+existing qualified patched executable and build identity; no full genome index
+is built or downloaded. The generated reference, feature BED and transcript-TSS
+resource use explicit isolated **test** qualification. Their human/hg38 fields
+are test contract values, not a claim that `chrTiny` is biological hg38.
+
+The ordinary upload/completion and Session HTTP interfaces request resources,
+accept the user's exact choice, then run inspection → qualified FASTQ fragments
+→ QC → selection → cell-by-cCRE matrix. Provider decisions are scripted for this
+software execution; the compiler, actual Chromap, all scientific owners,
+independent verification, authority, reporting and delivery are real.
+
+The explicit exploratory **test policy** is minimum depth **0**, minimum TSS
+**0.0**, minimum flank evidence **1**. It comes from the original user utterance,
+not a universal default or an operator-injected threshold. Two fragments and one
+observed barcode yield one selected candidate and a **1 × 1 int64 CSR**, one
+stored nonzero, count sum **1**. `matrix.h5ad` is **31,240 bytes**, SHA-256
+`088225a654108ab98c71330a5136e957646738204ec0c85e756c1cca63e30ce8`.
+
+### E. BAM workflow
+
+The existing generator writes a valid BAM with two aligned paired templates
+(central and flank), consistent mate flags/coordinates/CIGARs and generated CB
+tags, against two 6,001-base synthetic contigs. The reference includes both
+ordered features. Uploaded bytes receive their own intake and source-bound
+library context. The test declares the existing corrected-CB paired-ATAC profile
+within this simulated construction; it does not certify historical barcode
+correction of real sequencing. BAM inspection is separately qualified and does
+not confer producer eligibility. Missing history/profile/reference, incorrect
+context and source substitution retain their existing rejection boundaries.
+
+The same HTTP resource question/answer and five-step chain executes with the same
+explicit test thresholds. Two templates yield two fragments, one observed/selected
+barcode and a **1 × 2 int64 CSR**, one nonzero, count sum **2**. The complete
+ordered feature axis retains the zero column. The H5AD is **31,240 bytes**, SHA-256
+`480a827d8606ff4360e74991700d701a127f25da8ff528420632d5886210d959`.
+No new genuine biological BAM with independently reviewed source history was
+acquired; this is software qualification only.
+
+For both families, `workflow-*.json`, `provider-scripted-*.json`, `config-*.json`
+and `matrices.json` preserve exact source registrations, declarations, resolved
+arguments, results, Session/Revision identity and sparse values/axes. Each isolated
+workspace uses Session ID `analysis`, generation 1; identities must be interpreted
+within their respective workspace, not merged because a textual ID matches.
+Both generated Revision IDs are
+`b2bdacc2c340d22c32034e50df3806edd47efe400d6533bd08e721188aaf0ab3` because these
+isolated fixtures use the same logical turn/output identities. Their separate
+workspaces, source pins, scientific authorities and matrix hashes remain distinct;
+this is not evidence of scientific correspondence or interchangeable artifacts.
+
+### F. Fragments carryover and real semantic observations
+
+Work Unit A's genuine PBMC subset, both Revisions, 568/567 selected candidates,
+full canonical H5ADs, authority, reports, downloads and provider ledger remain
+historical evidence. No import/QC/matrix stage is repeated on those data.
+
+Five new real GPT-5.6 Sol completions use the unchanged OpenRouter profile/adapter:
+
+| Observation | Result | Scope |
+| --- | --- | --- |
+| Original fragments request | `request_resources`, matrix target; exact `1000 / 4 / 20`, with `20` at `203:205` | Fresh real interpreter success for the demonstrated grounding defect; no Planner/science |
+| Ordinary simulated FASTQ request | `request_resources`, matrix target; exact `0 / 0.0 / 1` | Real intent/parameter interpretation on captured ordinary application context |
+| Ordinary simulated BAM request | Same supported resource request and exact values | Same bounded interpretation scope |
+| FASTQ resource answer | Exact offered resource handle | Real answer interpretation over a scripted-created pending application context |
+| BAM resource answer | Exact offered resource handle | Same bounded answer scope |
+
+The answer observations are **not** continuations of the preceding live initial
+turns: their exact pending contexts come from the separately recorded software
+workflows. The scripted workflows choose the producer target whereas the live
+initial decisions choose the final matrix target. No response is rewritten to
+hide that distinction. All raw prompts/schemas/responses and the five decisions
+are retained. This does not qualify a complete live Interpreter → Planner →
+science → conversational-result chain. There are no semantic retries or silent
+fallbacks. The earlier live failure remains part of the qualification record.
+
+### G. Resources and acquisition
+
+**Zero new external downloads.** `fixture-inventory.json` lists every one of the
+31 generated/derived non-workspace fixture files (143,450 bytes total), with exact
+size/SHA-256, generator, test identity and qualification scope. The two accepted
+workspaces additionally retain exact uploaded copies, scientific manifests,
+authorities and outputs. Seed, roles, reference/coordinate and barcode semantics
+are recorded above and in the inventory/generator. No simulated barcode or
+alignment history is promoted to production qualification.
+
+Existing resources reused read-only are the qualified Chromap executable/build
+record, its stock qualification executable, BGZF/tabix tools and `/usr/bin/bedtools`.
+`/tmp/m116c-test-build-identity.json` pins source commit, patch and executable
+identities; candidate SHA-256 is
+`7ba402d0d69d08fedd525a4de83a4dd749670e88d4de507c236b07f03a285649`.
+Scientific compatibility is established by the existing fixture/reference/runtime
+owners, not inferred from the filenames. The synthetic QC allowance is explicit
+and confined to the isolated processes. No resource becomes a production default;
+production deployment would require an independently qualified real reference
+and a newly source-bound library InputSet under the existing operator contract.
+
+### H. Regression, browser and exact failures
+
+- Initial binding/contract check: **163 passed, 1 failed in 1.47 s**; the sole
+  new-test fixture error is described below.
+- Shared parameter/binding/safety/continuation regression: **247 passed in
+  158.31 s**. Initial new repair-specific check: **2 passed in 7.84 s**.
+- Explicitly enabled tiny qualified FASTQ plus BAM downstream production:
+  **2 passed in 61.82 s**. The existing Chromap qualification build record is
+  supplied; this is bounded technical execution, not a broad opt-in suite.
+- Main directly affected 12-file regression: **392 passed, 6 skipped, 3 warnings
+  in 670.11 s**, exit 0. All **491** frozen source/test Python files are unchanged
+  during the run. All `RUN_*` gates are removed. The six skips are existing
+  opt-in Chromap cases; the positive downstream execution above and the two
+  separate workflow demonstrations genuinely run the qualified owner.
+- Final targeted safety/contract/pending-role regression after adding the existing
+  guidance-candidate bypass guard to the rejection-capture path: **261 passed
+  in 64.43 s**, exit 0. It includes the additional exact-string continuation,
+  categorical-answer and candidate-guard cases. No full repository suite ran.
+
+Exact commands, logs and frozen hashes are retained in `regression.py`,
+`regression-command.json`, `regression-result.json`, `final-safety.log` and
+`final-safety-frozen.json`. The main regression includes scientific parameter
+contracts/safety/continuation, both raw-family composition and Web execution,
+resource continuation, scientific Web binding and conversational authority reuse.
+The final safety command is recorded in `final-safety-result.json`.
+
+Native Firefox in **fresh server processes** passes 22 checks, 11 per family:
+reopen exact history/generation/Revision, read accepted matrix evidence, download
+each of five artifacts with matching SHA-256/size, render the report, refresh,
+and verify zero provider constructions/scientific body entries. This is native
+read/delivery/restart acceptance; workflow creation/upload was through real HTTP
+ASGI application endpoints, not native mouse-driven input. `native-results.json`,
+`native-*.png` and the report texts retain evidence. All pre-restart workspace
+files preserve exact bytes (**53 FASTQ, 38 BAM**). Both task servers and Firefox are stopped afterwards.
+
+The newly generated FASTQ workflow completed science, downloads and result saving
+before the helper attempted `dataclasses.asdict` on an immutable InputSet mapping.
+That **helper export** failed with `mappingproxy` serialization; its original log
+is retained. Configuration was reconstructed from the saved exact catalog without
+repeating FASTQ science, and BAM then ran separately. The initial new Unicode/
+choice unit test used a species parameter on `inspect_scATAC`, which has no such
+parameter; correcting the test to `epizoo_embed_cells` resolved that fixture error.
+Neither required weakening production validation. No recurrence of Work Unit A's
+unexplained gzip-layout-A failure was observed; no timing-cause claim is made.
+
+### I. Performance and spending
+
+The scientific work is bounded to five FASTQ pairs, two BAM pairs and roughly
+12 kb references, with independent verification enabled. Each isolated workflow
+performs one intake, one producer and independent producer verification, and one
+production/independent owner body each for QC, selection and matrix. FASTQ also
+performs one alignment. HTTP duplicate retries, downloads and native recovery add
+zero covered scientific bodies. Fixture context/index provisioning occurs before
+these measured workflows and is separately retained; the counts do not claim
+that qualification/integrity IO was absent.
+
+Recorded question-through-result/download times are **36.28 s FASTQ** and
+**32.14 s BAM**. The separate existing downstream pair regression takes **61.82 s**.
+No stage approaches the 20-minute approval boundary. No GPU or checkpoint is
+used and no complete sparse matrix is densified. Process peak memory was not
+sampled for these new workflows; no unmeasured RSS estimate is presented as fact.
+The resource file set is below 1 MiB before generated workspace publications;
+free disk was checked before the new scientific runs. The historical 34-minute
+real QC stage is neither rerun nor used to predict tiny-reference runtime.
+
+The original ledger is checked before dispatch and copied to an additive B ledger;
+its original row remains unchanged. `provider/ledger.json`, request/response files
+and `budget-summary.json` show **5 new completions**, **USD 0.624854
+new conservative reservations**, **USD 0.0984650 new reported cost**.
+Cumulative UA3.6.4b accounting is **6 completions**, **USD 0.757452
+reserved**, **USD 0.1287735 reported**. There are **zero unfinished
+reservations**. The B guard enforces at most 8 additional calls and $2.50 in
+additional reservations, in addition to the retained 18-call/$5.00 whole-task
+policy. Output limit is 4,096, SDK retries zero, and provider fallback disabled.
+No provider credentials are printed, copied or persisted.
+
+### J. Architecture
+
+One Interpreter/Planner path, one existing Session/pending mechanism, the same
+immutable **23-tool Registry**, existing input/resource catalog, compiler and
+scientific authority/verifier owners remain. No per-format language parser,
+additional workflow engine, resource registry, model-specific scientific logic,
+new authority framework, upload replacement, default threshold or new scientific
+algorithm is introduced. Strict durable span validation remains authoritative.
+Rejection diagnostics can retain a question, never a scientific result.
+
+The UI already distinguishes request received, planning, ready for execution,
+analysis in progress, clarification needed and failure, and states that Session
+responses are saved. Native restart confirms terminal restoration. The reviewed
+client does not expose measured percent completion; no percentage is invented.
+A distinct current-scientific-step progress indicator was not added or qualified.
+No UI redesign or speculative presentation fix was justified.
+
+### K. Qualification
+
+| Area | Qualification | Remaining limit |
+| --- | --- | --- |
+| Fragments | Genuine Work Unit A science retained; fresh live literal grounding succeeds | Original historical live failure retained; complete live end-to-end chain still unqualified |
+| FASTQ | **PASS — bounded synthetic software workflow**, legal owner execution, resource continuation, matrix/report/download/restart; separate live initial/answer interpretation | No newly qualified genuine FASTQ source-to-matrix run; no native upload-driven or full live-provider execution claim |
+| BAM | **PASS — bounded synthetic software workflow**, with inspection distinguished from producer eligibility; same delivery/restart and separate live semantics | Independent genuine BAM processing history still unavailable |
+| Shared parameter behavior | **PASS within tested scope** — deterministic exact quote binding, strict provenance, actionable single-consumer correction | Semantic association still LLM-owned; arbitrary malformed/multi-consumer/staged prerequisites not automatically repaired |
+| UA3.6.4b overall | **PARTIAL** | Synthetic and scripted-provider success does not establish overall genuine/live production acceptance |
+
+### L. Recommendation
+
+Work Unit B can close **within its demonstrated technical scope**, with no need
+to repeat the genuine PBMC pipeline or build another framework to obtain a larger
+biological dataset. The demonstrated off-by-one usability defect is corrected;
+FASTQ/BAM have bounded ordinary-interface, verified software workflows. Proceeding
+to independent UA3.6.4c work is reasonable after review, without marking overall
+UA3.6.4b PASS. This task does not start that work.
+
+Track genuine FASTQ/BAM production qualification and one complete live-provider
+application chain separately. The concrete remaining upload usability boundary
+is a chat request made **before** a FASTQ library can be completed: uploaded members
+are retained and actionable completion guidance exists, but no durable scientific
+objective spans that pre-collection state. Researchers following the supported
+complete-library-first sequence are not blocked by that boundary. Do not describe
+it as a solved general additional-file conversational workflow.
+
+UA3.6.4a cross-Revision scientific dialogue remains PARTIAL and carries to
+UA3.6.5 unchanged. All implementation/report changes remain unstaged. No reset,
+clean, fetch, pull, stage, commit or push is performed.

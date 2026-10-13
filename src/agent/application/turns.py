@@ -407,6 +407,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             raise SessionConflictError('Interaction capture raced with another turn.')
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
+    decision = None
     try:
         visible = public_context(captured)
         from .scientific_dialogue import public as dialogue_public
@@ -520,6 +521,32 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             _update(sessions, turn_id, status='failed')
             return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
         reason = exc.reason if isinstance(exc, IntentError) else 'invalid_decision'
+        from .turn_decisions import DeclarationGroundingError
+        raw_rejection = exc.raw if isinstance(exc, DeclarationGroundingError) else None
+        candidate = decision
+        if (reason in {'invalid_parameter_value', 'ungrounded_operand'}
+                and isinstance(candidate, Execute) and candidate.operation == 'plan'):
+            import json
+            value = dict(kind='execute_plan', target=candidate.target,
+                arguments=[asdict(d) for d in candidate.arguments])
+            if candidate.argument is not None:
+                value['argument'] = asdict(candidate.argument)
+            if candidate.roles:
+                value['roles'] = [asdict(r) for r in candidate.roles]
+            if candidate.context is not None:
+                value['context'] = candidate.context
+            raw_rejection = json.dumps(dict(turn_schema_version=1, decision=value))
+        if raw_rejection is not None and captured.get('prerequisite') is None:
+            from .dialogue_execution import request_parameter_repair
+            try:
+                admitted, pending = request_parameter_repair(sessions, interaction,
+                    raw_rejection, execution_inputs, epizoo_resources)
+            except (ValueError, TypeError, KeyError):
+                pass  # An unsafe or unsupported objective stays an ordinary clarification.
+            else:
+                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=pending)
+                return TurnOutcome('clarify', 'clarification',
+                    Clarify(reason, tuple(pending['missing']), True))
         return _terminal(sessions, interaction, Clarify(reason))
     _update(sessions, turn_id, admitted=admitted, status='admitted')
     try:

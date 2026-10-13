@@ -13,6 +13,14 @@ class IntentError(ValueError):
         super().__init__(reason)
 
 
+class DeclarationGroundingError(IntentError):
+    """A structurally valid decision whose exact textual evidence is unresolved."""
+
+    def __init__(self, reason, raw):
+        super().__init__(reason)
+        self.raw = raw
+
+
 @dataclass(frozen=True)
 class IntentDelta:
     parameter: str
@@ -223,8 +231,6 @@ class ParameterAnswer:
         if type(self.pending) is not str or not 0 < len(self.pending) <= 128 or not self.arguments:
             raise ValueError('Invalid pending scientific parameter answer.')
         _validate_arguments(self.arguments)
-        if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
-            raise ValueError('Parameter answers require exact scalar declarations.')
 
 
 @dataclass(frozen=True)
@@ -385,7 +391,42 @@ def _role_requirements(value):
     return tuple(result)
 
 
-def parse_decision(raw):
+def _ground_declaration(value, utterance):
+    """Locate provider-selected text; persisted declarations remain strict spans.
+
+    Association belongs to the interpreter. An exact context quote can distinguish
+    repeated literals, but neither offsets nor first-match search resolve a new
+    ambiguous declaration. This boundary is never used to reload Session records.
+    """
+    if value is None:
+        return None
+    choice = type(value) is dict and 'value' in value
+    keys = ('tool', 'argument', 'literal') + (('value',) if choice else ())
+    quoted = type(value) is dict and 'evidence' in value
+    _shape(value, keys + (('evidence',) if quoted else ('start', 'end')))
+    literal = value['literal']
+    if type(literal) is not str or not 0 < len(literal) <= 80:
+        raise IntentError('invalid_decision')
+    if not quoted:
+        # Validate the legacy wire before normalization, including offset types.
+        (ScalarChoiceArgument if choice else ScopedArgument)(**value)
+        if utterance[value['start']:value['end']] == literal:
+            return value
+    evidence = value['evidence'] if quoted else literal
+    if type(evidence) is not str or not 0 < len(evidence) <= 4096:
+        raise IntentError('invalid_decision')
+    def unique(text, token):
+        start = text.find(token)
+        if start < 0:
+            raise IntentError('ungrounded_operand')
+        if text.find(token, start + 1) >= 0:
+            raise IntentError('ambiguous_parameter')
+        return start
+    start = unique(utterance, evidence) + unique(evidence, literal)
+    return {key: value[key] for key in keys} | dict(start=start, end=start + len(literal))
+
+
+def parse_decision(raw, *, utterance=None):
     def pairs(items):
         result = {}
         for k, v in items:
@@ -399,6 +440,31 @@ def parse_decision(raw):
         if type(envelope['turn_schema_version']) is not int or envelope['turn_schema_version'] != 1:
             raise IntentError('invalid_decision')
         value = envelope['decision']
+        if utterance is not None:
+            if type(utterance) is not str or not 0 < len(utterance) <= 4096:
+                raise IntentError('invalid_decision')
+            failure = None
+            def ground(item):
+                nonlocal failure
+                try:
+                    return _ground_declaration(item, utterance)
+                except IntentError as exc:
+                    if exc.reason not in {'ungrounded_operand', 'ambiguous_parameter'}:
+                        raise
+                    failure = exc.reason
+                    # Structural validation only; these placeholders never leave
+                    # this parser or become admitted parameter evidence.
+                    return {k: v for k, v in item.items() if k not in {'evidence', 'start', 'end'}} | dict(start=0, end=1)
+            if 'argument' in value:
+                value['argument'] = ground(value['argument'])
+            if 'arguments' in value:
+                if type(value['arguments']) is not list or len(value['arguments']) > 8:
+                    raise IntentError('invalid_decision')
+                value['arguments'] = [ground(item) for item in value['arguments']]
+            parsed = parse_decision(json.dumps(envelope))
+            if failure:
+                raise DeclarationGroundingError(failure, raw)
+            return parsed
         kind = value.get('kind')
         if kind == 'execute_candidate':
             _shape(value, ('kind', 'candidate', 'evidence'))
@@ -502,15 +568,13 @@ def decision_schema(public):
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
     argument = {'anyOf': [_object(dict(tool=enum(('cluster_cells',)),
         argument=enum(('resolution',)), literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
-        start={'type': 'integer', 'minimum': 0, 'maximum': 4096},
-        end={'type': 'integer', 'minimum': 1, 'maximum': 4096})), {'type': 'null'}]}
+        evidence={'type': 'string', 'minLength': 1, 'maxLength': 4096})), {'type': 'null'}]}
     parameters = public.get('dialogue', {}).get('scientific_parameters', ())
     identities = tuple(dict.fromkeys((item['tool'], item['argument']) for item in parameters))
     def declaration_schema(item):
         properties = dict(tool=enum((item['tool'],)), argument=enum((item['argument'],)),
             literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
-            start={'type': 'integer', 'minimum': 0, 'maximum': 4096},
-            end={'type': 'integer', 'minimum': 1, 'maximum': 4096})
+            evidence={'type': 'string', 'minLength': 1, 'maxLength': 4096})
         if 'choices' in item:
             properties['value'] = enum(item['choices'])
         return _object(properties)
@@ -580,7 +644,7 @@ def decision_schema(public):
         elif pending is not None and pending.get('field') == 'parameters' and exact:
             # Admission already fixes the pending operation. Reflect that scope
             # here instead of duplicating every unrelated tool's declarations.
-            scoped = [item for item in exact if item['tool'] == pending.get('tool', item['tool'])]
+            scoped = [item for item in parameters if item['tool'] == pending.get('tool', item['tool'])]
             if scoped:
                 variants.append(_object(dict(kind=enum(('answer_parameters',)),
                     pending=enum((pending['handle'],)), arguments=exact_declarations | {'minItems': 1,
@@ -628,7 +692,7 @@ def interpret(model, utterance, public):
             'For a selected raw scientific source, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. If no choice is available, the operator must provision a qualified resource; do not fabricate one.',
             'For an otherwise supported new scientific command with a selected input, an omitted or unresolved required dataset declaration is not unsupported intent and is not a direct missing-prerequisite answer. Choose execute_plan and omit that declaration from arguments. The existing Planner/compiler determines the exact missing prerequisite and the Application creates its durable clarification. Use missing_species only while answering an offered pending species prerequisite; never fabricate a pending request. Do not guess a value or bypass genuinely unsupported capabilities, input identity ambiguity or conflicting explicit declarations.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
-            'execute_plan.argument is the historical nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim and give start/end zero-based Unicode character offsets in this utterance. Do not repeat an identity across argument and arguments.',
+            'execute_plan.argument is the nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat an identity across argument and arguments.',
             *(['For an offered exact_string parameter, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
@@ -665,7 +729,7 @@ def interpret(model, utterance, public):
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field', 'species') == 'species'
               and public.get('dialogue', {}).get('pending_prerequisite') is not None else []) + ([
             'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',
-            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and exact character spans. Partial answers are allowed; never invent the remaining values or add operations.',
+            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and uniquely locating exact evidence quotes. Partial answers are allowed; never invent the remaining values or add operations.',
             'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else []) + ([
             'dialogue.pending_prerequisite describes the exact original scientific objective awaiting the offered required_roles. Captured sources retain their exact order and identity. Explicitly selected newly registered files may be appended only to fill the offered missing roles; previously admitted roles, scientific declarations and resource choices remain fixed; this context grants no scientific qualification.',
@@ -674,7 +738,7 @@ def interpret(model, utterance, public):
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'roles' else [])},
         sort_keys=True, separators=(',', ':'),
         ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
-    return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)))
+    return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)), utterance=utterance)
 
 
 def is_exact_string_argument(argument_spec):

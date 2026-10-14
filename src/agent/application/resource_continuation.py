@@ -17,13 +17,15 @@ COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
 def source_kind(submission):
     submission = submission or {}
     if 'registered_input' in submission:
+        if submission['registered_input'].get('composition') == 'scientific-role-selection.v1':
+            return 'roles'
         return COMPOSITIONS.get(submission['registered_input'].get('composition'))
     return 'structured' if submission.get('execution_inputs') else None
 
 
 def _offered(submission, input_sets):
     family = source_kind(submission)
-    if family == 'structured':
+    if family in ('structured', 'roles'):
         captured = submission['execution_inputs']
         # Exact configuration supplementation, not scientific compatibility or
         # inferred source matching. Existing values can never be replaced.
@@ -93,7 +95,7 @@ def request(sessions, interaction, decision, input_sets):
     if source_kind(interaction.submission) is None:
         raise IntentError('invalid_prerequisite')
     admitted = admit(sessions, interaction, Execute('current', 'plan', decision.target, None,
-        arguments=decision.arguments), interaction.submission['execution_inputs'])
+        arguments=decision.arguments, roles=decision.roles), interaction.submission['execution_inputs'])
     rows = catalog(input_sets)
     admitted.update(kind='request_resources', resource_catalog=rows)
     pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
@@ -106,7 +108,8 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry):
     from .local_resources import LocalResourceAdmission
     original = execution_submission(origin)
     binding = (None if source_kind(original) == 'structured'
-               else LocalResourceAdmission._submission_binding(original))
+               else LocalResourceAdmission._submission_binding(dict(execution_inputs=source.admitted['inputs'],
+                    registered_input=source.admitted.get('registered_input', original['registered_input']))))
     values = _serialize(source.admitted['inputs'])
     rows = origin.admitted['resource_catalog']
     choices = tuple(ScientificInputSet(**_serialize(row)) for row in rows)
@@ -135,8 +138,9 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry):
     values = _bind_arguments(registry, interaction.utterance, values, arguments)
     if binding is None:
         return dict(execution_inputs=values)
+    from .local_resources import RegisteredInputGroup
     completed = replace(binding, execution_inputs=values, resource_choice=chosen.resource_choice(),
-                        resource_selection_error=None)
+                        **({} if type(binding) is RegisteredInputGroup else dict(resource_selection_error=None)))
     return dict(execution_inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution())
 
 
@@ -196,8 +200,12 @@ def validate(interaction, preceding):
                 raise ValueError('Changed resource request.')
             registry = build_default_tool_registry()
             registry.get(admitted['tool'])
-            values = _bind_arguments(registry, interaction.utterance,
-                _serialize(interaction.submission['execution_inputs']),
+            base = _serialize(interaction.submission['execution_inputs'])
+            if source_kind(interaction.submission) == 'roles':
+                from .local_resources import LocalResourceAdmission, group_role_inputs
+                base = group_role_inputs(LocalResourceAdmission._submission_binding(interaction.submission),
+                    _serialize(admitted.get('roles', [])), registry)
+            values = _bind_arguments(registry, interaction.utterance, base,
                 _scientific_arguments(_serialize(admitted.get('arguments', []))))
             if values != _serialize(admitted['inputs']):
                 raise ValueError('Changed resource request inputs.')

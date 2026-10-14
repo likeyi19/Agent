@@ -10,7 +10,7 @@ def validate_result(value):
         c.matrix.shape(value, public.CellTypeAnnotationResult.__annotations__)
         if (value['status'] != 'success' or value['artifact_type'] != c.ARTIFACT or
                 type(value['artifact_schema_version']) is not int or value['artifact_schema_version'] != 1 or
-                value['contract_version'] != c.CONTRACT or value['annotation_profile'] != c.science.PROFILE or
+                value['contract_version'] != c.CONTRACT or value['annotation_profile'] not in (c.science.PROFILE, c.EXTERNAL_PRIMARY) or
                 value['validation_state'] != 'not_assessed' or
                 (value['species'],value['assembly']) not in (('human','hg38'),('mouse','mm10'))):
             raise ValueError()
@@ -52,20 +52,29 @@ def annotation_tool_spec():
         PlanningToolRole,PlanningSourceEligibility as S,SemanticToolSpec,SemanticConsumerPortSpec,
         SemanticProducerPortSpec,_planning_argument,_planning_result,_tool_planning,
         _semantic_member as member,_semantic_request as request,_semantic_request_member as input_member,_semantic_argument_port)
-    required = {}
-    for key in c.ARGUMENTS:
-        spec = _planning_argument((str,Path) if key.endswith('_path') or key=='output_dir' else (str,),
-            'Explicit matrix/specification identities.',
-            source=S.REQUEST_INPUT_ONLY)
-        required[key] = MatrixArgument(spec.accepted_types,planning=spec.planning)
+    from .registry import ArgumentSpec
+    required, optional = {}, {}
+    common = ('annotation_spec_path','annotation_spec_sha256','output_dir')
+    keys = (*c.ARGUMENTS, *c.GROUP_ARGUMENTS, *c.DIRECT_ARGUMENTS)
+    for key in dict.fromkeys(keys):
+        scalar = key in ('annotation_method','count_slot','group_column')
+        spec = _planning_argument((str,) if scalar or key.endswith('_sha256') else (str,Path),
+            'Explicit annotation input. Select X or layers/name for counts; select the exact obs grouping column.',
+            source=S.REQUEST_INPUT_ONLY, artifacts=(A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
+            scientific_parameter=key in ('count_slot','group_column'),
+            conversational_exact_string=key in ('count_slot','group_column'))
+        argument = (ArgumentSpec if scalar else MatrixArgument)(spec.accepted_types,planning=spec.planning)
+        (required if key in common else optional)[key] = argument
     ports = []
-    for name,prefix in (('matrix','matrix_manifest'),('specification','annotation_spec')):
-        ports.append(SemanticConsumerPortSpec(name,tuple(member(k,prefix+'_'+k) for k in ('path','sha256')),True,
+    for name,prefix in (('matrix','matrix_manifest'),('specification','annotation_spec'),('source','source'),('groups','groups')):
+        ports.append(SemanticConsumerPortSpec(name,tuple(member(k,prefix+'_'+k) for k in ('path','sha256')),name=='specification',
             request_sources=(request(prefix+'_path',*(input_member(k,prefix+'_'+k) for k in ('path','sha256'))),)))
+    for name in ('annotation_method','count_slot','group_column'):
+        ports.append(_semantic_argument_port(name,required=False))
     ports.append(_semantic_argument_port('output_dir',required=True))
     ints = {'artifact_schema_version','n_cells','n_groups','assigned_cells','unassigned_cells','ambiguous_cells','groups_omitted'}
     return ToolSpec(name='annotate_scATAC_cell_types',function=public.annotate_scATAC_cell_types,
-        required_arguments=required,optional_arguments={},
+        required_arguments=required,optional_arguments=optional,
         result_contract=ResultContract('CellTypeAnnotationResult',
             {k:(int,) if k in ints else (list,) if k=='group_summary' else (str,) for k in public.CellTypeAnnotationResult.__annotations__},
             validator=validate_result, planning_fields={k:_planning_result('Primary labels; unchanged matrix.',
@@ -74,8 +83,8 @@ def annotation_tool_spec():
         exception_classifier=classify,retryable_error_codes=frozenset(),recovery_policy_version=c.RECOVERY_POLICY,
         durable_hooks=DurableToolHooks(public.execute_annotation,public.recover_annotation),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Annotate scATAC groups.',
-            'Accepted canonical fragment-record matrix; scatac-annotation-inputs.v1 pins run/step, exact group TSV, species/assembly, context and genes/signatures.',
-            'MAESTRO annotation; retain unresolved/ambiguous cells. No clustering, inferred biology, external counts, peaks or required validation.', capability_ids=('marker_annotation',)),
+            'Direct human hg38 raw Cell Ranger ATAC cut-site peak H5AD, explicit source/count_slot/annotation_method and reviewed resources. Requires groups TSV or explicit group_column. Ask for missing roles/resources/declarations. Historical canonical input remains recoverable.',
+            'Count-weighted native Enhanced RP. External count history remains declared. No cCRE adoption, peak projection, normalized/binary values, inferred groups or required validation.', capability_ids=('marker_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('annotation','scatac_cell_type_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','annotated_h5ad_path'),)),)))

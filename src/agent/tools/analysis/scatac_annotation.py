@@ -56,6 +56,9 @@ def _operation():
 
 
 def source(args, spec):
+    if spec['schema'] == c.EXTERNAL_SPEC:
+        from .external_marker_annotation import qualify
+        return qualify(args, spec)
     from agent.orchestration.verification_authority import bind_annotation_matrix
     authority, manifest = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], current())
     if (manifest['contract_version'] != c.matrix.CONTRACT or
@@ -77,14 +80,14 @@ def source(args, spec):
 def _publication(args, execution_identity):
     args = c.arguments(args)
     token = c.digest(dict(arguments=args, policy=RECOVERY_POLICY, execution_identity=execution_identity,
-                          profile_sha256=c.PROFILE_SHA256))
+                          profile_sha256=c.profile_sha(args)))
     return args, Path(args['output_dir']) / ('annotation-' + token), token
 
 
 def _make_receipt(args, token, sha):
     return dict(artifact_type='agent.annotation-receipt', schema_version=1, policy=RECOVERY_POLICY,
                 execution_identity=token, arguments_sha256=c.digest(args), manifest_sha256=sha,
-                profile_sha256=c.PROFILE_SHA256)
+                profile_sha256=c.profile_sha(args))
 
 
 def _receipt(destination, args, token=None):
@@ -103,12 +106,13 @@ def _summary(value, path, sha):
         artifact_type=c.ARTIFACT, artifact_schema_version=1, contract_version=c.CONTRACT,
         annotated_h5ad_path=str(path.parent / 'annotated.h5ad'),
         annotated_h5ad_sha256=value['sidecars']['annotated.h5ad']['sha256'],
-        source_manifest_sha256=binding['manifest_sha256'], source_authority_sha256=value['source_authority_sha256'],
+        source_manifest_sha256=binding['manifest_sha256'] if 'manifest_sha256' in binding else binding['source_sha256'],
+        source_authority_sha256=value['source_authority_sha256'],
         annotation_spec_sha256=value['arguments']['annotation_spec_sha256'],
         gene_resource_sha256=value['inputs']['gene_resource']['sha256'],
         signature_resource_sha256=value['inputs']['signature_resource']['sha256'],
         ordered_cells_sha256=binding['ordered_cells_sha256'], ordered_feature_sha256=binding['ordered_features_sha256'],
-        annotation_profile=science.PROFILE, species=binding['species'], assembly=binding['assembly'],
+        annotation_profile=value['profile']['primary_profile'], species=binding['species'], assembly=binding['assembly'],
         context=value['inputs']['context'], validation_state='not_assessed', **value['summary'])
 
 
@@ -122,19 +126,25 @@ def _counts(groups, matrix):
 
 
 def _provenance(args, authority):
-    return dict(contract=c.CONTRACT, profile_sha256=c.PROFILE_SHA256,
+    if c.profile(args) == c.EXTERNAL_PROFILE:
+        return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args), source_path=args['source_path'],
+                    source_sha256=args['source_sha256'], input_qualification_sha256=authority,
+                    source_contract='external-peak-annotation-input.v1',
+                    counting_history='declared_not_reconstructed', count_slot=args['count_slot'],
+                    annotation_spec_sha256=args['annotation_spec_sha256'])
+    return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args),
                 matrix_manifest_path=args['matrix_manifest_path'], matrix_manifest_sha256=args['matrix_manifest_sha256'],
                 matrix_authority_sha256=authority, annotation_spec_sha256=args['annotation_spec_sha256'])
 
 
 def _build(args, output):
-    spec = c.specification(args['annotation_spec_path'], args['annotation_spec_sha256'])
+    spec = c.resolved_specification(args)
     authority, matrix, binding = source(args, spec)
     output.mkdir()
-    science.annotate_cell_groups(**c.component_arguments(args, spec, binding, output/'primary'))
+    c.backend(binding).annotate_cell_groups(**c.component_arguments(args, spec, binding, output/'primary'))
     cells = c.read_json(output/'primary/cells.json', limit=1024**3)
     groups = c.read_json(output/'primary/groups.json', limit=1024**3)
-    a, _ = science.load_matrix(science.MatrixInput(**binding))
+    a, _ = c.load_source(binding)
     if any(k in a.obs for k in c.OBS_COLUMNS) or 'cell_type_annotation' in a.uns:
         raise ValueError('Canonical input already contains annotation-owned metadata')
     if [r['cell_id'] for r in cells] != a.obs_names.tolist():
@@ -144,7 +154,7 @@ def _build(args, output):
     a.uns['cell_type_annotation'] = _provenance(args, authority)
     a.write_h5ad(output/'annotated.h5ad', convert_strings_to_categoricals=False)
     value = dict(artifact_type=c.ARTIFACT, schema_version=1, contract_version=c.CONTRACT,
-        profile=c.PROFILE, profile_sha256=c.PROFILE_SHA256, arguments=args, inputs=spec,
+        profile=c.profile(args), profile_sha256=c.profile_sha(args), arguments=args, inputs=spec,
         source_authority_sha256=authority, matrix_binding=binding,
         sidecars={str(p.relative_to(output)):dict(sha256=science.sha256(p),size_bytes=p.stat().st_size)
                   for p in sorted(output.rglob('*')) if p.is_file()}, summary=_counts(groups,matrix))
@@ -160,14 +170,15 @@ def _build(args, output):
 
 
 def _same_sparse(left, right):
-    return (left.shape == right.shape and left.dtype == right.dtype and
+    return (left.format == right.format and left.shape == right.shape and left.dtype == right.dtype and
             all(np.array_equal(getattr(left,k),getattr(right,k)) for k in ('indptr','indices','data')))
 
 
 def _verify_derivative(path, binding, cells, args, authority):
-    original, _ = science.load_matrix(science.MatrixInput(**binding))
+    original, _ = c.load_source(binding)
     derived = ad.read_h5ad(path)
-    if (not sparse.isspmatrix_csr(derived.X) or not _same_sparse(original.X, derived.X)
+    direct = binding.get('method') == c.EXTERNAL_PRIMARY
+    if (not _same_array(original.X, derived.X)
             or not original.obs_names.equals(derived.obs_names) or not original.var_names.equals(derived.var_names)
             or derived.obs.columns.tolist() != [*original.obs.columns, *c.OBS_COLUMNS]):
         raise ValueError('Annotated H5AD changed canonical matrix values or axes')
@@ -180,11 +191,32 @@ def _verify_derivative(path, binding, cells, args, authority):
     if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority):
         raise ValueError('Annotated H5AD matrix/annotation lineage mismatch')
     np.testing.assert_equal(original.uns, derived.uns)
+    if direct:
+        for key in ('obsm','varm','obsp','varp','layers'):
+            left,right=getattr(original,key),getattr(derived,key)
+            if set(left)!=set(right) or any(not _same_array(left[k],right[k]) for k in left):
+                raise ValueError('Annotated H5AD changed an ancillary scientific slot')
+        if (original.raw is None) != (derived.raw is None):
+            raise ValueError('Annotated H5AD changed raw storage')
+        if original.raw is not None:
+            if not _same_array(original.raw.X,derived.raw.X): raise ValueError('Changed raw values')
+            pd.testing.assert_frame_equal(original.raw.var,derived.raw.var)
+            if set(original.raw.varm)!=set(derived.raw.varm) or any(not _same_array(original.raw.varm[k],derived.raw.varm[k]) for k in original.raw.varm):
+                raise ValueError('Changed raw feature metadata')
+        return
     # The canonical owner publishes no alternate matrices or embeddings.
     if (original.raw is not None or derived.raw is not None or
             any(len(getattr(a,key)) for a in (original,derived)
                 for key in ('obsm','varm','obsp','varp','layers'))):
         raise ValueError('Unexpected alternate matrix slots in canonical annotation input/output')
+
+
+def _same_array(left,right):
+    if sparse.issparse(left) or sparse.issparse(right):
+        return sparse.issparse(left) and sparse.issparse(right) and _same_sparse(left,right)
+    if isinstance(left,pd.DataFrame) or isinstance(right,pd.DataFrame):
+        return isinstance(left,pd.DataFrame) and isinstance(right,pd.DataFrame) and left.equals(right)
+    return left.shape == right.shape and left.dtype == right.dtype and np.array_equal(left,right,equal_nan=True)
 
 
 @owned_verification('annotation')
@@ -197,7 +229,7 @@ def verify_annotation(path, *, expected_sha256):
     """
     value = c.load_manifest(path, expected_sha256)
     args = value['arguments']; root = Path(path).parent
-    spec = c.specification(args['annotation_spec_path'], args['annotation_spec_sha256'])
+    spec = c.resolved_specification(args)
     authority, matrix, binding = source(args, spec)
     if value['inputs'] != spec or value['source_authority_sha256'] != authority or value['matrix_binding'] != binding:
         raise ValueError('Annotation source or scientific input binding mismatch')
@@ -213,7 +245,7 @@ def verify_annotation(path, *, expected_sha256):
         raise ValueError('Primary component sidecar identities differ from annotation publication')
     with tempfile.TemporaryDirectory(prefix='.annotation-verification-', dir=root.parent) as tmp:
         replay = Path(tmp)/'primary'
-        expected_provenance = science.annotate_cell_groups(**c.component_arguments(args,spec,binding,replay))
+        expected_provenance = c.backend(binding).annotate_cell_groups(**c.component_arguments(args,spec,binding,replay))
         for key in ('sidecars',):
             provenance.pop(key); expected_provenance.pop(key)
         if provenance != expected_provenance:
@@ -261,7 +293,7 @@ def execute_annotation(arguments, execution_identity=None):
     with _operation() as context:
         context.register_execution('annotation',args['output_dir'],execution_identity)
         return publication._execute_publication(args,destination,token,lambda output:_build(args,output),
-            _summary,RECOVERY_POLICY,c.PROFILE_SHA256,load_manifest=c.load_manifest,receipt_factory=_make_receipt)
+            _summary,RECOVERY_POLICY,c.profile_sha(args),load_manifest=c.load_manifest,receipt_factory=_make_receipt)
 
 
 def recover_annotation(arguments, execution_identity):
@@ -275,7 +307,9 @@ def recover_annotation(arguments, execution_identity):
     return result
 
 
-def annotate_scATAC_cell_types(matrix_manifest_path, matrix_manifest_sha256, annotation_spec_path,
-                              annotation_spec_sha256, output_dir) -> CellTypeAnnotationResult:
+def annotate_scATAC_cell_types(annotation_spec_path, annotation_spec_sha256, output_dir,
+                              matrix_manifest_path=None, matrix_manifest_sha256=None,
+                              groups_path=None, groups_sha256=None, source_path=None, source_sha256=None,
+                              annotation_method=None, count_slot=None, group_column=None) -> CellTypeAnnotationResult:
     """Annotate exact canonical groups with explicit pinned tissue/context resources."""
-    return execute_annotation(locals())
+    return execute_annotation({k: v for k, v in locals().items() if v is not None})

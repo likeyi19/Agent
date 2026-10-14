@@ -28,6 +28,8 @@ _UPLOAD_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
 _STORAGE_NAME = re.compile(r'[0-9a-f]{64}\.h5ad')
 _FRAGMENTS_NAME = re.compile(r'[0-9a-f]{64}\.fragments')
 _BAM_NAME = re.compile(r'[0-9a-f]{64}\.bam')
+_GROUPS_NAME = re.compile(r'[0-9a-f]{64}\.groups.tsv')
+_GROUPS_ATTRIBUTION = 'Browser-supplied cell grouping TSV; scientific derivation unverified.'
 _ATTRIBUTION = 'Browser-supplied H5AD; scientific provenance unverified.'
 _FRAGMENTS_ATTRIBUTION = 'Browser-supplied external fragments; scientific provenance unverified.'
 _BAM_ATTRIBUTION = 'Browser-supplied BAM; scientific provenance unverified.'
@@ -158,6 +160,8 @@ class H5ADUploadAdmission:
         path = Path(record.source_path)
         if record.input_type == 'h5ad':
             valid = record.attribution == _ATTRIBUTION and _STORAGE_NAME.fullmatch(path.name)
+        elif record.input_type == 'groups':
+            valid = record.attribution == _GROUPS_ATTRIBUTION and _GROUPS_NAME.fullmatch(path.name)
         elif record.input_type == 'external_fragments':
             valid = (record.attribution == _FRAGMENTS_ATTRIBUTION
                      and _FRAGMENTS_NAME.fullmatch(path.name))
@@ -249,7 +253,7 @@ class H5ADUploadAdmission:
         """
         _request(upload_id, filename)
         paired = index_filename is not None or source_size is not None
-        if input_type not in ('h5ad', 'external_fragments', 'bam', 'fastq'):
+        if input_type not in ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups'):
             raise UploadError('UPLOAD_REQUEST_INVALID')
         if input_type == 'fastq':
             fastq_member = self.resources.fastq_member_declaration(fastq_member)
@@ -279,6 +283,7 @@ class H5ADUploadAdmission:
         else:
             domain, suffix, prefix, attribution = {
                 'h5ad': (b'agent.web-h5ad-upload.v1\0', '.h5ad', 'web-h5ad-upload:', _ATTRIBUTION),
+                'groups': (b'agent.web-groups-upload.v1\0', '.groups.tsv', 'web-groups-upload:', _GROUPS_ATTRIBUTION),
                 'external_fragments': (b'agent.web-fragments-upload.v1\0', '.fragments',
                                        'web-fragments-upload:', _FRAGMENTS_ATTRIBUTION),
                 'bam': (b'agent.web-bam-upload.v1\0', '.bam', 'web-bam-upload:', _BAM_ATTRIBUTION),

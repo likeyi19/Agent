@@ -237,6 +237,7 @@ class ParameterAnswer:
 class RequestResources:
     target: str
     arguments: tuple[ScopedArgument, ...] = ()
+    roles: tuple[InputRole, ...] = ()
 
     def __post_init__(self):
         if type(self.target) is not str or not self.target:
@@ -476,8 +477,9 @@ def parse_decision(raw, *, utterance=None):
                                  _leiden_argument(value.get('argument')),
                                  _scientific_arguments(value.get('arguments', [])))
         if kind == 'request_resources':
-            _shape(value, ('kind', 'target', 'arguments'))
-            return RequestResources(value['target'], _scientific_arguments(value['arguments']))
+            _shape(value, ('kind', 'target', 'arguments') + (('roles',) if 'roles' in value else ()))
+            return RequestResources(value['target'], _scientific_arguments(value['arguments']),
+                                    _input_roles(value.get('roles', [])))
         if kind == 'answer_resources':
             _shape(value, ('kind', 'pending', 'choice', 'arguments'))
             return ResourceAnswer(value['pending'], value['choice'], _scientific_arguments(value['arguments']))
@@ -629,7 +631,8 @@ def decision_schema(public):
                 candidate=enum(c['candidate'] for c in candidates), evidence={'type':'string','maxLength':4096})))
         if public['dialogue'].get('resource_source'):
             variants.append(_object(dict(kind=enum(('request_resources',)),
-                target=enum(public['dialogue']['tools']), arguments=declarations)))
+                target=enum(public['dialogue']['tools']), arguments=declarations,
+                **(dict(roles=role_schema(input_roles)) if selected_sources and input_roles else {}))))
         if pending is not None and pending.get('field') == 'resources' and pending.get('choices'):
             variants.append(_object(dict(kind=enum(('answer_resources',)),
                 pending=enum((pending['handle'],)),

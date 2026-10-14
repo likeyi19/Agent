@@ -42,8 +42,8 @@ def _strings(item):
             yield text
 
 
-def _feature_axis(group, length):
-    columns = ('_index', 'chrom', 'start', 'end', 'matrix_column_index')
+def _feature_axis(group, length, *, external=False):
+    columns = ('_index',) if external else ('_index', 'chrom', 'start', 'end', 'matrix_column_index')
     matrix._reject(not isinstance(group, h5py.Group) or set(group) != set(columns))
     matrix._attrs(group, {'encoding-type': 'dataframe', 'encoding-version': '0.2.0',
                          '_index': '_index', 'column-order': columns[1:]})
@@ -59,6 +59,17 @@ def _feature_axis(group, length):
 
 
 def _inspect(file, manifest, *, exported=False):
+    if manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256:
+        from agent.tools.analysis import peak_h5ad
+        from agent.tools.analysis.scatac_annotation import _provenance
+        peak_h5ad.inspect(file, privacy=True,
+            private_paths=() if exported else ('/uns/cell_type_annotation/source_path',))
+        provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'])
+        if exported: provenance.pop('source_path')
+        io._group(file['uns/cell_type_annotation'],provenance)
+        for name,value in provenance.items():
+            io._scalar(file['uns/cell_type_annotation'][name],value,private=name=='source_path')
+        return
     reject = matrix._reject
     reject(file.userblock_size != 0 or set(file) != matrix._TOP_LEVEL)
     matrix._safe_objects(file, maximum_depth=3)
@@ -77,7 +88,8 @@ def _inspect(file, manifest, *, exported=False):
         d = x[name]
         reject(not isinstance(d, h5py.Dataset) or d.ndim != 1 or len(d.attrs) or d.dtype != np.dtype('int64'))
     reject(len(x['data']) != len(x['indices']) or len(x['indptr']) != n + 1)
-    base = ('_index', 'namespace', 'barcode_identifier', 'matrix_row_index')
+    external = manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256
+    base = ('_index',) if external else ('_index', 'namespace', 'barcode_identifier', 'matrix_row_index')
     columns = (*base, *owner.OBS_COLUMNS)
     obs = file['obs']
     reject(not isinstance(obs, h5py.Group) or set(obs) != set(columns))
@@ -108,14 +120,16 @@ def _inspect(file, manifest, *, exported=False):
         for left in range(0, n, 65536):
             values = codes[left:left+65536]
             reject(np.any(values < (-1 if name == 'primary_annotation' else 0)) or np.any(values >= len(categories)))
-    _feature_axis(file['var'], p)
-    io._group(file['uns'], matrix._CREATED_UNS | {'cell_type_annotation'} | ({io.EXPORT_KEY} if exported else set()))
-    for name in matrix._CREATED_UNS:
+    _feature_axis(file['var'], p, external=external)
+    source_uns = {'species', 'assembly', 'matrix_semantics', 'reference_identity_sha256'} if external else matrix._CREATED_UNS
+    io._group(file['uns'], source_uns | {'cell_type_annotation'} | ({io.EXPORT_KEY} if exported else set()))
+    for name in source_uns:
         d = file['uns'][name]
         reject(not isinstance(d, h5py.Dataset) or d.shape != ())
         matrix._attrs(d, {'encoding-type': 'string', 'encoding-version': '0.2.0'})
         value = next(matrix._strings(d))
         expected = {'species': manifest['inputs']['species'], 'assembly': manifest['inputs']['assembly'],
+                    'matrix_semantics': 'fragment_counts',
                     'logical_matrix_sha256': manifest['summary']['logical_matrix_sha256'],
                     'ordered_feature_sha256': manifest['matrix_binding']['ordered_features_sha256']}
         reject(name in expected and value != expected[name])
@@ -130,7 +144,7 @@ def _inspect(file, manifest, *, exported=False):
 def _copy(source, destination):
     destination.attrs.update(dict(source.attrs))
     for name, item in source.items():
-        if item.name == '/uns/cell_type_annotation/matrix_manifest_path': continue
+        if item.name in ('/uns/cell_type_annotation/matrix_manifest_path','/uns/cell_type_annotation/source_path'): continue
         if isinstance(item, h5py.Group):
             _copy(item, destination.create_group(name))
             continue
@@ -142,7 +156,7 @@ def _copy(source, destination):
                 right = min(left + 4096, len(item))
                 target[left:right] = _string_block(item, left, right)
         else:
-            chunk = max(1, 1024**2 // item.dtype.itemsize)
+            chunk = max(1, 1024**2 // (item.dtype.itemsize * max(1, int(np.prod(item.shape[1:])))))
             for left in range(0, len(item), chunk): target[left:left+chunk] = item[left:left+chunk]
 
 
@@ -156,11 +170,15 @@ def create_annotation_export(source_stream, destination_stream, manifest, *, sou
     metadata = dict(contract_version=EXPORT_CONTRACT, source_contract=CONTRACT,
         source_sha256=source_sha256, source_size_bytes=source_size_bytes,
         source_manifest_sha256=manifest_sha256,
-        provenance_policy='historical-matrix-locator-omitted',
+        provenance_policy='private-source-locator-omitted' if manifest['profile_sha256']==owner.EXTERNAL_PROFILE_SHA256 else 'historical-matrix-locator-omitted',
         authority_scope='export-does-not-issue-scientific-authority')
     with h5py.File(source_stream, 'r') as source:
         _inspect(source, manifest)
-        numeric = sum(source[n].size * source[n].dtype.itemsize for n in ('X/data', 'X/indices', 'X/indptr'))
+        if manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256:
+            from agent.tools.analysis.peak_h5ad import inspect
+            numeric = inspect(source)
+        else:
+            numeric = sum(source[n].size * source[n].dtype.itemsize for n in ('X/data', 'X/indices', 'X/indptr'))
         matrix._reject(numeric > max_bytes)
         with h5py.File(io._BoundedDestination(destination_stream, max_bytes), 'w') as destination:
             _copy(source, destination)
@@ -195,7 +213,7 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
             or record['schema_version'] != 2 or record['completion'] != 'succeeded'
             or record['scope'] != 'scientific_correctness.v1'
             or record['artifact_contract'] != CONTRACT or record['artifact_type'] != owner.ARTIFACT
-            or record['science_profile'] != owner.PROFILE_SHA256
+            or record['science_profile'] != owner.profile_sha(step.resolved_arguments)
             or record['verifier'] != dict(id='agent.cell-type-annotation-replay', compatibility_version='1')):
         raise ValueError('Unsupported annotation authority.')
     spec = app._application.registry.get(step.tool_name)

@@ -169,7 +169,7 @@ def test_bam_has_one_source_and_context_selection_keeps_inspection_available():
     page = HierarchyPage(html)
     assert 'turn-form' in page.ancestors['bam-input-help']
     upload = section('function renderUploadType()', 'function transferUpload(')
-    assert 'bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : ".h5ad"' in upload
+    assert 'bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad"' in upload
     assert 'element("upload-index-fields").hidden = !fragments' in upload
     context = section('function inputContext()', 'function selectedResourceType()')
     assert 'Choose approved BAM context or inspect' in context

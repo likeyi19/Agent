@@ -591,8 +591,8 @@ def _detail(sessions, step, request):
         return selected
 
     if request.section == 'annotation_rationale':
-        from agent.tools.analysis.annotation_contract import CONTRACT, PROFILE_SHA256
-        if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != PROFILE_SHA256:
+        from agent.tools.analysis.annotation_contract import CONTRACT, profile_sha
+        if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != profile_sha(manifest['arguments']):
             raise _Unsupported('unsupported_detail_profile')
         groups = records('primary/groups.json', lambda row: row['group'] == request.subject, 'assignment')
         if len(groups) != 1:

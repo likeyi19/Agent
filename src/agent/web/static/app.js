@@ -1111,7 +1111,7 @@ function inputContext() {
   // Repeat the operator-admitted display label without deriving scientific context.
   const choice = element("input-choice").selectedOptions[0];
   const resources = selectedResourceIds().map((id) => state.resources.find((choice) => choice.resource_id === id));
-  const multiple = resources.length > 1;
+  const multiple = resources.length > 1 || state.selectedResourceIds.length > 0;
   const epizoo = element("epizoo-resource-choice").selectedOptions[0];
   const labels = [...resources.map((resource, index) => `${multiple ? `${index + 1}. ` : ""}${resource.label}`),
     choice && choice.value ? choice.textContent : "",
@@ -1160,7 +1160,7 @@ function selectedResourceIds() {
 function canAddScientificInput() {
   const ids = selectedResourceIds();
   return Boolean(element("resource-choice").value) && ids.length < MAX_SELECTED_RESOURCES
-    && ids.every((id) => state.resources.some((resource) => resource.resource_id === id && resource.input_type === "h5ad"));
+    && ids.every((id) => state.resources.some((resource) => resource.resource_id === id && ["h5ad", "groups"].includes(resource.input_type)));
 }
 
 function renderSelectedResources() {
@@ -1216,7 +1216,7 @@ function uploadStatus(text, failed = false) {
 
 function renderResources(selectedId = "", restoreSavedSelection = false) {
   const selected = state.resources.find((choice) => choice.resource_id === selectedId);
-  const canSelect = selected && (restoreSavedSelection || !state.selectedResourceIds.length || selected.input_type === "h5ad");
+  const canSelect = selected && (restoreSavedSelection || !state.selectedResourceIds.length || ["h5ad", "groups"].includes(selected.input_type));
   if (selected && !canSelect) state.selectedResourceIds = selectedResourceIds();
   const none = document.createElement("option");
   none.value = "";
@@ -1224,16 +1224,16 @@ function renderResources(selectedId = "", restoreSavedSelection = false) {
   element("resource-choice").replaceChildren(none, ...state.resources.map((choice) => {
     const option = document.createElement("option");
     option.value = choice.resource_id;
-    const role = choice.input_type === "external_fragments" ? `Fragments${choice.has_source_index === true ? " + TBI" : ""}` : choice.input_type === "bam" ? "BAM" : choice.input_type === "fastq" ? "FASTQ library" : "H5AD";
+    const role = choice.input_type === "external_fragments" ? `Fragments${choice.has_source_index === true ? " + TBI" : ""}` : choice.input_type === "bam" ? "BAM" : choice.input_type === "fastq" ? "FASTQ library" : choice.input_type === "groups" ? "Cell groups" : "H5AD";
     option.textContent = `${choice.label} · ${role} · registered`;
     option.disabled = state.selectedResourceIds.includes(choice.resource_id)
-      || state.selectedResourceIds.length > 0 && choice.input_type !== "h5ad";
+      || state.selectedResourceIds.length > 0 && !["h5ad", "groups"].includes(choice.input_type);
     return option;
   }));
   if (canSelect) {
     element("resource-choice").value = selectedId;
   }
-  if (selectedResourceIds().length === 1 && !selectedCompanion()) element("input-choice").value = "";
+  if (selectedResourceIds().length === 1 && !state.selectedResourceIds.length && !selectedCompanion()) element("input-choice").value = "";
   renderSelectedResources();
   saveResourceSelection();
   saveConveniences();
@@ -1292,8 +1292,9 @@ function renderUploadType() {
   const fragments = element("upload-type").value === "external_fragments";
   const bam = element("upload-type").value === "bam";
   const fastq = element("upload-type").value === "fastq";
-  element("upload-file-label").textContent = fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : "Attach an H5AD file";
-  element("upload-file").accept = fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : ".h5ad";
+  const groups = element("upload-type").value === "groups";
+  element("upload-file-label").textContent = fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : groups ? "Attach exact ordered cell_id / group TSV" : "Attach an H5AD file";
+  element("upload-file").accept = fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad";
   element("upload-index-fields").hidden = !fragments;
   element("fragments-input-help").hidden = !fragments;
   element("bam-input-help").hidden = !bam;
@@ -1549,7 +1550,7 @@ function submitRequest(utterance, predecessorTurnId = null) {
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
   const selectedIds = selectedResourceIds();
-  if (selectedIds.length > 1) {
+  if (selectedIds.length > 1 || state.selectedResourceIds.length || selectedResourceType() === "groups") {
     body.resource_ids = Object.freeze(selectedIds);
     if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   }
@@ -1609,7 +1610,7 @@ element("model-choice").addEventListener("change", modelDescription);
 element("input-choice").addEventListener("change", () => {
   if (state.upload) clearPendingUpload();
   if (element("input-choice").value && !selectedCompanion()) {
-    if (selectedResourceIds().length < 2) {
+    if (selectedResourceIds().length < 2 && !state.selectedResourceIds.length) {
       state.selectedResourceIds = [];
       element("resource-choice").value = "";
     }

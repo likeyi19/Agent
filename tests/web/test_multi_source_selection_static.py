@@ -48,19 +48,19 @@ def test_reopen_checks_display_selection_against_the_catalog_without_execution()
     assert 'checkpoint_path' not in source() and 'record_sha256' not in source()
 
 
-def test_group_add_affordance_matches_existing_h5ad_only_contract():
+def test_group_add_affordance_admits_h5ad_and_exact_group_files():
     helper = section('function canAddScientificInput()', 'function renderSelectedResources()')
-    assert 'resource.input_type === "h5ad"' in helper
+    assert '["h5ad", "groups"].includes(resource.input_type)' in helper
     assert 'ids.length < MAX_SELECTED_RESOURCES' in helper
     assert not any(term in helper for term in ('reference', 'query', 'ground_truth', 'species'))
     rendered = section('function renderResources(', 'async function loadResources()')
-    assert 'state.selectedResourceIds.length > 0 && choice.input_type !== "h5ad"' in rendered
-    assert 'Multiple inputs support 2–8 H5AD files.' in (STATIC / 'index.html').read_text()
+    assert 'state.selectedResourceIds.length > 0 && !["h5ad", "groups"].includes(choice.input_type)' in rendered
+    assert 'Select up to 8 H5AD or exact grouping TSV files.' in (STATIC / 'index.html').read_text()
 
 
 def test_incompatible_new_registration_does_not_replace_or_extend_queued_h5ad_selection():
     rendered = section('function renderResources(', 'async function loadResources()')
-    assert 'restoreSavedSelection || !state.selectedResourceIds.length || selected.input_type === "h5ad"' in rendered
+    assert 'restoreSavedSelection || !state.selectedResourceIds.length || ["h5ad", "groups"].includes(selected.input_type)' in rendered
     assert 'return Boolean(selectedId && element("resource-choice").value === selectedId)' in rendered
     assert rendered.index('if (selected && !canSelect) state.selectedResourceIds = selectedResourceIds()') < rendered.index('replaceChildren')
     assert 'state.selectedResourceIds = []' not in rendered and '.sort(' not in rendered

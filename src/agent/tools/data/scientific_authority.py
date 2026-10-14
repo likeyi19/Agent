@@ -144,21 +144,35 @@ def describe(kind, path, sha, context):
         from agent.tools.analysis import annotation_contract as annotation, marker_annotation
         from agent.orchestration.verification_authority import bind_annotation_matrix
         args = value['arguments']
-        spec = annotation.specification(args['annotation_spec_path'], args['annotation_spec_sha256'])
-        authority, _ = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], context)
+        spec = annotation.resolved_specification(args)
+        if spec['schema'] == annotation.EXTERNAL_SPEC:
+            authority = annotation.digest(dict(contract='external-peak-annotation-input.v1',
+                binding=value['matrix_binding'],declarations=spec,
+                upstream_counting_history='declared_not_reconstructed'))
+        else:
+            authority, _ = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], context)
         if value['inputs'] != spec or value['source_authority_sha256'] != authority:
             raise AuthorityError('Annotation source authority or specification changed.')
-        dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
+        if spec['schema'] == annotation.EXTERNAL_SPEC:
+            from agent.tools.analysis import peak_h5ad
+            resources.extend([args['source_path'],spec['contig_scope']['path'],peak_h5ad.__file__])
+            if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
+                resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
+        else:
+            dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
         owned.extend(root / name for name in value['sidecars'])
-        resources.extend([args['annotation_spec_path'], spec['groups']['path'],
+        if 'path' in spec['groups']: resources.append(spec['groups']['path'])
+        resources.extend([args['annotation_spec_path'],
                           spec['gene_resource']['path'], spec['signature_resource']['path']])
         runtime = annotation.backend_runtime()
         resources.extend([runtime.rscript, marker_annotation.__file__,
                           str(Path(marker_annotation.__file__).parent / 'r/maestro_markers_v1.R')])
+        if spec['schema'] == annotation.EXTERNAL_SPEC:
+            resources.append(annotation.backend(value['matrix_binding']).__file__)
         resources.extend(str(Path(runtime.upstream_dir) / name) for name in marker_annotation.SOURCES)
         for package in ('presto', 'Matrix', 'dplyr'):
             resources.extend(str(p.resolve()) for p in (Path(runtime.r_library)/package).rglob('*') if p.is_file())
-        profile = annotation.PROFILE_SHA256
+        profile = annotation.profile_sha(args)
         verifier = dict(id='agent.cell-type-annotation-replay', compatibility_version='1')
     elif kind in CONTRACTS or kind == 'generic_fragments':
         kinds = {e['provenance']['kind'] for e in value['libraries']}

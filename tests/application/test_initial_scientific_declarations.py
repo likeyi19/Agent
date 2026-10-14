@@ -176,13 +176,15 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
         ('import_scATAC_fragments', 'source_profile'): ('10x-atac-fragments.v1',),
         ('import_scATAC_fragments', 'source_selection'): ('full_export', 'subset_export', 'unknown'),
     }
-    assert len(parameters) == 21
+    assert len(parameters) == 23
     assert len([row for row in parameters if not row.get('choices') and not row.get('exact_string')]) == 14
     assert {(row['tool'], row['argument']) for row in parameters if row.get('exact_string')} == {
         ('evaluate_cell_clustering', 'label_key'),
         ('transfer_cell_labels', 'reference_label_key'),
         ('evaluate_cell_annotation', 'ground_truth_label_key'),
         ('import_scATAC_fragments', 'namespace'),
+        ('annotate_scATAC_cell_types', 'count_slot'),
+        ('annotate_scATAC_cell_types', 'group_column'),
     }
     execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
         if row['properties']['kind']['enum'] == ['execute_plan'])
@@ -318,7 +320,7 @@ def test_pending_scalar_schema_preserves_exact_pairs_and_scoped_choices(field, k
         if field == 'parameters' or 'choices' not in row}
     actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
         for row in members}
-    assert actual == expected and len(actual) == (21 if field == 'parameters' else 18)
+    assert actual == expected and len(actual) == (23 if field == 'parameters' else 20)
     assert len([row for row in context['dialogue']['scientific_parameters']
                 if not row.get('choices') and not row.get('exact_string')]) == 14
     assert arguments['maxItems'] == 8

@@ -58,7 +58,7 @@ class SubmitTurn(_Body):
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
-    resource_ids: list[StrictStr] | None = Field(default=None, min_length=2, max_length=8)
+    resource_ids: list[StrictStr] | None = Field(default=None, min_length=1, max_length=8)
     epizoo_resource_id: StrictStr | None = Field(default=None, min_length=1, max_length=64,
                                                pattern=r'^[a-z][a-z0-9_-]*$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
@@ -440,7 +440,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.put('/api/v1/uploads/{upload_id}', status_code=201)
     async def upload_source(upload_id: str, request: Request,
                             filename: str = Query(min_length=1, max_length=160),
-                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq)$'),
+                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq|groups)$'),
                             index_filename: str | None = Query(default=None, min_length=1, max_length=160),
                             source_size: str | None = Query(default=None, min_length=1, max_length=20),
                             library_id: str | None = Query(default=None, min_length=1, max_length=64),

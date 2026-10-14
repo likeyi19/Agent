@@ -178,6 +178,9 @@ def test_planner_and_plan_only(tmp_path,monkeypatch,version):
     args={k:'1'*64 if k.endswith('_sha256') else '/PRIVATE/'+k for k in c.ARGUMENTS}
     payload=wire() if version==4 else dict(schema_version=3,status='plan',reason=None,steps=[dict(step_id='annotation',tool_name=TOOL,
         arguments={k:dict(binding_type='input',input_name=k) for k in args},depends_on=[],description='Annotate.')])
+    if version==3:
+        for key in build_default_tool_registry().get(TOOL).optional_arguments:
+            payload['steps'][0]['arguments'].setdefault(key,None)
     planner=LLMPlanner(Model(payload),wire_mode=PlanningWireMode.V4 if version==4 else PlanningWireMode.V3)
     request=AgentRequest('annotation','Annotate explicit groups.',args,RunMode.PLAN_ONLY)
     assert dict(planner.plan(request,build_default_tool_registry()).steps[0].arguments)==args

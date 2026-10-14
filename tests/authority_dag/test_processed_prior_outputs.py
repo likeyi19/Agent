@@ -335,8 +335,10 @@ def test_incompatible_consumer_channel_is_registry_driven(processed_source):
     assert legitimate.producer_tool_name == 'build_cell_neighbors'
     assert [(member.argument_name, member.output_key) for member in legitimate.members] == [
         ('analysis_path', 'analysis_path')]
+    umap = channel_for(source.binding, 'compute_cell_umap', 'analysis', source.app.registry)
+    assert umap.producer_tool_name == 'build_cell_neighbors'
     with pytest.raises(AuthorityError, match='incompatible'):
-        channel_for(source.binding, 'compute_cell_umap', 'analysis', source.app.registry)
+        channel_for(source.binding, 'evaluate_cell_clustering', 'analysis', source.app.registry)
 
 
 @pytest.mark.parametrize('target', ['analysis', 'publication'])

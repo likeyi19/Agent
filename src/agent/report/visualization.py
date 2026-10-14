@@ -296,7 +296,8 @@ def _umap_plot_digest(
     digest = hashlib.sha256()
     header = _canonical_json_bytes(
         {
-            "domain": "agent.visualization.umap-leiden-data.v1",
+            "domain": ("agent.visualization.umap-leiden-data.v1" if labels
+                       else "agent.visualization.umap-coordinate-data.v1"),
             "shape": tuple(int(value) for value in contiguous.shape),
             "dtype": contiguous.dtype.str,
             "cell_ids_sha256": _ordered_strings_digest(
@@ -463,7 +464,8 @@ def _source_artifact(
     return copied
 
 
-def _read_umap_presentation(path: Path, *, expected_n_cells: object) -> _UmapData:
+def _read_umap_presentation(path: Path, *, expected_n_cells: object,
+                            clustered: bool = True) -> _UmapData:
     try:
         artifact = ad.read_h5ad(path, backed="r")
     except Exception as exc:
@@ -484,12 +486,18 @@ def _read_umap_presentation(path: Path, *, expected_n_cells: object) -> _UmapDat
         if coordinates.shape != (len(cell_ids), 2) or not np.isfinite(coordinates).all():
             raise ValueError("Invalid UMAP coordinates.")
         coordinates = np.array(coordinates, copy=True, order="C")
-        label_series = artifact.obs["leiden"]
-        if len(label_series) != len(cell_ids) or label_series.isna().any():
-            raise ValueError("Invalid Leiden labels.")
-        labels = tuple(str(value) for value in label_series.tolist())
-        if any(not value for value in labels):
-            raise ValueError("Invalid Leiden labels.")
+        labels = ()
+        if clustered:
+            label_series = artifact.obs["leiden"]
+            if len(label_series) != len(cell_ids) or label_series.isna().any():
+                raise ValueError("Invalid Leiden labels.")
+            labels = tuple(str(value) for value in label_series.tolist())
+            if any(not value for value in labels):
+                raise ValueError("Invalid Leiden labels.")
+        else:
+            from agent.tools.analysis.embedding_analysis import _validate_umap_labels
+            if _validate_umap_labels(artifact):
+                raise ValueError("UMAP presentation variant disagrees with its artifact.")
     except Exception as exc:
         raise AnalysisVisualizationError(
             "VISUALIZATION_SOURCE_INVALID",
@@ -505,7 +513,7 @@ def _read_umap_presentation(path: Path, *, expected_n_cells: object) -> _UmapDat
         coordinates=coordinates,
         labels=labels,
         categories=categories,
-        palette=_categorical_palette(len(categories)),
+        palette=_categorical_palette(len(categories)) if categories else (),
         point_size=_umap_point_size(len(cell_ids)),
     )
 
@@ -634,6 +642,8 @@ def _supported_figure_sources(
                 "VISUALIZATION_EVIDENCE_INVALID",
                 "Verified evidence lacks supported step facts.",
             )
+        if tool_name == "compute_cell_umap" and facts.get("clustering_present") is False:
+            kind = "umap_coordinates"
         supported.append((step_id, tool_name, kind, step))
     return tuple(supported)
 
@@ -659,7 +669,8 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 tool_name=tool_name,
             )
             path = Path(str(source["artifact_path"])).expanduser().resolve()
-            data = _read_umap_presentation(path, expected_n_cells=facts.get("n_cells"))
+            data = _read_umap_presentation(path, expected_n_cells=facts.get("n_cells"),
+                                           clustered=facts.get("clustering_present", True))
             digest = _umap_plot_digest(data.cell_ids, data.coordinates, data.labels)
             legend_columns = max(1, math.ceil(len(data.categories) / 20))
             width_px = int((8.0 + 1.5 * (legend_columns - 1)) * _DPI)
@@ -689,6 +700,11 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 "coordinate_transform": False,
                 "legend_columns": legend_columns,
             }
+            if not data.labels:
+                presentation = dict(presentation)
+                for name in ("leiden_labels_sha256", "category_order", "palette", "palette_version"):
+                    presentation.pop(name)
+                presentation.update(clustering_present=False, point_color="#4477AA")
         elif tool_name == "evaluate_cell_clustering":
             source = _source_artifact(
                 artifacts,
@@ -825,7 +841,7 @@ def _renderer_contract() -> Mapping[str, JsonValue]:
 def _render_umap(figure: Figure, data: _UmapData, *, legend_columns: int) -> None:
     axes = figure.add_axes((0.08, 0.12, 0.62, 0.78))
     color_by_category = dict(zip(data.categories, data.palette, strict=True))
-    colors = [color_by_category[label] for label in data.labels]
+    colors = [color_by_category[label] for label in data.labels] if data.labels else "#4477AA"
     axes.scatter(
         data.coordinates[:, 0],
         data.coordinates[:, 1],
@@ -839,7 +855,9 @@ def _render_umap(figure: Figure, data: _UmapData, *, legend_columns: int) -> Non
     axes.set_ylabel("UMAP 2")
     axes.set_xticks(())
     axes.set_yticks(())
-    axes.set_title("UMAP by Leiden cluster")
+    axes.set_title("UMAP by Leiden cluster" if data.labels else "UMAP coordinates")
+    if not data.labels:
+        return
     handles = [
         Line2D(
             (),

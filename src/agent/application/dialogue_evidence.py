@@ -213,6 +213,10 @@ def _step_summary(sessions, run, step, planned, value):
     if any(k not in facts or k not in step.result or _bytes(facts[k]) != _bytes(step.result[k])
            for k in projection.fact_fields):
         raise _Unavailable('evidence_fact_mismatch')
+    if step.tool_name == 'compute_cell_umap' and (
+            'clustering_present' in facts or 'clustering_present' in step.result):
+        if facts.get('clustering_present') is not False or step.result.get('clustering_present') is not False:
+            raise _Unavailable('evidence_fact_mismatch')
     if len(facts) > MAX_FIELDS:
         raise _Unavailable('evidence_field_limit')
     workflow = _one([s for s in value['workflow']['ordered_steps'] if s['step_id'] == step.step_id])
@@ -244,6 +248,9 @@ def _clustering_parameter_facts(sessions, run, step, planned, value):
     """Project recorded values only; defaults never come from current code."""
     if step.tool_name not in ('cluster_cells', 'compute_cell_umap'):
         return ()
+    if step.tool_name == 'compute_cell_umap' and step.result.get('clustering_present') is False:
+        return tuple(EvidenceFact(name, 'unavailable', reason='clustering_not_performed')
+                     for name in ('clustering_parameters', 'clustering_resolution_origin'))
     source = _clustering_source(run, step, planned)
     if source is None:
         return tuple(EvidenceFact(name, 'unavailable', reason='exact_clustering_source_not_recorded')
@@ -284,7 +291,8 @@ def _clustering_neighbors_facts(sessions, run, step, planned):
     cluster labels. A literal path or an unqualified legacy graph supplies no
     compatibility evidence.
     """
-    source = _clustering_source(run, step, planned)
+    unclustered_umap = step.tool_name == 'compute_cell_umap' and step.result.get('clustering_present') is False
+    source = (step, planned) if unclustered_umap else _clustering_source(run, step, planned)
     if source is None:
         return ()
     step, planned = source
@@ -325,8 +333,8 @@ def _clustering_neighbors_facts(sessions, run, step, planned):
     return tuple(EvidenceFact(name, 'available', value, pointer,
         artifact_name='accepted_run_result', artifact_sha256=digest(run.to_dict()))
         for name, value in (
-            ('clustering_neighbors_identity_sha256', digest(binding.to_dict())),
-            ('clustering_neighbors_consumption', consumption)))
+            ('umap_neighbors_identity_sha256' if unclustered_umap else 'clustering_neighbors_identity_sha256', digest(binding.to_dict())),
+            ('umap_neighbors_consumption' if unclustered_umap else 'clustering_neighbors_consumption', consumption)))
 
 
 def _selection_parameter_facts(sessions, run, step, planned, evidence):

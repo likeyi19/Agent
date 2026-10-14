@@ -36,6 +36,7 @@ from agent.tools.analysis.embedding_analysis import (
     _provenance,
     _read_analysis,
     _validate_cluster_labels,
+    _validate_umap_labels,
     _validate_neighbors_artifact,
 )
 from agent.tools.analysis.epizoo_embedding import epizoo_embed_cells, validate_resource_provenance
@@ -744,14 +745,39 @@ def _verify_umap(
             raise ValueError("Invalid input analysis path.")
         input_artifact = _read_analysis(Path(input_value).expanduser().resolve())
         input_ids, _, _ = _validate_neighbors_artifact(
-            input_artifact, expected_stages=frozenset({"clustering"})
+            input_artifact, expected_stages=frozenset({"neighbors", "clustering"})
         )
-        _validate_cluster_labels(input_artifact)
+        clustered = _provenance(input_artifact)["stage"] == "clustering"
+        if clustered:
+            if not _validate_umap_labels(input_artifact):
+                raise ValueError("Clustered UMAP source disclaims clustering.")
+        elif ("leiden" in input_artifact.obs
+              or "clustering" in _provenance(input_artifact).get("parameters", {})):
+            raise ValueError("Neighbors-only UMAP source contains clustering data.")
         artifact = _read_analysis(path)
         output_ids, _, _ = _validate_neighbors_artifact(
             artifact, expected_stages=frozenset({"umap"})
         )
-        _validate_cluster_labels(artifact)
+        if (_validate_umap_labels(artifact) != clustered
+                or result.get("clustering_present", True) is not clustered):
+            raise ValueError("UMAP clustering variant differs from its source/result.")
+        if clustered and not artifact.obs["leiden"].equals(input_artifact.obs["leiden"]):
+            raise ValueError("UMAP changed source Leiden labels.")
+        if not np.array_equal(artifact.obsm["X_epizoo"], input_artifact.obsm["X_epizoo"]):
+            raise ValueError("UMAP changed source embeddings.")
+        if (artifact.obsp["distances"] != input_artifact.obsp["distances"]).nnz:
+            raise ValueError("UMAP changed source distances.")
+        # Native UMAP prunes weak connectivity edges in place during optimization.
+        # Retained edges must still have the exact source weights; do not replace
+        # native behavior or reconstruct its numerical optimization here.
+        connections = artifact.obsp["connectivities"]
+        changed = connections != input_artifact.obsp["connectivities"]
+        if connections.multiply(changed).count_nonzero():
+            raise ValueError("UMAP changed retained source connectivity weights.")
+        for key in ("neighbors", "clustering"):
+            if (_provenance(artifact).get("parameters", {}).get(key)
+                    != _provenance(input_artifact).get("parameters", {}).get(key)):
+                raise ValueError("UMAP changed source parameter provenance.")
         coordinates = np.asarray(artifact.obsm[UMAP_KEY])
         provenance = _provenance(artifact)
         parameters = provenance.get("parameters")
@@ -791,7 +817,7 @@ def _verify_umap(
     checks.add(
         "umap_artifact_structure",
         structure_valid,
-        "UMAP artifact has valid graph, labels, and finite coordinates.",
+        "UMAP artifact has aligned source graph data, optional labels, and finite coordinates.",
         "UMAP artifact is unreadable or scientifically inconsistent.",
         "RESULT_METADATA_INCONSISTENT",
     )

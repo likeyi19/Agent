@@ -90,6 +90,7 @@ class CellClusteringToolResult(TypedDict):
 class CellUMAPToolResult(TypedDict):
     """Lightweight result for a persisted two-dimensional UMAP."""
 
+    clustering_present: NotRequired[bool]
     status: Literal["success"]
     input_analysis_path: str
     analysis_path: str
@@ -313,6 +314,20 @@ def _validate_cluster_labels(adata: ad.AnnData) -> int:
     if n_clusters <= 0:
         raise ValueError("Clustered analysis artifact has no Leiden clusters.")
     return n_clusters
+
+
+def _validate_umap_labels(adata: ad.AnnData) -> bool:
+    """Absent variant metadata retains the historical clustered UMAP contract."""
+    provenance = _provenance(adata)
+    clustered = provenance.get("clustering_present", True)
+    if not isinstance(clustered, (bool, np.bool_)):
+        raise ValueError("Invalid UMAP clustering declaration.")
+    if clustered:
+        _validate_cluster_labels(adata)
+    elif (LEIDEN_KEY in adata.obs
+          or "clustering" in provenance.get("parameters", {})):
+        raise ValueError("Unclustered UMAP must not contain Leiden labels or provenance.")
+    return bool(clustered)
 
 
 def _read_analysis(path: Path) -> ad.AnnData:
@@ -584,7 +599,7 @@ def compute_cell_umap(
     random_seed: int = 0,
     overwrite: bool = False,
 ) -> CellUMAPToolResult:
-    """Compute and persist a fixed two-dimensional UMAP from a clustered artifact."""
+    """Compute fixed two-dimensional UMAP from neighbors, optionally with Leiden."""
 
     _validate_overwrite(overwrite)
     _validate_seed(random_seed)
@@ -607,9 +622,14 @@ def compute_cell_umap(
 
     adata = _read_analysis(resolved_input)
     input_cell_ids, _, _ = _validate_neighbors_artifact(
-        adata, expected_stages=frozenset({"clustering"})
+        adata, expected_stages=frozenset({"neighbors", "clustering"})
     )
-    _validate_cluster_labels(adata)
+    clustered = _provenance(adata)["stage"] == "clustering"
+    if not clustered:
+        # Explicit only for the new variant; historical clustered bytes stay valid.
+        adata.uns[PROVENANCE_KEY]["clustering_present"] = False
+    if _validate_umap_labels(adata) != clustered:
+        raise ValueError("UMAP source stage and clustering declaration disagree.")
 
     import scanpy as sc
 
@@ -627,9 +647,10 @@ def compute_cell_umap(
     if coordinates.shape != (adata.n_obs, 2) or not _all_finite(coordinates):
         raise RuntimeError("Scanpy produced invalid UMAP coordinates.")
     output_cell_ids, _, _ = _validate_neighbors_artifact(
-        adata, expected_stages=frozenset({"clustering"})
+        adata, expected_stages=frozenset({"neighbors", "clustering"})
     )
-    _validate_cluster_labels(adata)
+    if _validate_umap_labels(adata) != clustered:
+        raise RuntimeError("UMAP changed the source clustering declaration.")
     order_preserved = output_cell_ids == input_cell_ids
     if not order_preserved:
         raise RuntimeError("UMAP computation changed the ordered cell identifiers.")
@@ -651,7 +672,8 @@ def compute_cell_umap(
 
     def validate_written(written: ad.AnnData) -> None:
         _validate_neighbors_artifact(written, expected_stages=frozenset({"umap"}))
-        _validate_cluster_labels(written)
+        if _validate_umap_labels(written) != clustered:
+            raise ValueError("Written UMAP changed its clustering declaration.")
         written_coordinates = np.asarray(written.obsm[UMAP_KEY])
         if written_coordinates.shape != (written.n_obs, 2):
             raise ValueError("Written UMAP coordinates have an invalid shape.")
@@ -673,6 +695,7 @@ def compute_cell_umap(
         "n_components": 2,
         "umap_key": UMAP_KEY,
         "coordinate_dtype": str(coordinates.dtype),
+        **({} if clustered else {"clustering_present": False}),
         "analysis_sha256": _analysis_digest(output_path),
         "finite": True,
         "min_dist": normalized_min_dist,

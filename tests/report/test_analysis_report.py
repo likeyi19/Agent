@@ -359,6 +359,16 @@ def test_conditional_sections_are_exact(
     assert f"## {absent}" not in markdown
 
 
+def test_unclustered_umap_report_without_figures_is_explicit(tmp_path):
+    _, _, _, result = _build(tmp_path, ('compute_cell_umap',),
+        facts_override={'compute_cell_umap': {'clustering_present': False}})
+    text = Path(result['report_path']).read_text()
+    assert 'Neighbors and UMAP' in text
+    assert 'Clustering and UMAP' not in text
+    assert 'Leiden clustering present' in text
+    assert result['n_figures'] == 0
+
+
 def test_full_report_has_fixed_sections_facts_and_exact_values(tmp_path: Path) -> None:
     run, evidence, visualization, result = _build(
         tmp_path, _ALL_TOOLS, with_visualization=True

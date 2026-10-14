@@ -489,8 +489,11 @@ def _validate_adata(adata: Any, species_cfg: _SpeciesConfig) -> ad.AnnData:
 
     matrix = adata.X
     data = matrix.data
-    if np.issubdtype(data.dtype, np.complexfloating) or not np.issubdtype(
-        data.dtype, np.number
+    # Boolean storage represents the same 0/1 values as integer binary input;
+    # native TF-IDF casts both to float32. This does not binarize count data.
+    if np.issubdtype(data.dtype, np.complexfloating) or not (
+        np.issubdtype(data.dtype, np.number)
+        or np.issubdtype(data.dtype, np.bool_)
     ):
         raise TypeError("Sparse scATAC values must be real numeric counts.")
     if not np.all(np.isfinite(data)):

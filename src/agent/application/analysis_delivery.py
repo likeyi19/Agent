@@ -1,4 +1,4 @@
-"""Closed safe export of accepted UMAP cells, embeddings and Leiden labels."""
+"""Closed safe export of accepted UMAP cells, embeddings and optional Leiden."""
 import os
 from pathlib import Path
 
@@ -40,16 +40,18 @@ def accepted_analysis(service, session_id, revision, origin, output, *, step_id=
         turn_id=origin.turn_id, run_id=run_id, step_id=step_id, accepted_step=anchor,
         role=ROLE, sha256=sha, size_bytes=size)
     reference = ScientificArtifactHandle(digest(identity), 'scientific_analysis', sha,
-        revision.revision_id, origin.turn_id, size, FILENAME, LABEL)
+        revision.revision_id, origin.turn_id, size, FILENAME,
+        'Embeddings and UMAP — safe export' if result.get('clustering_present') is False else LABEL)
     return _ScientificMatrixArtifact(reference, path, root, sha, size, CONTRACT,
-        dict(n_cells=result['n_cells']), ROLE)
+        dict(n_cells=result['n_cells'], **({'clustering_present': False}
+             if result.get('clustering_present') is False else {})), ROLE)
 
 
 def create_analysis_export(source, destination, manifest, *, source_sha256,
                            source_size_bytes, manifest_sha256, max_bytes):
     from agent.tools.analysis.peak_h5ad import _PATH
     from agent.tools.analysis.neighbors_delivery import _safe_objects, _strings
-    from agent.tools.analysis.embedding_analysis import _validate_neighbors_artifact, _validate_cluster_labels
+    from agent.tools.analysis.embedding_analysis import _validate_neighbors_artifact, _validate_umap_labels
     with h5py.File(source, 'r') as handle:
         _safe_objects(handle, max_bytes, numeric_kinds=frozenset({'i', 'f', 'b'}))
         def bounded_strings(name, value):
@@ -60,19 +62,24 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
         from anndata.io import read_elem
         data = read_elem(handle)
     _validate_neighbors_artifact(data, expected_stages=frozenset({'umap'}))
-    _validate_cluster_labels(data)
+    clustered = _validate_umap_labels(data)
+    if clustered is not manifest.get('clustering_present', True):
+        raise ValueError('Changed UMAP clustering variant.')
     if data.n_obs != manifest['n_cells']:
         raise ValueError('Changed analysis cell count.')
-    for text in (*data.obs_names, *data.obs['leiden'].astype(str)):
+    labels = tuple(data.obs['leiden'].astype(str)) if clustered else ()
+    for text in (*data.obs_names, *labels):
         if not text or _PATH.search(text) or any(ord(c) < 32 for c in text):
             raise ValueError('Cell identities or labels are ineligible for public delivery.')
-    result = ad.AnnData(obs=data.obs[['leiden']].copy())
+    result = ad.AnnData(obs=data.obs[['leiden'] if clustered else []].copy())
     for key, dimensions in (('X_epizoo', 512), ('X_umap', 2)):
         values = np.asarray(data.obsm[key])
         if values.shape != (data.n_obs, dimensions) or not np.isfinite(values).all():
             raise ValueError('Invalid compact analysis coordinates.')
         result.obsm[key] = values.copy()
     result.uns['agent_scientific_export'] = dict(contract=CONTRACT, source_sha256=source_sha256)
+    if not clustered:
+        result.uns['agent_scientific_export']['clustering_present'] = False
     with h5py.File(destination, 'w') as handle:
         from anndata.io import write_elem
         write_elem(handle, '/', result)

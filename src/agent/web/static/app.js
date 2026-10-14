@@ -370,6 +370,9 @@ function scientificArtifactPath(sessionId, revisionId, handle) {
 }
 
 function supportedScientificFile(artifact) {
+  if (artifact.artifact_type === "scientific_analysis"
+      && artifact.filename === "analysis.h5ad"
+      && artifact.label === "Embeddings and UMAP — safe export") return true;
   const files = {
     scientific_matrix: { "matrix.h5ad": "Original accepted matrix" },
     scientific_qc_table: {

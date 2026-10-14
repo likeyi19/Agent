@@ -12,6 +12,15 @@ import pytest
 STATIC = Path(__file__).resolve().parents[2] / 'src' / 'agent' / 'web' / 'static'
 
 
+def test_coordinate_only_download_has_an_explicit_reviewed_label():
+    code = (STATIC / 'app.js').read_text()
+    predicate = code[code.index('function supportedScientificFile'):code.index('function scientificFileNode')]
+    assert 'artifact.artifact_type === "scientific_analysis"' in predicate
+    assert 'artifact.filename === "analysis.h5ad"' in predicate
+    assert 'artifact.label === "Embeddings and UMAP — safe export"' in predicate
+    assert '"analysis.h5ad": "Embeddings, Leiden and UMAP — safe export"' in predicate
+
+
 class Page(HTMLParser):
     def __init__(self, text):
         super().__init__()

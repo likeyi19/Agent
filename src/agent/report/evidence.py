@@ -1289,6 +1289,8 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == "compute_cell_umap" and "clustering_present" in step_result.result:
+            facts["clustering_present"] = step_result.result["clustering_present"]
         if step.tool_name == 'adapt_epizoo_species' and step_result.result['purpose'] == 'native':
             from agent.tools.models.epizoo_adaptation.publication import load_manifest
             model = load_manifest(step_result.result['manifest_path'], step_result.result['manifest_sha256'])

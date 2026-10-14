@@ -378,6 +378,7 @@ def _visualization_manifest_path(
 
 _FIGURE_CAPTIONS: Mapping[str, str] = {
     "umap_leiden": "Verified UMAP coordinates colored by Leiden cluster labels.",
+    "umap_coordinates": "Verified UMAP coordinates; Leiden clustering was not performed for this result.",
     "clustering_metrics": (
         "Verified NMI, ARI, AMI, and Homogeneity values in fixed metric order."
     ),
@@ -914,6 +915,7 @@ _FIELD_LABELS: Mapping[str, str] = {
     "resolution": "Resolution",
     "n_components": "UMAP dimensions",
     "umap_key": "UMAP key",
+    "clustering_present": "Leiden clustering present",
     "coordinate_dtype": "Coordinate dtype",
     "min_dist": "UMAP min_dist",
     "spread": "UMAP spread",
@@ -1268,6 +1270,8 @@ def _project_report(
                 "Verified evidence lacks reportable step facts.",
             )
         step_facts: list[_Fact] = []
+        if tool_name == 'compute_cell_umap' and 'clustering_present' in raw_facts:
+            fields = (*fields, 'clustering_present')
         if tool_name == 'adapt_epizoo_species' and 'training_method' in raw_facts:
             fields = (*fields, 'training_method', 'training_configuration', 'training_biological_performance')
         if tool_name == 'epizoo_embed_cells' and 'target_model_method' in raw_facts:
@@ -1310,6 +1314,12 @@ def _project_report(
     for section_id, title, tools in _SECTION_SPECS:
         included = tuple(step for step in steps if step.tool_name in tools)
         if included:
+            if section_id == "clustering_umap" and not any(
+                    step.tool_name == "cluster_cells" for step in included):
+                # Preserve historical titles, including standalone clustered runs.
+                if any(fact.field == "clustering_present" and fact.value is False
+                       for step in included for fact in step.facts):
+                    title = "Neighbors and UMAP"
             sections.append(
                 _Section(
                     section_id,

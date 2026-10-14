@@ -400,6 +400,7 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
             ('scientific_analysis', 'neighbors.h5ad', 'Cell neighbors — safe export'),
             ('scientific_analysis', 'analysis.h5ad', 'Embeddings, Leiden and UMAP — safe export'),
+            ('scientific_analysis', 'analysis.h5ad', 'Embeddings and UMAP — safe export'),
             ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
             ('scientific_model', 'epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
             ('scientific_model', 'epizoox-model.json', 'Model configuration and reuse requirements'),

@@ -1232,6 +1232,8 @@ def _validate_clustering_result(result: Mapping[str, object]) -> None:
 
 
 def _validate_umap_result(result: Mapping[str, object]) -> None:
+    if "clustering_present" in result and result["clustering_present"] is not False:
+        raise ToolResultContractError("Only the explicit unclustered UMAP variant sets clustering_present=False.")
     if result["status"] != "success":
         raise ToolResultContractError(
             "compute_cell_umap field 'status' must equal 'success'."
@@ -2300,9 +2302,9 @@ def build_default_tool_registry() -> ToolRegistry:
         required_arguments={
             "analysis_path": _planning_argument(
                 path_types,
-                "Clustered-analysis artifact to visualize with UMAP.",
+                "Neighbor graph, optionally carrying Leiden labels, for UMAP coordinates; clustering is not required.",
                 source=composable,
-                artifacts=(ArtifactSemanticKind.CLUSTERED_ANALYSIS,),
+                artifacts=(ArtifactSemanticKind.NEIGHBORS_ANALYSIS, ArtifactSemanticKind.CLUSTERED_ANALYSIS),
                 provenance=branch,
             ),
             "output_dir": _planning_argument(
@@ -2357,7 +2359,7 @@ def build_default_tool_registry() -> ToolRegistry:
             validator=_validate_umap_result,
             planning_fields={
                 "analysis_path": _planning_result(
-                    "Compact clustered-analysis artifact augmented with UMAP coordinates.",
+                    "Compact neighbor-graph artifact with UMAP coordinates and optional existing Leiden labels.",
                     bindable=True,
                     artifact=ArtifactSemanticKind.UMAP_ANALYSIS,
                     provenance=branch,
@@ -2368,7 +2370,7 @@ def build_default_tool_registry() -> ToolRegistry:
         recovery_policy_version="compute-cell-umap-v1",
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
-            "Add fixed two-dimensional UMAP coordinates to a clustered analysis.",
+            "Compute fixed two-dimensional UMAP from neighbors; Leiden is optional and is not a prerequisite.",
             capability_ids=('embedding_analysis',),
         ),
         semantic_planning=SemanticToolSpec(
@@ -2383,7 +2385,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             _semantic_request_member("analysis", "analysis_path"),
                         ),
                     ),
-                    accepted_upstream_types=("clustered_analysis.v1",),
+                    accepted_upstream_types=("cell_neighbors.v1", "clustered_analysis.v1"),
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("min_dist", required=False),

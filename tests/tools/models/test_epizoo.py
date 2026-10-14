@@ -362,6 +362,77 @@ def test_input_validation_rejects_wrong_species_dimension() -> None:
         wrapper._validate_adata(wrong, wrapper.MOUSE_CONFIG)
 
 
+@pytest.mark.parametrize("storage", [sp.csr_matrix, sp.csc_matrix])
+def test_boolean_external_h5ad_preserves_binary_values(tmp_path, storage) -> None:
+    # Simulated miniature vocabulary tests storage admission, not model qualification.
+    config = replace(wrapper.MOUSE_CONFIG, raw_dimension=3)
+    original = ad.AnnData(storage([[True, False, True], [False, True, True]]))
+    original.obs_names = ["cell-b", "cell-a"]
+    path = tmp_path / "external-binary.h5ad"
+    original.write_h5ad(path)
+    loaded = ad.read_h5ad(path)
+
+    assert wrapper._validate_adata(loaded, config) is loaded
+    prepared = wrapper._prepare_sparse_adata(loaded)
+    assert sp.isspmatrix_csr(prepared.X)
+    assert prepared.X.dtype == np.dtype(bool)
+    assert (prepared.X != original.X).nnz == 0
+    assert tuple(prepared.obs_names) == ("cell-b", "cell-a")
+    assert isinstance(loaded.X, storage)
+    assert (loaded.X != original.X).nnz == 0
+
+
+@pytest.mark.parametrize("mutation", ["zero_cell", "dimension", "cell_identity", "feature_order"])
+def test_boolean_storage_retains_scientific_input_checks(mutation) -> None:
+    config = replace(wrapper.MOUSE_CONFIG, raw_dimension=3)
+    value = ad.AnnData(sp.csr_matrix([[True, False, True], [False, True, True]]))
+    value.obs_names = ["cell-b", "cell-a"]
+    value.var_names = ["feature-a", "feature-b", "feature-c"]
+    resources = SimpleNamespace(filter_indices=np.array([0, 2]),
+                                retained_names=np.array(["feature-a", "feature-c"]))
+    if mutation == "zero_cell":
+        value.X = sp.csr_matrix([[False, False, False], [False, True, True]])
+        message = "Zero-count"
+    elif mutation == "dimension":
+        config = replace(config, raw_dimension=4)
+        message = "raw cCRE features"
+    elif mutation == "cell_identity":
+        value.obs_names = ["same", "same"]
+        message = "unique"
+    else:
+        value.var_names = ["feature-c", "feature-b", "feature-a"]
+        message = "feature order"
+    with pytest.raises(ValueError, match=message):
+        wrapper._validate_adata(value, config)
+        wrapper._validate_retained_feature_order(value, resources)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_EPIZOO_INTEGRATION") != "1",
+    reason="Set RUN_EPIZOO_INTEGRATION=1 for native EpiZoo preprocessing.",
+)
+@pytest.mark.parametrize("storage", [sp.csr_matrix, sp.csc_matrix])
+def test_native_boolean_and_integer_binary_preprocessing_are_identical(storage) -> None:
+    # Compare native primitives on simulated values; no model or biological claim.
+    backend = wrapper._get_backend()
+    matrix = storage([[True, False, True], [False, True, True]])
+    results = []
+    for dtype in (np.bool_, np.int8):
+        source = ad.AnnData(matrix.astype(dtype))
+        tfidf = backend.compute_tfidf(
+            source, np.array([3, 5, 7]), cell_number=20,
+            scale_factor=10_000.0, dtype=np.float32, store="X", verbose=False,
+        )
+        sentences = backend.generate_cell_sentences(tfidf, species=0)
+        results.append((tfidf.X.tocsr(), sentences.obs["cell_indices"].tolist()))
+        assert (source.X != matrix).nnz == 0
+    boolean, integer = results
+    np.testing.assert_array_equal(boolean[0].indptr, integer[0].indptr)
+    np.testing.assert_array_equal(boolean[0].indices, integer[0].indices)
+    np.testing.assert_array_equal(boolean[0].data, integer[0].data)
+    assert boolean[1] == integer[1]
+
+
 @pytest.fixture(scope="module")
 def mouse_subset() -> ad.AnnData:
     if not FANG_H5AD.is_file():
@@ -370,6 +441,17 @@ def mouse_subset() -> ad.AnnData:
     subset = full[:2].copy()
     assert sp.isspmatrix_csr(subset.X)
     return subset
+
+
+@pytest.mark.parametrize("storage", [sp.csr_matrix, sp.csc_matrix])
+def test_boolean_storage_accepts_existing_full_model_vocabulary(mouse_subset, storage) -> None:
+    # Deliberately binary test derivative, not a new biological acceptance dataset.
+    binary = mouse_subset.copy()
+    binary.X = storage(binary.X.astype(bool))
+    resources = wrapper._load_resources(wrapper.MOUSE_CONFIG, wrapper.DEFAULT_RESOURCES_DIR)
+    assert wrapper._validate_adata(binary, wrapper.MOUSE_CONFIG) is binary
+    wrapper._validate_retained_feature_order(binary, resources)
+    assert tuple(binary.obs_names) == tuple(mouse_subset.obs_names)
 
 
 @pytest.mark.parametrize(

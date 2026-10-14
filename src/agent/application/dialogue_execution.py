@@ -364,7 +364,7 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
     if interaction.submission is None:
         raise IntentError('invalid_prerequisite')
     import json
-    from .resource_continuation import COMPOSITIONS
+    from .resource_continuation import source_kind
     from .scientific_guidance import references_candidate
     from .guidance_selection import candidates
     state = sessions.load(sessions._interaction_session_id)
@@ -374,7 +374,7 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
     if references_candidate(interaction, prior):
         raise IntentError('unsupported_intent')
     if (json.loads(raw)['decision']['kind'] == 'request_resources'
-            and interaction.submission.get('registered_input', {}).get('composition') not in COMPOSITIONS):
+            and source_kind(interaction.submission) is None):
         raise IntentError('invalid_prerequisite')
     registry = sessions._application.registry
     safe, rejected = _repair_declarations(raw, interaction.utterance, registry)

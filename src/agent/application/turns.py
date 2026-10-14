@@ -418,10 +418,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         pending_public = prerequisite_public(interaction, state.interactions)
         if pending_public is not None:
             visible['dialogue']['pending_prerequisite'] = pending_public
-        from .resource_continuation import offers, COMPOSITIONS, catalog
+        from .resource_continuation import offers, source_kind, catalog
         catalog(input_sets)
         visible['dialogue']['resource_choices'] = offers(submission, input_sets)
-        visible['dialogue']['resource_source'] = COMPOSITIONS.get((submission or {}).get('registered_input', {}).get('composition'))
+        visible['dialogue']['resource_source'] = source_kind(submission)
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission

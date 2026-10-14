@@ -376,6 +376,8 @@ class InteractiveAgentApplication:
             if original.source is not None:
                 labels.update({field: _FIELD_LABELS[field]
                     for field in _REPORT_FIELDS.get(original.source.tool_name, ()) if field in _FIELD_LABELS})
+                if original.source.tool_name == 'annotate_scATAC_cell_types':
+                    labels['contract_version'] = 'Annotation contract'
             labels = {fact.field: labels[fact.field] for name in ('facts', 'coverage', 'detail')
                 for fact in values[name] if fact.field in labels}
             return EvidenceView(**values, supported_details=() if original.source is None
@@ -728,6 +730,10 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
+                elif step.tool_name == 'annotate_scATAC_cell_types':
+                    from .annotation_delivery import accepted_annotation
+                    items.append(accepted_annotation(self, session_id, revision, origin,
+                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'build_cell_neighbors':
                     try:
                         items.append(self._accepted_neighbors(session_id, revision, origin,
@@ -754,6 +760,10 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                elif planned.tool_name == 'annotate_scATAC_cell_types':
+                    from .annotation_delivery import accepted_annotation
+                    items.append(accepted_annotation(self, session_id, revision, origin, None,
+                        step_id=planned.step_id))
                 elif planned.tool_name == 'build_cell_neighbors':
                     try:
                         items.append(self._accepted_neighbors(session_id, revision, origin, None,

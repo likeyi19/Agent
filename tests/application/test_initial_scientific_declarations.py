@@ -167,28 +167,31 @@ def test_old_numeric_wire_and_new_choice_wire_share_one_arguments_contract():
         'current', 'plan', 'compute_cell_umap', None)
 
 
-def test_only_reviewed_species_choice_is_offered_in_closed_schema():
+def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
     context = public()
     parameters = context['dialogue']['scientific_parameters']
     choices = [row for row in parameters if row.get('choices')]
-    assert len(choices) == 1
-    assert choices[0]['tool'] == 'epizoo_embed_cells' and choices[0]['argument'] == 'species'
-    assert choices[0]['choices'] == ['human', 'mouse'] or choices[0]['choices'] == ('human', 'mouse')
-    assert len(parameters) == 18
+    assert {(row['tool'], row['argument']): tuple(row['choices']) for row in choices} == {
+        ('epizoo_embed_cells', 'species'): ('human', 'mouse'),
+        ('import_scATAC_fragments', 'source_profile'): ('10x-atac-fragments.v1',),
+        ('import_scATAC_fragments', 'source_selection'): ('full_export', 'subset_export', 'unknown'),
+    }
+    assert len(parameters) == 21
     assert len([row for row in parameters if not row.get('choices') and not row.get('exact_string')]) == 14
     assert {(row['tool'], row['argument']) for row in parameters if row.get('exact_string')} == {
         ('evaluate_cell_clustering', 'label_key'),
         ('transfer_cell_labels', 'reference_label_key'),
         ('evaluate_cell_annotation', 'ground_truth_label_key'),
+        ('import_scATAC_fragments', 'namespace'),
     }
     execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
         if row['properties']['kind']['enum'] == ['execute_plan'])
     members = execution['properties']['arguments']['items']['anyOf']
-    categorical, = [row for row in members if 'value' in row['properties']]
-    assert categorical['properties']['value']['enum'] == ['human', 'mouse']
-    assert categorical['additionalProperties'] is False
-    assert set(categorical['properties']) == {'tool', 'argument', 'literal', 'start', 'end', 'value'}
-    assert all('value' not in row['properties'] for row in members if row is not categorical)
+    categorical = [row for row in members if 'value' in row['properties']]
+    assert len(categorical) == 3
+    for row in categorical:
+        assert row['additionalProperties'] is False
+        assert set(row['properties']) == {'tool', 'argument', 'literal', 'evidence', 'value'}
 
 
 @pytest.mark.parametrize('utterance,literal,value', [
@@ -219,13 +222,15 @@ def test_whitespace_only_choice_literal_cannot_ground_a_scientific_declaration(l
 
 
 @pytest.mark.parametrize('kind', ['answer_prerequisite', 'answer_parameters'])
-def test_choice_argument_does_not_extend_existing_pending_answer_contracts(kind):
+def test_choice_argument_respects_species_and_shared_parameter_contracts(kind):
     decision = dict(kind=kind, pending='@species' if kind == 'answer_prerequisite' else '@parameters',
         arguments=[asdict(choice(EXPLICIT))])
     if kind == 'answer_prerequisite':
         decision['species'] = 'human'
-    with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(wire(decision))
+        with pytest.raises(IntentError, match='invalid_decision'):
+            parse_decision(wire(decision))
+    else:
+        assert parse_decision(wire(decision)).arguments == (choice(EXPLICIT),)
     assert parse_decision(wire(dict(kind='answer_prerequisite', pending='@species',
         species='human'))) == SpeciesAnswer('@species', 'human')
 
@@ -301,7 +306,7 @@ def test_historical_missing_species_wire_remains_parseable_without_adding_pendin
 
 
 @pytest.mark.parametrize('field,kind', [('species', 'answer_prerequisite'), ('parameters', 'answer_parameters')])
-def test_pending_exact_scalar_schema_preserves_numeric_pairs_and_excludes_choices(field, kind):
+def test_pending_scalar_schema_preserves_exact_pairs_and_scoped_choices(field, kind):
     context = public()
     context['dialogue']['pending_prerequisite'] = dict(handle='@species' if field == 'species' else '@parameters',
         field=field, choices=['human', 'mouse'], objective=OMITTED)
@@ -310,14 +315,16 @@ def test_pending_exact_scalar_schema_preserves_numeric_pairs_and_excludes_choice
     arguments = answer['properties']['arguments']
     members = arguments['items']['anyOf']
     expected = {(row['tool'], row['argument']) for row in context['dialogue']['scientific_parameters']
-        if 'choices' not in row}
+        if field == 'parameters' or 'choices' not in row}
     actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
         for row in members}
-    assert actual == expected and len(actual) == 17
+    assert actual == expected and len(actual) == (21 if field == 'parameters' else 18)
     assert len([row for row in context['dialogue']['scientific_parameters']
                 if not row.get('choices') and not row.get('exact_string')]) == 14
     assert arguments['maxItems'] == 8
-    assert all('value' not in row['properties'] and row['additionalProperties'] is False for row in members)
+    assert all(row['additionalProperties'] is False for row in members)
+    if field == 'species':
+        assert all('value' not in row['properties'] for row in members)
     if field == 'parameters':
         assert arguments['minItems'] == 1
 

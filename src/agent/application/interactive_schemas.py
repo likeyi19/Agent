@@ -394,6 +394,7 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_selection_table', 'decisions.tsv.gz', 'Cell-selection decisions'),
             ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
             ('scientific_analysis', 'neighbors.h5ad', 'Cell neighbors — safe export'),
+            ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
         }
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):

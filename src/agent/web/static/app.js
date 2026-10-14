@@ -380,6 +380,7 @@ function supportedScientificFile(artifact) {
       "selected.tsv.gz": "Selected cells",
     },
     scientific_analysis: { "neighbors.h5ad": "Cell neighbors — safe export" },
+    scientific_annotation: { "annotated.h5ad": "Annotated cells — safe export" },
   };
   return Object.hasOwn(files, artifact.artifact_type)
     && Object.hasOwn(files[artifact.artifact_type], artifact.filename)

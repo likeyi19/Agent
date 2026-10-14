@@ -80,14 +80,14 @@ def _strings(dataset):
             yield text
 
 
-def _safe_objects(file):
+def _safe_objects(file, *, maximum_depth=2):
     """Visit closed shallow objects without following indirect links."""
     seen = {h5py.h5o.get_info(file.id).addr}
     count = 0
 
     def visit(group, depth):
         nonlocal count
-        _reject(depth > 2)
+        _reject(depth > maximum_depth)
         for name in group:
             count += 1
             _reject(count > 64 or not isinstance(group.get(name, getlink=True), h5py.HardLink))
@@ -348,15 +348,20 @@ class MatrixDownloadPreparer:
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery
+        from . import annotation_delivery
+        annotation = (artifact.contract == annotation_delivery.CONTRACT
+                      and getattr(artifact, 'role', None) == annotation_delivery.ROLE)
         processed = (artifact.contract == neighbors_delivery.CONTRACT
                      and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
+        export = processed or annotation
+        exporter = annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
-        elif processed:
-            filename, content_type = neighbors_delivery.FILENAME, 'application/octet-stream'
+        elif export:
+            filename, content_type = exporter.FILENAME, 'application/octet-stream'
         else:
             table_roles = {
                 ('scatac-barcode-qc.v1', 'table'): 'barcodes.tsv.gz',
@@ -378,7 +383,7 @@ class MatrixDownloadPreparer:
         delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, MAX_MATRIX_BYTES)
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
-        reservation = size + delivered_limit if processed else size
+        reservation = size + delivered_limit if export else size
         reserved, snapshot, derivative = False, None, None
         try:
             self._reserve(reservation)
@@ -408,9 +413,11 @@ class MatrixDownloadPreparer:
             snapshot.seek(0)
             if matrix:
                 validate_matrix_h5ad(snapshot, artifact.contract, artifact.manifest)
-            elif processed:
+            elif export:
                 derivative = tempfile.TemporaryFile(mode='w+b')
-                neighbors_delivery.create_neighbors_export(snapshot, derivative, artifact.manifest,
+                create_export = (annotation_delivery.create_annotation_export if annotation
+                                 else neighbors_delivery.create_neighbors_export)
+                create_export(snapshot, derivative, artifact.manifest,
                     source_sha256=artifact.sha256, source_size_bytes=size,
                     manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)
                 derivative.flush()
@@ -430,8 +437,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if processed else size,
-                sha256=checksum.hexdigest() if processed else artifact.sha256,
+                size_bytes=delivered_size if export else size,
+                sha256=checksum.hexdigest() if export else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

@@ -267,7 +267,7 @@ def test_role_answer_without_any_pending_request_cannot_create_a_task(tmp_path):
     assert not executor.plans and not app._application.sessions.load('session').revisions
 
 
-@pytest.mark.parametrize('changes', [dict(literal='Invented label'), dict(start=0, end=len(LABEL)),
+@pytest.mark.parametrize('changes', [dict(literal='Invented label'),
                                    dict(argument='unregistered_column'), dict(tool='evaluate_cell_clustering')])
 def test_role_reply_cannot_invent_or_redirect_exact_string_declarations(tmp_path, changes):
     utterance = ROLE_ANSWER + f' Use reference column "{LABEL}".'
@@ -279,6 +279,20 @@ def test_role_reply_cannot_invent_or_redirect_exact_string_declarations(tmp_path
     assert rejected['revision_id'] is None and rejected['response']['status'] in ('failed', 'clarification'), rejected
     assert not executor.plans and not app._application.sessions.load('session').revisions
     assert app._application.sessions.load('session').interactions[0] == origin
+
+
+def test_role_reply_grounds_unique_exact_label_despite_wrong_provider_offsets(tmp_path):
+    # Work Unit B locates a unique exact quote; offsets cannot redirect its value.
+    utterance = ROLE_ANSWER + f' Use reference column "{LABEL}".'
+    declaration = label_declaration(utterance) | dict(start=0, end=len(LABEL))
+    app, _, group, executor, _, _ = transfer_continuation_harness(tmp_path,
+        decisions={utterance: answer(declarations=[declaration])})
+    origin = pending(app, submit(app, group=group))
+    submit(app, turn='exact-label', utterance=utterance)
+    assert len(executor.plans) == 1
+    assert executor.plans[0].steps[0].arguments['reference_label_key'] == LABEL
+    state = app._application.sessions.load('session')
+    assert state.interactions[0] == origin and not state.revisions
 
 
 def test_conflicting_concurrent_role_answers_and_changed_retry_fail_closed(tmp_path):

@@ -1268,6 +1268,12 @@ def _project_report(
                 "Verified evidence lacks reportable step facts.",
             )
         step_facts: list[_Fact] = []
+        if tool_name == 'adapt_epizoo_species' and 'training_method' in raw_facts:
+            fields = (*fields, 'training_method', 'training_configuration', 'training_biological_performance')
+        if tool_name == 'epizoo_embed_cells' and 'target_model_method' in raw_facts:
+            fields = (*fields, 'target_model_method', 'target_assembly', 'target_matrix_semantics',
+                      'target_training_purpose', 'target_training_steps', 'target_checkpoint_sha256',
+                      'target_feature_sha256', 'target_features_reordered', 'target_biological_performance')
         for field in fields:
             if field not in raw_facts:
                 raise AnalysisReportError(
@@ -1385,6 +1391,14 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name == 'epizoo_embed_cells' and any(f.field == 'target_model_method' for f in step.facts):
+        lines = [f'### EpiZoo target-species embeddings {occurrence}', '',
+            'Native EpiZooX inference used the qualified target vocabulary and training-corpus document frequency.', '']
+        for fact in step.facts:
+            lines.append(f'- {fact.field.replace("_", " ").capitalize()}: {_inline_code(fact.value)}')
+        lines.extend(('', 'Numerical execution does not establish post-training convergence, meaningful biological clusters, '
+            'cell-type correctness or cross-species generalization.', '', _fact_ids_line(step.facts), ''))
+        return lines
     if step.tool_name == 'build_scATAC_cell_by_features':
         selected = any(f.field == 'contract_version' and f.value == 'scatac-cell-by-features.qc-selected.v1'
                        for f in step.facts)

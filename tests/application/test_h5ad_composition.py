@@ -61,12 +61,19 @@ def test_composition_preserves_source_identity_and_scoped_registry_inputs(regist
 
 
 @pytest.mark.parametrize('field', ['input_path', 'path', 'source_path', 'source_sha256', 'output_dir',
-                                  'reference_input_path', 'embedding_path', 'analysis_path', 'assembly', 'unknown'])
+                                  'reference_input_path', 'embedding_path', 'analysis_path', 'unknown'])
 def test_companions_cannot_override_source_or_add_unsupported_inputs(registered, field):
     owner, record, _ = registered
     with pytest.raises(ResourceAdmissionError) as error:
         owner.compose_h5ad(record.resource_id, {field: 'untrusted'})
     assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'
+
+
+def test_companion_can_declare_target_assembly_without_claiming_qualification(registered):
+    owner, record, _ = registered
+    binding = owner.compose_h5ad(record.resource_id, {'assembly': 'danRer11'})
+    assert binding.execution_inputs['assembly'] == 'danRer11'
+    assert 'target_model_manifest_path' not in binding.execution_inputs
 
 
 @pytest.mark.parametrize('values', [{'species': 'zebrafish'}, {'resolution': True},

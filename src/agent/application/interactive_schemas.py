@@ -230,12 +230,13 @@ class PresentedResponse(_JsonModel):
 
 @dataclass(frozen=True)
 class StepView(_JsonModel):
-    """A persisted execution checkpoint; no parameters or liveness inference."""
+    """A persisted execution checkpoint with optional resolved native training notice."""
 
     step_id: str
     tool_name: str
     status: str
     attempts: int
+    training_notice: str | None = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
         _identifier(self.step_id, 'step_id')
@@ -243,6 +244,10 @@ class StepView(_JsonModel):
         if self.status not in ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED'):
             raise ValueError('Invalid interactive step status.')
         _natural(self.attempts, 'step attempts')
+        if self.training_notice is not None:
+            if self.tool_name != 'adapt_epizoo_species' or self.status != 'RUNNING':
+                raise ValueError('Training notice requires a running adaptation step.')
+            _text(self.training_notice, 'training notice', 2048)
 
 
 @dataclass(frozen=True)
@@ -394,7 +399,10 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_selection_table', 'decisions.tsv.gz', 'Cell-selection decisions'),
             ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
             ('scientific_analysis', 'neighbors.h5ad', 'Cell neighbors — safe export'),
+            ('scientific_analysis', 'analysis.h5ad', 'Embeddings, Leiden and UMAP — safe export'),
             ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
+            ('scientific_model', 'epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
+            ('scientific_model', 'epizoox-model.json', 'Model configuration and reuse requirements'),
         }
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):

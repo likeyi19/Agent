@@ -45,6 +45,9 @@ def scientific_profile(matrix_semantics='fragment_counts'):
 
 def profile_sha256(profile):
     validate_execution(profile)
+    if profile.get('id') == 'epizoo-native-posttraining.v2':
+        from ..native_posttraining import METHOD_SHA256
+        return METHOD_SHA256
     return digest(scientific_profile(profile['matrix_semantics']))
 
 
@@ -116,6 +119,9 @@ def read_json(path,sha=None):
 
 
 def validate_execution(value):
+    if value.get('id') == 'epizoo-native-posttraining.v2':
+        from ..native_posttraining import validate
+        return validate(value)
     expected=execution_profile(matrix_semantics=value['matrix_semantics'],purpose=value['purpose'],seed=value['seed'],batch_size=value['batch_size'],
         sequence_batch_size=value['sequence_batch_size'],**{k:value['trainer'][k] for k in ('max_steps','save_steps','log_steps')})
     if value!=expected: raise ValueError('Unqualified scientific profile.')

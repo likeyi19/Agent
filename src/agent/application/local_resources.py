@@ -43,7 +43,7 @@ _GROUP_PORTS = (
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
-_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups')
+_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference')
 _OPERATION_TYPES = {
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
@@ -79,9 +79,10 @@ _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_pat
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors',
-                         'cluster_cells', 'compute_cell_umap')
+                         'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
-                          'cell_ids_path', 'analysis_path'}
+                          'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
+                          'matrix_manifest_path', 'matrix_manifest_sha256'}
 _RESOURCE_SELECTION_ERRORS = ('EPIZOO_RESOURCE_REQUIRED', 'EPIZOO_RESOURCE_AMBIGUOUS')
 _MESSAGES = {
     'MULTI_INPUT_ROLE_INVALID': 'The selected inputs need distinct, supported scientific roles.',
@@ -196,6 +197,14 @@ def qualified_epizoo_resources(resources):
 def select_epizoo_resource(inputs, selected_id, resources):
     """Resolve exact qualified selection from typed species, without science."""
     resources = qualified_epizoo_resources(resources)
+    target = ('target_model_manifest_path', 'target_model_manifest_sha256')
+    if any(k in inputs for k in target):
+        if (not all(k in inputs for k in target) or selected_id is not None
+                or {'checkpoint_path', 'expected_resource_identity'}.intersection(inputs)):
+            raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
+        # An exact operator InputSet may bind a target model. Eligibility and
+        # current artifact integrity remain the scientific owner's responsibility.
+        return inputs, None
     species = inputs.get('species')
     if selected_id is not None:
         selected = next((resource for resource in resources if resource.resource_id == selected_id), None)
@@ -298,6 +307,7 @@ class LocalResourceRecord:
     attribution: str
     source_index: object | None = None
     fastq_member: object | None = None
+    reference_qualification: object | None = None
 
     def __post_init__(self):
         _identifier(self.resource_id)
@@ -311,7 +321,7 @@ class LocalResourceRecord:
             raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
         _text(self.attribution, 1024, 'LOCAL_RESOURCE_RECORD_INVALID')
         if self.source_index is not None:
-            if (self.input_type != 'external_fragments' or not isinstance(self.source_index, Mapping)
+            if (self.input_type not in ('external_fragments', 'fasta', 'genome_reference') or not isinstance(self.source_index, Mapping)
                     or set(self.source_index) != {'path', 'sha256', 'size_bytes'}):
                 raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
             index = dict(self.source_index)
@@ -326,11 +336,18 @@ class LocalResourceRecord:
                 raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
             object.__setattr__(self, 'fastq_member', _fastq_member(self.fastq_member))
 
+        if self.reference_qualification is not None:
+            from .reference_supplementation import validate_record
+            validate_record(self)
+            object.__setattr__(self, 'reference_qualification', freeze_json_mapping(self.reference_qualification, 'reference_qualification'))
+        elif self.input_type in ('regulatory_reference', 'genome_reference'):
+            raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
+
     def to_dict(self):
         """Private persistence/binding metadata; never a client representation."""
         # Old unpaired records retain their exact persistence and binding digest.
         return {name: _serialize(getattr(self, name)) for name in self.__dataclass_fields__
-                if name not in {'source_index', 'fastq_member'} or getattr(self, name) is not None}
+                if name not in {'source_index', 'fastq_member', 'reference_qualification'} or getattr(self, name) is not None}
 
     @property
     def record_sha256(self):
@@ -830,7 +847,7 @@ class LocalResourceAdmission:
     def register(self, registration_key, source_path, *, input_type='h5ad', label, attribution,
                  expected_source_sha256=None, expected_size_bytes=None, source_index_path=None,
                  expected_source_index_sha256=None, expected_source_index_size_bytes=None,
-                 fastq_member=None):
+                 fastq_member=None, reference_qualification=None):
         if input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
         resource_id = self.registration_id(registration_key)
@@ -847,7 +864,7 @@ class LocalResourceAdmission:
         expected_index = (expected_source_index_sha256 is not None
                           or expected_source_index_size_bytes is not None)
         if source_index_path is not None:
-            if input_type != 'external_fragments':
+            if input_type not in ('external_fragments', 'fasta', 'genome_reference'):
                 raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
             if expected_index and (type(expected_source_index_sha256) is not str
                     or _SHA.fullmatch(expected_source_index_sha256) is None
@@ -863,7 +880,7 @@ class LocalResourceAdmission:
         elif expected_index:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         record = LocalResourceRecord(resource_id, input_type, label, source, sha, size, attribution,
-                                     index, fastq_member)
+                                     index, fastq_member, reference_qualification)
         with self._lock(resource_id):
             path = self._path(resource_id)
             try:
@@ -936,7 +953,7 @@ class LocalResourceAdmission:
             scalar_fields = set(LocalResourceRecord.__dataclass_fields__)
             if fields == set(LocalResourceCollectionRecord.__dataclass_fields__):
                 record = LocalResourceCollectionRecord(**value['record'])
-            elif (scalar_fields - {'source_index', 'fastq_member'} <= fields <= scalar_fields
+            elif (scalar_fields - {'source_index', 'fastq_member', 'reference_qualification'} <= fields <= scalar_fields
                   and len(raw) <= MAX_RECORD_BYTES):
                 record = LocalResourceRecord(**value['record'])
             else:
@@ -1191,6 +1208,8 @@ class LocalResourceAdmission:
                             key = fields[member.name]
                             if key not in _H5AD_SOURCE_ARGUMENTS:
                                 declarations.setdefault(member.input_name, []).append((key, arguments[key]))
+        adoption = self._registry.get('adopt_scATAC_cell_by_features')
+        declarations['input_sha256'] = [('source_sha256', adoption.required_arguments['source_sha256'])]
         if set(values) - set(declarations):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         try:
@@ -1209,6 +1228,8 @@ class LocalResourceAdmission:
         except (ValueError, TypeError) as exc:
             code = getattr(exc, 'code', 'LOCAL_RESOURCE_BINDING_INVALID')
             raise _fail(code if code in _MESSAGES else 'LOCAL_RESOURCE_BINDING_INVALID') from exc
+        if 'input_sha256' in values and values['input_sha256'] != record.source_sha256:
+            raise _fail('H5AD_SOURCE_MISMATCH')
         return values | dict(input_path=record.source_path)
 
     def compose_h5ad(self, resource_id, scientific_inputs=None, *,
@@ -1753,6 +1774,39 @@ class LocalResourceAdmission:
                        for member in sources[0].members):
                     raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
 
+    @staticmethod
+    def _new_target_binding(step, steps, *, resolved=False):
+        """Exact paired model output; this never chooses a model by species/order."""
+        from agent.schemas import StepOutputRef
+        args = step.resolved_arguments if resolved else step.arguments
+        path, sha = (args.get('target_model_manifest_' + key) for key in ('path', 'sha256'))
+        if resolved:
+            from agent.schemas import StepStatus
+            if not isinstance(path, str) or not isinstance(sha, str): return False
+            matches = [s for s in steps if s.tool_name == 'adapt_epizoo_species'
+                       and s.status == StepStatus.SUCCEEDED and s.result and s.verification and s.verification.passed
+                       and s.result.get('manifest_path') == path and s.result.get('manifest_sha256') == sha]
+            return len(matches) == 1
+        return (isinstance(path, StepOutputRef) and isinstance(sha, StepOutputRef)
+            and path.step_id == sha.step_id and path.output_key == 'manifest_path'
+            and sha.output_key == 'manifest_sha256' and path.step_id in step.depends_on
+            and any(s.step_id == path.step_id and s.tool_name == 'adapt_epizoo_species' for s in steps))
+
+    def _validate_neutral_h5ad(self, binding, steps, *, resolved=False):
+        if type(binding) is not RegisteredInput or binding.composition != _H5AD_COMPOSITION:
+            return
+        values = _serialize(binding.execution_inputs)
+        for step in steps:
+            if step.tool_name != 'adopt_scATAC_cell_by_features':
+                continue
+            arguments = step.resolved_arguments if resolved else step.arguments
+            pairs = {'source_path': 'input_path', 'source_sha256': 'input_sha256',
+                     'reference_manifest_path': 'reference_manifest_path',
+                     'reference_manifest_sha256': 'reference_manifest_sha256',
+                     'matrix_semantics': 'matrix_semantics'}
+            if any(k not in values or arguments.get(a) != values[k] for a, k in pairs.items()):
+                raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
+
     def validate_plan(self, submission, plan):
         """Check exact registered-source/resource consumption before execution.
 
@@ -1763,6 +1817,7 @@ class LocalResourceAdmission:
         binding = self._submission_binding(submission)
         values = self.validate_binding(binding)
         self._validate_resource_choice_consumption(binding, plan.steps)
+        self._validate_neutral_h5ad(binding, plan.steps)
         if type(binding) is RegisteredInputGroup:
             self._validate_group_consumption(binding, plan.steps)
             return
@@ -1818,11 +1873,18 @@ class LocalResourceAdmission:
             if step.tool_name == 'epizoo_embed_cells':
                 if 'species' not in values:
                     raise _fail('H5AD_SPECIES_REQUIRED')
-                if binding.resource_selection_error is not None:
+                new_target = ('target_model_manifest_path' not in values and 'expected_resource_identity' not in values
+                              and self._new_target_binding(step, plan.steps))
+                if binding.resource_selection_error is not None and not new_target:
                     raise _fail(binding.resource_selection_error)
-                if 'expected_resource_identity' not in values:
+                if 'expected_resource_identity' not in values and 'target_model_manifest_path' not in values and not new_target:
                     raise _fail('EPIZOO_RESOURCE_REQUIRED')
-                for key in ('species', 'checkpoint_path', 'expected_resource_identity'):
+                keys = (('species', 'assembly', 'matrix_semantics') if new_target else
+                        ('species', 'target_model_manifest_path', 'target_model_manifest_sha256',
+                         'assembly', 'matrix_semantics', 'target_model_source_run_id',
+                         'target_model_source_step_id') if 'target_model_manifest_path' in values
+                        else ('species', 'checkpoint_path', 'expected_resource_identity'))
+                for key in keys:
                     if step.arguments.get(key) != values.get(key):
                         raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
                 if 'device' in values and step.arguments.get('device') != values['device']:
@@ -1837,6 +1899,7 @@ class LocalResourceAdmission:
         """
         binding = self._submission_binding(submission)
         self._validate_resource_choice_consumption(binding, steps, resolved=True)
+        self._validate_neutral_h5ad(binding, steps, resolved=True)
         if type(binding) is RegisteredInputGroup:
             # This API runs only at first Session acceptance. Recheck the pins
             # after owner verification/presentation too; terminal history reads
@@ -1903,11 +1966,18 @@ class LocalResourceAdmission:
                         or step.result.get('input_path') != values['input_path']):
                     raise _fail('H5AD_SOURCE_MISMATCH')
                 if step.tool_name == 'epizoo_embed_cells':
-                    if binding.resource_selection_error is not None:
+                    new_target = ('target_model_manifest_path' not in values and 'expected_resource_identity' not in values
+                                  and self._new_target_binding(step, steps, resolved=True))
+                    if binding.resource_selection_error is not None and not new_target:
                         raise _fail(binding.resource_selection_error)
-                    if 'expected_resource_identity' not in values:
+                    if 'expected_resource_identity' not in values and 'target_model_manifest_path' not in values and not new_target:
                         raise _fail('EPIZOO_RESOURCE_REQUIRED')
-                    for key in ('species', 'checkpoint_path', 'expected_resource_identity'):
+                    keys = (('species', 'assembly', 'matrix_semantics') if new_target else
+                            ('species', 'target_model_manifest_path', 'target_model_manifest_sha256',
+                             'assembly', 'matrix_semantics', 'target_model_source_run_id',
+                             'target_model_source_step_id') if 'target_model_manifest_path' in values
+                            else ('species', 'checkpoint_path', 'expected_resource_identity'))
+                    for key in keys:
                         if step.resolved_arguments.get(key) != values.get(key):
                             raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
         if collection:

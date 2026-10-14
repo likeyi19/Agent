@@ -47,8 +47,12 @@ def sequences_and_embeddings(reference,features,seam,profile,root,device):
     from epizoo.inference.embeddings import extract_seq_embeddings
     from torch.utils.data import DataLoader
     check_file(seam['checkpoint'])
-    sequences=extract_dna_sequences(reference.genome.fasta.path,features,
-        fix_chrom_name=False,on_error='raise',show_progress=False)
+    if profile.get('id') == 'epizoo-native-posttraining.v2':
+        from ..native_posttraining import extract_sequences
+        sequences=extract_sequences(reference, features, root)
+    else:
+        sequences=extract_dna_sequences(reference.genome.fasta.path,features,
+            fix_chrom_name=False,on_error='raise',show_progress=False)
     if len(sequences)!=len(features) or any(len(seq)!=parse_region(region)[2]-parse_region(region)[1] for region,seq in zip(features,sequences)):
         raise ValueError('Sequence extraction clipped, skipped or reordered target features.')
     (root/'sequences.txt').write_text('\n'.join(sequences)+'\n')

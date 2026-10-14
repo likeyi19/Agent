@@ -159,6 +159,7 @@ def _pinned_provenance(
 
 class _OptionalEpiZooEmbeddingFields(TypedDict, total=False):
     resource_provenance: dict[str, object]
+    target_model_provenance: dict[str, object]
 
 
 class EpiZooEmbeddingToolResult(_OptionalEpiZooEmbeddingFields):
@@ -322,11 +323,17 @@ def epizoo_embed_cells(
     input_path: str | Path,
     output_dir: str | Path,
     *,
-    species: Literal["human", "mouse"],
+    species: str | Mapping[str, object],
     checkpoint_path: str | Path = epizoo_backend.DEFAULT_CHECKPOINT_PATH,
     device: str = "cuda:0",
     overwrite: bool = False,
     expected_resource_identity: Mapping[str, str] | None = None,
+    target_model_manifest_path: str | Path | None = None,
+    target_model_manifest_sha256: str | None = None,
+    assembly: str | None = None,
+    matrix_semantics: str | None = None,
+    target_model_source_run_id: str | None = None,
+    target_model_source_step_id: str | None = None,
 ) -> EpiZooEmbeddingToolResult:
     """Embed a raw scATAC ``.h5ad`` file and persist ordered artifacts.
 
@@ -335,6 +342,25 @@ def epizoo_embed_cells(
     to ``.npy`` and is never included in the returned dictionary.
     """
 
+    if target_model_manifest_path is not None or target_model_manifest_sha256 is not None:
+        if (target_model_manifest_path is None or target_model_manifest_sha256 is None
+                or expected_resource_identity is not None
+                or checkpoint_path != epizoo_backend.DEFAULT_CHECKPOINT_PATH):
+            raise ValueError('Bind one complete target model; legacy resource overrides cannot be combined.')
+        from agent.tools.models.epizoo_target_inference import embed_target
+        from agent.tools.data.regulatory_feature_reference import validate_species
+        identity = validate_species(dict(species))
+        species, taxonomy_id = identity.scientific_name, identity.taxonomy_id
+        return embed_target(input_path, output_dir, species=species, taxonomy_id=taxonomy_id,
+            assembly=assembly, matrix_semantics=matrix_semantics,
+            target_model_manifest_path=target_model_manifest_path,
+            target_model_manifest_sha256=target_model_manifest_sha256,
+            target_model_source_run_id=target_model_source_run_id,
+            target_model_source_step_id=target_model_source_step_id,
+            device=device, overwrite=overwrite)
+    if any(value is not None for value in (assembly, matrix_semantics,
+                                          target_model_source_run_id, target_model_source_step_id)):
+        raise ValueError('Target species declarations require a qualified target model binding.')
     if not isinstance(species, str) or species.strip().lower() not in {
         "human",
         "mouse",

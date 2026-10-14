@@ -101,6 +101,7 @@ def test_scientific_inventory_is_separate_from_preparation_and_uses_exact_route(
     ('MATRIX_DOWNLOAD_BUSY', 503),
     ('SCIENTIFIC_DOWNLOAD_UNAVAILABLE', 404),
     ('SCIENTIFIC_DOWNLOAD_LIMIT', 413),
+    ('MODEL_DOWNLOAD_LIMIT', 413),
     ('SCIENTIFIC_DOWNLOAD_BUSY', 503),
 ])
 def test_failed_preparation_emits_only_safe_json(monkeypatch, tmp_path, code, status):

@@ -334,6 +334,7 @@ function renderRevision(revision) {
   element("result-operations").replaceChildren(...(revision.steps || []).map((step) => {
     const item = document.createElement("li");
     item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
+    if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
     return item;
   }));
   const retained = new Set(revision.retained_outputs);
@@ -379,8 +380,15 @@ function supportedScientificFile(artifact) {
       "decisions.tsv.gz": "Cell-selection decisions",
       "selected.tsv.gz": "Selected cells",
     },
-    scientific_analysis: { "neighbors.h5ad": "Cell neighbors — safe export" },
+    scientific_analysis: {
+      "neighbors.h5ad": "Cell neighbors — safe export",
+      "analysis.h5ad": "Embeddings, Leiden and UMAP — safe export",
+    },
     scientific_annotation: { "annotated.h5ad": "Annotated cells — safe export" },
+    scientific_model: {
+      "epizoox-checkpoint.pth": "EpiZooX model checkpoint",
+      "epizoox-model.json": "Model configuration and reuse requirements",
+    },
   };
   return Object.hasOwn(files, artifact.artifact_type)
     && Object.hasOwn(files[artifact.artifact_type], artifact.filename)
@@ -400,6 +408,12 @@ function scientificFileNode(sessionId, artifact) {
   download.setAttribute("aria-label", `Download ${artifact.filename}`);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
   row.append(title, download);
+  if (artifact.artifact_type === "scientific_model") {
+    const note = document.createElement("span");
+    note.className = "scientific-export-note";
+    note.textContent = "Accepted trained model. Read the configuration and reuse requirements; these downloads are not a standalone inference bundle.";
+    row.append(note);
+  }
   if (artifact.artifact_type === "scientific_analysis") {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
@@ -925,6 +939,7 @@ function renderExecution() {
   list.replaceChildren(...steps.map((step) => {
     const item = document.createElement("li");
     item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
+    if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
     return item;
   }));
   updateControls();
@@ -1289,13 +1304,16 @@ function clearPendingUpload(keepFile = false) {
 }
 
 function renderUploadType() {
+  const fasta = element("upload-type").value === "fasta";
   const fragments = element("upload-type").value === "external_fragments";
   const bam = element("upload-type").value === "bam";
   const fastq = element("upload-type").value === "fastq";
   const groups = element("upload-type").value === "groups";
-  element("upload-file-label").textContent = fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : groups ? "Attach exact ordered cell_id / group TSV" : "Attach an H5AD file";
-  element("upload-file").accept = fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad";
-  element("upload-index-fields").hidden = !fragments;
+  element("upload-file-label").textContent = fasta ? "Attach the plain reference-genome FASTA for your pending task" : fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : groups ? "Attach exact ordered cell_id / group TSV" : "Attach an H5AD file";
+  element("upload-file").accept = fasta ? ".fa,.fasta,.fna" : fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad";
+  element("upload-index-fields").hidden = !(fragments || fasta);
+  document.querySelector('label[for="upload-index"]').textContent = fasta ? "FAI index (optional; generated if omitted)" : "Paired TBI index (optional)";
+  element("upload-index").accept = fasta ? ".fai" : ".tbi";
   element("fragments-input-help").hidden = !fragments;
   element("bam-input-help").hidden = !bam;
   element("fastq-fields").hidden = !fastq;
@@ -1410,7 +1428,28 @@ async function uploadSelectedFile() {
   uploadStatus(`Uploading ${upload.file.name}…`);
   updateControls();
   try {
+    const sessionId = state.session && state.session.session_id;
+    let referencePending = null;
+    if (upload.inputType === "fasta") {
+      if (!sessionId) throw new Error("Start the scientific request before uploading its reference.");
+      referencePending = (await api(`${sessionPath(sessionId)}/reference-prerequisite`)).pending;
+      if (!referencePending) throw new Error("No genome-reference request is pending in this Session.");
+    }
     const resource = await transferUpload(upload);
+    if (upload.inputType === "fasta") {
+      uploadStatus("Reference uploaded. Verifying the genome and feature coordinates…");
+      await api(`${sessionPath(sessionId)}/reference-prerequisite`, "POST", {
+        resource_id: resource.resource_id, expected_generation: referencePending.expected_generation,
+        origin_turn_id: referencePending.origin_turn_id });
+      if (state.upload !== upload) return;
+      state.upload = null;
+      element("upload-file").value = "";
+      element("upload-index").value = "";
+      element("upload-progress").hidden = true;
+      uploadStatus("Reference qualified for the original task. Send ‘Use the qualified reference and continue’ to resume.");
+      updateControls();
+      return;
+    }
     if (state.upload !== upload) return;
     if (resource.input_type === "fastq") {
       state.fastqMembers = [...state.fastqMembers.filter((choice) => choice.resource_id !== resource.resource_id), resource];
@@ -1451,8 +1490,10 @@ element("upload-file").addEventListener("change", () => {
   if (state.selectedResourceIds.length && state.upload.inputType !== "h5ad") {
     state.selectedResourceIds = selectedResourceIds();
   }
-  element("resource-choice").value = "";
-  if (!selectedCompanion()) element("input-choice").value = "";
+  if (state.upload.inputType !== "fasta") {
+    element("resource-choice").value = "";
+    if (!selectedCompanion()) element("input-choice").value = "";
+  }
   saveResourceSelection();
   saveConveniences();
   inputContext();
@@ -1475,7 +1516,7 @@ element("fastq-collection-label").addEventListener("input", () => { state.fastqC
 element("complete-fastq-collection").addEventListener("click", completeFastqCollection);
 function changePairedIndex(index) {
   const upload = state.upload;
-  if (!upload || upload.inputType !== "external_fragments" || upload.status === "uploading") return;
+  if (!upload || !(["external_fragments", "fasta"].includes(upload.inputType)) || upload.status === "uploading") return;
   // Changing the explicit pair creates a new unit identity. Retry keeps it exact.
   state.upload = { ...upload, uploadId: newTurnId(), index, status: "selected", request: null };
   uploadStatus(`${upload.file.name}${index ? ` + ${index.name}` : ""} · selected. Upload this source before sending your request.`);

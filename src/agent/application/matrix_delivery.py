@@ -226,6 +226,7 @@ class MatrixDeliveryError(ValueError):
         'SCIENTIFIC_DOWNLOAD_UNAVAILABLE': 'The accepted scientific file is unavailable or ineligible for download.',
         'SCIENTIFIC_DOWNLOAD_LIMIT': 'The accepted scientific file exceeds the 1 GiB download limit.',
         'SCIENTIFIC_DOWNLOAD_BUSY': 'Scientific download capacity is unavailable. Try again shortly.',
+        'MODEL_DOWNLOAD_LIMIT': 'The accepted model checkpoint exceeds the 5 GiB download limit.',
     }
 
     def __init__(self, code='MATRIX_DOWNLOAD_UNAVAILABLE'):
@@ -348,18 +349,26 @@ class MatrixDownloadPreparer:
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery
-        from . import annotation_delivery
+        from . import annotation_delivery, analysis_delivery, model_delivery
+        model_role = getattr(artifact, 'role', None)
+        model = artifact.contract == model_delivery.CONTRACT and model_role in model_delivery.FILES
+        model_metadata = model and model_role == model_delivery.METADATA
         annotation = (artifact.contract == annotation_delivery.CONTRACT
                       and getattr(artifact, 'role', None) == annotation_delivery.ROLE)
         processed = (artifact.contract == neighbors_delivery.CONTRACT
                      and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
-        export = processed or annotation
-        exporter = annotation_delivery if annotation else neighbors_delivery
+        compact = (artifact.contract == analysis_delivery.CONTRACT
+                   and getattr(artifact, 'role', None) == analysis_delivery.ROLE)
+        export = processed or annotation or compact
+        exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
+        elif model:
+            filename = model_delivery.FILES[model_role][0]
+            content_type = 'application/json' if model_metadata else 'application/octet-stream'
         elif export:
             filename, content_type = exporter.FILENAME, 'application/octet-stream'
         else:
@@ -376,14 +385,17 @@ class MatrixDownloadPreparer:
         size = artifact.size_bytes
         if type(size) is not int or size < 1:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
-        if size > MAX_MATRIX_BYTES:
+        limit = (model_delivery.MAX_METADATA_BYTES if model_metadata else model_delivery.MAX_CHECKPOINT_BYTES) if model else MAX_MATRIX_BYTES
+        if size > limit and model and not model_metadata:
+            raise MatrixDeliveryError('MODEL_DOWNLOAD_LIMIT')
+        if size > limit:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_LIMIT')
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
         delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, MAX_MATRIX_BYTES)
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
-        reservation = size + delivered_limit if export else size
+        reservation = size + (model_delivery.MAX_METADATA_BYTES if model_metadata else delivered_limit) if export or model_metadata else size
         reserved, snapshot, derivative = False, None, None
         try:
             self._reserve(reservation)
@@ -413,9 +425,21 @@ class MatrixDownloadPreparer:
             snapshot.seek(0)
             if matrix:
                 validate_matrix_h5ad(snapshot, artifact.contract, artifact.manifest)
+            elif model_metadata:
+                _, manifest = model_delivery.read_json(snapshot)
+                if manifest != artifact.manifest:
+                    raise ValueError('Changed model metadata.')
+                data = model_delivery.metadata(manifest, artifact.manifest_sha256)
+                if len(data) > model_delivery.MAX_METADATA_BYTES:
+                    raise ValueError('Model metadata projection exceeds the bound.')
+                snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
+                delivered_size = len(data); checksum = hashlib.sha256(data)
+            elif model:
+                pass  # Exact accepted state-dict bytes; never deserialize weights for delivery.
             elif export:
                 derivative = tempfile.TemporaryFile(mode='w+b')
-                create_export = (annotation_delivery.create_annotation_export if annotation
+                create_export = (analysis_delivery.create_analysis_export if compact else
+                                 annotation_delivery.create_annotation_export if annotation
                                  else neighbors_delivery.create_neighbors_export)
                 create_export(snapshot, derivative, artifact.manifest,
                     source_sha256=artifact.sha256, source_size_bytes=size,
@@ -437,8 +461,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export else size,
-                sha256=checksum.hexdigest() if export else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata else size,
+                sha256=checksum.hexdigest() if export or model_metadata else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

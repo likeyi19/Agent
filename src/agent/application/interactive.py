@@ -248,6 +248,21 @@ class InteractiveAgentApplication:
         except (SessionError, ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_SESSION_INVALID') from exc
 
+    def reference_prerequisite(self, session_id):
+        from .reference_supplementation import public_pending
+        return public_pending(self, session_id)
+
+    def qualify_reference(self, uploads, session_id, **binding):
+        from .reference_supplementation import qualify, ReferenceSupplementError
+        if uploads.resources is not self.resources:
+            raise ValueError("Reference uploads must use this deployment resource owner.")
+        try:
+            return qualify(self, uploads, session_id, **binding)
+        except ReferenceSupplementError:
+            raise
+        except (ValueError, OSError) as exc:
+            raise ReferenceSupplementError("Reference qualification failed. Check the FASTA, optional FAI, and exact feature contigs and coordinates.") from exc
+
     def create_session(self, session_id):
         _identifier(session_id)
         try:
@@ -497,7 +512,8 @@ class InteractiveAgentApplication:
                     outcome = app.sessions.respond(session_id, turn_id, utterance,
                         interpreter=model, answerer=model, expected_generation=expected_generation,
                         execution_inputs=inputs, predecessor_turn_id=predecessor_turn_id,
-                        submission=submission, epizoo_resources=resources, input_sets=input_sets)
+                        submission=submission, epizoo_resources=resources, input_sets=input_sets,
+                        reference_resources=self.resources)
                     presentation = _present(outcome, self._load(session_id), turn_id=turn_id)
                 except SessionConflictError as exc:
                     code = ('INTERACTIVE_GENERATION_CONFLICT'
@@ -555,7 +571,10 @@ class InteractiveAgentApplication:
                 raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
             if run is not None:
                 status, state_revision = run.lifecycle_status.value.lower(), run.revision
-                steps = tuple(StepView(s.step_id, s.tool_name, s.status.value, s.attempt_count) for s in run.steps)
+                from agent.tools.models.native_posttraining import training_notice
+                steps = tuple(StepView(s.step_id, s.tool_name, s.status.value, s.attempt_count,
+                    training_notice(s.resolved_arguments) if s.tool_name == 'adapt_epizoo_species'
+                        and s.status.value == 'RUNNING' and s.resolved_arguments else None) for s in run.steps)
                 if status == 'succeeded' and (turn is None or turn.status in {'linked','run_succeeded','ready'}):
                     status = 'finalizing'
                 elif status == 'succeeded' and turn.status == 'failed':
@@ -716,6 +735,10 @@ class InteractiveAgentApplication:
                 step = next(s for s in run.steps if s.step_id == output.step_id)
                 if step.tool_name in _MATRIX_CONTRACTS:
                     items.append(self._accepted_matrix(session_id, revision, origin, output))
+                elif step.tool_name == 'adapt_epizoo_species':
+                    from .model_delivery import accepted_models
+                    items.extend(accepted_models(self, session_id, revision, origin,
+                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name in _TABLE_TOOLS:
                     try:
                         if output.run_id == origin.run_id:
@@ -740,6 +763,12 @@ class InteractiveAgentApplication:
                             None if output.run_id == origin.run_id else output, step_id=output.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                if step.tool_name == 'compute_cell_umap':
+                    from .analysis_delivery import accepted_analysis
+                    try:
+                        items.append(accepted_analysis(self, session_id, revision, origin, output))
+                    except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                        pass
                 represented.add((output.run_id, output.step_id))
             # The captured run-result digest includes its exact plan and every
             # accepted step. It establishes current-request membership without
@@ -754,6 +783,10 @@ class InteractiveAgentApplication:
                 if planned.tool_name in _MATRIX_CONTRACTS:
                     items.append(self._accepted_matrix(session_id, revision, origin, None,
                         step_id=planned.step_id))
+                elif planned.tool_name == 'adapt_epizoo_species':
+                    from .model_delivery import accepted_models
+                    items.extend(accepted_models(self, session_id, revision, origin, None,
+                        step_id=planned.step_id))
                 elif planned.tool_name in _TABLE_TOOLS:
                     try:
                         items.extend(self._accepted_tables(session_id, revision, origin, None,
@@ -767,6 +800,13 @@ class InteractiveAgentApplication:
                 elif planned.tool_name == 'build_cell_neighbors':
                     try:
                         items.append(self._accepted_neighbors(session_id, revision, origin, None,
+                            step_id=planned.step_id))
+                    except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                        pass
+                elif planned.tool_name == 'compute_cell_umap':
+                    from .analysis_delivery import accepted_analysis
+                    try:
+                        items.append(accepted_analysis(self, session_id, revision, origin, None,
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass

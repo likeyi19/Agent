@@ -453,6 +453,17 @@ class ArgumentSpec:
             )
 
 
+class _EpiZooSpeciesArgument(ArgumentSpec):
+    """Legacy string choices or an explicit neutral target species identity."""
+
+    def validate(self, name, value):
+        if isinstance(value, MappingABC):
+            from agent.tools.data.regulatory_feature_reference import validate_species
+            validate_species(dict(value))
+            return
+        return super().validate(name, value)
+
+
 class _EpiZooResourceIdentityArgument(ArgumentSpec):
     """The embedding owner's narrow public resource-pin shape."""
 
@@ -1846,17 +1857,26 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Destination directory for embedding artifacts.",
                 source=direct,
             ),
-            "species": _planning_argument(
-                (str,),
-                "Species of the raw scATAC dataset.",
-                choices=("human", "mouse"),
-                source=direct,
-                scientific_parameter=True,
-                conversational_choice=True,
-                provenance=branch,
-            ),
+            "species": _EpiZooSpeciesArgument((str, MappingABC), choices=("human", "mouse"),
+                planning=ArgumentPlanningSemantics(
+                    description="Legacy human/mouse string or explicit neutral scientific_name/taxonomy_id object for a qualified target model.",
+                    source_eligibility=direct, scientific_parameter=True,
+                    conversational_choice=True, provenance_role=branch)),
         },
         optional_arguments={
+            "target_model_manifest_path": _planning_argument(
+                path_types, "Qualified EpiZoo target model manifest; bind its exact SHA together.",
+                source=composable, artifacts=(ArtifactSemanticKind.EPIZOO_TARGET_MODEL,), provenance=branch),
+            "target_model_manifest_sha256": _planning_argument(
+                (str,), "Exact target model manifest SHA-256.", source=composable, provenance=branch),
+            "target_model_source_run_id": _planning_argument((str,),
+                "Operator-bound accepted target execution in the trusted source store.", source=direct),
+            "target_model_source_step_id": _planning_argument((str,),
+                "Exact accepted target step paired with its source run.", source=direct),
+            "assembly": _planning_argument((str,), "Exact target assembly declaration.",
+                source=direct, scientific_parameter=True, conversational_exact_string=True),
+            "matrix_semantics": _planning_argument((str,), "Exact target-model measurement semantics.",
+                choices=("fragment_counts", "binary_accessibility"), source=direct, scientific_parameter=True),
             "checkpoint_path": _planning_argument(
                 path_types,
                 "Explicit EpiZoo checkpoint; omit to use the registered tool default.",
@@ -1942,7 +1962,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.OPERATION,
             "Produce aligned EpiZoo embeddings and ordered cell IDs from raw scATAC.",
-            capability_ids=('embedding_analysis', 'reference_annotation'),
+            capability_ids=('embedding_analysis', 'reference_annotation', 'species_adaptation'),
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=(
@@ -1972,6 +1992,21 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("species", required=True),
+                SemanticConsumerPortSpec("target_model", (
+                    _semantic_member("manifest_path", "target_model_manifest_path"),
+                    _semantic_member("manifest_sha256", "target_model_manifest_sha256")), False,
+                    request_sources=(_semantic_request("target_model_manifest_path",
+                        _semantic_request_member("manifest_path", "target_model_manifest_path"),
+                        _semantic_request_member("manifest_sha256", "target_model_manifest_sha256")),),
+                    accepted_upstream_types=("epizoo_target_model.v1",)),
+                SemanticConsumerPortSpec("target_model_source", (
+                    _semantic_member("run_id", "target_model_source_run_id"),
+                    _semantic_member("step_id", "target_model_source_step_id")), False,
+                    request_sources=(_semantic_request("target_model_source_run_id",
+                        _semantic_request_member("run_id", "target_model_source_run_id"),
+                        _semantic_request_member("step_id", "target_model_source_step_id")),)),
+                _semantic_argument_port("assembly", required=False),
+                _semantic_argument_port("matrix_semantics", required=False),
                 _semantic_argument_port(
                     "checkpoint_path",
                     required=False,

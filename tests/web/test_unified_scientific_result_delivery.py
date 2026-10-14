@@ -187,15 +187,20 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
             rendered = client.get(path + '/artifacts/' + report['handle'])
             assert rendered.status_code == 200 and str(tmp_path) not in rendered.text
             inventory = client.get(path + '/scientific-artifacts').json()['artifacts']
-            assert len(inventory) == 1
-            graph = inventory[0]
+            assert {item['filename'] for item in inventory} == {'analysis.h5ad', 'neighbors.h5ad'}
+            graph = next(item for item in inventory if item['filename'] == 'neighbors.h5ad')
+            analysis = next(item for item in inventory if item['filename'] == 'analysis.h5ad')
+            compact = client.get(path + '/scientific-artifacts/' + analysis['handle'])
+            assert compact.status_code == 200
+            assert compact.headers['x-artifact-source-sha256'] == analysis['sha256']
+            assert hashlib.sha256(compact.content).hexdigest() == compact.headers['x-artifact-content-sha256']
             assert graph['artifact_type'] == 'scientific_analysis'
             assert graph['filename'] == 'neighbors.h5ad'
             assert graph['label'] == 'Cell neighbors — safe export'
             assert graph['revision_id'] == child_revision and graph['turn_id'] == 'modify'
             assert len(evidence['source']['prior_outputs']) == 1
             assert evidence['source']['prior_outputs'][0]['run_id'] == source.run.run_id
-            assert client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json() == {'artifacts': []}
+            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
             downloaded = client.get(path + '/scientific-artifacts/' + graph['handle'])
             assert_graph_export(downloaded, graph, source)
             historical_path = revision_path(original_revision)
@@ -388,8 +393,9 @@ def test_historical_dependency_alone_does_not_authorize_child_download_attachmen
             parent = revision_path(parent_revision)
             child = revision_path(child_revision)
             graph = client.get(parent + '/scientific-artifacts').json()['artifacts'][0]
-            assert client.get(child + '/scientific-artifacts').json() == {'artifacts': []}
-            assert client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json() == {'artifacts': []}
+            # The child's own new UMAP is downloadable; its unretained upstream graph is not.
+            assert {item['filename'] for item in client.get(child + '/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
+            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
             rejected = client.get(child + '/scientific-artifacts/' + graph['handle'])
             assert rejected.status_code == 404 and 'content-disposition' not in rejected.headers
             assert_graph_export(client.get(parent + '/scientific-artifacts/' + graph['handle']), graph, source)

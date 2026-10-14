@@ -28,7 +28,7 @@ def _parameter_input(registry, tool_name, argument_name):
     tool = registry.get(tool_name)
     argument = tool.required_arguments.get(argument_name, tool.optional_arguments.get(argument_name))
     choice = (argument is not None and argument.planning is not None
-        and argument.planning.conversational_choice and argument.accepted_types == (str,)
+        and argument.planning.conversational_choice and str in argument.accepted_types
         and bool(argument.choices) and all(type(v) is str and v.strip() for v in argument.choices)
         and not argument.planning.accepted_artifact_kinds)
     exact_string = argument is not None and is_exact_string_argument(argument)

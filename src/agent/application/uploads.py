@@ -21,12 +21,14 @@ from .workspace import ApplicationWorkspaceError
 
 
 DEFAULT_UPLOAD_BYTES = 256 * 1024 * 1024
-MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_UPLOAD_FILES = 128
 _UPLOAD_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
 _STORAGE_NAME = re.compile(r'[0-9a-f]{64}\.h5ad')
 _FRAGMENTS_NAME = re.compile(r'[0-9a-f]{64}\.fragments')
+_FASTA_NAME = re.compile(r'[0-9a-f]{64}\.fa')
+_FASTA_ATTRIBUTION = 'Browser-supplied plain FASTA; species, assembly and sharing rights unverified.'
 _BAM_NAME = re.compile(r'[0-9a-f]{64}\.bam')
 _GROUPS_NAME = re.compile(r'[0-9a-f]{64}\.groups.tsv')
 _GROUPS_ATTRIBUTION = 'Browser-supplied cell grouping TSV; scientific derivation unverified.'
@@ -78,7 +80,7 @@ class H5ADUploadAdmission:
         if not isinstance(resources, LocalResourceAdmission):
             raise TypeError('The existing LocalResourceAdmission owner is required.')
         if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_UPLOAD_BYTES:
-            raise ValueError('max_bytes must be between one byte and one GiB.')
+            raise ValueError('max_bytes must be between one byte and eight GiB.')
         if type(max_concurrent) is not int or not 1 <= max_concurrent <= 4:
             raise ValueError('max_concurrent must be between one and four.')
         self.resources = resources
@@ -165,6 +167,8 @@ class H5ADUploadAdmission:
         elif record.input_type == 'external_fragments':
             valid = (record.attribution == _FRAGMENTS_ATTRIBUTION
                      and _FRAGMENTS_NAME.fullmatch(path.name))
+        elif record.input_type == 'fasta':
+            valid = record.attribution == _FASTA_ATTRIBUTION and _FASTA_NAME.fullmatch(path.name)
         elif record.input_type == 'bam':
             valid = record.attribution == _BAM_ATTRIBUTION and _BAM_NAME.fullmatch(path.name)
         elif record.input_type == 'fastq':
@@ -174,8 +178,8 @@ class H5ADUploadAdmission:
             valid = False
         if not valid or path.parent != self.completed:
             raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
-        if record.source_index is not None and (record.input_type != 'external_fragments'
-                or record.source_index['path'] != str(path.with_suffix('.tbi'))):
+        if record.source_index is not None and (record.input_type not in ('external_fragments', 'fasta')
+                or record.source_index['path'] != str(path.with_suffix('.fai' if record.input_type == 'fasta' else '.tbi'))):
             raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
         return record
 
@@ -184,7 +188,8 @@ class H5ADUploadAdmission:
         try:
             self._check_directories()
             return tuple(self._owned(record).public()
-                         for record in self.resources.list_records(source_root=self.completed, listing='choices'))
+                         for record in self.resources.list_records(source_root=self.completed, listing='choices')
+                         if record.input_type != 'fasta')
         except (ResourceAdmissionError, UploadError):
             raise
         except (ValueError, OSError, RuntimeError) as exc:
@@ -253,14 +258,14 @@ class H5ADUploadAdmission:
         """
         _request(upload_id, filename)
         paired = index_filename is not None or source_size is not None
-        if input_type not in ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups'):
+        if input_type not in ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta'):
             raise UploadError('UPLOAD_REQUEST_INVALID')
         if input_type == 'fastq':
             fastq_member = self.resources.fastq_member_declaration(fastq_member)
         elif fastq_member is not None:
             raise UploadError('UPLOAD_REQUEST_INVALID')
         if paired:
-            if (input_type != 'external_fragments' or index_filename is None
+            if (input_type not in ('external_fragments', 'fasta') or index_filename is None
                     or type(source_size) is not int or source_size <= 0):
                 raise UploadError('UPLOAD_REQUEST_INVALID')
             _request(upload_id, index_filename)
@@ -283,6 +288,7 @@ class H5ADUploadAdmission:
         else:
             domain, suffix, prefix, attribution = {
                 'h5ad': (b'agent.web-h5ad-upload.v1\0', '.h5ad', 'web-h5ad-upload:', _ATTRIBUTION),
+                'fasta': (b'agent.web-fasta-upload.v1\0', '.fa', 'web-fasta-upload:', _FASTA_ATTRIBUTION),
                 'groups': (b'agent.web-groups-upload.v1\0', '.groups.tsv', 'web-groups-upload:', _GROUPS_ATTRIBUTION),
                 'external_fragments': (b'agent.web-fragments-upload.v1\0', '.fragments',
                                        'web-fragments-upload:', _FRAGMENTS_ATTRIBUTION),
@@ -294,7 +300,7 @@ class H5ADUploadAdmission:
         components = [{'path': destination, 'stream': None, 'temporary': None,
                        'digest': hashlib.sha256(), 'size': 0}]
         if paired:
-            components.append({'path': destination.with_suffix('.tbi'), 'stream': None,
+            components.append({'path': destination.with_suffix('.fai' if input_type == 'fasta' else '.tbi'), 'stream': None,
                                'temporary': None, 'digest': hashlib.sha256(), 'size': 0})
         lease = None
         try:

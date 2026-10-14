@@ -72,8 +72,8 @@ class WebConfiguration:
                 or any(not isinstance(r, QualifiedEpiZooResource) for r in self.epizoo_resources)
                 or len({r.resource_id for r in self.epizoo_resources}) != len(self.epizoo_resources)):
             raise WebConfigurationError("EpiZoo resources must have bounded unique identities.")
-        if type(self.upload_max_bytes) is not int or not 1 <= self.upload_max_bytes <= 1024 ** 3:
-            raise WebConfigurationError("The attachment size limit must be between one byte and one GiB.")
+        if type(self.upload_max_bytes) is not int or not 1 <= self.upload_max_bytes <= 8 * 1024 ** 3:
+            raise WebConfigurationError("The attachment size limit must be between one byte and eight GiB.")
         if type(self.upload_max_concurrent) is not int or not 1 <= self.upload_max_concurrent <= 4:
             raise WebConfigurationError("Concurrent attachments must be between one and four.")
         if self.upload_root is not None:

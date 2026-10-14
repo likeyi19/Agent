@@ -699,6 +699,14 @@ def _verify_umap(
     result: Mapping[str, object],
     checks: _VerificationChecks,
 ) -> None:
+    if 'analysis_sha256' in result:
+        from agent.tools.analysis.embedding_analysis import _analysis_digest
+        try:
+            matches = _analysis_digest(result['analysis_path']) == result['analysis_sha256']
+        except (OSError, ValueError, TypeError):
+            matches = False
+        checks.add('umap_payload_identity', matches, 'UMAP bytes match the producer digest.',
+                   'UMAP bytes differ from the producer digest.', 'RESULT_IDENTITY_MISMATCH')
     checks.add(
         "success_status",
         result.get("status") == "success",
@@ -943,6 +951,17 @@ def _verify_embedding(
     dependency_results: Mapping[str, Mapping[str, object]],
     checks: _VerificationChecks,
 ) -> None:
+    if (resolved_arguments.get('target_model_manifest_path') is not None
+            or 'target_model_provenance' in result):
+        try:
+            from agent.tools.models.epizoo_target_inference import verify_result
+            verify_result(resolved_arguments, result)
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            checks.add('target_model_binding', False, 'Verified target-model inference binding.',
+                       str(exc), 'EPIZOO_TARGET_IDENTITY_MISMATCH')
+        else:
+            checks.add('target_model_binding', True, 'Verified target-model inference binding.',
+                       '', 'EPIZOO_TARGET_IDENTITY_MISMATCH')
     expected = resolved_arguments.get("expected_resource_identity")
     if expected is not None or "resource_provenance" in result:
         owner_parameters = inspect.signature(epizoo_embed_cells).parameters
@@ -972,7 +991,7 @@ def _verify_embedding(
         "Embedding result backend identity is not EpiZoo.",
         "TOOL_IDENTITY_MISMATCH",
     )
-    if "species" in resolved_arguments:
+    if "species" in resolved_arguments and resolved_arguments.get('target_model_manifest_path') is None:
         resolved_species = resolved_arguments.get("species")
         species_matches = (
             isinstance(resolved_species, str)

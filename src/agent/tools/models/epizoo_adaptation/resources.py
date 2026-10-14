@@ -40,6 +40,7 @@ def code_bundle():
     files=[file_record(p) for p in sorted(root.rglob('*.py'))]
     # Agent adapters are part of the compatibility closure as well.
     files += [file_record(p) for p in sorted(Path(__file__).parent.glob('*.py'))]
+    files += [file_record(Path(__file__).parent.parent / 'native_posttraining.py')]
     return dict(epizoo_root=str(root),revision=revision,files=files,runtime=runtime())
 
 

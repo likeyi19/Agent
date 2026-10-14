@@ -238,10 +238,13 @@ class RequestResources:
     target: str
     arguments: tuple[ScopedArgument, ...] = ()
     roles: tuple[InputRole, ...] = ()
+    reference_category: str | None = None
 
     def __post_init__(self):
         if type(self.target) is not str or not self.target:
             raise ValueError('Invalid resource request target.')
+        if self.reference_category not in (None, 'peak_set', 'regulatory_regions'):
+            raise ValueError('Invalid reference category.')
         _validate_arguments(self.arguments)
 
 
@@ -336,7 +339,7 @@ REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision
            'unavailable_context', 'invalid_decision', 'planning_failed', 'ambiguous_subject',
            'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution',
            'missing_species', 'ambiguous_species', 'unsupported_species',
-           'conflicting_species', 'missing_resources', 'invalid_prerequisite', 'conflicting_scientific_parameter')
+           'conflicting_species', 'invalid_reference', 'missing_reference', 'missing_resources', 'invalid_prerequisite', 'conflicting_scientific_parameter')
 # These are language aliases, not scientific types/ranges/defaults. Those stay
 # exclusively in the registered ArgumentSpecs. Initial interaction scope is QC selection.
 ALIASES = {
@@ -477,9 +480,9 @@ def parse_decision(raw, *, utterance=None):
                                  _leiden_argument(value.get('argument')),
                                  _scientific_arguments(value.get('arguments', [])))
         if kind == 'request_resources':
-            _shape(value, ('kind', 'target', 'arguments') + (('roles',) if 'roles' in value else ()))
+            _shape(value, ('kind', 'target', 'arguments') + tuple(k for k in ('roles', 'reference_category') if k in value))
             return RequestResources(value['target'], _scientific_arguments(value['arguments']),
-                                    _input_roles(value.get('roles', [])))
+                                    _input_roles(value.get('roles', [])), value.get('reference_category'))
         if kind == 'answer_resources':
             _shape(value, ('kind', 'pending', 'choice', 'arguments'))
             return ResourceAnswer(value['pending'], value['choice'], _scientific_arguments(value['arguments']))
@@ -633,6 +636,10 @@ def decision_schema(public):
             variants.append(_object(dict(kind=enum(('request_resources',)),
                 target=enum(public['dialogue']['tools']), arguments=declarations,
                 **(dict(roles=role_schema(input_roles)) if selected_sources and input_roles else {}))))
+        if public['dialogue'].get('reference_supplementation'):
+            variants.append(_object(dict(kind=enum(('request_resources',)),
+                target=enum(public['dialogue']['tools']), arguments=declarations,
+                reference_category=enum(('peak_set', 'regulatory_regions')))))
         if pending is not None and pending.get('field') == 'resources' and pending.get('choices'):
             variants.append(_object(dict(kind=enum(('answer_resources',)),
                 pending=enum((pending['handle'],)),
@@ -692,7 +699,7 @@ def interpret(model, utterance, public):
             'Comparison needs parent, previous_active, or previous. Other answers normally use current.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
-            'For selected raw or structured scientific inputs, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. If no choice is available, the operator must provision a qualified resource; do not fabricate one.',
+            'For selected scientific uploads or structured inputs, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. When dialogue.reference_supplementation is available, a missing genome for declared species/assembly and an uploaded regulatory H5AD can use request_resources with explicit reference_category peak_set or regulatory_regions. This asks for plain FASTA (optional FAI) and preserves the objective. Qualified pending reference choices can answer that original request. Otherwise an operator must provision missing resources. Never fabricate resources.',
             'For an otherwise supported new scientific command with a selected input, an omitted or unresolved required dataset declaration is not unsupported intent and is not a direct missing-prerequisite answer. Choose execute_plan and omit that declaration from arguments. The existing Planner/compiler determines the exact missing prerequisite and the Application creates its durable clarification. Use missing_species only while answering an offered pending species prerequisite; never fabricate a pending request. Do not guess a value or bypass genuinely unsupported capabilities, input identity ambiguity or conflicting explicit declarations.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'execute_plan.argument is the nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat an identity across argument and arguments.',
@@ -773,7 +780,7 @@ def admit_scientific_argument(declaration, utterance, argument_spec):
                 or end < len(utterance) and utterance[end].isalnum()):
             raise IntentError('ungrounded_operand')
         if (not argument_spec.planning or not argument_spec.planning.conversational_choice
-                or argument_spec.accepted_types != (str,) or not argument_spec.choices):
+                or str not in argument_spec.accepted_types or not argument_spec.choices):
             raise IntentError('unsupported_intent')
         try:
             argument_spec.validate(declaration.argument, declaration.value)

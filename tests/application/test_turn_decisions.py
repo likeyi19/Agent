@@ -176,7 +176,7 @@ def test_parameter_schema_is_narrow_nullable_and_not_offered_on_read_only_or_qc_
         assert null == {'type': 'null'}
         assert argument['properties']['tool']['enum'] == ['cluster_cells']
         assert argument['properties']['argument']['enum'] == ['resolution']
-        assert argument['required'] == ['tool', 'argument', 'literal', 'start', 'end']
+        assert argument['required'] == ['tool', 'argument', 'literal', 'evidence']
         assert argument['additionalProperties'] is False
 
 

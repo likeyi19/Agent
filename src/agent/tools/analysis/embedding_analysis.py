@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 from importlib import metadata
@@ -24,6 +25,23 @@ LEIDEN_KEY = "leiden"
 UMAP_KEY = "X_umap"
 PROVENANCE_KEY = "agent_milestone6"
 PROVENANCE_SCHEMA_VERSION = 1
+
+
+@contextmanager
+def _preserve_loaded_torch_threads():
+    """Scanpy/Numba initialization must not change a preceding model's runtime.
+
+    Preserve the caller's actual setting without importing an optional model
+    backend or changing the settings inside the Scanpy operation.
+    """
+    import sys
+    torch = sys.modules.get('torch')
+    previous = None if torch is None else torch.get_num_threads()
+    try:
+        yield
+    finally:
+        if torch is not None and torch.get_num_threads() != previous:
+            torch.set_num_threads(previous)
 
 
 class CellNeighborsToolResult(TypedDict):
@@ -86,6 +104,7 @@ class CellUMAPToolResult(TypedDict):
     cell_order_preserved: bool
     backend: str
     software_versions: dict[str, str]
+    analysis_sha256: NotRequired[str]
 
 
 def _software_versions() -> dict[str, str]:
@@ -410,17 +429,18 @@ def build_cell_neighbors(
         "software_versions": versions,
     }
 
-    import scanpy as sc
+    with _preserve_loaded_torch_threads():
+        import scanpy as sc
 
-    sc.pp.neighbors(
-        adata,
-        n_neighbors=n_neighbors,
-        use_rep=EPIZOO_REPRESENTATION_KEY,
-        metric=metric,
-        method="umap",
-        transformer=None,
-        random_state=random_seed,
-    )
+        sc.pp.neighbors(
+            adata,
+            n_neighbors=n_neighbors,
+            use_rep=EPIZOO_REPRESENTATION_KEY,
+            metric=metric,
+            method="umap",
+            transformer=None,
+            random_state=random_seed,
+        )
     output_cell_ids, distances, connectivities = _validate_neighbors_artifact(
         adata, expected_stages=frozenset({"neighbors"})
     )
@@ -653,6 +673,7 @@ def compute_cell_umap(
         "n_components": 2,
         "umap_key": UMAP_KEY,
         "coordinate_dtype": str(coordinates.dtype),
+        "analysis_sha256": _analysis_digest(output_path),
         "finite": True,
         "min_dist": normalized_min_dist,
         "spread": normalized_spread,
@@ -661,6 +682,11 @@ def compute_cell_umap(
         "backend": "Scanpy",
         "software_versions": versions,
     }
+
+
+def _analysis_digest(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 __all__ = [

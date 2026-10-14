@@ -36,6 +36,13 @@ class _Body(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
 
+class QualifyReference(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    resource_id: str = Field(min_length=1, max_length=80)
+    expected_generation: int = Field(ge=0)
+    origin_turn_id: str = Field(min_length=1, max_length=128)
+
+
 class CreateSession(_Body):
     session_id: StrictStr | None = Field(default=None, min_length=1, max_length=256, pattern=r'^[^/\\]+$')
 
@@ -369,6 +376,17 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         status = 404 if exc.code == 'LOCAL_RESOURCE_UNAVAILABLE' else 400
         return JSONResponse({'error': exc.error.to_dict()}, status_code=status)
 
+    from agent.application.reference_supplementation import ReferenceSupplementError
+    from agent.tools.data.scatac_reference import ScATACReferenceError
+
+    @app.exception_handler(ReferenceSupplementError)
+    async def reference_error(request, exc):
+        return _error(exc.code, exc.message, 400)
+
+    @app.exception_handler(ScATACReferenceError)
+    async def reference_science_error(request, exc):
+        return _error(exc.code, 'Reference qualification failed. Check the FASTA, optional FAI, and exact feature contigs and coordinates.', 400)
+
     @app.exception_handler(UploadError)
     async def upload_error(request, exc):
         return _error(exc.code, exc.message, exc.status_code)
@@ -381,6 +399,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             'MATRIX_DOWNLOAD_BUSY': 503,
             'SCIENTIFIC_DOWNLOAD_UNAVAILABLE': 404,
             'SCIENTIFIC_DOWNLOAD_LIMIT': 413,
+            'MODEL_DOWNLOAD_LIMIT': 413,
             'SCIENTIFIC_DOWNLOAD_BUSY': 503,
         }.get(exc.code, 400))
         if exc.code in {'MATRIX_DOWNLOAD_BUSY', 'SCIENTIFIC_DOWNLOAD_BUSY'}:
@@ -440,7 +459,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.put('/api/v1/uploads/{upload_id}', status_code=201)
     async def upload_source(upload_id: str, request: Request,
                             filename: str = Query(min_length=1, max_length=160),
-                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq|groups)$'),
+                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq|groups|fasta)$'),
                             index_filename: str | None = Query(default=None, min_length=1, max_length=160),
                             source_size: str | None = Query(default=None, min_length=1, max_length=20),
                             library_id: str | None = Query(default=None, min_length=1, max_length=64),
@@ -457,7 +476,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                                          *fastq_member}
                 or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params)
                 or (index_filename is None) != (source_size is None)
-                or index_filename is not None and input_type != 'external_fragments'
+                or index_filename is not None and input_type not in ('external_fragments', 'fasta')
                 or input_type == 'fastq' and any(value is None for value in fastq_member.values())
                 or input_type != 'fastq' and any(value is not None for value in fastq_member.values())):
             return _error('WEB_UPLOAD_REQUEST_INVALID', 'The upload request is invalid.', 422)
@@ -488,6 +507,16 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             input_type=input_type, index_filename=index_filename, source_size=paired_source_size,
             expected_size=expected_size, **({'fastq_member': fastq_member} if input_type == 'fastq' else {}))
         return record.public()
+
+    @app.get('/api/v1/sessions/{session_id}/reference-prerequisite')
+    def reference_prerequisite(session_id: str):
+        return {'pending': application.reference_prerequisite(session_id)}
+
+    @app.post('/api/v1/sessions/{session_id}/reference-prerequisite')
+    def qualify_reference(session_id: str, body: QualifyReference):
+        if uploads is None:
+            return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
+        return application.qualify_reference(uploads, session_id, **body.model_dump())
 
     @app.post('/api/v1/sessions', status_code=201)
     def create_session(body: CreateSession):

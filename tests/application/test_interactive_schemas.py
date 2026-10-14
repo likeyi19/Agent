@@ -151,3 +151,11 @@ def test_model_and_artifact_metadata_do_not_carry_server_configuration_or_paths(
     assert 'path' not in artifact.to_dict() and 'endpoint' not in choice.to_dict()
     with pytest.raises(ValueError, match='digest'):
         ArtifactHandle('handle', 'report', 'A' * 64, 'revision', 'turn')
+
+
+def test_training_notice_is_optional_and_scoped_to_running_adaptation():
+    step=StepView('train','adapt_epizoo_species','RUNNING',1,'Native configuration; runtime uncalibrated.')
+    assert step.to_dict()['training_notice']==step.training_notice
+    assert 'training_notice' not in StepView('inspect','inspect_scATAC','RUNNING',1).to_dict()
+    for tool,status in [('inspect_scATAC','RUNNING'),('adapt_epizoo_species','SUCCEEDED')]:
+        with pytest.raises(ValueError):StepView('s',tool,status,1,'Not appropriate here.')

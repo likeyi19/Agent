@@ -11,7 +11,8 @@ from .turn_decisions import IntentError
 from .input_sets import ScientificInputSet
 
 COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
-                'bam-science.v1': 'bam', 'fastq-science.v1': 'fastq'}
+                'bam-science.v1': 'bam', 'fastq-science.v1': 'fastq',
+                'h5ad-science.v1': 'h5ad'}
 
 
 def source_kind(submission):
@@ -33,7 +34,8 @@ def _offered(submission, input_sets):
                 if not any(getattr(s, f + '_companion') for f in ('h5ad', *COMPOSITIONS.values()))
                 and set(s.execution_inputs) - set(captured)
                 and all(k not in captured or captured[k] == v for k, v in s.execution_inputs.items())]
-    return [s for s in input_sets if family and getattr(s, family + '_companion')]
+    return [s for s in input_sets if family and getattr(s, family + '_companion')
+            and (family != 'h5ad' or 'target_model_manifest_path' in s.execution_inputs)]
 
 
 def catalog(input_sets):
@@ -42,7 +44,8 @@ def catalog(input_sets):
             or len({s.input_set_id for s in input_sets}) != len(input_sets)):
         raise IntentError('invalid_prerequisite')
     return [{key: _serialize(getattr(s, key)) for key in s.__dataclass_fields__}
-            for s in input_sets if not s.h5ad_companion]
+            for s in input_sets if not s.h5ad_companion
+            or 'target_model_manifest_path' in s.execution_inputs]
 
 
 def offers(submission, input_sets):
@@ -72,7 +75,7 @@ def capture(prior, origin, current):
         return None
     # Resource values are checked against the captured catalog at admission.
     # Source values must still be exactly the captured registration.
-    for k in ('source_path', 'source_sha256', 'source_index_path', 'source_index_sha256', 'raw_input_paths'):
+    for k in ('input_path', 'source_path', 'source_sha256', 'source_index_path', 'source_index_sha256', 'raw_input_paths'):
         if k in current.get('execution_inputs', {}) and current['execution_inputs'][k] != original['execution_inputs'].get(k):
             return None
     return dict(**_serialize(prior.prerequisite), predecessor_turn_id=prior.turn_id)
@@ -98,15 +101,22 @@ def request(sessions, interaction, decision, input_sets):
         arguments=decision.arguments, roles=decision.roles), interaction.submission['execution_inputs'])
     rows = catalog(input_sets)
     admitted.update(kind='request_resources', resource_catalog=rows)
+    if decision.reference_category is not None:
+        from .reference_supplementation import requirement
+        if source_kind(interaction.submission) != 'h5ad':
+            raise IntentError('invalid_prerequisite')
+        admitted['reference_requirement'] = requirement(admitted['inputs'], decision.reference_category)
     pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
         field='resources', tool=decision.target, resource_context_sha256=digest(_serialize(rows)))
     return admitted, pending
 
 
-def _completed(origin, source, interaction, choice_handle, arguments, registry):
+def _completed(origin, source, interaction, choice_handle, arguments, registry, reference_record=None, reference_source=None):
     from .dialogue_execution import _bind_arguments, execution_submission
     from .local_resources import LocalResourceAdmission
     original = execution_submission(origin)
+    if ('reference_requirement' in origin.admitted) != (reference_record is not None):
+        raise IntentError('invalid_prerequisite')
     binding = (None if source_kind(original) == 'structured'
                else LocalResourceAdmission._submission_binding(dict(execution_inputs=source.admitted['inputs'],
                     registered_input=source.admitted.get('registered_input', original['registered_input']))))
@@ -114,11 +124,17 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry):
     rows = origin.admitted['resource_catalog']
     choices = tuple(ScientificInputSet(**_serialize(row)) for row in rows)
     offered = {('resource.' + s.input_set_id): s for s in _offered(original, choices)}
+    if reference_record is not None:
+        from .reference_supplementation import input_set, validate_completion
+        validate_completion(reference_record, reference_source, origin, binding)
+        supplementary = input_set(reference_record)
+        offered = {'resource.' + supplementary.input_set_id: supplementary}
+        values['input_sha256'] = reference_source.source_sha256
     if choice_handle not in offered:
         raise IntentError('invalid_prerequisite')
     chosen = offered[choice_handle]
     original_choice = None if binding is None else binding.resource_choice
-    if original_choice is not None and _serialize(original_choice) != chosen.resource_choice():
+    if reference_record is None and original_choice is not None and _serialize(original_choice) != chosen.resource_choice():
         raise IntentError('invalid_prerequisite')
     for key, value in chosen.inputs().items():
         if key in values and values[key] != value:
@@ -128,7 +144,7 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry):
     if binding is None and 'registered_input' in current:
         raise IntentError('invalid_prerequisite')
     received_choice = current.get('registered_input', {}).get('resource_choice')
-    if received_choice is not None and received_choice != chosen.resource_choice():
+    if received_choice is not None and received_choice != (_serialize(original_choice) if reference_record is not None else chosen.resource_choice()):
         raise IntentError('invalid_prerequisite')
     # Received inputs may repeat captured declarations or the exact selected set.
     # They cannot inject another path or change a previous declaration.
@@ -139,12 +155,12 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry):
     if binding is None:
         return dict(execution_inputs=values)
     from .local_resources import RegisteredInputGroup
-    completed = replace(binding, execution_inputs=values, resource_choice=chosen.resource_choice(),
+    completed = replace(binding, execution_inputs=values, resource_choice=original_choice if reference_record is not None else chosen.resource_choice(),
                         **({} if type(binding) is RegisteredInputGroup else dict(resource_selection_error=None)))
     return dict(execution_inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution())
 
 
-def answer(sessions, interaction, decision, input_sets):
+def answer(sessions, interaction, decision, input_sets, *, reference_resources=None):
     from .dialogue_execution import validate_prerequisite
     from .local_resources import LocalResourceAdmission
     from dataclasses import asdict
@@ -161,8 +177,12 @@ def answer(sessions, interaction, decision, input_sets):
         run = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         if run.steps or not run.errors or run.request.prompt != origin.utterance:
             raise IntentError('invalid_prerequisite')
+    reference_record = reference_source = None
+    if 'reference_requirement' in origin.admitted:
+        from .reference_supplementation import select
+        reference_record, reference_source = select(reference_resources, state.session_id, origin, decision.choice)
     completed = _completed(origin, source, interaction, decision.choice, decision.arguments,
-                           sessions._application.registry)
+                           sessions._application.registry, reference_record, reference_source)
     if 'registered_input' in completed:
         owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
         owner.validate_binding(LocalResourceAdmission._submission_binding(completed))
@@ -172,6 +192,8 @@ def answer(sessions, interaction, decision, input_sets):
         inputs=completed['execution_inputs'],
         **({'registered_input': completed['registered_input']} if 'registered_input' in completed else {}),
         arguments=[asdict(d) for d in decision.arguments], resource_handle=decision.choice,
+        **({'reference_record': reference_record.to_dict(), 'reference_source': reference_source.to_dict()}
+           if reference_record is not None else {}),
         continuation={k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')})
 
 
@@ -207,6 +229,11 @@ def validate(interaction, preceding):
                     _serialize(admitted.get('roles', [])), registry)
             values = _bind_arguments(registry, interaction.utterance, base,
                 _scientific_arguments(_serialize(admitted.get('arguments', []))))
+            if 'reference_requirement' in admitted:
+                from .reference_supplementation import requirement
+                required = _serialize(admitted['reference_requirement'])
+                if requirement(values, required['feature_category']) != required:
+                    raise ValueError('Changed reference requirement.')
             if values != _serialize(admitted['inputs']):
                 raise ValueError('Changed resource request inputs.')
             return
@@ -223,8 +250,11 @@ def validate(interaction, preceding):
                 raise ValueError('Unexpected resource pending state.')
             return  # an unrelated ordinary decision does not answer this request
         origin, source = _source(reference, preceding)
+        from .local_resources import LocalResourceRecord
         completed = _completed(origin, source, interaction, admitted['resource_handle'],
-            _scientific_arguments(_serialize(admitted['arguments'])), build_default_tool_registry())
+            _scientific_arguments(_serialize(admitted['arguments'])), build_default_tool_registry(),
+            LocalResourceRecord(**_serialize(admitted['reference_record'])) if 'reference_record' in admitted else None,
+            LocalResourceRecord(**_serialize(admitted['reference_source'])) if 'reference_source' in admitted else None)
         if (admitted['kind'] != 'execute' or admitted['operation'] != 'plan'
                 or admitted['tool'] != origin.admitted['tool']
                 or admitted['revision_id'] != interaction.base_revision_id

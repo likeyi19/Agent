@@ -81,6 +81,13 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if clarification.reason == 'invalid_reference':
+        return 'The selected reference is incompatible or its qualified content has changed. Supply a compatible reference for the preserved task.'
+    if clarification.reason == 'missing_reference':
+        return ('A qualified reference is available: ' + '; '.join(clarification.choices)
+                + '. Select it to continue your original request.' if clarification.choices else
+                'To continue this analysis, upload the plain reference-genome FASTA for the declared species and assembly. '
+                'An FAI index is optional; Agent can generate it. Your original request and H5AD are preserved.')
     if clarification.reason == 'missing_resources':
         return ('Which reference and source declarations should be used? Available choices: '
                 + '; '.join(clarification.choices) + '. Your original request and file are preserved.'

@@ -278,7 +278,7 @@ def test_upload_configuration_is_opt_in_and_approves_only_controlled_workspace_r
 @pytest.mark.parametrize('changes', [
     {'upload_root': '../outside'}, {'upload_root': '.'}, {'upload_root': ''},
     {'upload_root': 1}, {'upload_root': []},
-    {'upload_max_bytes': True}, {'upload_max_bytes': 0}, {'upload_max_bytes': 1024 ** 3 + 1},
+    {'upload_max_bytes': True}, {'upload_max_bytes': 0}, {'upload_max_bytes': 8 * 1024 ** 3 + 1},
     {'upload_max_concurrent': True}, {'upload_max_concurrent': 0}, {'upload_max_concurrent': 5},
 ])
 def test_upload_configuration_rejects_unsafe_roots_and_unbounded_limits(tmp_path, changes):

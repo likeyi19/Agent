@@ -1289,6 +1289,15 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == 'adapt_epizoo_species' and step_result.result['purpose'] == 'native':
+            from agent.tools.models.epizoo_adaptation.publication import load_manifest
+            model = load_manifest(step_result.result['manifest_path'], step_result.result['manifest_sha256'])
+            profile = model['arguments']['profile']
+            facts.update(training_method=profile['id'],
+                training_configuration=_plain_json(dict(trainer=profile['trainer'],
+                    batch_size=profile['batch_size'], sequence_batch_size=profile['sequence_batch_size'],
+                    seed=profile['seed'], dtype=profile['dtype'], max_length=profile['max_length']),
+                    'training_configuration'), training_biological_performance='not_assessed')
         if step.tool_name == "epizoo_embed_cells" and "resource_provenance" in step_result.result:
             facts["resource_provenance"] = validate_resource_provenance(
                 step_result.result["resource_provenance"],
@@ -1296,6 +1305,16 @@ def _prepare_evidence(
                 species=step_result.result["species"], device=step_result.result["device"],
                 overwrite=step_result.resolved_arguments.get("overwrite", False),
             )
+        if step.tool_name == 'epizoo_embed_cells' and 'target_model_provenance' in step_result.result:
+            target = step_result.result['target_model_provenance']
+            facts.update(target_model_method=target['method'], target_assembly=target['assembly'],
+                target_matrix_semantics=target['matrix_semantics'],
+                target_training_purpose=target['training_purpose'],
+                target_training_steps=target['training_steps'],
+                target_checkpoint_sha256=target['checkpoint_sha256'],
+                target_feature_sha256=target['ordered_feature_sha256'],
+                target_features_reordered=target['features_reordered'],
+                target_biological_performance='not_assessed')
         if step.tool_name == "run_replicate_differential_accessibility":
             facts.update(
                 _differential_accessibility_derived_facts(

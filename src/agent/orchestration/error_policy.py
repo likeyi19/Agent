@@ -83,6 +83,9 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "SPECIES_ASSEMBLY_INVALID": ErrorPolicyEntry(
         "The species and genome assembly are unsupported or incompatible.", _USER
     ),
+    "EPIZOO_TRAINING_CAPACITY_UNAVAILABLE": ErrorPolicyEntry(
+        "Post-training needs available cuda:0 and sufficient free GPU memory and checkpoint disk space. Release capacity or ask the operator to change the workspace, then retry. Training settings were not reduced.", _USER
+    ),
     "METADATA_COLUMN_MISSING": ErrorPolicyEntry(
         "Required pseudobulk observation metadata is missing.", _USER
     ),

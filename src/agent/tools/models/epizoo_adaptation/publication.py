@@ -148,7 +148,11 @@ def verify_target(path,*,expected_sha256):
     if [json.loads(line) for line in (root/'cells.jsonl').read_text().splitlines()]!=cells:
         raise ValueError('Target dataset/cell row identity differs.')
     from epizoo.data.ccre import extract_dna_sequences
-    sequences=extract_dna_sequences(reference.genome.fasta.path,joint.var_names.tolist(),fix_chrom_name=False,on_error='raise',show_progress=False)
+    if args['profile'].get('id') == 'epizoo-native-posttraining.v2':
+        from ..native_posttraining import extract_sequences
+        sequences=extract_sequences(reference, joint.var_names.tolist(), root.parent)
+    else:
+        sequences=extract_dna_sequences(reference.genome.fasta.path,joint.var_names.tolist(),fix_chrom_name=False,on_error='raise',show_progress=False)
     if (root/'sequences.txt').read_text().splitlines()!=sequences: raise ValueError('Target DNA sequence order/content differs.')
     seq=np.load(root/'sequence_embeddings.npy',allow_pickle=False)
     if seq.dtype!=np.float32 or seq.shape!=(joint.n_vars,512) or not np.isfinite(seq).all():

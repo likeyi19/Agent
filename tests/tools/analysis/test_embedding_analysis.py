@@ -34,6 +34,29 @@ def embedding_artifacts(tmp_path: Path) -> tuple[Path, Path, tuple[str, ...]]:
     return embedding_path, cell_ids_path, cell_ids
 
 
+@pytest.mark.parametrize('fail', [False, True])
+def test_neighbors_preserves_loaded_model_thread_setting(embedding_artifacts, tmp_path, monkeypatch, fail):
+    import torch
+    import scanpy as sc
+    before = torch.get_num_threads()
+    original = sc.pp.neighbors
+    def changed(*args, **kwargs):
+        torch.set_num_threads(2)
+        if fail: raise RuntimeError('simulated neighbor failure')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sc.pp, 'neighbors', changed)
+    try:
+        torch.set_num_threads(4)
+        if fail:
+            with pytest.raises(RuntimeError, match='simulated neighbor failure'):
+                build_cell_neighbors(*embedding_artifacts[:2], tmp_path/'output')
+        else:
+            build_cell_neighbors(*embedding_artifacts[:2], tmp_path/'output')
+        assert torch.get_num_threads() == 4
+    finally:
+        torch.set_num_threads(before)
+
+
 @pytest.fixture
 def neighbors_result(
     embedding_artifacts: tuple[Path, Path, tuple[str, ...]], tmp_path: Path

@@ -349,7 +349,7 @@ def execute(sessions, interaction, admitted):
 
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
             answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
-            epizoo_resources=(), input_sets=()):
+            epizoo_resources=(), input_sets=(), reference_resources=None):
     # Each property access returns its own facade; no process-global turn context.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
@@ -416,12 +416,17 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                                               execution_inputs=execution_inputs)
         from .dialogue_execution import prerequisite_public
         pending_public = prerequisite_public(interaction, state.interactions)
+        if pending_public is not None and reference_resources is not None:
+            from .reference_supplementation import pending_choices
+            pending_choices(pending_public, interaction, state, reference_resources)
         if pending_public is not None:
             visible['dialogue']['pending_prerequisite'] = pending_public
         from .resource_continuation import offers, source_kind, catalog
         catalog(input_sets)
         visible['dialogue']['resource_choices'] = offers(submission, input_sets)
         visible['dialogue']['resource_source'] = source_kind(submission)
+        visible['dialogue']['reference_supplementation'] = (reference_resources is not None
+            and source_kind(submission) == 'h5ad')
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
@@ -464,10 +469,16 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             admitted, prerequisite = request(sessions, interaction, decision, input_sets)
             _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
             choices = tuple(c['label'] for c in offers(submission, input_sets))
-            return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', choices, True))
+            reason = 'missing_resources'
+            if 'reference_requirement' in admitted:
+                from .reference_supplementation import choices as reference_choices
+                choices = tuple(r.label for r in reference_choices(reference_resources, session_id,
+                    admitted['reference_requirement'], origin_turn_id=turn_id)) if reference_resources else ()
+                reason = 'missing_reference'
+            return TurnOutcome('clarify', 'clarification', Clarify(reason, choices, True))
         elif isinstance(decision, ResourceAnswer):
             from .resource_continuation import answer
-            admitted = answer(sessions, interaction, decision, input_sets)
+            admitted = answer(sessions, interaction, decision, input_sets, reference_resources=reference_resources)
         elif isinstance(decision, RequestRoles):
             from .dialogue_execution import admit_role_request
             admitted, prerequisite, choices = admit_role_request(sessions, interaction, decision, epizoo_resources)

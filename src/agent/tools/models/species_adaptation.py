@@ -6,6 +6,7 @@ from agent.tools.data.neutral_matrix_binding import reference_binding, matrix_se
 
 ARGUMENTS = ('matrix_manifest_path','matrix_manifest_sha256','adaptation_spec_path',
              'adaptation_spec_sha256','strategy','output_dir')
+OPTIONAL_ARGUMENTS = ('max_steps', 'learning_rate', 'training_batch_size')
 RECOVERY_POLICY = c.POLICY
 SPECIFICATION = 'epizoo-adaptation-inputs.v1'
 BASE_FIELDS = ('status','artifact_type','contract_version','manifest_path','manifest_sha256',
@@ -19,6 +20,7 @@ RESULT_FIELDS = (*BASE_FIELDS, *FACT_FIELDS)
 
 def expand(args):
     args = dict(args)
+    overrides = {key: args.pop(key) for key in OPTIONAL_ARGUMENTS if key in args}
     matrix.shape(args, ARGUMENTS)
     for key in ARGUMENTS:
         if key.endswith('_sha256'): matrix.sha(args[key])
@@ -28,12 +30,15 @@ def expand(args):
     spec = c.read_json(args['adaptation_spec_path'], args['adaptation_spec_sha256'])
     matrix.shape(spec, ('contract_version','reference_identity_sha256','species','assembly',
                         'source_bundle','seam_bundle','mapping','execution_profile'))
-    if spec['contract_version'] != SPECIFICATION: raise ValueError('Unsupported adaptation specification.')
+    native = spec['contract_version'] == 'epizoo-adaptation-inputs.v2'
+    if not native and spec['contract_version'] != SPECIFICATION: raise ValueError('Unsupported adaptation specification.')
     from agent.tools.data.regulatory_matrix_contract import validate_binding
     validate_binding(spec['species'],spec['assembly'])
-    matrix.sha(spec['reference_identity_sha256'])
-    if spec['execution_profile'] not in ('qualification.v1','production-candidate.v1','binary-de-novo-qualification.v1'):
+    if not native or spec['reference_identity_sha256'] is not None: matrix.sha(spec['reference_identity_sha256'])
+    if (native and spec['execution_profile'] != 'native.v2' or not native and
+            spec['execution_profile'] not in ('qualification.v1','production-candidate.v1','binary-de-novo-qualification.v1')):
         raise ValueError('Explicit qualified execution profile required.')
+    if overrides and not native: raise ValueError('Historical profiles cannot accept native overrides.')
     current_code = resources.code_bundle()
     for key in ('source_bundle','seam_bundle'):
         matrix.shape(spec[key],('path','sha256'))
@@ -58,6 +63,10 @@ def expand(args):
         seed=0,batch_size=1 if qualification else 4,sequence_batch_size=4 if qualification else 128,
         max_steps=10 if qualification else 500000,save_steps=10 if qualification else 4000,
         log_steps=1 if qualification else 500)
+    if native:
+        from .native_posttraining import resolve
+        value = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
+        profile = resolve(matrix_semantics=matrix_semantics(value), max_steps=overrides.pop('max_steps', None), **overrides)
     expanded = backend.arguments(dict(matrices=[dict(manifest_path=str(args['matrix_manifest_path']),
         manifest_sha256=args['matrix_manifest_sha256'])],source_bundle=spec['source_bundle'],
         seam_bundle=spec['seam_bundle'],strategy=args['strategy'],mapping=spec['mapping'],
@@ -68,7 +77,7 @@ def expand(args):
     if (c.file_record(args['matrix_manifest_path'])['sha256'] != args['matrix_manifest_sha256'] or
         matrix_semantics(value) != profile['matrix_semantics'] or
         value['species'] != spec['species'] or value['assembly'] != spec['assembly'] or
-        reference_binding(value)['identity_sha256'] != spec['reference_identity_sha256']):
+        (spec['reference_identity_sha256'] is not None and reference_binding(value)['identity_sha256'] != spec['reference_identity_sha256'])):
         raise ValueError('Adaptation matrix/reference/species/assembly/semantics mismatch.')
     return expanded
 
@@ -96,6 +105,10 @@ def _summary(args, base):
 def execute(arguments, execution_identity=None):
     if execution_identity is None: raise ValueError('Adaptation requires durable Agent execution.')
     expanded = expand(arguments)
+    if expanded['profile']['id'] == 'epizoo-native-posttraining.v2':
+        from .native_posttraining import admit_resources
+        value = matrix.load_manifest_bytes(Path(arguments['matrix_manifest_path']).read_bytes())
+        admit_resources(expanded['profile'], value['shape'][1], expanded['output_dir'])
     output = backend.adapt_epizoo_species(**expanded, execution_identity=execution_identity)
     return _summary(arguments,output['result'])
 
@@ -114,5 +127,5 @@ def recover(arguments, execution_identity):
 
 
 def adapt_epizoo_species(matrix_manifest_path, matrix_manifest_sha256, adaptation_spec_path,
-        adaptation_spec_sha256, strategy, output_dir):
-    return execute(locals())
+        adaptation_spec_sha256, strategy, output_dir, max_steps=None, learning_rate=None, training_batch_size=None):
+    return execute({k: v for k, v in locals().items() if k not in OPTIONAL_ARGUMENTS or v is not None})

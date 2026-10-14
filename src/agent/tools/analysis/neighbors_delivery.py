@@ -88,7 +88,7 @@ def _scalar(item, expected, *, private=False):
                 or item[()] != expected)
 
 
-def _safe_objects(file, max_bytes):
+def _safe_objects(file, max_bytes, *, numeric_kinds=frozenset({'i', 'f'})):
     """Reject indirect storage and unreviewed attrs before copying any values."""
     seen = {h5py.h5o.get_info(file.id).addr}
     count, numeric_bytes = 0, 0
@@ -112,7 +112,7 @@ def _safe_objects(file, max_bytes):
                 _reject(creation.get_nfilters() != 0
                         or creation.fill_value_defined() != h5py.h5d.FILL_VALUE_DEFAULT)
                 if h5py.check_string_dtype(item.dtype) is None:
-                    _reject(item.dtype.kind not in {'i', 'f'})
+                    _reject(item.dtype.kind not in numeric_kinds)
                     numeric_bytes += item.size * item.dtype.itemsize
                     _reject(numeric_bytes > max_bytes)
 

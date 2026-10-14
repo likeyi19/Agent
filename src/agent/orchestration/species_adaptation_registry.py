@@ -7,10 +7,23 @@ from agent.tools.data import neutral_matrix_tool as adoption
 from agent.tools.models import species_adaptation as adaptation
 
 
+class TrainingArgument(ArgumentSpec):
+    def validate(self, name, value):
+        super().validate(name, value)
+        import math
+        from .registry import ToolArgumentError
+        if (not math.isfinite(value) or value <= 0
+                or name == 'training_batch_size' and value > 4):
+            raise ToolArgumentError('Invalid native training setting: ' + name)
+
+
 def classify(exception):
     from .registry import ErrorClassification
     from agent.schemas import ErrorCategory
     from agent.schemas.verification_authority import AuthorityError
+    from agent.tools.models.native_posttraining import TrainingResourceError
+    if isinstance(exception, TrainingResourceError):
+        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR,exception.code)
     if isinstance(exception, AuthorityError):
         return ErrorClassification(ErrorCategory.VERIFICATION_ERROR,'SPECIES_AUTHORITY_INVALID')
     if getattr(exception,'code','').startswith('MATRIX_'):
@@ -49,10 +62,12 @@ def validate_adaptation(value):
     from agent.tools.models.epizoo_adaptation import contract as c
     try:
         c.checks.shape(value, adaptation.RESULT_FIELDS)
+        from agent.tools.models.native_posttraining import METHOD_SHA256
         if (value['status']!='success' or value['artifact_type']!=c.ARTIFACT or
-            value['contract_version']!=c.CONTRACT or value['profile_sha256'] not in (c.PROFILE_SHA256,c.BINARY_PROFILE_SHA256) or
-            value['purpose'] not in ('qualification','production') or
+            value['contract_version']!=c.CONTRACT or value['profile_sha256'] not in (c.PROFILE_SHA256,c.BINARY_PROFILE_SHA256,METHOD_SHA256) or
+            value['purpose'] not in ('qualification','production','native') or
             value['strategy'] not in ('de_novo','mapped_reference')): raise ValueError()
+        if (value['profile_sha256'] == METHOD_SHA256) != (value['purpose'] == 'native'): raise ValueError()
         if value['profile_sha256']==c.BINARY_PROFILE_SHA256 and (
                 value['strategy']!='de_novo' or value['purpose']!='qualification'):
             raise ValueError('Binary adaptation requires bounded de_novo qualification.')
@@ -94,13 +109,24 @@ def tool_specs():
         for port,prefix,upstream in bindings:
             members=('manifest_path','manifest_sha256') if upstream else ('path','sha256')
             ports.append(SemanticConsumerPortSpec(port,tuple(member(m,prefix+'_'+s) for m,s in zip(members,('path','sha256'))),True,
-                request_sources=(request(prefix+'_path',*(input_member(m,prefix+'_'+s) for m,s in zip(members,('path','sha256')))),),
+                request_sources=(request(prefix+'_path',*(input_member(m,prefix+'_'+s) for m,s in zip(members,('path','sha256')))),)
+                    + ((request('input_path', input_member('path','input_path'), input_member('sha256','input_sha256')), )
+                       if name == 'adopt_scATAC_cell_by_features' and port == 'source' else ()),
                 accepted_upstream_types=upstream))
         ports.extend(_semantic_argument_port(k,required=True) for k in (*choices,'output_dir'))
         is_adoption=public is adoption
+        optional = {}
+        if not is_adoption:
+            for key, types, description in (
+                ('max_steps', (int,), 'Positive native training steps; omission uses pinned EpiZoo defaults (currently 500,000). Only explicit post-training intent authorizes new training; never substitute training for existing-model inference.'),
+                ('learning_rate', (int,float), 'Explicit positive native optimizer learning rate; omitted uses pinned EpiZoo defaults.'),
+                ('training_batch_size', (int,), 'Explicit training loader batch size, 1 through 4 under the qualified 24 GiB execution envelope.')):
+                spec = _planning_argument(types, description, source=S.REQUEST_INPUT_ONLY, scientific_parameter=True)
+                optional[key] = TrainingArgument(spec.accepted_types, allow_step_output_ref=False, planning=spec.planning)
+                ports.append(_semantic_argument_port(key, required=False))
         ints={'artifact_schema_version','n_cells','n_features','nnz','total_count','zero_row_count','completed_step','optimizer_steps','amp_skipped_steps'}
         fields={k:(int,) if k in ints else (dict,) if k=='species' else (str,type(None)) if k=='mapping_identity_sha256' else (str,) for k in result_fields}
-        specs.append(ToolSpec(name=name,function=getattr(public,name),required_arguments=required,optional_arguments={},
+        specs.append(ToolSpec(name=name,function=getattr(public,name),required_arguments=required,optional_arguments=optional,
             result_contract=ResultContract('NeutralMatrixResult' if is_adoption else 'SpeciesAdaptationResult',fields,
                 validator=validator,planning_fields={k:_planning_result('Verified exact artifact binding.',bindable=True,
                     artifact=A.SCATAC_CELL_BY_FEATURES if is_adoption else A.EPIZOO_TARGET_MODEL) for k in ('manifest_path','manifest_sha256')}),
@@ -111,7 +137,7 @@ def tool_specs():
                 'Complete ordered neutral reference/genome; int64 CSR; declared value semantics. Peaks are exact features, never projected to canonical cCREs.' if is_adoption else
                 'Qualified neutral matrix: external or fragment-derived fragment_counts, or binary_accessibility with explicit binary-de-novo-qualification.v1; specification pins reference and source/SEAM bundles.',
                 'No inferred raw/QC lineage, curated-cCRE or model-readiness claim.' if is_adoption else
-                'Explicit de_novo or mapped_reference; mapped requires supplied chain/reference resources. No fallback, biological quality claim or target-model inference.',
+                'Explicit de_novo or mapped_reference; mapped requires supplied chain/reference resources. No fallback or biological quality claim; the model port can feed qualified epizoo_embed_cells target inference.',
                 capability_ids=('species_adaptation',)),
             semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
                 SemanticProducerPortSpec('matrix' if is_adoption else 'model',

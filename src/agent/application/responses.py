@@ -92,8 +92,8 @@ def clarification_text(clarification):
         return ('Which reference and source declarations should be used? Available choices: '
                 + '; '.join(clarification.choices) + '. Your original request and file are preserved.'
                 if clarification.choices else
-                'Your original request and file are preserved. No reviewed resource choice is available; '
-                'an operator must provision the required reference and source declarations before execution.')
+                'Your original request and file are preserved. No additional reviewed resource choice is available for this request. '
+                'Check the selected inputs and declarations; an operator can help review resource availability.')
     if clarification.reason == 'missing_input_roles':
         roles = ', '.join(
             (choice.partition('.')[2].replace('_', ' ') + ' for '

@@ -309,3 +309,46 @@ def test_http_explicit_obs_column_uses_shared_literal_binding(external_case,tmp_
         run=app._application.run_store.load(result['run_id']);bound=run.steps[0].resolved_arguments
         assert bound['count_slot']=='layers/raw_counts' and bound['group_column']=='supplied_groups' and 'groups_path' not in bound
         assert len(calls)==2
+
+
+def test_selected_resources_empty_offer_does_not_assert_missing_reference(external_case,tmp_path):
+    """A provider's resource question is not proof that selected resources are absent."""
+    args,calls=external_case
+    prompts=[]
+    class ResourceQuestion(Model):
+        def complete(self,*,prompt,response_schema):
+            value=json.loads(prompt);prompts.append(value)
+            assert 'turn_schema_version' in value, 'Clarification must not invoke planning'
+            return json.dumps(dict(turn_schema_version=1,decision=dict(
+                kind='request_resources',target='annotate_scATAC_cell_types',
+                roles=ROLES[:1],arguments=[])))
+    root=tmp_path/'resource-question';uploads=root/'uploads';uploads.mkdir(parents=True)
+    profile=PlanningModelProfile('scripted','scripted',Model.model_id)
+    app=InteractiveAgentApplication(root,model_profiles=(profile,),default_profile_id='scripted',
+        approved_source_roots=(uploads,),planning_model_factory_registry=PlanningModelFactoryRegistry(
+            {'scripted':lambda _:ResourceQuestion(prompts)}))
+    inputs={k:v for k,v in args.items() if k.startswith('annotation_') or k=='count_slot'}
+    choice=ScientificInputSet('reviewed','Reviewed human annotation resources',inputs)
+    with TestClient(create_app(app,input_sets=(choice,),uploads=H5ADUploadAdmission(app.resources,uploads))) as client:
+        client.post('/api/v1/sessions',json={'session_id':'upload'})
+        registered=client.put('/api/v1/uploads/source?filename=peaks.h5ad',
+            content=Path(args['source_path']).read_bytes(),headers={'Content-Type':'application/octet-stream'})
+        assert registered.status_code==201,registered.text
+        body=dict(turn_id='resources',expected_generation=0,utterance=OBJECTIVE,
+            resource_ids=[registered.json()['resource_id']],input_set_id='reviewed')
+        assert client.post('/api/v1/sessions/upload/turns',json=body).status_code==202
+        view=wait_turn(client,'resources')
+        assert view['status']=='clarification',view
+        question=view['response']['clarification']
+        assert question['reason']=='missing_resources' and not question['choices']
+        assert 'No additional reviewed resource choice' in view['response']['text']
+        assert 'must provision' not in view['response']['text']
+        state=app._application.sessions.load('upload')
+        assert state.generation==0 and not state.revisions and not calls and len(prompts)==1
+        interaction=state.interactions[-1]
+        assert interaction.utterance==OBJECTIVE and interaction.prerequisite['field']=='resources'
+        assert all(interaction.admitted['inputs'][k]==v for k,v in inputs.items())
+        assert interaction.admitted['inputs']['source_sha256']==args['source_sha256']
+        assert client.post('/api/v1/sessions/upload/turns',json=body).status_code==202
+        assert wait_turn(client,'resources')==view
+        assert len(prompts)==1 and not calls

@@ -232,6 +232,41 @@ def test_missing_or_compatible_metadata_returns_the_exact_completion_without_inf
     assert model.complete(prompt="context", response_schema=SCHEMA) == OUTPUT
 
 
+@pytest.mark.parametrize("base", [MODEL, "organization/another-model"])
+def test_explicit_floor_routing_accepts_only_its_exact_base_with_requested_echo(base):
+    selected = base + ":floor"
+    client = FakeClient(response(model=base, openrouter_metadata={
+        "requested": selected, "pipeline": [], "attempt": 1}))
+    model = OpenRouterPlanningModel(model=selected, _client=client)
+    assert model.complete(prompt="context", response_schema=SCHEMA) == OUTPUT
+    request = client.chat.completions.calls[0]
+    assert request["model"] == selected
+    assert model.model_id == "openrouter:" + selected
+    assert request["response_format"]["json_schema"]["strict"] is True
+    assert request["extra_body"]["provider"] == {
+        "require_parameters": True, "allow_fallbacks": False,
+        "max_price": {"prompt": 2, "completion": 10, "request": 0}}
+
+
+@pytest.mark.parametrize("selected,returned,metadata", [
+    (MODEL + ":floor", MODEL, None),
+    (MODEL + ":floor", MODEL, {}),
+    (MODEL + ":floor", MODEL, {"requested": MODEL}),
+    (MODEL + ":floor", MODEL + ":free", {"requested": MODEL + ":floor"}),
+    (MODEL + ":floor", "other/model", {"requested": MODEL + ":floor"}),
+    (MODEL + ":floor", MODEL, {"requested": MODEL + ":floor", "attempt": 2}),
+    (MODEL + ":floor", MODEL, {"requested": MODEL + ":floor", "pipeline": [{"id": "response-healing"}]}),
+    (MODEL + ":nitro", MODEL, {"requested": MODEL + ":nitro"}),
+    (MODEL + ":floor:floor", MODEL + ":floor", {"requested": MODEL + ":floor:floor"}),
+])
+def test_floor_identity_does_not_admit_substitution_missing_proof_or_routing_violations(selected, returned, metadata):
+    client = FakeClient(response(model=returned, openrouter_metadata=metadata))
+    model = OpenRouterPlanningModel(model=selected, _client=client)
+    with pytest.raises(OpenRouterPlanningError):
+        model.complete(prompt="context", response_schema=SCHEMA)
+    assert len(client.chat.completions.calls) == 1
+
+
 class SDKError(Exception):
     def __init__(self, status_code, retry_after=None):
         super().__init__("private-key private provider body https://private.example")

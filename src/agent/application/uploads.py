@@ -25,6 +25,8 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_UPLOAD_FILES = 128
 _UPLOAD_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+_ATTACHMENT_NAME = re.compile(r'[0-9a-f]{64}\.attachment')
+_ATTACHMENT_ATTRIBUTION = 'Browser-supplied attachment; format, role and scientific eligibility unverified.'
 _STORAGE_NAME = re.compile(r'[0-9a-f]{64}\.h5ad')
 _FRAGMENTS_NAME = re.compile(r'[0-9a-f]{64}\.fragments')
 _FASTA_NAME = re.compile(r'[0-9a-f]{64}\.fa')
@@ -160,7 +162,9 @@ class H5ADUploadAdmission:
                     raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
             return record
         path = Path(record.source_path)
-        if record.input_type == 'h5ad':
+        if record.input_type == 'attachment':
+            valid = record.attribution == _ATTACHMENT_ATTRIBUTION and _ATTACHMENT_NAME.fullmatch(path.name)
+        elif record.input_type == 'h5ad':
             valid = record.attribution == _ATTRIBUTION and _STORAGE_NAME.fullmatch(path.name)
         elif record.input_type == 'groups':
             valid = record.attribution == _GROUPS_ATTRIBUTION and _GROUPS_NAME.fullmatch(path.name)
@@ -189,7 +193,7 @@ class H5ADUploadAdmission:
             self._check_directories()
             return tuple(self._owned(record).public()
                          for record in self.resources.list_records(source_root=self.completed, listing='choices')
-                         if record.input_type != 'fasta')
+                         if record.input_type not in ('fasta', 'attachment') and getattr(record, 'session_id', None) is None)
         except (ResourceAdmissionError, UploadError):
             raise
         except (ValueError, OSError, RuntimeError) as exc:
@@ -249,7 +253,7 @@ class H5ADUploadAdmission:
             resource_choice=resource_choice, verify_source=verify_source)
 
     async def receive(self, upload_id, filename, chunks, *, expected_size=None,
-                      input_type='h5ad', index_filename=None, source_size=None, fastq_member=None):
+                      input_type='h5ad', index_filename=None, source_size=None, fastq_member=None, session_id=None):
         """Receive one source, optionally followed by an explicitly paired index.
 
         source_size frames the pair in one raw transfer. Both components finish
@@ -257,8 +261,12 @@ class H5ADUploadAdmission:
         format and index compatibility remain the importer's responsibility.
         """
         _request(upload_id, filename)
+        if session_id is not None and (type(session_id) is not str or not session_id.strip()
+                or len(session_id) > 256 or any(not c.isprintable() for c in session_id)):
+            raise UploadError('UPLOAD_REQUEST_INVALID')
         paired = index_filename is not None or source_size is not None
-        if input_type not in ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta'):
+        if (input_type not in ('attachment', 'h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta')
+                or session_id is not None and input_type not in ('h5ad', 'attachment')):
             raise UploadError('UPLOAD_REQUEST_INVALID')
         if input_type == 'fastq':
             fastq_member = self.resources.fastq_member_declaration(fastq_member)
@@ -287,6 +295,7 @@ class H5ADUploadAdmission:
             attribution = _FASTQ_ATTRIBUTION
         else:
             domain, suffix, prefix, attribution = {
+                'attachment': (b'agent.web-attachment-upload.v1\0', '.attachment', 'web-attachment-upload:', _ATTACHMENT_ATTRIBUTION),
                 'h5ad': (b'agent.web-h5ad-upload.v1\0', '.h5ad', 'web-h5ad-upload:', _ATTRIBUTION),
                 'fasta': (b'agent.web-fasta-upload.v1\0', '.fa', 'web-fasta-upload:', _FASTA_ATTRIBUTION),
                 'groups': (b'agent.web-groups-upload.v1\0', '.groups.tsv', 'web-groups-upload:', _GROUPS_ATTRIBUTION),
@@ -294,6 +303,8 @@ class H5ADUploadAdmission:
                                        'web-fragments-upload:', _FRAGMENTS_ATTRIBUTION),
                 'bam': (b'agent.web-bam-upload.v1\0', '.bam', 'web-bam-upload:', _BAM_ATTRIBUTION),
             }[input_type]
+            if session_id is not None:
+                upload_id = hashlib.sha256(canonical([session_id, upload_id])).hexdigest()
             token = hashlib.sha256(domain + upload_id.encode()).hexdigest()
             destination = self.completed / (token + suffix)
             registration_key = prefix + upload_id
@@ -315,7 +326,7 @@ class H5ADUploadAdmission:
                 accepted = None
             if accepted is not None and (accepted.source_path != str(destination)
                     or accepted.label != filename or (accepted.source_index is not None) != paired
-                    or accepted.fastq_member != fastq_member):
+                    or accepted.fastq_member != fastq_member or accepted.session_id != session_id):
                 raise UploadError('UPLOAD_CONFLICT')
             if fastq_member is not None:
                 # Role slots are immutable across transfer IDs too, including a
@@ -416,7 +427,7 @@ class H5ADUploadAdmission:
             try:
                 record = self.resources.register(registration_key, destination,
                     input_type=input_type, label=filename,
-                    attribution=attribution,
+                    attribution=attribution, session_id=session_id,
                     expected_source_sha256=source['digest'].hexdigest(),
                     expected_size_bytes=source['size'], fastq_member=fastq_member, **index_arguments)
             except ResourceAdmissionError as exc:

@@ -167,3 +167,8 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
   .message, .turn-metadata { max-width: 94%; }
   .revision-summary { grid-template-columns: 110px minmax(0, 1fr); }
 }
+
+.chat-attachments, .message-attachments { padding-left: 1.3rem; overflow-wrap: anywhere; }
+.chat-attachments li { margin: .4rem 0; }
+.chat-attachments button { margin-left: .5rem; padding: .2rem .5rem; }
+.chat-attachments progress { width: 7rem; margin-left: .5rem; }

@@ -89,9 +89,16 @@ def _field(value: object, name: str, default: object = None) -> object:
 
 def _check_response_identity(response: object, model: str) -> None:
     returned_model = _field(response, "model")
-    if type(returned_model) is not str or returned_model != model:
-        raise OpenRouterPlanningError("OpenRouter returned an unexpected model identity.")
     metadata = _field(response, "openrouter_metadata")
+    # :floor selects capacity/price routing for the same underlying model.
+    # Accept its exact base identity only with an explicit requested-slug echo;
+    # other aliases, variants and missing routing evidence remain fail-closed.
+    base, separator, variant = model.rpartition(":")
+    floor_base = (separator and variant == "floor" and base and ":" not in base
+                  and returned_model == base and isinstance(metadata, Mapping)
+                  and _field(metadata, "requested") == model)
+    if type(returned_model) is not str or (returned_model != model and not floor_base):
+        raise OpenRouterPlanningError("OpenRouter returned an unexpected model identity.")
     if metadata is None:
         return  # Missing observations are not evidence of upstream routing behavior.
     if not isinstance(metadata, Mapping):

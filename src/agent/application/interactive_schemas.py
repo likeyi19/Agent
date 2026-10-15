@@ -267,8 +267,19 @@ class TurnView(_JsonModel):
     steps: tuple[StepView, ...] = ()
     state_revision: int | None = None
     base_revision_id: str | None = None
+    attachments: tuple = ()
 
     def __post_init__(self):
+        if type(self.attachments) is not tuple or len(self.attachments) > 16:
+            raise ValueError('Invalid turn attachments.')
+        for item in self.attachments:
+            _shape(item, ('resource_id', 'label', 'input_type', 'use'), 'attachment')
+            _identifier(item['resource_id'], 'attachment resource')
+            _text(item['label'], 'attachment label', 160)
+            _identifier(item['input_type'], 'attachment type')
+            if item['use'] not in ('staged', 'offered_for_analysis', 'consumed'):
+                raise ValueError('Invalid attachment use.')
+        object.__setattr__(self, 'attachments', tuple(freeze_json_mapping(a, 'attachment') for a in self.attachments))
         _identifier(self.session_id, 'session_id')
         _identifier(self.turn_id, 'turn_id')
         _text(self.utterance, 'utterance', MAX_UTTERANCE_LENGTH, empty=True)

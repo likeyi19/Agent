@@ -26,6 +26,7 @@ const state = {
   posting: false, opening: false, timer: null, epoch: 0, pollEpoch: 0,
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
+  attachments: [], attachmentSession: null, restoringAttachments: false,
   resources: [], resourcesEnabled: false, upload: null,
   selectedResourceIds: [],
   fastqMembers: [], fastqCompletion: null,
@@ -803,6 +804,122 @@ function restoreConversationUi(history, captured) {
   if (target) target.focus({ preventScroll: true });
 }
 
+// Draft storage contains opaque references and display labels, never file bytes.
+function saveAttachments() {
+  if (!state.attachmentSession) return;
+  try { localStorage.setItem(`agent.web.attachments.${state.attachmentSession}`, JSON.stringify(
+    state.attachments.map((a) => ({ resource: a.resource, label: a.label })))); } catch (_) {}
+}
+
+function renderAttachments() {
+  element("chat-attachments").replaceChildren(...state.attachments.map((a) => {
+    const row = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${a.label} · ${a.status === "uploaded" ?
+      (a.resource.input_type === "h5ad" ? "Uploaded H5AD candidate; analysis will check eligibility" : "Uploaded; staged, scientific handoff pending") :
+      a.status === "uploading" ? `Uploading ${a.percent || 0}%` : a.error || "Waiting to upload"}`;
+    row.append(label);
+    if (a.status === "uploading") {
+      const progress = document.createElement("progress");
+      progress.max = 100; progress.value = a.percent || 0;
+      progress.setAttribute("aria-label", `Upload progress for ${a.label}`);
+      row.append(progress);
+    }
+    if (a.status === "failed" && a.file) {
+      const retry = document.createElement("button"); retry.type = "button"; retry.className = "secondary";
+      retry.textContent = "Retry"; retry.addEventListener("click", () => uploadChatAttachment(a)); row.append(retry);
+    }
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary";
+    remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove attachment ${a.label}`);
+    remove.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
+    remove.addEventListener("click", () => {
+      state.attachments = state.attachments.filter((item) => item !== a);
+      if (a.request) a.request.abort();
+      saveAttachments(); renderAttachments(); inputContext(); updateControls();
+    });
+    row.append(remove); return row;
+  }));
+  element("chat-attachment-status").textContent = state.attachments.some((a) => a.status !== "uploaded")
+    ? "Wait for uploads to finish, or retry/remove failed files before sending."
+    : state.attachments.length ? "Files accompany this message. Uploading does not qualify a file or complete its analysis." : "";
+}
+
+async function restoreAttachments(sessionId) {
+  for (const a of state.attachments) if (a.request) a.request.abort();
+  state.attachments = []; state.attachmentSession = sessionId; state.restoringAttachments = true;
+  renderAttachments(); updateControls();
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(`agent.web.attachments.${sessionId}`) || "[]"); } catch (_) {}
+  if (!Array.isArray(saved)) saved = [];
+  try {
+    const catalog = await api(`${sessionPath(sessionId)}/attachments`);
+    if (state.attachmentSession !== sessionId) return;
+    const used = new Set(state.session.turns.flatMap((t) => (t.attachments || []).map((a) => a.resource_id)));
+    if (Array.isArray(saved)) state.attachments = saved.slice(0, 16).filter((a) => a && typeof a.label === "string")
+      .filter((a) => !(a.resource && used.has(a.resource.resource_id))).map((a) => {
+        const resource = catalog.choices.find((r) => a.resource && r.resource_id === a.resource.resource_id);
+        return { label: resource ? resource.label : a.label, resource, status: resource ? "uploaded" : "failed",
+          error: "Transfer unavailable after refresh. Remove and select the file again." };
+      });
+    saveAttachments();
+  } catch (error) {
+    if (state.attachmentSession === sessionId) {
+      state.attachments = saved.slice(0, 16).filter((a) => a && typeof a.label === "string").map((a) => ({
+        label: a.label, status: "failed", error: "Cannot confirm this attachment. Reopen the session to retry, or remove it." }));
+      showError(error);
+    }
+  } finally {
+    if (state.attachmentSession === sessionId) {
+      state.restoringAttachments = false; renderAttachments(); inputContext(); updateControls();
+    }
+  }
+}
+
+async function uploadChatAttachment(a) {
+  if (a.status === "uploading") return;
+  a.status = "uploading"; a.percent = 0;
+  renderAttachments(); updateControls(); saveAttachments();
+  try {
+    a.resource = await new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest(); a.request = request;
+      // Extension is an explicit H5AD candidate hint only; the existing owner validates bytes.
+      const inputType = a.file.name.toLowerCase().endsWith(".h5ad") ? "h5ad" : "attachment";
+      request.open("PUT", `/api/v1/sessions/${encodeURIComponent(a.sessionId)}/uploads/${encodeURIComponent(a.uploadId)}?filename=${encodeURIComponent(a.file.name)}&input_type=${inputType}`);
+      request.setRequestHeader("Content-Type", "application/octet-stream");
+      request.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) a.percent = Math.floor(event.loaded * 100 / event.total);
+        if (state.attachments.includes(a)) renderAttachments();
+      });
+      request.addEventListener("load", () => {
+        let data; try { data = JSON.parse(request.responseText); } catch (_) {}
+        if (request.status >= 200 && request.status < 300 && data && data.status === "registered"
+            && /^local-[0-9a-f]{64}$/.test(data.resource_id) && data.input_type === inputType) resolve(data);
+        else reject(new Error(data && data.error ? data.error.message : "Upload failed. Retry this file."));
+      });
+      for (const event of ["error", "abort", "timeout"]) request.addEventListener(event,
+        () => reject(new Error("Upload interrupted. Retry this file.")));
+      request.send(a.file);
+    });
+    a.status = "uploaded";
+  } catch (error) { a.status = "failed"; a.error = error.message; }
+  if (state.attachments.includes(a)) { saveAttachments(); renderAttachments(); inputContext(); updateControls(); }
+}
+
+element("attach-chat-files").addEventListener("click", () => element("chat-files").click());
+element("chat-files").addEventListener("change", () => {
+  if (!state.session || element("attach-chat-files").disabled) return;
+  const files = Array.from(element("chat-files").files);
+  element("chat-files").value = "";
+  if (state.attachments.length + files.length > 16) {
+    showError(new Error("Attach at most 16 files to one message. Remove a file before adding more.")); return;
+  }
+  const additions = files.map((file) => ({file, label: file.name, status: "selected", uploadId: newTurnId(), sessionId: state.session.session_id}));
+  state.attachments.push(...additions);
+  // Sequential transfers use the existing bounded server capacity; failures are independent.
+  (async () => { for (const a of additions) if (state.attachments.includes(a)) await uploadChatAttachment(a); })();
+  renderAttachments(); updateControls(); saveAttachments();
+});
+
 function renderHistory() {
   const history = element("conversation-history");
   const captured = captureConversationUi(history);
@@ -824,6 +941,15 @@ function renderHistory() {
     article.className = "turn";
     article.dataset.turnId = turn.turn_id;
     if (turn.utterance) article.append(messageNode("You", turn.utterance, "user"));
+    if (turn.attachments && turn.attachments.length) {
+      const attachments = document.createElement("ul"); attachments.className = "message-attachments";
+      for (const a of turn.attachments) {
+        const item = document.createElement("li");
+        item.textContent = `${a.label} · ${a.use === "staged" ? "Staged only; scientific handoff unresolved" : a.use === "consumed" ? "Used in the accepted analysis" : "Offered for analysis; scientific acceptance pending"}`;
+        attachments.append(item);
+      }
+      article.append(attachments);
+    }
     let response = null;
     if (turn.response) {
       response = messageNode(RESPONSE_LABELS[turn.response.kind] || "Agent", turn.response.text, "assistant");
@@ -833,7 +959,7 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = statusLabel(turn.status);
+    status.textContent = statusLabel(turn.status) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     metadata.dataset.detailKey = "turn-details";
@@ -897,8 +1023,10 @@ function renderHistory() {
 
 function updateControls() {
   const busy = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
-  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || Boolean(state.upload) || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
+  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || state.restoringAttachments || state.attachments.some((a) => a.status !== "uploaded") || Boolean(state.upload) || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("submit-turn").disabled = cannotSubmit;
+  element("attach-chat-files").disabled = !state.session || !state.resourcesEnabled || busy || state.opening || state.restoringAttachments;
+  document.querySelectorAll("#chat-attachments button").forEach((button) => { button.disabled = busy; });
   document.querySelectorAll(".guidance-select").forEach((button) => { button.disabled = cannotSubmit; });
   element("activate-revision").disabled = !state.revision || busy || state.opening || state.navigating;
   element("continue-revision").disabled = !state.revision || busy || state.opening || state.navigating;
@@ -954,6 +1082,12 @@ function mergeTurn(turn) {
   const index = turns.findIndex((item) => item.turn_id === turn.turn_id);
   if (index === -1) turns.push(turn); else turns[index] = turn;
   state.session = { ...state.session, turns };
+  // A 202 receipt is transient. Clear only references echoed by a captured turn.
+  if (state.submission && state.submission.body.turn_id === turn.turn_id && turn.attachments) {
+    const captured = new Set(turn.attachments.map((a) => a.resource_id));
+    state.attachments = state.attachments.filter((a) => !a.resource || !captured.has(a.resource.resource_id));
+    saveAttachments(); renderAttachments(); inputContext();
+  }
   renderHistory();
 }
 
@@ -966,6 +1100,7 @@ function stopPolling() {
 function displaySession(view) {
   const changedActive = !state.session || state.session.session_id !== view.session_id || state.session.active_revision_id !== view.active_revision_id;
   state.session = view;
+  if (state.attachmentSession !== view.session_id) restoreAttachments(view.session_id);
   state.durableTurnIds = new Set(view.turns.map((turn) => turn.turn_id));
   element("current-session").textContent = view.session_id;
   element("session-input").value = view.session_id;
@@ -1048,6 +1183,7 @@ function watchTurn(sessionId, turnId) {
 }
 
 async function openSession(sessionId, resumeTurnId = "") {
+  state.attachmentSession = null;
   const epoch = ++state.epoch;
   state.scientificFiles.clear();
   stopPolling();
@@ -1128,7 +1264,8 @@ function modelDescription() {
 function inputContext() {
   // Repeat the operator-admitted display label without deriving scientific context.
   const choice = element("input-choice").selectedOptions[0];
-  const resources = selectedResourceIds().map((id) => state.resources.find((choice) => choice.resource_id === id));
+  const resources = [...selectedResourceIds().map((id) => state.resources.find((choice) => choice.resource_id === id)),
+    ...state.attachments.filter((a) => a.resource && a.resource.input_type === "h5ad").map((a) => a.resource)];
   const multiple = resources.length > 1 || state.selectedResourceIds.length > 0;
   const epizoo = element("epizoo-resource-choice").selectedOptions[0];
   const labels = [...resources.map((resource, index) => `${multiple ? `${index + 1}. ` : ""}${resource.label}`),
@@ -1208,7 +1345,8 @@ function renderSelectedResources() {
 function selectedResourceType() {
   if (selectedResourceIds().length > 1) return null;
   const resource = state.resources.find((choice) => choice.resource_id === selectedResourceIds()[0]);
-  return resource ? resource.input_type : state.upload ? state.upload.inputType : null;
+  const attached = state.attachments.filter((a) => a.resource && a.resource.input_type === "h5ad");
+  return resource ? resource.input_type : state.upload ? state.upload.inputType : attached.length === 1 ? "h5ad" : null;
 }
 
 function selectedCompanion(inputType = selectedResourceType()) {
@@ -1594,7 +1732,20 @@ function submitRequest(utterance, predecessorTurnId = null) {
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
   const selectedIds = selectedResourceIds();
-  if (selectedIds.length > 1 || state.selectedResourceIds.length || selectedResourceType() === "groups") {
+  const h5ads = state.attachments.filter((a) => a.resource.input_type === "h5ad").map((a) => a.resource.resource_id);
+  if (state.attachments.length) body.attachment_ids = Object.freeze(state.attachments.map((a) => a.resource.resource_id));
+  if (h5ads.length && selectedIds.length) {
+    showError(new Error("New H5AD attachments and previously selected inputs are both present. Remove the earlier input selection or the new H5AD attachments before sending.")); return;
+  }
+  if (h5ads.length) {
+    if (h5ads.length > 8) { showError(new Error("At most eight H5AD candidates can be offered for analysis at once.")); return; }
+    if (h5ads.length === 1) {
+      body.resource_id = h5ads[0];
+      if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
+    } else body.resource_ids = Object.freeze(h5ads);
+    if (element("input-choice").value) body.input_set_id = element("input-choice").value;
+  }
+  else if (selectedIds.length > 1 || state.selectedResourceIds.length || selectedResourceType() === "groups") {
     body.resource_ids = Object.freeze(selectedIds);
     if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   }

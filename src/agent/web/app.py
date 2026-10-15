@@ -65,6 +65,7 @@ class SubmitTurn(_Body):
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
+    attachment_ids: list[StrictStr] = Field(default_factory=list, max_length=16)
     resource_ids: list[StrictStr] | None = Field(default=None, min_length=1, max_length=8)
     epizoo_resource_id: StrictStr | None = Field(default=None, min_length=1, max_length=64,
                                                pattern=r'^[a-z][a-z0-9_-]*$')
@@ -75,7 +76,7 @@ class SubmitTurn(_Body):
     def route_identity(cls, value):
         return _route_identity(value)
 
-    @field_validator('resource_ids')
+    @field_validator('resource_ids', 'attachment_ids')
     @classmethod
     def selected_resources(cls, value):
         if value is not None:
@@ -158,7 +159,7 @@ class _LocalWorkers:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
                 epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
-                predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
+                predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
             return exc.error
@@ -180,7 +181,7 @@ class _LocalWorkers:
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
             epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
-            predecessor_turn_id=payload.predecessor_turn_id, **self._input_arguments(inputs))
+            predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
             receipt = self.receipts.get(key)
@@ -450,16 +451,24 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             result['fastq_members'] = list(members)
         return result
 
+    @app.get('/api/v1/sessions/{session_id}/attachments')
+    def session_attachments(session_id: str):
+        application.reopen_session(session_id)
+        return {'choices': [] if uploads is None else [uploads._owned(r).public()
+            for r in uploads.resources.list_records(source_root=uploads.completed)
+            if getattr(r, 'session_id', None) == session_id]}
+
     @app.post('/api/v1/uploads/fastq-collections', status_code=201)
     def complete_fastq_collection(body: CompleteFastqCollection):
         if uploads is None:
             return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
         return uploads.complete_fastq_collection(body.collection_id, body.label, body.member_ids).public()
 
+    @app.put('/api/v1/sessions/{session_id}/uploads/{upload_id}', status_code=201)
     @app.put('/api/v1/uploads/{upload_id}', status_code=201)
-    async def upload_source(upload_id: str, request: Request,
+    async def upload_source(upload_id: str, request: Request, session_id: str | None = None,
                             filename: str = Query(min_length=1, max_length=160),
-                            input_type: str = Query(default='h5ad', pattern=r'^(h5ad|external_fragments|bam|fastq|groups|fasta)$'),
+                            input_type: str = Query(default='h5ad', pattern=r'^(attachment|h5ad|external_fragments|bam|fastq|groups|fasta)$'),
                             index_filename: str | None = Query(default=None, min_length=1, max_length=160),
                             source_size: str | None = Query(default=None, min_length=1, max_length=20),
                             library_id: str | None = Query(default=None, min_length=1, max_length=64),
@@ -470,6 +479,12 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                             compression: str | None = Query(default=None, min_length=1, max_length=5)):
         if uploads is None:
             return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
+        if session_id is not None:
+            application.reopen_session(session_id)
+            if input_type not in ('h5ad', 'attachment'):
+                raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
+        elif input_type == 'attachment':
+            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
         fastq_member = dict(library_id=library_id, fastq_layout=fastq_layout, role=role,
                            lane=lane, chunk=chunk, compression=compression)
         if (set(request.query_params) - {'filename', 'input_type', 'index_filename', 'source_size',
@@ -504,7 +519,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if paired_source_size is not None and expected_size <= paired_source_size:
                 return _error('WEB_UPLOAD_REQUEST_INVALID', 'The paired index transfer is incomplete.', 422)
         record = await uploads.receive(upload_id, filename, request.stream(),
-            input_type=input_type, index_filename=index_filename, source_size=paired_source_size,
+            input_type=input_type, session_id=session_id, index_filename=index_filename, source_size=paired_source_size,
             expected_size=expected_size, **({'fastq_member': fastq_member} if input_type == 'fastq' else {}))
         return record.public()
 

@@ -43,7 +43,7 @@ _GROUP_PORTS = (
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
-_INPUT_TYPES = ('h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference')
+_INPUT_TYPES = ('attachment', 'h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference')
 _OPERATION_TYPES = {
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
@@ -308,9 +308,12 @@ class LocalResourceRecord:
     source_index: object | None = None
     fastq_member: object | None = None
     reference_qualification: object | None = None
+    session_id: str | None = None
 
     def __post_init__(self):
         _identifier(self.resource_id)
+        if self.session_id is not None:
+            _text(self.session_id, 256, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
         if self.input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
         _text(self.label, 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
@@ -347,7 +350,7 @@ class LocalResourceRecord:
         """Private persistence/binding metadata; never a client representation."""
         # Old unpaired records retain their exact persistence and binding digest.
         return {name: _serialize(getattr(self, name)) for name in self.__dataclass_fields__
-                if name not in {'source_index', 'fastq_member', 'reference_qualification'} or getattr(self, name) is not None}
+                if name not in {'source_index', 'fastq_member', 'reference_qualification', 'session_id'} or getattr(self, name) is not None}
 
     @property
     def record_sha256(self):
@@ -847,7 +850,7 @@ class LocalResourceAdmission:
     def register(self, registration_key, source_path, *, input_type='h5ad', label, attribution,
                  expected_source_sha256=None, expected_size_bytes=None, source_index_path=None,
                  expected_source_index_sha256=None, expected_source_index_size_bytes=None,
-                 fastq_member=None, reference_qualification=None):
+                 fastq_member=None, reference_qualification=None, session_id=None):
         if input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
         resource_id = self.registration_id(registration_key)
@@ -880,7 +883,7 @@ class LocalResourceAdmission:
         elif expected_index:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         record = LocalResourceRecord(resource_id, input_type, label, source, sha, size, attribution,
-                                     index, fastq_member, reference_qualification)
+                                     index, fastq_member, reference_qualification, session_id)
         with self._lock(resource_id):
             path = self._path(resource_id)
             try:
@@ -953,7 +956,7 @@ class LocalResourceAdmission:
             scalar_fields = set(LocalResourceRecord.__dataclass_fields__)
             if fields == set(LocalResourceCollectionRecord.__dataclass_fields__):
                 record = LocalResourceCollectionRecord(**value['record'])
-            elif (scalar_fields - {'source_index', 'fastq_member', 'reference_qualification'} <= fields <= scalar_fields
+            elif (scalar_fields - {'source_index', 'fastq_member', 'reference_qualification', 'session_id'} <= fields <= scalar_fields
                   and len(raw) <= MAX_RECORD_BYTES):
                 record = LocalResourceRecord(**value['record'])
             else:

@@ -400,6 +400,30 @@ class InteractiveAgentApplication:
         except (ValueError, TypeError, RecursionError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
+    def _attachment_records(self, session_id, attachment_ids, registered_input=None):
+        """Resolve source identities only; this grants no scientific role or authority."""
+        if (type(attachment_ids) not in (tuple, list) or len(attachment_ids) > 16
+                or any(type(value) is not str for value in attachment_ids)
+                or len(set(attachment_ids)) != len(attachment_ids)):
+            raise _fail('INTERACTIVE_INPUT_INVALID')
+        selected = (() if registered_input is None else
+                    tuple(m['resource_id'] for m in registered_input.members)
+                    if isinstance(registered_input, (RegisteredInputGroup, RegisteredInputCollection))
+                    else (registered_input.resource_id,))
+        records = []
+        for resource_id in dict.fromkeys((*attachment_ids, *selected)):
+            record = self.resources.load(resource_id)
+            scope = getattr(record, 'session_id', None)
+            if scope is not None and scope != session_id:
+                raise _fail('INTERACTIVE_REFERENCE_INVALID')
+            if resource_id in attachment_ids:
+                if scope != session_id:
+                    raise _fail('INTERACTIVE_REFERENCE_INVALID')
+                records.append(dict(resource_id=record.resource_id, record_sha256=record.record_sha256,
+                    label=record.label, input_type=record.input_type,
+                    use='offered_for_analysis' if resource_id in selected else 'staged'))
+        return records
+
     def _submission(self, profile, generation, inputs, predecessor, registered_input=None):
         submission = dict(profile_id=profile.profile_id,
             configuration_sha256=digest(dict(profile=asdict(profile),
@@ -424,7 +448,7 @@ class InteractiveAgentApplication:
 
     def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None):
+                            registered_input=None, attachment_ids=()):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
                 or type(utterance) is not str or not utterance.strip() or len(utterance) > 4096):
@@ -438,6 +462,9 @@ class InteractiveAgentApplication:
             execution_inputs = registered_input.execution_inputs
         inputs = _inputs(execution_inputs)
         submission = self._submission(profile, expected_generation, inputs, predecessor_turn_id, registered_input)
+        attachments = self._attachment_records(session_id, attachment_ids, registered_input)
+        if attachments:
+            submission['attachments'] = attachments
         try:
             if len(canonical(submission)) > 65536:
                 raise ValueError('Submission bound exceeded.')
@@ -458,7 +485,7 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, epizoo_resources=None, input_sets=()):
+                            registered_input=None, epizoo_resources=None, input_sets=(), attachment_ids=()):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
@@ -468,7 +495,7 @@ class InteractiveAgentApplication:
         resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
-            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input)
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
         if not duplicate and registered_input is not None:
             self.resources.validate_binding(registered_input)
         return digest(dict(session_id=session_id, turn_id=turn_id,
@@ -476,12 +503,12 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, epizoo_resources=None, input_sets=()):
+                    registered_input=None, epizoo_resources=None, input_sets=(), attachment_ids=()):
         resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
-            profile_id=profile_id, registered_input=registered_input)
+            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
         if duplicate:
             return self.turn(session_id, turn_id)
         sessions = self._application.sessions
@@ -593,13 +620,26 @@ class InteractiveAgentApplication:
             error = response.error
         if interaction is not None and interaction.prerequisite is not None:
             status, error = 'clarification', None
+        # Terminal scientific acceptance already passed the resource owner's
+        # validate_result guard in sessions._complete. Project that recorded use;
+        # do not reopen sources or repeat scientific verification on a read.
+        accepted_use = (status == 'succeeded' and error is None and turn is not None
+                        and turn.status in {'activated', 'stale'})
+        attachments = []
+        for item in (() if interaction is None or interaction.submission is None
+                     else interaction.submission.get('attachments', ())):
+            attachment = {key: item[key] for key in ('resource_id', 'label', 'input_type', 'use')}
+            if accepted_use and attachment['use'] == 'offered_for_analysis':
+                attachment['use'] = 'consumed'
+            attachments.append(attachment)
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,
             base_revision_id=turn.base_revision_id if interaction is None else interaction.base_revision_id,
             profile_id=None if interaction is None or interaction.submission is None else interaction.submission.get('profile_id'),
             run_id=run_id, revision_id=None if turn is None else turn.revision_id,
-            status=status, response=response, error=error, steps=steps, state_revision=state_revision)
+            status=status, response=response, error=error, steps=steps, state_revision=state_revision,
+            attachments=tuple(attachments))
 
     def turn(self, session_id, turn_id):
         _identifier(turn_id)

@@ -203,25 +203,32 @@ print(json.dumps(retry.to_dict()))
     print('ordinary raw counts:', json.dumps(dict(kind=source[0], matrix=matrix, counts=dict(counts)), sort_keys=True))
 
 
-def test_ordinary_raw_missing_thresholds_continue_the_exact_pending_objective(source):
+def test_ordinary_raw_omitted_thresholds_default_then_explicit_request_overrides(source):
     _, _, old = source
     service, calls, _ = interactive(source)
-    with all_work() as pending:
-        first = service.submit_turn('analysis', 'missing', MISSING, expected_generation=1)
-    assert first.response.kind == 'clarify' and first.response.clarification['reason'] == 'missing_parameter_value'
-    assert set(first.response.clarification['choices']) == {'min_qc_fragment_records', 'min_tss_enrichment'}
-    assert not science(pending) and first.revision_id is None
+    with all_work() as defaulted:
+        first = service.submit_turn('analysis', 'defaults', MISSING, expected_generation=1)
+    assert first.response.status == 'activated', first.to_dict()
+    assert science(defaulted) == {'production.selection': 1, 'owner.selection': 1}
+    run = old.run_store.load(first.run_id)
+    step, = run.steps
+    manifest = json.loads(Path(step.result['manifest_path']).read_bytes())
+    assert manifest['arguments']['min_qc_fragment_records'] == 1000
+    assert manifest['arguments']['min_tss_enrichment'] == 4
+    assert step.result['n_selected'] == 0
     before = old.sessions.load('analysis')
-    assert before.generation == 1 and len(before.revisions) == 1
+    assert before.generation == 2 and len(before.revisions) == 2
+    service, calls, _ = interactive(source, decision=dict(kind='execute_plan',
+        context='current', target='select_scATAC_cells', arguments=declarations(ANSWER)))
     with all_work() as completed:
-        view = service.submit_turn('analysis', 'answer', ANSWER, expected_generation=1)
+        view = service.submit_turn('analysis', 'override', ANSWER, expected_generation=2)
     assert view.response.status == 'activated', view.to_dict()
     assert science(completed) == {'production.selection': 1, 'owner.selection': 1}
-    planning = [value for value, _, _ in calls if 'active_outputs' in value]
-    assert planning[-1]['user_request'] == MISSING
-    state = old.sessions.load('analysis')
-    assert state.interactions[-1].admitted['continuation']['origin_turn_id'] == 'missing'
-    assert state.interactions[-1].base_revision_id == before.active_revision_id
+    adjusted, = old.run_store.load(view.run_id).steps
+    assert adjusted.resolved_arguments['min_qc_fragment_records'] == 1
+    assert adjusted.resolved_arguments['min_tss_enrichment'] == 0
+    assert old.run_store.load(first.run_id).to_dict() == run.to_dict()
+    assert old.sessions.load('analysis').interactions[-1].base_revision_id == before.active_revision_id
 
 
 def test_unknown_raw_historical_handle_fails_without_science_or_new_revision(source):
@@ -250,13 +257,19 @@ def test_default_context_none_does_not_grant_legacy_decisions_historical_inputs(
     assert not any(payload.get('active_outputs') for payload, _, _ in calls)
 
 
-def test_raw_pending_answer_cannot_follow_generation_navigation(source):
+def test_raw_rejected_parameter_answer_cannot_follow_generation_navigation(source):
     _, _, old = source
-    service, _, _ = interactive(source)
-    first = service.submit_turn('analysis', 'pending', MISSING, expected_generation=1)
+    invalid = 'Select candidate cells with minimum TSS enrichment -1.'
+    start = invalid.index('-1')
+    service, _, _ = interactive(source, decision=dict(kind='execute_plan', context='current',
+        target='select_scATAC_cells', arguments=[dict(tool='select_scATAC_cells',
+            argument='min_tss_enrichment', literal='-1', start=start, end=start+2)]))
+    first = service.submit_turn('analysis', 'pending', invalid, expected_generation=1)
     assert first.response.kind == 'clarify'
+    assert first.response.clarification['reason'] == 'invalid_parameter_value'
     old.sessions.switch('analysis', 'navigate-current', old.sessions.load('analysis').active_revision_id,
                         expected_generation=1)
+    service, _, _ = interactive(source)
     with all_work() as counts:
         view = service.submit_turn('analysis', 'stale-answer', ANSWER, expected_generation=2)
     assert view.response.kind == 'clarify' and view.response.status != 'activated'

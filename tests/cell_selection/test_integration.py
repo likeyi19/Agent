@@ -58,7 +58,7 @@ def test_preflight_threshold_rejection(tmp_path,change):
 def test_missing_threshold_and_optional_parameters(selection_case):
     args,_=selection_case;registry=build_default_tool_registry()
     for missing in ('min_qc_fragment_records','min_tss_enrichment'):
-        with pytest.raises(ValueError):registry.validate_arguments('select_scATAC_cells',{k:v for k,v in args.items() if k!=missing})
+        registry.validate_arguments('select_scATAC_cells',{k:v for k,v in args.items() if k!=missing})
     payload=wire();extra=dict(min_tss_flank_evidence=1,max_qc_fragment_records=100,max_nucleosome_signal=None)
     payload['decision']['steps'][0]['sources'].extend(dict(target=k,source=dict(kind='input',input=k)) for k in extra)
     plan=LLMPlanner(Model(payload)).plan(AgentRequest('qc','Explicit selection.',args|extra,RunMode.PLAN_ONLY),registry)

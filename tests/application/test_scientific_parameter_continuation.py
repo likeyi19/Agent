@@ -7,7 +7,7 @@ Synthetic qualification is explicit and makes no biological-quality claim.
 from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -98,7 +98,7 @@ class SelectionHarness:
     constructions: list
 
 
-def selection_harness(workspace, *, decisions=None, plan_variant=None):
+def selection_harness(workspace, *, decisions=None, plan_variant=None, registry=None):
     choices = {OBJECTIVE: dict(kind='execute_plan', target=TOOL),
         BOTH: answer(), DEPTH: answer(DEPTH, [argument(DEPTH, REQUIRED[0], '1')]),
         TSS: answer(TSS, [argument(TSS, REQUIRED[1], '0.5')]),
@@ -112,10 +112,36 @@ def selection_harness(workspace, *, decisions=None, plan_variant=None):
         constructions.append(model)
         return model
 
-    service = InteractiveAgentApplication(workspace,
+    service = InteractiveAgentApplication(workspace, registry=registry,
         model_profiles=(PROFILE,), default_profile_id=PROFILE.profile_id,
         planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': factory}))
     return SelectionHarness(service, choices, calls, constructions)
+
+
+def legacy_selection_registry():
+    """Create pre-USI-3C pending records using the former required-port contract.
+
+    Scientific implementation and all subsequent persisted-record validation use
+    current code. This is a bounded test fixture, never a production registry.
+    """
+    from agent.orchestration import ToolRegistry
+    registry = build_default_tool_registry()
+    spec = registry.get(TOOL)
+    optional = dict(spec.optional_arguments)
+    required = dict(spec.required_arguments)
+    for name in REQUIRED:
+        required[name] = optional.pop(name)
+    semantic = replace(spec.semantic_planning, consumer_ports=tuple(
+        replace(port, required=True) if port.name in REQUIRED else port
+        for port in spec.semantic_planning.consumer_ports))
+    old = replace(spec, required_arguments=required, optional_arguments=optional,
+                  semantic_planning=semantic)
+    return ToolRegistry(tuple(old if name == TOOL else registry.get(name)
+                              for name in registry.names()))
+
+
+def legacy_selection_harness(workspace, **kwargs):
+    return selection_harness(workspace, registry=legacy_selection_registry(), **kwargs)
 
 
 @pytest.fixture
@@ -181,9 +207,9 @@ def test_selection_requiredness_and_owner_defaults_are_registry_authority():
     parameters = {key: value for key, value in
         (*spec.required_arguments.items(), *spec.optional_arguments.items())
         if value.planning.scientific_parameter}
-    assert set(parameters).intersection(spec.required_arguments) == set(REQUIRED)
+    assert not set(parameters).intersection(spec.required_arguments)
     assert {key: value.planning.default_when_omitted for key, value in
-        spec.optional_arguments.items()} == dict(min_tss_flank_evidence=None,
+        spec.optional_arguments.items()} == dict(min_qc_fragment_records=1000, min_tss_enrichment=4, min_tss_flank_evidence=None,
             max_qc_fragment_records=None, max_nucleosome_signal=None)
     for name, value in [('min_qc_fragment_records', -1), ('min_tss_enrichment', '-1'),
                         ('min_tss_enrichment', .5), ('min_qc_fragment_records', True)]:
@@ -197,7 +223,7 @@ def test_missing_argument_identities_survive_existing_planner_diagnostic_transpo
         dict(barcode_qc_manifest_path='/declared/qc.json', barcode_qc_manifest_sha256='1' * 64,
             output_dir='/declared/output'))
     with pytest.raises(PlannerError) as error:
-        LLMPlanner(model).plan(request, build_default_tool_registry())
+        LLMPlanner(model).plan(request, legacy_selection_registry())
     assert error.value.code == 'MISSING_REQUIRED_SOURCE'
     details = _planner_error_details(error.value)
     assert details['tool_name'] == TOOL and details['step_id'] == 'selection'
@@ -208,9 +234,9 @@ def test_missing_argument_identities_survive_existing_planner_diagnostic_transpo
     assert '/declared' not in json.dumps(details)
 
 
-def test_first_selection_clarifies_both_thresholds_then_executes_true_science(
+def test_historical_selection_clarification_then_executes_true_science(
         tmp_path, selection_inputs):
-    harness = selection_harness(tmp_path / 'application')
+    harness = legacy_selection_harness(tmp_path / 'application')
     harness.service.create_session('session')
     with selection_work() as calls:
         pending = submit(harness, inputs=selection_inputs)
@@ -271,7 +297,7 @@ def test_initial_explicit_thresholds_use_the_same_binding_without_clarification(
 def test_partial_answer_restart_invalid_attempt_and_retry_preserve_accepted_values(
         tmp_path, selection_inputs):
     workspace = tmp_path / 'application'
-    harness = selection_harness(workspace)
+    harness = legacy_selection_harness(workspace)
     harness.service.create_session('session')
     initial = submit(harness, inputs=selection_inputs)
     assert_pending(initial, *REQUIRED)
@@ -311,7 +337,7 @@ def test_pending_correction_replaces_only_its_validated_scoped_parameter(
     correction = 'Use at least 2 QC fragment records and TSS enrichment of at least 0.5.'
     decisions = {correction: answer(correction, [argument(correction, REQUIRED[0], '2'),
         argument(correction, REQUIRED[1], '0.5')])}
-    harness = selection_harness(tmp_path / 'application', decisions=decisions)
+    harness = legacy_selection_harness(tmp_path / 'application', decisions=decisions)
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
     assert_pending(submit(harness, 'partial', DEPTH), REQUIRED[1])
@@ -323,7 +349,7 @@ def test_pending_correction_replaces_only_its_validated_scoped_parameter(
 
 def test_invalid_multi_parameter_correction_is_atomic(tmp_path, selection_inputs):
     invalid = 'Use at least 2 QC fragment records and TSS enrichment of at least -1.'
-    harness = selection_harness(tmp_path / 'application', decisions={invalid:
+    harness = legacy_selection_harness(tmp_path / 'application', decisions={invalid:
         answer(invalid, [argument(invalid, REQUIRED[0], '2'), argument(invalid, REQUIRED[1], '-1')])})
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
@@ -341,7 +367,7 @@ def test_invalid_multi_parameter_correction_is_atomic(tmp_path, selection_inputs
 def test_partial_threshold_continuation_executes_after_actual_process_restart(
         tmp_path, selection_inputs):
     workspace = tmp_path / 'application'
-    harness = selection_harness(workspace)
+    harness = legacy_selection_harness(workspace)
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
     assert_pending(submit(harness, 'partial', DEPTH), REQUIRED[1])
@@ -376,7 +402,7 @@ print(json.dumps(result))
 def test_invalid_or_unauthorized_parameter_answer_has_zero_science(
         tmp_path, selection_inputs, changes):
     declarations = [argument(DEPTH, REQUIRED[0], '1', **changes)]
-    harness = selection_harness(tmp_path / 'application', decisions={DEPTH: answer(DEPTH, declarations)})
+    harness = legacy_selection_harness(tmp_path / 'application', decisions={DEPTH: answer(DEPTH, declarations)})
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
     with selection_work() as calls:
@@ -398,8 +424,11 @@ def test_ambiguous_repeated_operation_never_binds_to_first_consumer(tmp_path, se
     with selection_work() as calls:
         result = submit(harness, utterance=request, inputs=selection_inputs)
     assert result['revision_id'] is None and result['response']['status'] != 'activated'
-    assert result['response']['kind'] == 'clarify'
-    assert result['response']['clarification']['reason'] == 'ambiguous_parameter'
+    # Optional scalar inputs are rejected by the compiler before a candidate
+    # reaches the application's declaration-scope guard. No first consumer wins.
+    assert result['response']['kind'] == 'execute'
+    assert result['response']['status'] == 'failed'
+    assert result['response']['error']['code'] == 'AMBIGUOUS_OPTIONAL_INPUT_SCOPE'
     assert not calls and not harness.service._application.sessions.load('session').revisions
     counts = len(harness.calls), len(harness.constructions)
     with selection_work() as calls:
@@ -422,7 +451,7 @@ def test_conflicting_typed_and_semantic_values_do_not_gain_authority(tmp_path, s
 
 
 def test_stale_generation_rejects_before_provider_and_preserves_pending(tmp_path, selection_inputs):
-    harness = selection_harness(tmp_path / 'application')
+    harness = legacy_selection_harness(tmp_path / 'application')
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
     state = harness.service._application.sessions.load('session').to_dict()
@@ -435,7 +464,7 @@ def test_stale_generation_rejects_before_provider_and_preserves_pending(tmp_path
 
 
 def test_changed_input_cannot_redirect_pending_threshold_answer(tmp_path, selection_inputs):
-    harness = selection_harness(tmp_path / 'application')
+    harness = legacy_selection_harness(tmp_path / 'application')
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
     with selection_work() as calls:
@@ -459,7 +488,7 @@ def test_independent_missing_qc_is_not_relabelled_as_missing_thresholds(tmp_path
 def test_new_task_does_not_inherit_old_pending_parameter(tmp_path, selection_inputs):
     original = OBJECTIVE + ' ' + DEPTH
     fresh = 'Start a new selection with the supplied complete explicit thresholds.'
-    harness = selection_harness(tmp_path / 'application', decisions={original:
+    harness = legacy_selection_harness(tmp_path / 'application', decisions={original:
         dict(kind='execute_plan', target=TOOL, arguments=[argument(original, REQUIRED[0], '1')]),
         fresh: dict(kind='execute_plan', target=TOOL)})
     harness.service.create_session('session')

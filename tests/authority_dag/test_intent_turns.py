@@ -13,6 +13,47 @@ from agent.schemas import PriorOutputRef
 from test_prior_outputs import source, application_chain, chain, all_work, ContextModel
 
 
+@pytest.mark.parametrize('supplied_depth', [None, 1500])
+def test_new_selection_defaults_ignore_old_values_and_survive_delta_continuation(source, supplied_depth):
+    from agent.application import OutputSelection
+    from agent.orchestration import AgentRequest
+    app, _ = app_for(source)
+    historical = app.run_store.load('authority-request:run').to_dict()
+    inputs = {} if supplied_depth is None else {'min_qc_fragment_records': supplied_depth}
+    with all_work() as work:
+        state = app.sessions.run('analysis', 'defaults',
+            AgentRequest('defaults', 'Select candidates from the current QC.', inputs),
+            (OutputSelection('selection', 'new_selection', 'manifest_path'),),
+            expected_generation=1, use_active_context=True, retain=('fragments', 'qc'))
+    assert state.turn('defaults').status == 'activated'
+    assert counts(work) == {'production.selection': 1, 'owner.selection': 1}
+    default_run = app.run_store.load('defaults:run')
+    selected, = default_run.steps
+    assert 'min_tss_enrichment' not in selected.resolved_arguments
+    manifest = json.loads(Path(selected.result['manifest_path']).read_bytes())
+    assert manifest['arguments']['min_tss_enrichment'] == 4
+    assert manifest['arguments']['min_qc_fragment_records'] == (1000 if supplied_depth is None else supplied_depth)
+    assert selected.result['n_selected'] == 0  # Defaults are never lowered to force success.
+    assert app.run_store.load('authority-request:run').to_dict() == historical
+    app, _ = app_for(source)  # Fresh application reads the exact accepted state.
+    from agent.application.turn_decisions import Answer
+    with all_work() as work:
+        answer = app.sessions.answer('analysis', Answer('thresholds'))
+    assert not work and answer.status == 'answered'
+    assert dict(answer.facts.parameters)['min_tss_enrichment'] == 4
+    with all_work() as work:
+        result = app.sessions.respond('analysis', 'adjust', 'Set TSS to 0',
+            interpreter=change('Set TSS to 0', literal='0'))
+    assert result.status == 'activated', result
+    assert counts(work) == {'production.selection': 1, 'owner.selection': 1}
+    state = app.sessions.load('analysis')
+    adjusted, = app.run_store.load(state.revisions[-1].run_id).steps
+    assert adjusted.resolved_arguments['min_tss_enrichment'] == 0
+    assert adjusted.resolved_arguments['min_qc_fragment_records'] == (1000 if supplied_depth is None else supplied_depth)
+    assert app.run_store.load('defaults:run').to_dict() == default_run.to_dict()
+    assert app.run_store.load('authority-request:run').to_dict() == historical
+
+
 class Interpreter:
     def __init__(self, decision): self.decision, self.calls = decision, []
     def complete(self, *, prompt, response_schema):

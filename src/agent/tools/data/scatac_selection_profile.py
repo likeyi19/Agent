@@ -18,6 +18,9 @@ PROFILE = dict(selection_method=METHOD, cell_call_method='none', cell_call_state
     identity_encoding='scatac-cell.v1.base64url-unpadded', reason_order=list(REASONS))
 PROFILE_SHA256 = qc.digest(PROFILE)
 REQUIRED = ('min_qc_fragment_records', 'min_tss_enrichment')
+# Required in effective manifests, defaultable at the execution boundary.
+# Pragmatic adjustable starting values, not calibrated biological optima.
+DEFAULTS = dict(min_qc_fragment_records=1000, min_tss_enrichment=4)
 OPTIONAL = ('min_tss_flank_evidence', 'max_qc_fragment_records', 'max_nucleosome_signal')
 MAX_INTEGER = 10**18
 
@@ -53,7 +56,7 @@ def rational(value):
 def thresholds(args):
     out = {}
     for key in (*REQUIRED, *OPTIONAL):
-        value = args.get(key)
+        value = args.get(key, DEFAULTS.get(key))
         if value is None:
             if key in REQUIRED: fail('SELECTION_THRESHOLD_REQUIRED')
             out[key] = None

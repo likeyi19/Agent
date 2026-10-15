@@ -294,8 +294,14 @@ def test_pending_fastq_rejects_unsafe_completion_without_science(tiny, reads, mo
         assert not (tiny['root'] / 'workspace' / 'fastq_handoffs').exists()
 
 
-def test_fastq_completed_members_preserve_existing_parameter_clarification(tiny, reads, monkeypatch):
-    """Compiler-owned threshold requirements survive generated context admission."""
+def test_fastq_completed_members_preserve_historical_parameter_clarification(tiny, reads, monkeypatch):
+    """Historical required ports survive generated context admission.
+
+    Current omission defaults are exercised separately through real selection;
+    this fixture preserves the pre-default pending-task compatibility contract.
+    """
+    from agent.orchestration import ToolRegistry
+    from test_scientific_parameter_continuation import legacy_selection_registry
     group, whitelist = reads([(100, 200, BC, 1)])
     resource = companion(tiny, whitelist)
     class MissingThresholds(ChatModel):
@@ -306,6 +312,9 @@ def test_fastq_completed_members_preserve_existing_parameter_clarification(tiny,
                 value['decision']['arguments'] = []
             return json.dumps(value)
     registry, counts = instrument(monkeypatch)
+    legacy = legacy_selection_registry().get('select_scATAC_cells')
+    registry = ToolRegistry(tuple(legacy if name == 'select_scATAC_cells' else registry.get(name)
+                                  for name in registry.names()))
     service, uploads, models, app = chat_web(tiny['root'], (resource,), registry, MissingThresholds)
     with TestClient(app) as client:
         client.post('/api/v1/sessions', json=dict(session_id='session'))

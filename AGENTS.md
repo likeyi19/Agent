@@ -545,8 +545,12 @@ After these fixes, all 88 QC tests and the full lightweight suite pass:
 
 M11.4c adds `select_scATAC_cells` as tool seventeen. It consumes exact verified
 `scatac-barcode-qc.v1` plus caller-supplied `explicit_qc_thresholds.v1`, producing
-immutable `scatac-cell-selection.v1`. Required minimum QC-record depth and TSS
-enrichment have no defaults; optional minimum flank evidence, maximum QC depth
+immutable `scatac-cell-selection.v1`. At M11.4c, minimum QC-record depth and TSS
+enrichment required explicit values. USI-3C now supplies owner starting defaults
+of 1000 and 4 for omissions, respectively; validated explicit values (including
+zero) and captured same-task values take precedence. Defaults are adjustable,
+not universal biological optima or ArchR-equivalent scores. Qualified QC/TSS
+resources remain mandatory. Optional minimum flank evidence, maximum QC depth
 and maximum nucleosome signal are disabled when absent/null. Inclusive comparisons
 use exact integers/rationals. Undefined TSS fails; undefined nucleosome signal
 fails only with its maximum enabled. Every observed tuple receives a decision with

@@ -1,5 +1,7 @@
 """Completed byte transport, existing UA1 ownership, and bounded durable discovery."""
 import asyncio
+import errno
+import io
 import hashlib
 import os
 from pathlib import Path
@@ -72,6 +74,53 @@ def test_writes_are_bounded_even_for_large_transport_chunks(uploads, monkeypatch
     assert Path(record.source_path).read_bytes() == payload
 
 
+@pytest.mark.parametrize('failure_at', ['stage', 'write', 'sync'])
+@pytest.mark.parametrize('number,code', [
+    (errno.ENOSPC, 'UPLOAD_STORAGE_EXHAUSTED'),
+    (errno.EDQUOT, 'UPLOAD_STORAGE_EXHAUSTED'),
+    (errno.EACCES, 'UPLOAD_STORAGE_INVALID'),
+])
+def test_storage_failure_is_specific_private_and_same_identity_can_resume(
+        uploads, monkeypatch, failure_at, number, code):
+    original = uploads._stage
+
+    def failed(*args, **kwargs):
+        raise OSError(number, 'private storage detail', '/private/upload')
+
+    class FailedWrite:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, data):
+            failed()
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+    def staged(token):
+        stream, path = original(token)
+        return FailedWrite(stream), path
+
+    with monkeypatch.context() as patch:
+        if failure_at == 'sync':
+            patch.setattr(uploads, '_sync_directory', failed)
+        else:
+            patch.setattr(uploads, '_stage', failed if failure_at == 'stage' else staged)
+        with pytest.raises(UploadError) as error:
+            receive(uploads, key='recover-storage')
+    assert error.value.code == code
+    assert error.value.status_code == (507 if code == 'UPLOAD_STORAGE_EXHAUSTED' else 500)
+    assert 'private' not in error.value.message
+    assert not tuple(uploads.staging.iterdir()) and uploads.choices() == ()
+    published = tuple(uploads.completed.iterdir())
+    before = None if not published else published[0].stat().st_ino
+    recovered = receive(uploads, key='recover-storage')
+    assert uploads.choices() == (recovered.public(),)
+    assert len(tuple(uploads.completed.iterdir())) == 1
+    if before is not None:
+        assert Path(recovered.source_path).stat().st_ino == before
+
+
 @pytest.mark.parametrize('expected,parts,code', [
     (None, (b'1234', b'56789'), 'UPLOAD_TOO_LARGE'),
     (4, (b'abc',), 'UPLOAD_INTERRUPTED'),
@@ -88,6 +137,45 @@ def test_actual_bytes_and_declared_length_fail_before_publication(uploads, expec
     assert error.value.code == code and '/' not in error.value.message
     assert uploads.choices() == ()
     assert not tuple(uploads.completed.iterdir()) and not tuple(uploads.staging.iterdir())
+
+
+@pytest.mark.parametrize('number', [errno.ENOSPC, errno.EDQUOT])
+@pytest.mark.parametrize('cancel', [False, True])
+def test_buffered_disk_failure_does_not_mask_error_or_cancellation_on_close(
+        uploads, monkeypatch, number, cancel):
+    original = uploads._stage
+    streams = []
+
+    class FullDevice(io.RawIOBase):
+        def writable(self):
+            return True
+
+        def write(self, data):
+            raise OSError(number, 'private device detail')
+
+    def staged(token):
+        stream, path = original(token)
+        stream.close()
+        buffered = io.BufferedWriter(FullDevice())
+        streams.append(buffered)
+        return buffered, path
+
+    async def source():
+        yield b'bytes smaller than the write buffer'
+        if cancel:
+            raise asyncio.CancelledError()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(uploads, '_stage', staged)
+        with pytest.raises(asyncio.CancelledError if cancel else UploadError) as error:
+            asyncio.run(uploads.receive('buffered', 'matrix.h5ad', source()))
+    if not cancel:
+        assert error.value.code == 'UPLOAD_STORAGE_EXHAUSTED'
+        assert 'private' not in error.value.message
+    assert all(stream.closed for stream in streams)
+    assert not tuple(uploads.staging.iterdir()) and not tuple(uploads.completed.iterdir())
+    assert uploads.choices() == ()
+    assert receive(uploads, key='buffered').public() in uploads.choices()
 
 
 @pytest.mark.parametrize('key,label', [

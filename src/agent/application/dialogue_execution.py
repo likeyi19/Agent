@@ -265,7 +265,7 @@ def _validate_argument_record(interaction):
         raise SessionError('Invalid persisted scientific arguments.') from exc
 
 
-def _missing_parameters(error, admitted, registry):
+def _missing_parameters(error, admitted, registry, *, historical=False):
     if error is None or error.code not in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}:
         return None
     tool_name = error.details.get('tool_name')
@@ -273,12 +273,19 @@ def _missing_parameters(error, admitted, registry):
     if tool_name not in registry.names() or not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8:
         return None
     tool = registry.get(tool_name)
+    # Bounded reader for pre-default selection clarifications. New planning
+    # errors still use only the current Registry's required arguments.
+    required = dict(tool.required_arguments)
+    if historical and tool_name == 'select_scATAC_cells':
+        from agent.tools.data.scatac_selection_profile import DEFAULTS
+        required.update({name: tool.optional_arguments[name] for name in DEFAULTS
+                         if name in tool.optional_arguments})
     try:
         for name in names:
-            if name not in tool.required_arguments:
+            if name not in required:
                 return None
             input_name, _ = _parameter_input(registry, tool_name, name)
-            if tool.required_arguments[name].planning.conversational_choice:
+            if required[name].planning.conversational_choice:
                 return None
             if input_name in admitted['inputs']:
                 return None
@@ -417,6 +424,9 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 return
             required = {item['argument'] for item in scientific_parameters(registry)
                         if item['tool'] == tool.name and item['required'] and 'choices' not in item}
+            if tool.name == 'select_scATAC_cells':
+                from agent.tools.data.scatac_selection_profile import DEFAULTS
+                required.update(DEFAULTS)
             missing = sorted(name for name in required if _parameter_input(registry, tool.name, name)[0] not in values)
             if list(pending['missing']) != missing:
                 raise ValueError('Missing requirements changed.')
@@ -481,7 +491,7 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     if 'parameter_rejection' not in origin.admitted:
         stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         original_error = next((e for e in stored.errors
-            if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
+            if _missing_parameters(e, origin.admitted, sessions._application.registry, historical=True) ==
                (reference['tool'], list(origin.prerequisite['missing']))), None)
         if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
                 or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):

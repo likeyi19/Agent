@@ -25,7 +25,7 @@ from agent.schemas import AgentPlan, PlanStep
 from test_scientific_parameter_continuation import (
     BOTH, DEPTH, OBJECTIVE, PROFILE, REQUIRED, TOOL, TSS, SelectionModel,
     accepted_step, answer, argument, assert_pending, fixture_factory, qc_case,
-    runtime, selection_harness, selection_inputs, selection_work, submit,
+    runtime, legacy_selection_harness as selection_harness, selection_inputs, selection_work, submit,
 )
 
 

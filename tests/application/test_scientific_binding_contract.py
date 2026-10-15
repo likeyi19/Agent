@@ -82,7 +82,7 @@ def test_species_identity_stays_distinct_from_registered_parameter_bindings():
 ])
 def test_registered_type_drives_binding_and_exact_ratio_owner_validates(registry, literal, argument, expected):
     utterance = 'Use threshold ' + literal + '.'
-    spec = registry.get('select_scATAC_cells').required_arguments[argument]
+    spec = registry.get('select_scATAC_cells').optional_arguments[argument]
     result = admit_scientific_argument(declaration(utterance, literal, argument=argument), utterance, spec)
     assert result == expected and type(result) is type(expected)
 
@@ -96,7 +96,7 @@ def test_registered_type_drives_binding_and_exact_ratio_owner_validates(registry
 ])
 def test_invalid_explicit_values_never_become_default_or_float_thresholds(registry, literal, argument):
     utterance = 'Use threshold ' + literal + '.'
-    spec = registry.get('select_scATAC_cells').required_arguments[argument]
+    spec = registry.get('select_scATAC_cells').optional_arguments[argument]
     with pytest.raises(IntentError, match='invalid_parameter_value'):
         admit_scientific_argument(declaration(utterance, literal, argument=argument), utterance, spec)
 
@@ -129,13 +129,13 @@ def test_historical_resolution_class_and_admission_stay_strict_and_share_validat
 def test_generic_numeric_spans_reject_truncation_and_units(registry, utterance, literal):
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration(utterance, literal), utterance,
-            registry.get('select_scATAC_cells').required_arguments['min_tss_enrichment'])
+            registry.get('select_scATAC_cells').optional_arguments['min_tss_enrichment'])
 
 
 def test_exact_literal_and_utterance_identity_are_checked(registry):
     utterance = 'Use threshold 4.5.'
     candidate = declaration(utterance, '4.5')
-    spec = registry.get('select_scATAC_cells').required_arguments['min_tss_enrichment']
+    spec = registry.get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
     for invalid in (replace(candidate, literal='4.6'), replace(candidate, end=100)):
         with pytest.raises(IntentError, match='ungrounded_operand'):
             admit_scientific_argument(invalid, utterance, spec)

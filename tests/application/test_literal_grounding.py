@@ -45,7 +45,7 @@ def test_no_first_match_or_text_repair(text, literal, evidence, reason):
     ('TSS 1.5', '5'), ('TSS 1e3', '3'), ('TSS 4/3', '3')])
 def test_locating_text_does_not_bypass_token_boundary(text, literal):
     declaration, = parse_decision(wire(literal, text), utterance=text).arguments
-    spec = build_default_tool_registry().get('select_scATAC_cells').required_arguments['min_tss_enrichment']
+    spec = build_default_tool_registry().get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration, text, spec)
 

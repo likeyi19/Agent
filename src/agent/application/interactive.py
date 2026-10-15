@@ -1271,6 +1271,10 @@ class InteractiveAgentApplication:
                     rendered = (json.dumps(_serialize(fact.value), ensure_ascii=False, allow_nan=False)
                                 if fact.status == 'available' else fact.reason or fact.status)
                     lines.append(f'{fact.field} [{fact.status}]: {rendered}')
+                if view.source is not None and view.source.tool_name == 'select_scATAC_cells':
+                    lines.append('The effective selection thresholds can be adjusted. Owner defaults, when used, '
+                        'are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. '
+                        'An empty selection means no barcode met these criteria; thresholds are not automatically lowered.')
                 lines.extend(['Limitations:'] + list(view.limitations) + [''])
                 size += sum(len(line.encode('utf-8')) + 1 for line in lines[start:])
                 if size > 1_048_576:

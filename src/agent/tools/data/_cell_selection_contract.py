@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import _barcode_qc_contract as qc, scatac_fragments_v2 as v2
 from .scatac_qc_profile import canonical
-from .scatac_selection_profile import (METHOD, PROFILE, PROFILE_SHA256, REQUIRED, OPTIONAL,
+from .scatac_selection_profile import (METHOD, PROFILE, PROFILE_SHA256, REQUIRED, OPTIONAL, DEFAULTS,
     REASONS, thresholds, fail)
 from agent.tools._cancellation import cancellation_checkpoint
 
@@ -27,6 +27,7 @@ LINEAGE_FIELDS = ('arguments', 'reference_identity_sha256', 'qc_resource_identit
 
 def arguments(value):
     args = dict(value)
+    for key, default in DEFAULTS.items(): args.setdefault(key, default)
     for key in OPTIONAL: args.setdefault(key, None)
     v2.shape(args, ARGUMENTS)
     for key in ('barcode_qc_manifest_path', 'output_dir'):

@@ -9,7 +9,7 @@ from typing import TypedDict
 
 from . import _cell_selection_contract as m, _barcode_qc_contract as qc, scatac_fragments_v2 as v2
 from .scatac_qc_profile import canonical
-from .scatac_selection_profile import PROFILE_SHA256, PROFILE, thresholds, fail
+from .scatac_selection_profile import PROFILE_SHA256, PROFILE, DEFAULTS, thresholds, fail
 from .scatac_qc_reference import _fsync_dir
 from .scatac_fragments_v2_verifier import take_snapshots,check_snapshots
 from .barcode_qc_verifier import verify_barcode_qc
@@ -135,7 +135,8 @@ def execute_cell_selection(arguments,execution_identity=None):
 
 
 def select_scATAC_cells(barcode_qc_manifest_path,barcode_qc_manifest_sha256,
-        min_qc_fragment_records,min_tss_enrichment,output_dir,*,min_tss_flank_evidence=None,
+        min_qc_fragment_records=DEFAULTS['min_qc_fragment_records'],
+        min_tss_enrichment=DEFAULTS['min_tss_enrichment'],*,output_dir,min_tss_flank_evidence=None,
         max_qc_fragment_records=None,max_nucleosome_signal=None)->CellSelectionResult:
-    """Select candidate cells by explicit thresholds; statistical calling is not assessed."""
+    """Select candidates with adjustable thresholds and a required output directory."""
     return execute_cell_selection(locals())

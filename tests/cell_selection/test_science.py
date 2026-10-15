@@ -9,6 +9,22 @@ def args(**changes):
         max_qc_fragment_records=None,max_nucleosome_signal=None)|changes
 
 
+def test_owner_omission_defaults_leave_independent_effective_contract_and_profile_unchanged():
+    effective = dict(min_qc_fragment_records=1000, min_tss_enrichment=4)
+    assert p.thresholds({}) == v.canonical_thresholds(effective)
+    assert p.thresholds(dict(min_qc_fragment_records=0)) == v.canonical_thresholds(effective | {'min_qc_fragment_records': 0})
+    for key in p.REQUIRED:
+        with pytest.raises(ValueError):
+            p.thresholds({key: None})
+    # The independent verifier still requires explicit effective manifest values.
+    with pytest.raises(ValueError):
+        v.canonical_thresholds({})
+    for values in ({}, {'min_qc_fragment_records': 0, 'min_tss_enrichment': 0}):
+        policy = p.thresholds(values)
+        assert 'TSS_ENRICHMENT_UNDEFINED' in p.decide((1000, 1000, 0, 0, 0, 1000, 0, 0), policy)
+        assert p.decide((1000, 1000, 0, 0, 0, 1000, 0, 0), policy) == v.failures((1000, 1000, 0, 0, 0, 1000, 0, 0), policy)
+
+
 @pytest.mark.parametrize('changes,counts,expected',[
     ({},(3,1,1,1,0,1,0,0),('QC_FRAGMENT_COUNT_BELOW_MIN',)),
     ({},(3,2,1,1,0,1,1,0),()),

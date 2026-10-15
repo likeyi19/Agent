@@ -1,5 +1,6 @@
 """Streamed attachments enter the existing registered-input turn boundary."""
 import asyncio
+import errno
 
 import httpx
 import pytest
@@ -47,6 +48,23 @@ def test_upload_registration_discovery_and_retry_use_only_safe_metadata(uploaded
     assert conflicting.status_code == 409
     assert client.get('/api/v1/resources').json()['choices'] == [resource]
     assert not backend.models and not backend.science_calls
+
+
+def test_disk_exhaustion_returns_safe_reason_and_allows_same_upload_retry(uploaded_web, monkeypatch):
+    client, backend, uploads, _ = uploaded_web
+
+    def exhausted(*args):
+        raise OSError(errno.ENOSPC, 'private mount details', '/private/upload')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(uploads, '_stage', exhausted)
+        response = attach(client, b'bounded upload bytes')
+    assert response.status_code == 507
+    assert response.json()['error']['code'] == 'UPLOAD_STORAGE_EXHAUSTED'
+    assert 'retry the same attachment' in response.json()['error']['message']
+    assert 'private' not in response.text
+    assert uploads.choices() == () and not backend.models and not backend.science_calls
+    assert attach(client, b'bounded upload bytes').status_code == 201
 
 
 @pytest.mark.parametrize('upload_id', ['turns', 'activate'])

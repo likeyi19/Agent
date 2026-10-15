@@ -119,12 +119,14 @@ def _revision(sessions, state, rid):
         outputs.append(output)
         steps[role] = step
         if step.tool_name == SELECTION:
+            from .turn_context import selection_parameters
             specs = parameter_specs(sessions._application.registry)
+            effective = selection_parameters(step, specs)
             required = set(specs).intersection(sessions._application.registry.get(SELECTION).required_arguments)
-            if not required <= set(step.resolved_arguments): raise SessionError('Missing accepted parameters.')
+            if not required <= set(effective): raise SessionError('Missing accepted parameters.')
             for key, spec in specs.items():
-                if key in step.resolved_arguments:
-                    value = _serialize(step.resolved_arguments[key])
+                if key in effective:
+                    value = effective[key]
                     spec.validate(key, value)
                     parameters[key] = value
     return revision, tuple(outputs), parameters, steps

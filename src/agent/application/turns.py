@@ -225,8 +225,8 @@ def _context(sessions, interaction, admitted, generation):
 def _execution_inputs(sessions, admitted, context, utterance):
     app = sessions._application
     source = stored_step(sessions, admitted['operation']['source'])
-    original = {k:_serialize(source.resolved_arguments[k]) for k in parameter_specs(app.registry)
-                if k in source.resolved_arguments}
+    from .turn_context import selection_parameters
+    original = selection_parameters(source, parameter_specs(app.registry))
     expected = dict(original)
     if admitted['delta'] is not None:
         delta = IntentDelta(**admitted['delta'])

@@ -57,6 +57,17 @@ def stored_step(sessions, locator):
     return next(s for s in state.steps if s.step_id == locator.step_id)
 
 
+def selection_parameters(step, specs):
+    """Exact supplied recipe values precede the fixed selection owner defaults.
+
+    Pre-default accepted selections always supplied both minima. Their captured
+    values remain unchanged; omission is possible only under the new contract.
+    """
+    from agent.tools.data.scatac_selection_profile import DEFAULTS
+    return {**DEFAULTS, **{k: _serialize(step.resolved_arguments[k])
+                          for k in specs if k in step.resolved_arguments}}
+
+
 def snapshot(sessions, state, *, tool_names=None):
     revisions = {r.revision_id:r for r in state.revisions}
     current = revisions.get(state.active_revision_id)
@@ -84,7 +95,7 @@ def snapshot(sessions, state, *, tool_names=None):
             if step.tool_name != SELECTION: continue
             if any(o['source']['run_id'] == locator.run_id and o['source']['step_id'] == locator.step_id for o in operations):
                 continue
-            parameters = {k:_serialize(step.resolved_arguments[k]) for k in specs if k in step.resolved_arguments}
+            parameters = selection_parameters(step, specs)
             required = set(specs).intersection(sessions._application.registry.get(SELECTION).required_arguments)
             if not required <= set(parameters): raise IntentError('unavailable_context')
             for key, value in parameters.items(): specs[key].validate(key, value)

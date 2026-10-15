@@ -1468,7 +1468,7 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
         return lines
     if step.tool_name == "select_scATAC_cells":
         lines=[f"### Explicit QC selection {occurrence}", "",
-            "Selected barcodes are QC-selected candidate cells. Selection is QC-threshold based; statistical background-versus-cell calling was not assessed.", ""]
+            "Selected barcodes are QC-selected candidate cells. Selection is QC-threshold based; statistical background-versus-cell calling was not assessed. The effective thresholds below can be adjusted. Owner defaults, when used, are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.", ""]
         for fact in step.facts:
             lines.append(f"- {_FIELD_LABELS[fact.field]}: {_inline_code(fact.value)}")
         lines.extend(("", "Failure reasons may overlap; their counts do not form a partition. No doublet detection, FRiP, cCRE matrix or EpiZoo inference was performed by this step.",

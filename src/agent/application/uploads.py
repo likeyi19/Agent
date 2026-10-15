@@ -7,6 +7,7 @@ Uploads create no Session, scientific result, or execution instruction.
 from __future__ import annotations
 
 import fcntl
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -46,6 +47,7 @@ _MESSAGES = {
     'UPLOAD_CONFLICT': ('This upload identity already belongs to different file bytes or metadata.', 409),
     'UPLOAD_BUSY': ('The bounded upload capacity is busy. Retry the same attachment.', 503),
     'UPLOAD_STORAGE_INVALID': ('The controlled upload location is unavailable or unsafe.', 500),
+    'UPLOAD_STORAGE_EXHAUSTED': ('Upload storage is full or its disk quota has been reached. Ask the operator to free space, then retry the same attachment.', 507),
     'UPLOAD_STORAGE_LIMIT': ('The controlled upload location has reached its file limit.', 413),
 }
 
@@ -444,6 +446,8 @@ class H5ADUploadAdmission:
         except (UploadError, ResourceAdmissionError):
             raise
         except (OSError, ValueError, RuntimeError, ApplicationWorkspaceError) as exc:
+            if isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EDQUOT):
+                raise UploadError('UPLOAD_STORAGE_EXHAUSTED') from exc
             raise UploadError('UPLOAD_STORAGE_INVALID') from exc
         except Exception as exc:
             # Stream interruption carries no request payload or private paths.
@@ -452,7 +456,12 @@ class H5ADUploadAdmission:
             try:
                 for component in components:
                     if component['stream'] is not None:
-                        component['stream'].close()
+                        try:
+                            component['stream'].close()
+                        except OSError:
+                            # A failed buffered flush can fail again on close.
+                            # Preserve the transfer error/cancellation and remove staging.
+                            pass
                     if component['temporary'] is not None:
                         component['temporary'].unlink(missing_ok=True)
             finally:

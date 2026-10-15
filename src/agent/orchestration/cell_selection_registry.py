@@ -62,13 +62,16 @@ def cell_selection_tool_spec():
         accepted_upstream_types=('scatac_barcode_qc.v1',)),_semantic_argument_port('output_dir',required=True)]
     optional={}
     for key in (*m.REQUIRED,*m.OPTIONAL):
-        is_required=key in m.REQUIRED
+        defaulted=key in m.DEFAULTS
         types=(int,str) if key in ('min_tss_enrichment','max_nucleosome_signal') else (int,)
-        spec=_planning_argument(types if is_required else (*types,type(None)),
-            'Explicit inclusive threshold; nonnegative integer or exact decimal/fraction string for ratios; no floats. Optional omission/null disables. Integers/reduced ratios <=1e18; decimals <=18 places.',
+        spec=_planning_argument(types if defaulted else (*types,type(None)),
+            'Inclusive threshold; nonnegative integer or exact decimal/fraction string for ratios; no floats. '
+            + ('Omission uses the adjustable owner starting default; explicit null is invalid. ' if defaulted
+               else 'Omission/null disables. ')
+            + 'Integers/reduced ratios <=1e18; decimals <=18 places.',
             scientific_parameter=True)
-        (required if is_required else optional)[key]=ThresholdArgument(spec.accepted_types,planning=spec.planning)
-        ports.append(_semantic_argument_port(key,required=is_required))
+        optional[key]=ThresholdArgument(spec.accepted_types,planning=spec.planning)
+        ports.append(_semantic_argument_port(key,required=False))
     integers={'artifact_schema_version','n_observed_barcodes','n_selected','n_rejected'}
     return ToolSpec(name='select_scATAC_cells',function=select_scATAC_cells,required_arguments=required,optional_arguments=optional,
         result_contract=ResultContract('CellSelectionResult',{k:(int,) if k in integers else (str,) for k in CellSelectionResult.__annotations__},validator=validate_result,
@@ -76,7 +79,7 @@ def cell_selection_tool_spec():
         exception_classifier=classify,retryable_error_codes=frozenset(),recovery_policy_version=m.POLICY,
         durable_hooks=DurableToolHooks(execute_cell_selection,recover_cell_selection),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Select candidate cells using explicit QC thresholds.',
-            'Required minimum QC-record depth and TSS enrichment; no inferred thresholds. Optional minimum L+R, maximum QC depth and nucleosome signal.',
+            'Omitted minimum QC-record depth and TSS enrichment use adjustable owner starting defaults. Explicit values take precedence. Optional minimum L+R, maximum QC depth and nucleosome signal.',
             'Inclusive exact comparisons; undefined TSS fails; undefined nucleosome fails only with enabled maximum. Retain all failures; empty selection succeeds.',
             'Statistical cell calling not assessed. No doublets, FRiP, matrix or inference. Metrics-only QC remains valid.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(

@@ -14,7 +14,7 @@ from agent.web.config import ScientificInputSet
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'application'))
 from test_scientific_parameter_continuation import (
-    runtime, fixture_factory, qc_case, selection_inputs, selection_harness,
+    runtime, fixture_factory, qc_case, selection_inputs, selection_harness, legacy_selection_harness,
     REQUIRED, OBJECTIVE, BOTH, DEPTH, TSS, BAD, assert_pending, accepted_step,
 )
 from helpers import wait_turn
@@ -38,9 +38,9 @@ def post(client, body):
     return wait_turn(client, body['turn_id'], timeout=90)
 
 
-def test_first_selection_chat_requests_only_required_thresholds_and_runs_verified_owner(
+def test_historical_selection_chat_thresholds_run_verified_owner(
         tmp_path, selection_inputs):
-    harness = selection_harness(tmp_path / 'workspace')
+    harness = legacy_selection_harness(tmp_path / 'workspace')
     with TestClient(web(harness, selection_inputs)) as client:
         assert client.post('/api/v1/sessions', json={'session_id': 'session'}).status_code in (200, 201)
         assert client.get('/api/v1/input-sets').json() == {'choices': [
@@ -73,7 +73,7 @@ def test_first_selection_chat_requests_only_required_thresholds_and_runs_verifie
 def test_partial_invalid_threshold_answer_refresh_and_fresh_server_resume_original_task(
         tmp_path, selection_inputs):
     workspace = tmp_path / 'workspace'
-    harness = selection_harness(workspace)
+    harness = legacy_selection_harness(workspace)
     with TestClient(web(harness, selection_inputs)) as client:
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         pending = post(client, payload(selected=True))
@@ -99,7 +99,7 @@ def test_partial_invalid_threshold_answer_refresh_and_fresh_server_resume_origin
 
 
 def test_stale_web_response_is_rejected_before_model_construction(tmp_path, selection_inputs):
-    harness = selection_harness(tmp_path / 'workspace')
+    harness = legacy_selection_harness(tmp_path / 'workspace')
     with TestClient(web(harness, selection_inputs)) as client:
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         pending = post(client, payload(selected=True))

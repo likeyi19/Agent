@@ -421,7 +421,8 @@ class InteractiveAgentApplication:
                     raise _fail('INTERACTIVE_REFERENCE_INVALID')
                 records.append(dict(resource_id=record.resource_id, record_sha256=record.record_sha256,
                     label=record.label, input_type=record.input_type,
-                    use='offered_for_analysis' if resource_id in selected else 'staged'))
+                    use='offered_for_analysis' if resource_id in selected and not (
+                        isinstance(registered_input, RegisteredInputGroup) and registered_input.attachment_candidates) else 'staged'))
         return records
 
     def _submission(self, profile, generation, inputs, predecessor, registered_input=None):
@@ -459,6 +460,13 @@ class InteractiveAgentApplication:
         if registered_input is not None:
             if execution_inputs is not None or type(registered_input) not in (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup):
                 raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
+            execution_inputs = registered_input.execution_inputs
+        # Attachment capture is a candidate offer, never a format or role inference.
+        # Explicit operator/scientific selections retain their existing binding.
+        self._attachment_records(session_id, attachment_ids, registered_input)
+        if attachment_ids and registered_input is None and not execution_inputs:
+            registered_input = self.resources.compose_group(attachment_ids,
+                attachment_candidates=True, verify_source=False)
             execution_inputs = registered_input.execution_inputs
         inputs = _inputs(execution_inputs)
         submission = self._submission(profile, expected_generation, inputs, predecessor_turn_id, registered_input)
@@ -626,8 +634,23 @@ class InteractiveAgentApplication:
         accepted_use = (status == 'succeeded' and error is None and turn is not None
                         and turn.status in {'activated', 'stale'})
         attachments = []
-        for item in (() if interaction is None or interaction.submission is None
-                     else interaction.submission.get('attachments', ())):
+        captured_attachments = (() if interaction is None or interaction.submission is None
+                                else interaction.submission.get('attachments', ()))
+        metadata = {} if interaction is None else (interaction.admitted or {}).get('registered_input', {})
+        raw = {} if interaction is None else (interaction.admitted or {})
+        if 'fastq_sources' in raw or 'bam_sources' in raw:
+            field = 'bam' if 'bam_sources' in raw else 'fastq'
+            metadata = raw[field + '_sources']
+            offered = {raw['bam']['source']} if field == 'bam' else {m['source'] for m in raw['fastq']['members']}
+            captured_attachments = [dict(resource_id=m['resource_id'], label=m['label'],
+                input_type=m['input_type'], use='offered_for_analysis' if f'source.{i}' in offered else 'staged')
+                for i, m in enumerate(metadata['members'])]
+        elif metadata.get('attachment_candidates'):
+            offered = {role['source'] for role in metadata['roles']}
+            captured_attachments = [dict(resource_id=m['resource_id'], label=m['label'],
+                input_type=m['input_type'], use='offered_for_analysis' if f'source.{i}' in offered else 'staged')
+                for i, m in enumerate(metadata['members'])]
+        for item in captured_attachments:
             attachment = {key: item[key] for key in ('resource_id', 'label', 'input_type', 'use')}
             if accepted_use and attachment['use'] == 'offered_for_analysis':
                 attachment['use'] = 'consumed'

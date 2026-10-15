@@ -97,7 +97,9 @@ def bind(arguments):
             if isinstance(item, dict) and item.get('contract') == _raw_bam.CONTRACT and item.get('fact') == 'assay':
                 assays.add(item['value'])
     if len(assays) > 1: m.fail('BAM_FRAGMENTS_INTAKE_MISMATCH')
-    roots = sorted({f.selection_root if f.selection is raw.SelectionBasis.DIRECTORY_DISCOVERY else f.path for f in intake.files})
+    roots = ([dict(path=f.path, input_kind='BAM') for f in intake.files]
+             if all(f.selection is raw.SelectionBasis.EXPLICIT for f in intake.files) else
+             sorted({f.selection_root if f.selection is raw.SelectionBasis.DIRECTORY_DISCOVERY else f.path for f in intake.files}))
     current = _raw_bam.inspect_bam_inputs(roots, species=declaration('species'),
         assay=_raw_bam.BamAssay(next(iter(assays))) if assays else None,
         source_genome_assembly=declaration('source_genome_assembly'))

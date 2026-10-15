@@ -46,10 +46,13 @@ def _terminal(sessions, interaction, clarification):
     species_reason = clarification.reason in {'missing_species', 'ambiguous_species', 'unsupported_species', 'conflicting_species'}
     parameter_reason = clarification.reason in {'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'}
     reference = captured.get('prerequisite')
-    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources'}:
+    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources', 'fastq', 'bam'}:
         prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
         if reference['field'] == 'parameters':
             choices = tuple(reference['missing'])
+        elif reference['field'] in {'fastq', 'bam'}:
+            from .raw_handoff import public
+            choices = tuple(public(interaction, sessions.load(sessions_id(sessions)).interactions)['missing'])
         elif reference['field'] == 'resources':
             from .resource_continuation import public
             choices = tuple(c['label'] for c in public(interaction, sessions.load(sessions_id(sessions)).interactions)['choices'])
@@ -79,7 +82,7 @@ def _terminal(sessions, interaction, clarification):
         if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
                             value_required=clarification.reason in {'missing_parameter_value', 'missing_species', 'ambiguous_species',
-                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources'})
+                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources', 'missing_fastq_declarations', 'missing_bam_declarations'})
     admitted = dict(kind='clarify', **asdict(clarification))
     def change(state):
         turns = state.turns
@@ -430,11 +433,15 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
-        if pending_public is not None and pending_public['field'] == 'roles':
+        if pending_public is not None and pending_public['field'] in {'roles', 'fastq', 'bam'}:
             reference = interaction.snapshot['prerequisite']
             from .dialogue_execution import _role_source, _role_binding
             origin, source = _role_source(reference, state.interactions)
-            binding = _role_binding(origin, source, interaction)
+            if pending_public['field'] in {'fastq', 'bam'}:
+                from .raw_handoff import source_binding
+                binding = source_binding(origin, source, interaction)
+            else:
+                binding = _role_binding(origin, source, interaction)
             role_submission = dict(execution_inputs=_serialize(binding.execution_inputs),
                                    registered_input=binding.attribution())
         if (role_submission is not None
@@ -444,6 +451,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             choices = group_choices(binding, sessions._application.registry)
             visible['dialogue']['selected_sources'] = choices['sources']
             visible['dialogue']['input_roles'] = choices['roles']
+            if binding.attachment_candidates:
+                visible['dialogue']['attachment_candidates'] = True
+                from .raw_handoff import offers as raw_offers
+                visible['dialogue']['fastq_resources'] = raw_offers(input_sets)
+                visible['dialogue']['bam_resources'] = raw_offers(input_sets, 'bam')
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         if context is not None:
             visible['dialogue']['planning_context'] = list(context.public_items())
@@ -479,6 +491,13 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         elif isinstance(decision, ResourceAnswer):
             from .resource_continuation import answer
             admitted = answer(sessions, interaction, decision, input_sets, reference_resources=reference_resources)
+        elif isinstance(decision, (RequestRoles, RoleAnswer)) and (
+                decision.fastq is not None or decision.bam is not None or (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam'}):
+            from .raw_handoff import admit as admit_raw
+            admitted, prerequisite = admit_raw(sessions, interaction, decision, input_sets)
+            if prerequisite is not None:
+                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+                return TurnOutcome('clarify', 'clarification', Clarify(admitted['reason'], tuple(admitted['choices']), True))
         elif isinstance(decision, RequestRoles):
             from .dialogue_execution import admit_role_request
             admitted, prerequisite, choices = admit_role_request(sessions, interaction, decision, epizoo_resources)

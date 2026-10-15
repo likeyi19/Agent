@@ -3497,7 +3497,7 @@ def build_default_tool_registry() -> ToolRegistry:
         required_arguments={
             "raw_input_paths": _planning_argument(
                 (str, Path, list, tuple),
-                "Local raw sequencing files or non-recursive directories; Agent determines format.",
+                "Local raw paths/directories, explicit FASTQ members (path, library_id, role, lane, chunk), or typed BAM sources (path, input_kind='BAM'). Typed members use actual source bytes without filename inference; the owner validates content.",
                 artifacts=(ArtifactSemanticKind.RAW_SCATAC_SEQUENCING,),
             ),
             "output_dir": _planning_argument(

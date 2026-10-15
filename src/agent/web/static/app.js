@@ -1737,12 +1737,11 @@ function submitRequest(utterance, predecessorTurnId = null) {
   if (h5ads.length && selectedIds.length) {
     showError(new Error("New H5AD attachments and previously selected inputs are both present. Remove the earlier input selection or the new H5AD attachments before sending.")); return;
   }
-  if (h5ads.length) {
-    if (h5ads.length > 8) { showError(new Error("At most eight H5AD candidates can be offered for analysis at once.")); return; }
-    if (h5ads.length === 1) {
-      body.resource_id = h5ads[0];
-      if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
-    } else body.resource_ids = Object.freeze(h5ads);
+  const lastTurn = state.session.turns[state.session.turns.length - 1];
+  const pendingRoles = lastTurn && lastTurn.response && lastTurn.response.clarification && ["missing_input_roles", "missing_fastq_declarations", "missing_bam_declarations"].includes(lastTurn.response.clarification.reason);
+  if (h5ads.length === 1 && state.attachments.length === 1 && !pendingRoles) {
+    body.resource_id = h5ads[0];
+    if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
     if (element("input-choice").value) body.input_set_id = element("input-choice").value;
   }
   else if (selectedIds.length > 1 || state.selectedResourceIds.length || selectedResourceType() === "groups") {

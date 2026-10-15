@@ -32,6 +32,7 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('inspect_scATAC', 'dataset'),
     ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
     ('evaluate_cell_clustering', 'ground_truth_dataset'),
@@ -444,10 +445,14 @@ class RegisteredInputGroup:
     roles: object = ()
     composition: str = _GROUP_COMPOSITION
     resource_choice: object = None
+    attachment_candidates: bool = False
 
     def __post_init__(self):
         try:
-            if self.composition != _GROUP_COMPOSITION or not 1 <= len(self.members) <= MAX_GROUP_MEMBERS:
+            if type(self.attachment_candidates) is not bool:
+                raise ValueError('Invalid attachment candidate designation.')
+            maximum = 16 if self.attachment_candidates else MAX_GROUP_MEMBERS
+            if self.composition != _GROUP_COMPOSITION or not 1 <= len(self.members) <= maximum:
                 raise ValueError('Invalid source selection.')
             members = []
             for member in self.members:
@@ -457,7 +462,8 @@ class RegisteredInputGroup:
                 _identifier(member['resource_id'])
                 if type(member['record_sha256']) is not str or _SHA.fullmatch(member['record_sha256']) is None:
                     raise ValueError('Invalid record identity.')
-                if member['input_type'] not in ('h5ad', 'groups'):
+                if member['input_type'] not in (('h5ad', 'groups', 'attachment')
+                        if self.attachment_candidates else ('h5ad', 'groups')):
                     raise ValueError('Unsupported selected source kind.')
                 if 'source_sha256' in member and (type(member['source_sha256']) is not str
                         or _SHA.fullmatch(member['source_sha256']) is None):
@@ -479,6 +485,8 @@ class RegisteredInputGroup:
 
     def attribution(self):
         result = dict(composition=self.composition, members=_serialize(self.members), roles=_serialize(self.roles))
+        if self.attachment_candidates:
+            result['attachment_candidates'] = True
         if self.resource_choice is not None:
             result['resource_choice'] = _serialize(self.resource_choice)
         return result
@@ -513,7 +521,8 @@ def _group_port(registry, tool_name, port_name):
     sources = [s for s in port.request_sources if tuple(m.name for m in s.members) == tuple(m.name for m in port.members)]
     if len(port.members) == 2 and tuple(m.name for m in port.members) != ('path', 'sha256'):
         raise _fail('MULTI_INPUT_ROLE_INVALID')
-    exact = [s for s in sources if s.members[0].input_name == member.field_name]
+    alias = 'input_path' if (tool_name, port_name) == ('inspect_scATAC', 'dataset') else member.field_name
+    exact = [s for s in sources if s.members[0].input_name == alias]
     choices = exact if exact else sources
     if len(choices) != 1:
         raise _fail('MULTI_INPUT_ROLE_INVALID')
@@ -560,7 +569,7 @@ def group_role_inputs(binding, roles, registry):
     """Pure exact role replay; content qualification stays with scientific owners."""
     try:
         roles = _group_roles(roles, len(binding.members))
-        if roles and {r['source'] for r in roles} != {f'source.{i}' for i in range(len(binding.members))}:
+        if roles and not binding.attachment_candidates and {r['source'] for r in roles} != {f'source.{i}' for i in range(len(binding.members))}:
             raise ValueError('Unassigned selected input.')
         aliases, declarations = _group_declarations(registry)
         values = _serialize(binding.execution_inputs)
@@ -579,7 +588,8 @@ def group_role_inputs(binding, roles, registry):
             fields = {m.name: m.field_name for m in port.members}
             record = binding.members[int(role['source'].split('.')[1])]
             wanted_type = 'groups' if (role['tool'], role['port']) == ('annotate_scATAC_cell_types', 'groups') else 'h5ad'
-            if record['input_type'] != wanted_type:
+            if record['input_type'] != wanted_type and not (binding.attachment_candidates
+                    and record['input_type'] == 'attachment'):
                 raise ValueError('File type does not match the explicit scientific role.')
             for member in source.members:
                 key = member.input_name
@@ -604,7 +614,8 @@ def validate_group_roles(binding, roles, registry, required_roles, *, complete=F
         if type(binding) is not RegisteredInputGroup or type(complete) is not bool:
             raise ValueError('Invalid captured selection.')
         if (not isinstance(required_roles, (tuple, list))
-                or not len(binding.members) <= len(required_roles) <= MAX_GROUP_MEMBERS):
+                or not (1 if binding.attachment_candidates else len(binding.members))
+                    <= len(required_roles) <= MAX_GROUP_MEMBERS):
             raise ValueError('Invalid required scientific role count.')
         required = []
         for item in required_roles:
@@ -627,7 +638,8 @@ def validate_group_roles(binding, roles, registry, required_roles, *, complete=F
         if not {(r['tool'], r['port']) for r in values} <= set(required):
             raise ValueError('Unoffered required scientific role.')
         if complete and (len(values) != len(required)
-                or {r['source'] for r in values} != {f'source.{i}' for i in range(len(binding.members))}):
+                or not binding.attachment_candidates and
+                {r['source'] for r in values} != {f'source.{i}' for i in range(len(binding.members))}):
             raise ValueError('Incomplete scientific source associations.')
         return tuple(InputRole(**role) for role in values)
     except (ValueError, TypeError, KeyError, LookupError) as exc:
@@ -1075,18 +1087,9 @@ class LocalResourceAdmission:
             key = (declared['lane'], declared['chunk'])
             names = groups.setdefault(key, [])
             role = owner.ReadRole(declared['role'])
-            locator = owner._name(Path(record.source_path).name)
-            if locator is None or (locator.lane, locator.chunk, locator.role) != (*key, role):
-                raise _fail('FASTQ_COLLECTION_INVALID')
             if any(name.role is role for name in names):
                 raise _fail('FASTQ_COLLECTION_INVALID')
             names.append(owner.FastqName('declared-library', '1', key[0], role, key[1]))
-        syntactic_groups = {(str(Path(record.source_path).parent),
-                             owner._name(Path(record.source_path).name).sample,
-                             owner._name(Path(record.source_path).name).sample_number)
-                            for record in records}
-        if len(syntactic_groups) != 1:
-            raise _fail('FASTQ_COLLECTION_INVALID')
         for (lane, chunk), names in sorted(groups.items()):
             actual, duplicate = owner._layout(names, owner.FastqAssay.TENX_ATAC, layout)
             if actual is layout and not duplicate:
@@ -1102,6 +1105,32 @@ class LocalResourceAdmission:
                 raise error
             raise _fail('FASTQ_COLLECTION_INVALID')
         return groups
+
+    def bind_raw_source(self, registration_key, source, *, session_id, input_type, declaration=None):
+        """Task-local format metadata shares the exact immutable uploaded source."""
+        if (input_type not in ('fastq', 'bam') or source.input_type != 'attachment'
+                or source.session_id != session_id or self.load(source.resource_id) != source):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        self._verify_records([source])
+        technical = None
+        if input_type == 'fastq':
+            with Path(source.source_path).open('rb') as stream:
+                compression = 'gzip' if stream.read(2) == b'\x1f\x8b' else 'plain'
+            technical = _fastq_member(dict(declaration, compression=compression))
+        elif declaration is not None:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        admission = LocalResourceAdmission(self._workspace,
+            approved_source_roots=(Path(source.source_path).parent,), registry=self._registry)
+        return admission.register(registration_key, source.source_path, input_type=input_type, label=source.label,
+            session_id=session_id, fastq_member=technical, expected_source_sha256=source.source_sha256,
+            expected_size_bytes=source.size_bytes, attribution='Task-scoped roles for '
+                + source.resource_id + '; record SHA-256 ' + source.record_sha256)
+
+    @staticmethod
+    def _fastq_sources(records):
+        from agent.tools.data._raw_fastq import explicit_sources
+        return explicit_sources([dict(path=r.source_path,
+            **{k: r.fastq_member[k] for k in ('library_id', 'role', 'lane', 'chunk')}) for r in records])
 
     def register_fastq_collection(self, registration_key, member_ids, *, label, attribution):
         """Publish a complete typed library choice in the existing local catalog."""
@@ -1147,6 +1176,21 @@ class LocalResourceAdmission:
             _, intake, _ = load_raw_intake_manifest(values['intake_manifest_path'],
                 expected_sha256=values['intake_manifest_sha256'])
             expected = {record.source_path: record.size_bytes for record in records}
+            from agent.tools.data._raw_fastq import declared_sources, _name
+            declared = declared_sources(intake)
+            if declared is not None and declared != LocalResourceAdmission._fastq_sources(records):
+                raise ValueError('Intake declarations differ from registered task roles.')
+            if declared is None:
+                # Legacy intakes qualify filename-derived roles. They cannot
+                # satisfy a contradictory explicit task binding for those bytes.
+                for record in records:
+                    if record.fastq_member is None:
+                        continue
+                    name = _name(Path(record.source_path).name)
+                    member = record.fastq_member
+                    if name is None or (name.role.value, name.lane, name.chunk) != (
+                            member['role'], member['lane'], member['chunk']):
+                        raise ValueError('Legacy intake roles differ from registered task roles.')
             if len(intake.files) != len(expected) or {source.path for source in intake.files} != set(expected):
                 raise ValueError('Intake membership differs from the registered collection.')
             for source in intake.files:
@@ -1344,7 +1388,8 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
         # Inspection has no required biological declarations. Producer contracts
         # apply only when the ordinary plan actually requests preparation.
-        return values | dict(raw_input_paths=[record.source_path],
+        return values | dict(raw_input_paths=([record.source_path] if record.source_path.endswith('.bam')
+                            else [dict(path=record.source_path, input_kind='BAM')]),
                              source_path=record.source_path, source_sha256=record.source_sha256)
 
     def compose_bam(self, resource_id, scientific_inputs=None, *,
@@ -1396,7 +1441,7 @@ class LocalResourceAdmission:
                     argument.validate(key, value)
         except (ValueError, TypeError, LookupError) as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        return values | dict(raw_input_paths=sorted(record.source_path for record in records),
+        return values | dict(raw_input_paths=self._fastq_sources(records),
             raw_assay='TENX_ATAC', fastq_layout=records[0].fastq_member['fastq_layout'])
 
     def compose_fastq_collection(self, resource_id, scientific_inputs=None, *,
@@ -1462,17 +1507,20 @@ class LocalResourceAdmission:
             self._registry = build_default_tool_registry()
         return self._registry
 
-    def compose_group(self, resource_ids, scientific_inputs=None, *, resource_choice=None, verify_source=True):
+    def compose_group(self, resource_ids, scientific_inputs=None, *, resource_choice=None, verify_source=True,
+                      attachment_candidates=False):
         """Capture ordered existing records; selection alone proposes no roles."""
-        if type(resource_ids) not in (tuple, list) or not 1 <= len(resource_ids) <= MAX_GROUP_MEMBERS:
+        if (type(attachment_candidates) is not bool or type(resource_ids) not in (tuple, list)
+                or not 1 <= len(resource_ids) <= (16 if attachment_candidates else MAX_GROUP_MEMBERS)):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         records = [self.load(resource_id) for resource_id in resource_ids]
-        if any(type(record) is not LocalResourceRecord or record.input_type not in ('h5ad', 'groups') for record in records):
+        kinds = ('h5ad', 'groups', 'attachment') if attachment_candidates else ('h5ad', 'groups')
+        if any(type(record) is not LocalResourceRecord or record.input_type not in kinds for record in records):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         members = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
             source_path=r.source_path, source_sha256=r.source_sha256, input_type=r.input_type, label=r.label) for r in records]
         binding = RegisteredInputGroup(members, _input_mapping(scientific_inputs),
-                                       resource_choice=resource_choice)
+                                       resource_choice=resource_choice, attachment_candidates=attachment_candidates)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
@@ -1482,7 +1530,8 @@ class LocalResourceAdmission:
     def bind_group(self, binding, roles, *, verify_source=False):
         self.validate_binding(binding, verify_source=verify_source)
         values = group_role_inputs(binding, roles, self._group_registry())
-        result = RegisteredInputGroup(binding.members, values, roles, resource_choice=binding.resource_choice)
+        result = RegisteredInputGroup(binding.members, values, roles, resource_choice=binding.resource_choice,
+                                      attachment_candidates=binding.attachment_candidates)
         self.validate_binding(result, verify_source=False)
         return result
 
@@ -1501,7 +1550,9 @@ class LocalResourceAdmission:
             if values != _serialize(binding.execution_inputs):
                 raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
             if verify_source:
-                self._verify_records(records)
+                selected = {r['source'] for r in binding.roles}
+                self._verify_records([record for i, record in enumerate(records)
+                    if not binding.attachment_candidates or f'source.{i}' in selected])
             return values
         if type(binding) is RegisteredInputCollection:
             return self._validate_collection(binding, verify_source=verify_source)
@@ -1542,7 +1593,7 @@ class LocalResourceAdmission:
             metadata = submission['registered_input']
             fields = set(metadata) - {'resource_choice'}
             scalar = {'resource_id', 'record_sha256', 'tool_name'}
-            if fields == {'composition', 'members', 'roles'}:
+            if fields - {'attachment_candidates'} == {'composition', 'members', 'roles'}:
                 binding_type = RegisteredInputGroup
             elif (fields == scalar or
                     (scalar | {'composition'} <= fields
@@ -1570,7 +1621,7 @@ class LocalResourceAdmission:
     def _bam_inspection_arguments(values, arguments):
         actual = _serialize(arguments.get('raw_input_paths'))
         paths = [actual] if type(actual) is str else actual
-        if paths != [values['source_path']]:
+        if paths != values['raw_input_paths']:
             raise _fail('BAM_SOURCE_MISMATCH')
         for key in ('species', 'raw_assay', 'source_genome_assembly', 'fastq_layout'):
             if key in values and arguments.get(key) != values[key]:
@@ -1626,8 +1677,8 @@ class LocalResourceAdmission:
     @staticmethod
     def _fastq_inspection_arguments(values, arguments):
         actual = _serialize(arguments.get('raw_input_paths'))
-        if (type(actual) is not list or any(type(path) is not str for path in actual)
-                or sorted(actual) != values['raw_input_paths']):
+        if (type(actual) is not list
+                or sorted(actual, key=canonical) != sorted(values['raw_input_paths'], key=canonical)):
             raise _fail('FASTQ_SOURCE_MISMATCH')
         for key in ('species', 'raw_assay', 'source_genome_assembly', 'fastq_layout'):
             if key in values and arguments.get(key) != values[key]:
@@ -1992,6 +2043,10 @@ class LocalResourceAdmission:
                     if binding.composition == _FASTQ_COMPOSITION:
                         self._fastq_inspection_arguments(values, step.resolved_arguments)
                     actual = _serialize(step.resolved_arguments.get('raw_input_paths'))
+                    from agent.tools.data._raw_fastq import explicit_sources
+                    declared = explicit_sources(actual)
+                    if declared is not None:
+                        actual = [row['path'] for row in declared]
                     if (type(actual) is not list or any(type(path) is not str for path in actual)
                             or sorted(actual) != paths):
                         raise _fail('LOCAL_RESOURCE_BINDING_INVALID')

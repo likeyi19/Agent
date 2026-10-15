@@ -41,7 +41,7 @@ def _facts(intake, gid=None, fact=None):
 
 
 def fresh_intake(intake):
-    roots = sorted({x.selection_root if x.selection is m.SelectionBasis.DIRECTORY_DISCOVERY
+    roots = f.declared_sources(intake) or sorted({x.selection_root if x.selection is m.SelectionBasis.DIRECTORY_DISCOVERY
                     else x.path for x in intake.files})
     species = {g.species.value for g in intake.groups}
     assays = {v['value'] for _, v in _facts(intake, fact='assay')}

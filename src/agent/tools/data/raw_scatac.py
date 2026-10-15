@@ -1,7 +1,7 @@
 """Public raw sequencing intake; private inspectors own format/scientific facts."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import hashlib
 import os
 from pathlib import Path
@@ -10,6 +10,7 @@ import stat
 from typing import TypedDict
 
 from . import _raw_fastq as fastq
+from . import _raw_bam as bam
 from . import raw_scatac_manifest as m
 
 
@@ -52,6 +53,9 @@ def _kind(name: str) -> m.InputKind | None:
 
 def _select(raw_input_paths):
     """Bounded name/stat dispatch only; never open raw content or load pysam."""
+    bam_sources = bam.explicit_sources(raw_input_paths)
+    declared = bam_sources if bam_sources is not None else fastq.explicit_sources(raw_input_paths)
+    raw_input_paths = [r['path'] for r in declared] if declared is not None else raw_input_paths
     values = (raw_input_paths,) if isinstance(raw_input_paths, (str, Path)) else raw_input_paths
     if not isinstance(values, (list, tuple)) or not 0 < len(values) <= 128:
         _fail('RAW_INPUT_SELECTION_INVALID')
@@ -60,7 +64,10 @@ def _select(raw_input_paths):
         for value in values:
             if not isinstance(value, (str, Path)) or not str(value) or '://' in str(value):
                 _fail('RAW_INPUT_SELECTION_INVALID')
-            roots.add(Path(value).expanduser().resolve(strict=True))
+            resolved = Path(value).expanduser().resolve(strict=True)
+            if declared is not None and (str(resolved) != value or not resolved.is_file()):
+                _fail('RAW_INPUT_SELECTION_INVALID')
+            roots.add(resolved)
         candidates = {}
         for root in sorted(roots):
             if root.is_dir():
@@ -75,7 +82,7 @@ def _select(raw_input_paths):
                         if len(candidates) > 128:
                             _fail('RAW_INPUT_DISCOVERY_LIMIT')
             else:
-                kind = _kind(root.name)
+                kind = (m.InputKind.BAM if bam_sources is not None else m.InputKind.FASTQ) if declared is not None else _kind(root.name)
                 if kind is None:
                     _fail('RAW_INPUT_SELECTION_INVALID')
                 candidates[root] = kind
@@ -124,16 +131,17 @@ def _reconstruct(raw_input_paths, *, species=None, raw_assay=None,
     roots, kind, before = _select(raw_input_paths)
     _declarations(kind, species, raw_assay, source_genome_assembly, fastq_layout)
     if kind is m.InputKind.FASTQ:
-        manifest = fastq.inspect_fastq_inputs(roots, species=species,
+        manifest = fastq.inspect_fastq_inputs(
+            fastq.explicit_sources(raw_input_paths) or roots, species=species,
             assay=fastq.FastqAssay(raw_assay) if raw_assay else None,
             declared_layout=fastq.FastqLayout(fastq_layout) if fastq_layout else None)
     else:
         from . import _raw_bam as bam
-        manifest = bam.inspect_bam_inputs(roots, species=species,
+        manifest = bam.inspect_bam_inputs(bam.explicit_sources(raw_input_paths) or roots, species=species,
             assay=bam.BamAssay(raw_assay) if raw_assay else None,
             source_genome_assembly=source_genome_assembly)
     try:
-        after = _select(roots)
+        after = _select(raw_input_paths)
     except RawScATACError:
         _fail('RAW_INPUT_SOURCE_CHANGED')
     if after != (roots, kind, before) or tuple(sorted(f.path for f in manifest.files)) != tuple(p for p, _ in before):
@@ -154,7 +162,7 @@ def _summary(manifest: m.RawIntakeManifest, path: Path, digest: str) -> RawScATA
 
 
 def inspect_raw_scATAC(
-    raw_input_paths: Sequence[str | Path] | str | Path,
+    raw_input_paths: Sequence[str | Path | Mapping[str, str]] | str | Path,
     output_dir: str | Path,
     *,
     species: str | None = None,
@@ -166,6 +174,9 @@ def inspect_raw_scATAC(
 
     Readiness is independent of execution success. Only matching existing
     canonical artifacts may be reused; no overwrite or preprocessing is exposed.
+    Inputs are legacy paths/directories or a closed list of explicit FASTQ
+    members (path, library_id, role, lane, chunk), or BAM rows (path, input_kind='BAM'). The latter uses original
+    canonical regular files and content-detected compression, not name inference.
     """
     if (not isinstance(output_dir, (str, Path)) or not str(output_dir)
             or '://' in str(output_dir) or '\0' in str(output_dir)):

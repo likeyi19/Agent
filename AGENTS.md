@@ -29,6 +29,13 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 
 - Never densify a complete scATAC-seq matrix or assume more than 24 GB GPU memory.
 - Test on small datasets before full-scale execution.
+- Preserve scientific correctness, accepted data, meaning and provenance rather
+  than historical implementation structure. Simplify redundant contracts,
+  validations and intermediate representations at their proper owner, including
+  coordinated scientific input-interface changes when justified. Compatibility
+  is an engineering choice: prefer a small reader, explicit version or bounded
+  migration over permanent parallel implementations. Never silently reinterpret
+  accepted evidence or destroy protected data; make any retired behavior explicit.
 - Reuse validated scientific logic. Modify
   `src/agent/tools/models/epizoo.py` only for a verified bug or a clearly defined
   new capability.

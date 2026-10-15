@@ -94,9 +94,13 @@ def clarification_text(clarification):
                 if clarification.choices else
                 'Your original request and file are preserved. No additional reviewed resource choice is available for this request. '
                 'Check the selected inputs and declarations; an operator can help review resource availability.')
+    if clarification.reason in {'missing_fastq_declarations', 'missing_bam_declarations'}:
+        return ('Before preprocessing: ' + ' '.join(clarification.choices)
+                + ' Your original request and uploaded files are preserved.')
     if clarification.reason == 'missing_input_roles':
         roles = ', '.join(
-            (choice.partition('.')[2].replace('_', ' ') + ' for '
+            ('dataset to inspect' if choice == 'inspect_scATAC.dataset' else
+             choice.partition('.')[2].replace('_', ' ') + ' for '
              + choice.partition('.')[0].replace('_', ' ')) if '.' in choice
             else choice.replace('_', ' ') for choice in clarification.choices)
         return ('Please identify which selected dataset supplies each scientific role'

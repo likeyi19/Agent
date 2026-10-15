@@ -126,7 +126,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
         values = _bind_arguments(registry, interaction.utterance,
             group_role_inputs(binding, roles, registry), declarations)
         expected = RegisteredInputGroup(binding.members, values, roles=roles,
-            resource_choice=binding.resource_choice).attribution()
+            resource_choice=binding.resource_choice, attachment_candidates=binding.attachment_candidates).attribution()
         if _serialize(admitted.get('registered_input')) != expected:
             raise ValueError('Scientific input role attribution changed.')
         return values
@@ -634,9 +634,21 @@ def _role_binding(origin, source, interaction):
     if selected is None:
         return original
     current = LocalResourceAdmission._submission_binding(interaction.submission)
-    required = origin.admitted['required_roles']
+    if original.attachment_candidates and getattr(current, 'attachment_candidates', False):
+        captured_ids = {m['resource_id']: m for m in original.members}
+        for member in current.members:
+            if member['resource_id'] in captured_ids and member != captured_ids[member['resource_id']]:
+                raise IntentError('invalid_prerequisite')
+        additions = tuple(m for m in current.members if m['resource_id'] not in captured_ids)
+        # Repeated references must retain their captured relative order.
+        repeated = tuple(m for m in current.members if m['resource_id'] in captured_ids)
+        if repeated != tuple(m for m in original.members if m['resource_id'] in {r['resource_id'] for r in repeated}):
+            raise IntentError('invalid_prerequisite')
+        current = replace(current, members=original.members + additions)
+    required = (origin.admitted or {}).get('required_roles', ())
     if (type(current) is not type(original) or current.composition != original.composition
-            or not len(original.members) <= len(current.members) <= len(required)
+            or current.attachment_candidates != original.attachment_candidates
+            or not len(original.members) <= len(current.members) <= (16 if original.attachment_candidates else len(required))
             or current.members[:len(original.members)] != original.members
             or current.resource_choice != original.resource_choice
             or current.roles):
@@ -670,7 +682,7 @@ def _role_completion(registry, origin, source, interaction, roles, declarations)
         validate_group_roles(binding, captured_roles, registry, required, complete=True)
         values = dict(group_role_inputs(binding, [asdict(r) for r in captured_roles], registry), **values)
         metadata = RegisteredInputGroup(binding.members, values, roles=[asdict(r) for r in captured_roles],
-            resource_choice=binding.resource_choice).attribution()
+            resource_choice=binding.resource_choice, attachment_candidates=binding.attachment_candidates).attribution()
     return values, [asdict(r) for r in captured_roles], missing, metadata
 
 
@@ -833,11 +845,15 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
     if pending['field'] == 'resources':
         from .resource_continuation import capture
         return capture(prior, origin, current)
-    if pending['field'] == 'roles':
+    if pending['field'] in {'roles', 'fastq', 'bam'}:
         _, source = _role_source(pending, preceding)
         try:
             from types import SimpleNamespace
-            _role_binding(origin, source, SimpleNamespace(submission=current))
+            if pending['field'] in {'fastq', 'bam'}:
+                from .raw_handoff import source_binding
+                source_binding(origin, source, SimpleNamespace(submission=current))
+            else:
+                _role_binding(origin, source, SimpleNamespace(submission=current))
         except (ValueError, TypeError, KeyError, AttributeError):
             return None
         return dict(**pending, predecessor_turn_id=prior.turn_id)
@@ -876,6 +892,13 @@ def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    reference = interaction.snapshot.get('prerequisite') or {}
+    if ('fastq' in admitted or 'bam' in admitted or reference.get('field') in {'fastq', 'bam'}):
+        from .raw_handoff import validate
+        validate(interaction, preceding)
+        if (interaction.prerequisite or {}).get('field') == 'parameters':
+            _validate_parameter_prerequisite(interaction, preceding)
+        return
     resource_continuation = admitted.get('continuation', {}).get('field') == 'resources'
     if (admitted.get('kind') == 'request_resources' or resource_continuation
             or (interaction.prerequisite or {}).get('field') == 'resources'):
@@ -1007,6 +1030,9 @@ def prerequisite_public(interaction, preceding):
     origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
     if reference['field'] == 'resources':
         from .resource_continuation import public
+        return public(interaction, preceding)
+    if reference['field'] in {'fastq', 'bam'}:
+        from .raw_handoff import public
         return public(interaction, preceding)
     if reference['field'] == 'roles':
         _, source = _role_source(reference, preceding)

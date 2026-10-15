@@ -159,7 +159,7 @@ def qualified_companion(service, records, tiny, whitelist, *, input_set_id='qual
     source_records = uploaded_records(service, records)
     root = tiny['root'] / ('uploaded-context-' + input_set_id)
     root.mkdir()
-    intake = raw_scatac.inspect_raw_scATAC([record.source_path for record in source_records], root / 'intake',
+    intake = raw_scatac.inspect_raw_scATAC(service.resources._fastq_sources(source_records), root / 'intake',
         species='human', raw_assay='TENX_ATAC', fastq_layout=source_records[0].fastq_member['fastq_layout'])
     _, manifest, _ = raw_scatac_manifest.load_raw_intake_manifest(intake['manifest_path'])
     context = library.build_scatac_library_processing_context(
@@ -214,7 +214,8 @@ def test_uploaded_fastq_layouts_exact_typed_roles_inspect_without_producer_conte
         step, = web.service._application.run_store.load(view['run_id']).steps
         assert step.result['readiness'] == 'READY' and step.result['n_files'] == 3 + optional_index
         assert step.result['n_groups'] == 1 and step.verification.passed
-        assert _serialize(step.resolved_arguments['raw_input_paths']) == sorted(record.source_path for record in sources)
+        assert _serialize(step.resolved_arguments['raw_input_paths']) == sorted([dict(path=r.source_path,
+            **{k:r.fastq_member[k] for k in ('library_id','role','lane','chunk')}) for r in sources],key=lambda r:r['path'])
         assert step.resolved_arguments['fastq_layout'] == layout.value
         assert step.resolved_arguments['raw_assay'] == 'TENX_ATAC'
         _, manifest, _ = raw_scatac_manifest.load_raw_intake_manifest(step.result['manifest_path'])

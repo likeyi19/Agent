@@ -52,7 +52,8 @@ def test_member_attribution_and_catalog_completion_never_execute_science(uploads
     assert uploads.choices() == (completed.public(),)
     binding = uploads.resolve(completed.resource_id)
     assert isinstance(binding, RegisteredInputCollection)
-    assert _serialize(binding.execution_inputs) == dict(raw_input_paths=sorted(r.source_path for r in records),
+    assert _serialize(binding.execution_inputs) == dict(raw_input_paths=sorted([dict(path=r.source_path,
+        **{k: r.fastq_member[k] for k in ('library_id','role','lane','chunk')}) for r in records],key=lambda r:r['path']),
         raw_assay='TENX_ATAC', fastq_layout='tenx-atac-r1-r2-r3.v1')
     assert not tuple(uploads.resources._workspace.runs.iterdir())
     assert not (uploads.resources._workspace.root / 'sessions').exists()

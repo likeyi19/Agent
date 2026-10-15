@@ -31,6 +31,7 @@ class ScientificInputSet:
     bam_default: bool = False
     fastq_companion: bool = False
     fastq_default: bool = False
+    fastq_whitelist: Mapping[str, object] | None = None
 
     def __post_init__(self):
         if type(self.input_set_id) is not str or not _IDENTIFIER.fullmatch(self.input_set_id):
@@ -53,6 +54,15 @@ class ScientificInputSet:
             raise WebConfigurationError("A BAM default must designate a BAM companion.")
         if self.fastq_default and not self.fastq_companion:
             raise WebConfigurationError("A FASTQ default must designate a FASTQ companion.")
+        if self.fastq_whitelist is not None:
+            from agent.tools.data.scatac_library_context import _whitelist
+            if not self.fastq_companion or {'library_context_path', 'library_context_sha256'}.intersection(self.execution_inputs):
+                raise WebConfigurationError('Reusable FASTQ resources cannot carry a source-specific context.')
+            try:
+                _whitelist(_serialize(self.fastq_whitelist))
+                object.__setattr__(self, 'fastq_whitelist', freeze_json_mapping(self.fastq_whitelist, 'fastq_whitelist'))
+            except (ValueError, TypeError) as exc:
+                raise WebConfigurationError('Invalid pinned FASTQ whitelist identity.') from exc
         from .interactive import _inputs
         try:
             if not isinstance(self.execution_inputs, Mapping):
@@ -98,13 +108,18 @@ class ScientificInputSet:
         """Return a fresh mapping suitable for the existing submit contract."""
         return _serialize(self.execution_inputs)
 
+    def definition(self):
+        # Preserve exact legacy choice/catalog digests when this extension is absent.
+        return {name: _serialize(getattr(self, name)) for name in self.__dataclass_fields__
+                if name != 'fastq_whitelist' or self.fastq_whitelist is not None}
+
     def resource_choice(self):
         """Return exact operator choice identity, separate from scientific inputs.
 
         The definition digest captures all declarations and selection policy. It
         records a configured choice and does not qualify that choice scientifically.
         """
-        definition = {name: _serialize(getattr(self, name)) for name in self.__dataclass_fields__}
+        definition = self.definition()
         return dict(input_set_id=self.input_set_id, definition_sha256=digest(definition))
 
 

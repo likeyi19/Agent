@@ -1,7 +1,8 @@
 """Read-only, bounded FASTQ intake (M10.2); no registered Agent tool.
 
 Only an explicit TENX_ATAC declaration authorizes the two reviewed role layouts.
-Names establish syntactic read sets, never biological samples/libraries. Evidence
+Names are a legacy syntactic adapter; explicit members declare task read sets.
+Neither input representation establishes scientific eligibility. Evidence
 values are canonical JSON under ``raw-fastq.v1`` in the existing M10.1 fields.
 
 The narrow parser accepts four LF/CRLF-terminated lines, printable ASCII sequence
@@ -12,7 +13,7 @@ Budgets and implementation version are repository-owned, not planner inputs.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 import gzip
@@ -254,7 +255,74 @@ def _resolve(value: str | Path) -> Path:
         _error("SELECTION_INVALID")
 
 
-def _discover(inputs: Sequence[str | Path] | str | Path) -> tuple[_Selected, ...]:
+def explicit_sources(inputs):
+    """Normalize the closed typed FASTQ input, or return None for legacy paths.
+
+    These are declarations, not eligibility. Byte parsing, synchronization and
+    layout qualification still run below. No paths are resolved or files opened.
+    """
+    if not isinstance(inputs, (list, tuple)) or not any(isinstance(x, Mapping) for x in inputs):
+        return None
+    rows, paths, slots = [], set(), set()
+    if not 0 < len(inputs) <= MAX_CANDIDATE_FILES:
+        _error("DECLARATION_INVALID")
+    for item in inputs:
+        if (not isinstance(item, Mapping) or set(item) != {'path', 'library_id', 'role', 'lane', 'chunk'}
+                or any(type(value) is not str for value in item.values())):
+            _error("DECLARATION_INVALID")
+        row = dict(item)
+        path = Path(row['path'])
+        if (not path.is_absolute() or str(path) != row['path'] or '..' in path.parts
+                or any(ord(c) < 32 or ord(c) == 127 for c in row['path'])
+                or not 1 <= len(row['library_id']) <= 64 or not row['library_id'].strip()
+                or any(c in row['library_id'] for c in '/\\:')
+                or any(ord(c) < 32 or ord(c) == 127 for c in row['library_id'])
+                or any(re.fullmatch(r'[0-9]{3}', row[k]) is None for k in ('lane', 'chunk'))):
+            _error("DECLARATION_INVALID")
+        try:
+            ReadRole(row['role'])
+        except ValueError:
+            _error("DECLARATION_INVALID")
+        slot = tuple(row[k] for k in ('library_id', 'lane', 'chunk', 'role'))
+        if row['path'] in paths or slot in slots:
+            _error("DECLARATION_INVALID")
+        paths.add(row['path']); slots.add(slot); rows.append(row)
+    return sorted(rows, key=lambda row: row['path'])
+
+
+def declared_sources(manifest):
+    """Recover explicit source declarations from their manifest evidence.
+
+    Legacy syntactic manifests retain their original reconstruction adapter.
+    An explicit group cannot silently fall back to filename interpretation.
+    """
+    if not any(g.grouping_basis is m.GroupingBasis.EXPLICIT for g in manifest.groups):
+        return None
+    files = {f.id: f for f in manifest.files}
+    evidence = {e.id: e for e in manifest.evidence}
+    rows = []
+    for group in manifest.groups:
+        if group.grouping_basis is not m.GroupingBasis.EXPLICIT:
+            _error("DECLARATION_INVALID")
+        seen = set()
+        for eid in group.grouping_evidence_ids:
+            e = evidence[eid]
+            value = json.loads(e.value)
+            if (e.source is not m.EvidenceSource.USER_DECLARATION or e.file_id not in group.file_ids
+                    or e.file_id in seen or e.group_id != group.id
+                    or e.claim is not m.EvidenceClaim.GROUPING
+                    or set(value) != {'contract', 'fact', 'library_id', 'role', 'lane', 'chunk'}
+                    or value['contract'] != CONTRACT or value['fact'] != 'member-declaration'):
+                _error("DECLARATION_INVALID")
+            seen.add(e.file_id)
+            rows.append(dict(path=files[e.file_id].path,
+                **{k: value[k] for k in ('library_id', 'role', 'lane', 'chunk')}))
+        if seen != set(group.file_ids):
+            _error("DECLARATION_INVALID")
+    return explicit_sources(rows)
+
+
+def _discover(inputs: Sequence[str | Path] | str | Path, *, explicit=False) -> tuple[_Selected, ...]:
     if isinstance(inputs, (str, Path)):
         inputs = (inputs,)
     if not isinstance(inputs, (tuple, list)) or not 0 < len(inputs) <= MAX_SELECTIONS:
@@ -262,7 +330,7 @@ def _discover(inputs: Sequence[str | Path] | str | Path) -> tuple[_Selected, ...
     candidates: dict[str, tuple[m.SelectionBasis, str | None]] = {}
 
     def add(path: Path, root: Path | None):
-        if _suffix(path.name) is None:
+        if not explicit and _suffix(path.name) is None:
             _error("SUFFIX_UNSUPPORTED")
         key = str(path)
         choice = (m.SelectionBasis.EXPLICIT if root is None else m.SelectionBasis.DIRECTORY_DISCOVERY,
@@ -272,6 +340,8 @@ def _discover(inputs: Sequence[str | Path] | str | Path) -> tuple[_Selected, ...
         if len(candidates) > MAX_CANDIDATE_FILES:
             _error("DISCOVERY_LIMIT")
 
+    if explicit and any(str(_resolve(v)) != v or not Path(v).is_file() for v in inputs):
+        _error("SELECTION_INVALID")
     for path in sorted({_resolve(v) for v in inputs}, key=str):
         if path.is_dir():
             # No recursive traversal or implicit symlink following. Bound the
@@ -502,7 +572,7 @@ def observe_fastq_sources(sources: Sequence[m.FileRecord]) -> ReadSetObservation
         if not isinstance(source, m.FileRecord) or source.input_kind is not m.InputKind.FASTQ:
             _error("SELECTION_INVALID")
         path = _resolve(source.path)
-        if str(path) != source.path or _suffix(path.name) is None:
+        if str(path) != source.path:
             _error("SELECTION_INVALID")
         value = _stat(path)
         if (value.st_size, value.st_mtime_ns) != (source.size_bytes, source.mtime_ns):
@@ -569,7 +639,7 @@ def _missing_roles(names: list[FastqName | None], assay: FastqAssay | None,
                  if observed < (required := set(LAYOUT_ROLES[candidate]) - {ReadRole.I1}))
 
 
-def inspect_fastq_inputs(inputs: Sequence[str | Path] | str | Path, *,
+def inspect_fastq_inputs(inputs: Sequence[str | Path | Mapping[str, str]] | str | Path, *,
                          assay: FastqAssay | None = None, species: str | None = None,
                          declared_layout: FastqLayout | None = None) -> m.RawIntakeManifest:
     """Inspect local files/leaf directories and populate the unchanged M10.1 contract.
@@ -579,8 +649,10 @@ def inspect_fastq_inputs(inputs: Sequence[str | Path] | str | Path, *,
     mapping and unsupported-species readiness. Selection order is immaterial.
     An optional A/B layout declaration applies to every selected group and can
     distinguish incomplete R1/R2 sets. It never substitutes for declaring assay.
-    File symlinks resolve to canonical names; directory-discovered symlinks are
-    rejected. Explicit directory aliases resolve once, without subtree traversal.
+    Legacy file aliases resolve to canonical names; discovered symlinks are
+    rejected. Typed members must already name canonical regular files, and carry
+    explicit grouping evidence. Both representations share the parser and all
+    layout, synchronization, coverage and readiness checks below.
     """
     if assay is not None and type(assay) is not FastqAssay:
         _error("DECLARATION_INVALID")
@@ -590,14 +662,20 @@ def inspect_fastq_inputs(inputs: Sequence[str | Path] | str | Path, *,
     if species is not None and (type(species) is not str or
             re.fullmatch(r"[a-z0-9][a-z0-9_.:+-]{0,127}", species) is None):
         _error("DECLARATION_INVALID")
-    inventory = _discover(inputs)
+    declared = explicit_sources(inputs)
+    by_path = {} if declared is None else {row['path']: row for row in declared}
+    inventory = _discover(inputs if declared is None else list(by_path), explicit=declared is not None)
+    def member_name(path):
+        row = by_path.get(path)
+        return (_name(Path(path).name) if row is None else
+                FastqName(row['library_id'], '1', row['lane'], ReadRole(row['role']), row['chunk']))
     grouped = {}
     for selected in inventory:
         file = selected.file
-        name = _name(Path(file.path).name)
+        name = member_name(file.path)
         # Canonical parent is the leaf scope for both explicit and discovered
         # selection. No same-name merging across independent roots or lanes.
-        key = ((str(Path(file.path).parent), name.sample, name.sample_number, name.lane, name.chunk)
+        key = (('explicit' if declared is not None else str(Path(file.path).parent), name.sample, name.sample_number, name.lane, name.chunk)
                if name else (file.path,))
         grouped.setdefault(key, []).append(selected)
     evidence, coverage, issues, groups = [], [], [], []
@@ -620,22 +698,29 @@ def inspect_fastq_inputs(inputs: Sequence[str | Path] | str | Path, *,
                 if effect in (m.ReadinessEffect.ADVISORY, m.ReadinessEffect.INFORMATION_REQUIRED)
                 else m.Severity.ERROR, gid, effect, tuple(refs), tuple(files)))
 
-        names = [_name(Path(s.file.path).name) for s in sources]
+        names = [member_name(s.file.path) for s in sources]
         grouping_refs = []
         for s, c, name in zip(sources, covers, names, strict=True):
-            if name:
+            if declared is not None:
+                grouping_refs.append(claim(m.EvidenceClaim.GROUPING,
+                    json.dumps(dict(contract=CONTRACT, fact='member-declaration',
+                        **{k: by_path[s.file.path][k] for k in ('library_id', 'lane', 'chunk', 'role')}),
+                        sort_keys=True, separators=(',', ':')),
+                    source=m.EvidenceSource.USER_DECLARATION, file_id=s.file.id))
+            elif name:
                 grouping_refs.append(claim(m.EvidenceClaim.GROUPING, _fact(Fact.NAME,
                     sample_number=name.sample_number, lane=name.lane, chunk=name.chunk, role=name.role.value),
                     source=m.EvidenceSource.FILENAME, file_id=s.file.id))
             ref = claim(m.EvidenceClaim.STRUCTURE, _fact(Fact.PARSE, compression=s.compression.value,
-                suffix_matches=s.suffix_matches, finding=s.finding.value, stop=s.stop.value),
+                finding=s.finding.value, stop=s.stop.value,
+                **(dict(suffix_matches=s.suffix_matches) if declared is None else {})),
                 file_id=s.file.id, cov=c)
             claim(m.EvidenceClaim.STRUCTURE, _fact(Fact.LENGTH, minimum=s.min_length,
                 maximum=s.max_length, constant=s.min_length is not None and s.min_length == s.max_length),
                 file_id=s.file.id, cov=c)
             claim(m.EvidenceClaim.STRUCTURE, _fact(Fact.LIMITS,
                 line_bytes=MAX_LINE_BYTES, encoded_bytes=MAX_ENCODED_BYTES), file_id=s.file.id, cov=c)
-            if not s.suffix_matches:
+            if declared is None and not s.suffix_matches:
                 finding("COMPRESSION_SUFFIX_MISMATCH", m.ReadinessEffect.ADVISORY, (ref,), (s.file.id,))
             if s.finding is ParseFinding.LIMIT:
                 finding("INSPECTION_LIMIT", m.ReadinessEffect.INFORMATION_REQUIRED, (ref,), (s.file.id,))
@@ -698,8 +783,9 @@ def inspect_fastq_inputs(inputs: Sequence[str | Path] | str | Path, *,
             barcode = m.BarcodeProvenance(m.BarcodeSource.FASTQ_READ, locator, refs)
         name = names[0]  # Same reviewed grouping key, or an unresolved singleton.
         groups.append(m.GroupRecord(m.InputKind.FASTQ, file_ids, m.IntakeRoute.FASTQ_TO_CCRE,
-            grouping_basis=m.GroupingBasis.SYNTACTIC if name else m.GroupingBasis.UNRESOLVED,
-            grouping_evidence_ids=tuple(grouping_refs), syntactic_sample_token=name.sample if name else None,
+            grouping_basis=(m.GroupingBasis.EXPLICIT if declared is not None else
+                m.GroupingBasis.SYNTACTIC if name else m.GroupingBasis.UNRESOLVED),
+            grouping_evidence_ids=tuple(grouping_refs), syntactic_sample_token=name.sample if name and declared is None else None,
             lane=name.lane if name else None, chunk=name.chunk if name else None,
             structure=structure, structure_evidence_ids=structure_refs, species=metadata,
             source_genome_assembly=m.MetadataResolution(applicable=False), barcode=barcode))

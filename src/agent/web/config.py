@@ -149,7 +149,7 @@ def load_web_configuration(path):
             if (type(item) is not dict or set(item) - {"input_set_id", "label", "execution_inputs", "h5ad_companion",
                                                      "fragments_companion", "fragments_default",
                                                      "bam_companion", "bam_default",
-                                                     "fastq_companion", "fastq_default"}
+                                                     "fastq_companion", "fastq_default", "fastq_whitelist"}
                     or {"input_set_id", "label", "execution_inputs"} - set(item)):
                 raise WebConfigurationError("Operator input-set fields are invalid.")
             input_sets.append(ScientificInputSet(**item))

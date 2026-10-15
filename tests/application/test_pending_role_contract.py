@@ -78,7 +78,7 @@ def test_role_request_retains_exact_strings_and_is_not_an_executable_plan():
 
 
 @pytest.mark.parametrize('changes', [
-    dict(required_roles=[]), dict(required_roles=requirements()[:1]),
+    dict(required_roles=[]),
     dict(required_roles=requirements()*5), dict(required_roles=[requirements()[0]]*2),
     dict(required_roles=[requirements()[0] | dict(source='source.0'), requirements()[1]]),
     dict(target='cluster_cells'), dict(context='previous'), dict(roles=roles()),

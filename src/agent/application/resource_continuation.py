@@ -43,7 +43,7 @@ def catalog(input_sets):
             or any(not isinstance(s, ScientificInputSet) for s in input_sets)
             or len({s.input_set_id for s in input_sets}) != len(input_sets)):
         raise IntentError('invalid_prerequisite')
-    return [{key: _serialize(getattr(s, key)) for key in s.__dataclass_fields__}
+    return [s.definition()
             for s in input_sets if not s.h5ad_companion
             or 'target_model_manifest_path' in s.execution_inputs]
 

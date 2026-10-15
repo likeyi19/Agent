@@ -35,7 +35,11 @@ def test_multi_source_retry_freezes_captured_selection_and_singles_keep_the_old_
     assert 'Object.freeze(body)' in submitted
     assert 'expected_generation: state.session.generation' in submitted
     assert 'predecessor_turn_id = predecessorTurnId' in submitted
-    assert not any(term in submitted for term in ('source_sha256', 'record_sha256', 'roles', 'tool_name'))
+    assert not any(term in submitted for term in ('source_sha256', 'record_sha256', 'body.roles', 'tool_name'))
+    # Reading an existing clarification reason does not assign scientific roles.
+    assert 'clarification.reason' in submitted
+    assert '"missing_input_roles"' in submitted
+    assert '"missing_fastq_declarations"' in submitted
 
 
 def test_reopen_checks_display_selection_against_the_catalog_without_execution():

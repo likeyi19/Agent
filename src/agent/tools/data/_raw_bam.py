@@ -284,7 +284,33 @@ def _resolve(value):
         _error("SELECTION_INVALID")
 
 
+def explicit_sources(inputs):
+    """Closed BAM declarations; paths identify original canonical regular files."""
+    from collections.abc import Mapping
+    if not isinstance(inputs, (list, tuple)) or not any(isinstance(v, Mapping) and 'input_kind' in v for v in inputs):
+        return None
+    if not 0 < len(inputs) <= MAX_SELECTIONS:
+        _error('SELECTION_INVALID')
+    paths = []
+    for row in inputs:
+        if (not isinstance(row, Mapping) or set(row) != {'path', 'input_kind'}
+                or row['input_kind'] != 'BAM' or type(row['path']) is not str):
+            _error('SELECTION_INVALID')
+        path = Path(row['path'])
+        if not path.is_absolute() or '..' in path.parts or str(path) != row['path']:
+            _error('SELECTION_INVALID')
+        if str(_resolve(path)) != row['path'] or not path.is_file():
+            _error('SELECTION_INVALID')
+        paths.append(row['path'])
+    if len(set(paths)) != len(paths):
+        _error('SELECTION_INVALID')
+    return [dict(path=p, input_kind='BAM') for p in sorted(paths)]
+
+
 def _discover(inputs):
+    declared = explicit_sources(inputs)
+    if declared is not None:
+        inputs = [r['path'] for r in declared]
     if isinstance(inputs, (str, Path)):
         inputs = (inputs,)
     if not isinstance(inputs, (tuple, list)) or not 0 < len(inputs) <= MAX_SELECTIONS:
@@ -309,7 +335,7 @@ def _discover(inputs):
             for name in sorted(names):
                 candidates.setdefault(str(path / name), str(path))
         else:
-            if not path.name.endswith(".bam"):
+            if declared is None and not path.name.endswith(".bam"):
                 _error("SUFFIX_UNSUPPORTED")
             candidates[str(path)] = None
         if len(candidates) > MAX_CANDIDATE_FILES:
@@ -672,7 +698,7 @@ def observe_bam_source(source: m.FileRecord) -> BamObservation:
     if not isinstance(source, m.FileRecord) or source.input_kind is not m.InputKind.BAM:
         _error('SELECTION_INVALID')
     path = _resolve(source.path)
-    if str(path) != source.path or not path.name.endswith('.bam'):
+    if str(path) != source.path:
         _error('SELECTION_INVALID')
     value = _stat(path)
     if (source.size_bytes, source.mtime_ns) != (value.st_size, value.st_mtime_ns):

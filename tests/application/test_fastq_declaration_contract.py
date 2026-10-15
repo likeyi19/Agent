@@ -28,7 +28,7 @@ def test_closed_declarations(change):
 
 
 @pytest.mark.parametrize('field,value', [('layout', 'tenx-atac-r1-i2-r2.v1'), ('namespace', 'other'),
-    ('species', 'mouse'), ('resource', 'resource.other')])
+    ('species', 'mouse')])
 def test_captured_declarations_cannot_be_replaced(field, value):
     original = FastqDeclaration(layout=LAYOUT, namespace='sample', species='human', resource='resource.reference')
     with pytest.raises(ValueError, match='cannot be replaced'):

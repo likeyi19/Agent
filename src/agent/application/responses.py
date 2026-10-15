@@ -94,7 +94,7 @@ def clarification_text(clarification):
                 if clarification.choices else
                 'Your original request and file are preserved. No additional reviewed resource choice is available for this request. '
                 'Check the selected inputs and declarations; an operator can help review resource availability.')
-    if clarification.reason in {'missing_fastq_declarations', 'missing_bam_declarations'}:
+    if clarification.reason in {'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations'}:
         return ('Before preprocessing: ' + ' '.join(clarification.choices)
                 + ' Your original request and uploaded files are preserved.')
     if clarification.reason == 'missing_input_roles':

@@ -2,7 +2,7 @@
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from .raw_handoff import FastqDeclaration, BamDeclaration
+    from .raw_handoff import FastqDeclaration, BamDeclaration, FragmentsDeclaration
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import json
@@ -141,15 +141,25 @@ class RequestRoles:
     context: str = 'none'
     fastq: 'FastqDeclaration | None' = None
     bam: 'BamDeclaration | None' = None
+    fragments: 'FragmentsDeclaration | None' = None
 
     def __post_init__(self):
+        if self.fragments is not None:
+            from .raw_handoff import FragmentsDeclaration, validate_arguments
+            if (type(self.fragments) is not FragmentsDeclaration or self.fastq is not None or self.bam is not None
+                    or self.target != 'import_scATAC_fragments' or self.required_roles or self.roles
+                    or self.context != 'none' or self.argument is not None):
+                raise ValueError('Invalid fragments task declaration.')
+            _validate_arguments(self.arguments)
+            validate_arguments(self.arguments, 'fragments')
+            return
         if self.bam is not None:
             from .raw_handoff import BamDeclaration, validate_arguments
             if type(self.bam) is not BamDeclaration or self.fastq is not None or self.roles:
                 raise ValueError('Invalid BAM task declaration.')
             validate_arguments(self.arguments, 'bam')
         if self.fastq is not None:
-            from .raw_handoff import FastqDeclaration, BamDeclaration
+            from .raw_handoff import FastqDeclaration
             if (type(self.fastq) is not FastqDeclaration or self.target != 'prepare_scATAC_fragments'
                     or self.required_roles or self.roles or self.context != 'none' or self.argument is not None):
                 raise ValueError('Invalid FASTQ task declaration.')
@@ -183,18 +193,24 @@ class RoleAnswer:
     arguments: tuple[ScopedArgument, ...] = ()
     fastq: 'FastqDeclaration | None' = None
     bam: 'BamDeclaration | None' = None
+    fragments: 'FragmentsDeclaration | None' = None
 
     def __post_init__(self):
         if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
-                or not (self.roles or self.arguments or self.fastq is not None or self.bam is not None)):
+                or not (self.roles or self.arguments or self.fastq is not None or self.bam is not None or self.fragments is not None)):
             raise ValueError('Invalid pending scientific role answer.')
+        if self.fragments is not None:
+            from .raw_handoff import FragmentsDeclaration, validate_arguments
+            if type(self.fragments) is not FragmentsDeclaration or self.fastq is not None or self.bam is not None or self.roles:
+                raise ValueError('Invalid fragments task answer.')
+            validate_arguments(self.arguments, 'fragments')
         if self.bam is not None:
             from .raw_handoff import BamDeclaration, validate_arguments
             if type(self.bam) is not BamDeclaration or self.fastq is not None or self.roles:
                 raise ValueError('Invalid BAM task declaration.')
             validate_arguments(self.arguments, 'bam')
         if self.fastq is not None:
-            from .raw_handoff import FastqDeclaration, BamDeclaration
+            from .raw_handoff import FastqDeclaration
             if type(self.fastq) is not FastqDeclaration or self.roles:
                 raise ValueError('Invalid FASTQ member answer.')
             from .raw_handoff import validate_arguments
@@ -528,22 +544,24 @@ def parse_decision(raw, *, utterance=None):
             return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
         if kind == 'request_roles':
             _shape(value, ('kind', 'target', 'required_roles', 'roles') + tuple(
-                key for key in ('argument', 'arguments', 'context', 'fastq', 'bam') if key in value))
+                key for key in ('argument', 'arguments', 'context', 'fastq', 'bam', 'fragments') if key in value))
             from .raw_handoff import declaration
-            return RequestRoles(value['target'], (() if (value.get('fastq') is not None or value.get('bam') is not None) and value['required_roles'] == []
+            return RequestRoles(value['target'], (() if (value.get('fastq') is not None or value.get('bam') is not None or value.get('fragments') is not None) and value['required_roles'] == []
                                                     else _role_requirements(value['required_roles'])),
                                 _input_roles(value['roles']), _leiden_argument(value.get('argument')),
                                 _scientific_arguments(value.get('arguments', [])), value.get('context', 'none'),
                                 declaration(value['fastq']) if 'fastq' in value else None,
-                                declaration(value['bam'], 'bam') if 'bam' in value else None)
+                                declaration(value['bam'], 'bam') if 'bam' in value else None,
+                                declaration(value['fragments'], 'fragments') if 'fragments' in value else None)
         if kind == 'answer_roles':
             _shape(value, ('kind', 'pending', 'roles') + tuple(
-                key for key in ('arguments', 'fastq', 'bam') if key in value))
+                key for key in ('arguments', 'fastq', 'bam', 'fragments') if key in value))
             from .raw_handoff import declaration
             return RoleAnswer(value['pending'], _input_roles(value['roles']),
                               _scientific_arguments(value.get('arguments', [])),
                               declaration(value['fastq']) if 'fastq' in value else None,
-                                declaration(value['bam'], 'bam') if 'bam' in value else None)
+                                declaration(value['bam'], 'bam') if 'bam' in value else None,
+                                declaration(value['fragments'], 'fragments') if 'fragments' in value else None)
         if kind == 'answer_guidance':
             _shape(value, ('kind', 'targets', 'candidate'))
             if type(value['targets']) is not list: raise IntentError('invalid_decision')
@@ -673,8 +691,8 @@ def decision_schema(public):
                         port=enum((item['port'],)))) for item in input_roles]}})))
         if selected_sources and public['dialogue'].get('attachment_candidates'):
             from .raw_handoff import schema as raw_schema, target
-            from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS
-            for field, tools in (('fastq', _FASTQ_COMPANION_TOOLS), ('bam', _BAM_COMPANION_TOOLS)):
+            from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
+            for field, tools in (('fastq', _FASTQ_COMPANION_TOOLS), ('bam', _BAM_COMPANION_TOOLS), ('fragments', _FRAGMENTS_COMPANION_TOOLS)):
                 if field + '_resources' not in public['dialogue']:
                     continue
                 raw = raw_schema(selected_sources, public['dialogue'][field + '_resources'], field)
@@ -748,6 +766,7 @@ def interpret(model, utterance, public):
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
             'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
+            'For independent external fragments use request_roles with fragments and empty required_roles/roles. Bind source, optional index_source and optional feature_source only to explicitly selected attachments. Interpret namespace, human/mouse species and hg38/mm10 source assembly. source_profile 10x-atac-fragments.v1 requires explicit declared adjusted zero-based half-open ATAC/ARC intervals, corrected barcode identifiers and read-pair support; never infer source history from columns or filenames. An index is optional. If no offered reference is available, explicit genome_source (plain FASTA) and optional genome_index_source (FAI) plus a declared BED can qualify a private feature reference through the existing owner. Missing genome_source stays null and is requested without losing the task. This supplies genome and regions only, never TSS/QC qualification. Custom peaks or regions require feature_category peak_set or regulatory_regions; if the BED is missing leave feature_source null and preserve the request. The BED must be declared in the source assembly with zero-based half-open intervals; if uncertain leave feature_category null. Never call custom peaks curated cCREs. Agent qualifies the exact BED through its existing owner. resource is an explicit preference only; otherwise leave null. Missing fields stay null. For pending fragments use answer_roles with fragments and only explicit additions, preserving the original task. Do not request FASTQ/BAM or prior Agent output for independent fragments.',
             'For BAM preprocessing use request_roles with bam and empty required_roles/roles. Associate only the explicitly selected source. Interpret assay, single-library namespace, species and source assembly. barcode_policy corrected_cb_already_corrected requires explicit history that CB identifiers were corrected; CB presence alone is not proof. source_profile agent-cb-paired-atac.v1 declares unshifted paired ATAC alignments with duplicate pairs retained. Do not infer this history from filenames, tags, coordinates or header names. Missing declarations stay null. For both BAM and FASTQ, resource is only an explicit user preference among offered handles; otherwise leave it null. Agent checks pinned owner contracts, compatible unique resources and configured defaults. Configuration alone is not qualification. A pending resource problem may be answered with an explicit alternative resource; preserve every other captured declaration. Do not request FASTQs, sorting or an index for BAM. For pending bam use answer_roles with bam, empty roles, @roles and only explicit additions; preserve the original task and declarations.',
             *(['dialogue.selected_sources is the exact ordered selection for this turn; source handles identify only those captured registrations. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate the explicitly selected inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve every explicitly selected source and the declared scientific role. When dialogue.attachment_candidates is true, these are captured candidate attachments: bind only the files explicitly relevant to the requested task; unused files remain staged. Their stored input_type is a representation hint, never proof of scientific eligibility. For FASTQ preprocessing use the bounded request_roles fastq variant with empty required_roles and roles. Interpret explicit assay, layout, single-library namespace/grouping, species, raw barcode whitelist policy and member source/read-role/lane/chunk associations. Missing declarations remain null or absent members. Compression is inspected from bytes. FASTQ species belongs only in fastq.species; arguments may contain only the offered FASTQ scientific consumers, never an EpiZoo species argument. Offered fastq_resources handles select reusable configured references and whitelists, never source-bound contexts. Leave resource null unless the user explicitly selects one; Agent resolves qualified compatible choices. Never invent other values or thresholds. Do not invent FASTQ read membership, barcode history, or unsupported consumers. A single missing role may require clarification. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one distinct source each. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
               if public.get('dialogue', {}).get('selected_sources') else []),
@@ -809,7 +828,7 @@ def interpret(model, utterance, public):
             'For a pending fastq declaration use answer_roles with fastq, empty roles and the exact @roles handle. Preserve the original library and members; supply only explicit additions. Missing values stay null.',
             'Choose answer_roles only when this utterance answers that specific pending question. Use its exact pending handle and offered tool/port/source associations. A partial answer may provide only some missing roles or an exact offered scientific argument; omit unresolved roles instead of assigning by order or guessing. Previously admitted roles cannot be reassigned. Positional references apply only to the captured ordered selection and an explicit role association in this reply.',
             'Contradictory or ambiguous associations require clarify/ambiguous_subject. Unrelated tasks, explanations, uncertainty and cancellation use their ordinary decisions, never answer_roles. An answer continues only the original task; do not add operations or claim resource authority from conversational assertions.',
-        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') in {'roles', 'fastq', 'bam'} else [])},
+        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') in {'roles', 'fastq', 'bam', 'fragments'} else [])},
         sort_keys=True, separators=(',', ':'),
         ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
     return parse_decision(model.complete(prompt=prompt, response_schema=decision_schema(public)), utterance=utterance)

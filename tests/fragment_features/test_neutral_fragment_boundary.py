@@ -35,12 +35,15 @@ def test_source_index_mutation_invalidates_reuse(factory, source):
         with pytest.raises(ValueError): matrix.recover_matrix(args,None)
 
 
-def test_legacy_registered_boundary_stays_legacy(factory):
+def test_public_import_admits_owner_qualified_neutral_reference(factory):
     _, _, args = factory()
-    args['output_dir'] += '-legacy'
-    from agent.tools.data.scatac_fragment_import import import_scATAC_fragments
-    with pytest.raises(ValueError): import_scATAC_fragments(**args)
-    assert not Path(args['output_dir']).exists()
+    args['output_dir'] += '-public'
+    from agent.tools.data.scatac_fragment_import import import_scATAC_fragments, recover_external_fragments
+    from agent.orchestration.external_fragments_registry import validate_external_result
+    result = import_scATAC_fragments(**args)
+    validate_external_result(result)
+    assert result['species'] == {'scientific_name': 'Danio rerio', 'taxonomy_id': 7955}
+    assert recover_external_fragments(args, None) == result
 
 
 @pytest.mark.parametrize('kind', ['fastq_fragment_production','bam_fragment_production'])

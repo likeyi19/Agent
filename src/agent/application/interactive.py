@@ -638,10 +638,11 @@ class InteractiveAgentApplication:
                                 else interaction.submission.get('attachments', ()))
         metadata = {} if interaction is None else (interaction.admitted or {}).get('registered_input', {})
         raw = {} if interaction is None else (interaction.admitted or {})
-        if 'fastq_sources' in raw or 'bam_sources' in raw:
-            field = 'bam' if 'bam_sources' in raw else 'fastq'
+        if any(f + '_sources' in raw for f in ('fastq', 'bam', 'fragments')):
+            field = 'fragments' if 'fragments_sources' in raw else 'bam' if 'bam_sources' in raw else 'fastq'
             metadata = raw[field + '_sources']
-            offered = {raw['bam']['source']} if field == 'bam' else {m['source'] for m in raw['fastq']['members']}
+            from .raw_handoff import declaration, source_handles
+            offered = set(source_handles(declaration(_serialize(raw[field]), field)))
             captured_attachments = [dict(resource_id=m['resource_id'], label=m['label'],
                 input_type=m['input_type'], use='offered_for_analysis' if f'source.{i}' in offered else 'staged')
                 for i, m in enumerate(metadata['members'])]

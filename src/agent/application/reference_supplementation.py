@@ -26,6 +26,80 @@ def _fail(message):
     raise ReferenceSupplementError(message)
 
 
+def prepare_fai(resources, fasta, directory):
+    """Existing htslib preparation, shared by H5AD and explicit BED handoff."""
+    path = fasta.source_path
+    index = Path(fasta.source_index['path']) if fasta.source_index else directory / 'genome.fai'
+    if fasta.source_index:
+        _, actual, index_size = resources._source(index)
+        if (actual, index_size) != (fasta.source_index['sha256'], fasta.source_index['size_bytes']):
+            _fail('Uploaded FAI bytes changed.')
+    else:
+        import pysam
+        # htslib writes an explicit separate index; it never edits the upload.
+        if not index.exists():
+            descriptor, temporary_name = tempfile.mkstemp(dir=directory, prefix='.genome-', suffix='.fai.part')
+            os.close(descriptor)
+            temporary = Path(temporary_name)
+            try:
+                try:
+                    pysam.faidx('-o', str(temporary), path)
+                except pysam.utils.SamtoolsError as exc:
+                    raise ReferenceSupplementError('FASTA indexing failed. Supply a valid plain FASTA; an existing FAI is optional.') from exc
+                os.replace(temporary, index)
+            finally:
+                temporary.unlink(missing_ok=True)
+    return index
+
+
+def qualify_bed(resources, source, *, parent_path=None, parent_sha256=None, category, directory,
+                fasta=None, species=None, assembly=None):
+    """Qualify uploaded regions with an existing genome or explicit plain FASTA.
+
+    Uploaded intervals are parsed only by the existing reference owner. No
+    sequence, index or BED copy and no deployment registration is needed.
+    """
+    from agent.tools.data import regulatory_feature_reference as owner, scatac_reference
+    from agent.tools.data._fragment_reference import load
+    resources._verify_records([source] + ([] if fasta is None else [fasta]))
+    parent = load(parent_path, parent_sha256) if parent_path is not None else None
+    if parent is None and fasta is None:
+        _fail('A qualified genome or an explicit plain FASTA is required.')
+    if parent is not None:
+        species = parent.species if type(parent.species) is dict else scatac_reference.species_identity(parent.species)
+        assembly = parent.target_assembly
+        fasta_path, fai_path = parent.genome.fasta.path, parent.genome.fai.path
+        provenance = parent.genome.fasta.provenance
+    if fasta is not None:
+        with open(fasta.source_path, 'rb') as stream:
+            if stream.read(2) == b'\x1f\x8b':
+                _fail('Supply a plain FASTA; compressed genome upload preparation is unsupported.')
+        fasta_path, fai_path = fasta.source_path, prepare_fai(resources, fasta, directory)
+        provenance = scatac_reference.SourceProvenance(basis='caller_supplied',
+            source='Explicit task FASTA; species and assembly are declared, not independently established.')
+    reference = owner.build_regulatory_feature_reference(
+        species=species, target_assembly=assembly, fasta_path=fasta_path,
+        fai_path=fai_path, feature_bed_path=source.source_path,
+        feature_category=category, genome_provenance=provenance,
+        feature_provenance=scatac_reference.SourceProvenance(basis='caller_supplied',
+            source='Task-selected BED registration ' + source.resource_id + '; ' + source.record_sha256))
+    if parent is not None and (reference.genome.fasta.sha256 != parent.genome.fasta.sha256
+            or reference.genome.fai.sha256 != parent.genome.fai.sha256
+            or reference.genome.ordered_contig_sha256 != parent.genome.ordered_contig_sha256
+            or reference.genome.contig_count != parent.genome.contig_count):
+        _fail('The selected reference genome changed.')
+    path = directory / 'reference.json'
+    if path.exists():
+        _, previous, sha = owner.load_regulatory_feature_reference(path)
+        if previous != reference:
+            _fail('Previously qualified custom regions changed.')
+        pointer = dict(manifest_path=str(path), manifest_sha256=sha)
+    else:
+        pointer = owner.publish_regulatory_feature_reference(reference, path)
+    resources._verify_records([source] + ([] if fasta is None else [fasta]))
+    return {k: pointer[k] for k in ('manifest_path', 'manifest_sha256')}
+
+
 def requirement(inputs, category):
     from agent.tools.data.regulatory_feature_reference import validate_species, CATEGORIES
     if category not in CATEGORIES or category == 'curated_ccre':
@@ -235,26 +309,7 @@ def qualify(service, uploads, session_id, *, resource_id, expected_generation, o
     lease = uploads._lease('reference-' + key[0] + '.lock')
     try:
         directory = resources._workspace._ensure_directory(root / key)
-        index = Path(fasta.source_index['path']) if fasta.source_index else directory / 'genome.fai'
-        if fasta.source_index:
-            _, actual, index_size = resources._source(index)
-            if (actual, index_size) != (fasta.source_index['sha256'], fasta.source_index['size_bytes']):
-                _fail('Uploaded FAI bytes changed.')
-        else:
-            import pysam
-            # htslib writes an explicit separate index; it never edits the upload.
-            if not index.exists():
-                descriptor, temporary_name = tempfile.mkstemp(dir=directory, prefix='.genome-', suffix='.fai.part')
-                os.close(descriptor)
-                temporary = Path(temporary_name)
-                try:
-                    try:
-                        pysam.faidx('-o', str(temporary), path)
-                    except pysam.utils.SamtoolsError as exc:
-                        raise ReferenceSupplementError('FASTA indexing failed. Supply a valid plain FASTA; an existing FAI is optional.') from exc
-                    os.replace(temporary, index)
-                finally:
-                    temporary.unlink(missing_ok=True)
+        index = prepare_fai(resources, fasta, directory)
         bed = directory / 'features.bed'
         names = _feature_names(source.source_path)
         candidate = directory / 'features.bed.part'

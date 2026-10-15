@@ -74,12 +74,13 @@ def bind(upstream, limits):
                 or args['fragments_manifest_sha256'] != fp['manifest_sha256']): m.fail('MATRIX_LINEAGE_INVALID')
         _, qc_reference, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'],
             expected_sha256=args['qc_reference_manifest_sha256'])
-        if type(qc_reference) is not NeutralQCReference: m.fail('MATRIX_REFERENCE_MISMATCH')
         qualification = resource_qualification(qc_reference)
         qa = selected['arguments']; qp = Path(qa['barcode_qc_manifest_path'])
         qvalue = load_qc(qp, qa['barcode_qc_manifest_sha256']).to_dict()
+        resources = (qc_resources(qc_reference) if type(qc_reference) is NeutralQCReference else
+                     (qc_reference.parent_manifest, qc_reference.annotation.resource, qc_reference.tss, qc_reference.lineage))
         snapshots += take_snapshots([qp, args['qc_reference_manifest_path'],
-            *[r.path for r in qc_resources(qc_reference)],
+            *[r.path for r in resources],
             *[qp.parent / qvalue[k]['path'] for k in ('table', 'histogram')],
             Path(cp['manifest_path']).parent / 'decisions.tsv.gz'])
     from .external_fragments_verifier import verify_external_fragments
@@ -126,10 +127,12 @@ def bind(upstream, limits):
     fragments = open_verified_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
                                         runtime=FragmentVerificationRuntime())
     fr = fragments.manifest['reference']
-    if (type(fr['species']) is not dict or fr['species'] != ref.species
-            or fr['assembly'] != ref.target_assembly):
+    from .scatac_reference import species_identity
+    species = fr['species'] if type(fr['species']) is dict else species_identity(fr['species'])
+    if (species != ref.species or fr['assembly'] != ref.target_assembly):
         m.fail('MATRIX_REFERENCE_MISMATCH')
-    _, source_ref, _ = reference.load_reference(fr['manifest_path'], expected_sha256=fr['manifest_sha256'])
+    from ._fragment_reference import load
+    source_ref = load(fr['manifest_path'], fr['manifest_sha256'])
     # Feature vocabularies may differ; the exact genome/assembly may not.
     def genome(r):
         return (r.genome.fasta.sha256, r.genome.fai.sha256,

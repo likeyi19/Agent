@@ -87,31 +87,73 @@ class BamDeclaration:
             raise ValueError('Invalid BAM resource handle.')
 
 
+@dataclass(frozen=True)
+class FragmentsDeclaration:
+    """External source history and optional user-selected region vocabulary."""
+    source: str | None = None
+    index_source: str | None = None
+    namespace: str | None = None
+    species: str | None = None
+    assembly: str | None = None
+    source_profile: str | None = None
+    resource: str | None = None
+    feature_source: str | None = None
+    feature_category: str | None = None
+    genome_source: str | None = None
+    genome_index_source: str | None = None
+
+    def __post_init__(self):
+        from agent.tools.data.scatac_library_context import _namespace
+        from agent.tools.data.external_fragment_manifest import PROFILE_ID
+        for value in (self.source, self.index_source, self.feature_source, self.genome_source, self.genome_index_source):
+            if value is not None and (type(value) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None):
+                raise ValueError('Invalid external source handle.')
+        handles = source_handles(self)
+        if len(handles) != len(set(handles)):
+            raise ValueError('Fragment, index and feature roles require distinct files.')
+        if self.namespace is not None:
+            _namespace(self.namespace)
+        if (self.species not in (None, 'human', 'mouse') or self.assembly not in (None, 'hg38', 'mm10')
+                or self.source_profile not in (None, PROFILE_ID)
+                or self.feature_category not in (None, 'peak_set', 'regulatory_regions')):
+            raise ValueError('Unsupported external source declaration.')
+        if self.species and self.assembly and {'human': 'hg38', 'mouse': 'mm10'}[self.species] != self.assembly:
+            raise ValueError('Fragment species/assembly declarations conflict.')
+        if self.resource is not None and (type(self.resource) is not str or re.fullmatch(r'resource\.[a-z][a-z0-9_-]{0,63}', self.resource) is None):
+            raise ValueError('Invalid external resource handle.')
+
+
 def target(field):
-    return 'prepare_scATAC_bam_fragments' if field == 'bam' else 'prepare_scATAC_fragments'
+    return {'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
 
 
 def empty(field):
-    return BamDeclaration() if field == 'bam' else FastqDeclaration()
+    return {'fragments': FragmentsDeclaration, 'bam': BamDeclaration, 'fastq': FastqDeclaration}[field]()
 
 
 def source_handles(declared):
+    if isinstance(declared, FragmentsDeclaration):
+        return [h for h in (declared.source, declared.index_source, declared.feature_source, declared.genome_source, declared.genome_index_source) if h is not None]
     return ([declared.source] if declared.source else []) if isinstance(declared, BamDeclaration) else [m.source for m in declared.members]
 
 
 def _field(interaction):
     admitted = interaction.admitted or {}
-    return 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    return 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
 
 
 def validate_arguments(arguments, field='fastq'):
-    from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS
-    allowed = _BAM_COMPANION_TOOLS if field == 'bam' else _FASTQ_COMPANION_TOOLS
+    from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
+    allowed = {'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
     if any(a.tool not in allowed for a in arguments):
         raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
 
 
 def declaration(value, field='fastq'):
+    if field == 'fragments':
+        if type(value) is not dict or set(value) != set(FragmentsDeclaration.__dataclass_fields__):
+            raise ValueError('Invalid fragment declaration shape.')
+        return FragmentsDeclaration(**value)
     if field == 'bam':
         if type(value) is not dict or set(value) != set(BamDeclaration.__dataclass_fields__):
             raise ValueError('Invalid BAM declaration shape.')
@@ -131,8 +173,8 @@ def merge(previous, additions):
             if key != 'resource' and values[key] is not None and values[key] != value:
                 raise ValueError('Captured FASTQ declarations cannot be replaced.')
             values[key] = value
-    if isinstance(previous, BamDeclaration):
-        return BamDeclaration(**values)
+    if isinstance(previous, (BamDeclaration, FragmentsDeclaration)):
+        return type(previous)(**values)
     members = {m.source: m for m in previous.members}
     for member in additions.members:
         if member.source in members and members[member.source] != member:
@@ -146,6 +188,17 @@ def schema(sources, resources, field='fastq'):
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
         return {'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
+    if field == 'fragments':
+        return _object(dict(source=optional([s['source'] for s in sources]),
+            index_source=optional([s['source'] for s in sources]),
+            feature_source=optional([s['source'] for s in sources]),
+            genome_source=optional([s['source'] for s in sources]),
+            genome_index_source=optional([s['source'] for s in sources]),
+            namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
+            species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
+            source_profile=optional(('10x-atac-fragments.v1',)),
+            feature_category=optional(('peak_set', 'regulatory_regions')),
+            resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'}))
     if field == 'bam':
         return _object(dict(source=optional([s['source'] for s in sources]),
             assay=optional(('SCATAC', 'TENX_ATAC')),
@@ -165,6 +218,8 @@ def schema(sources, resources, field='fastq'):
 
 
 def resources(input_sets, field='fastq'):
+    if field == 'fragments':
+        return tuple(s for s in input_sets if s.fragments_companion)
     if field == 'bam':
         return tuple(s for s in input_sets if s.bam_companion and not
                      {'library_context_path', 'library_context_sha256'}.intersection(s.inputs()))
@@ -190,9 +245,14 @@ def resource_evidence(input_sets, field):
         try:
             if not values.get('reference_bundle_sha256'):
                 raise ValueError('A reference content pin is required.')
-            _, bundle, _ = reference.load_scatac_reference_bundle(
-                values.get('reference_bundle_path'), expected_sha256=values['reference_bundle_sha256'])
-            result[choice.input_set_id] = bundle.to_dict()
+            if field == 'fragments':
+                from agent.tools.data._fragment_reference import load
+                bundle = load(values.get('reference_bundle_path'), values['reference_bundle_sha256'])
+                result[choice.input_set_id] = getattr(bundle, 'bundle', bundle).to_dict()
+            else:
+                _, bundle, _ = reference.load_scatac_reference_bundle(
+                    values.get('reference_bundle_path'), expected_sha256=values['reference_bundle_sha256'])
+                result[choice.input_set_id] = bundle.to_dict()
         except (ValueError, OSError, TypeError):
             result[choice.input_set_id] = None
     return result
@@ -209,11 +269,18 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         if raw is None:
             descriptions[choice.input_set_id] = 'its pinned reference is unavailable or invalid'
             continue
-        bundle = reference.validate_scatac_reference_bundle(raw)
+        if isinstance(declared, FragmentsDeclaration) and raw.get('contract_version') == 'regulatory-feature-reference.v1':
+            from agent.tools.data.regulatory_feature_reference import validate_regulatory_feature_reference
+            from agent.tools.data.regulatory_matrix_contract import _MatrixReference
+            bundle = _MatrixReference(validate_regulatory_feature_reference(raw))
+        else:
+            bundle = reference.validate_scatac_reference_bundle(raw)
+        sample_species = (reference.species_identity(declared.species)
+                          if type(bundle.species) is dict and declared.species is not None else declared.species)
         values = choice.inputs()
         if ((values.get('species', bundle.species) != bundle.species)
-                or (declared.species is not None and declared.species != bundle.species)
-                or (isinstance(declared, BamDeclaration) and declared.assembly is not None
+                or (sample_species is not None and sample_species != bundle.species)
+                or (isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is not None
                     and declared.assembly != bundle.target_assembly)):
             descriptions[choice.input_set_id] = 'its species or assembly conflicts with this task'
             continue
@@ -228,15 +295,17 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
             return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}. Supply a corrected resource or explicitly choose an alternative.'], None
         return [], selected
     # An available reference cannot establish the sample's species/alignment history.
-    if declared.species is None or isinstance(declared, BamDeclaration) and declared.assembly is None:
+    if declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None:
         return [], None
     if not candidates:
-        needed = ('A qualified BAM reference compatible with the declared species and assembly'
-                  if isinstance(declared, BamDeclaration) else
+        needed = ('A qualified fragments reference compatible with the declared species and assembly'
+                  if isinstance(declared, FragmentsDeclaration) else 'A qualified BAM reference compatible with the declared species and assembly'
+                  if isinstance(declared, (BamDeclaration, FragmentsDeclaration)) else
                   'A qualified FASTQ reference and barcode whitelist compatible with the declared species')
         return [needed + ' must be provisioned before preprocessing.'
                 + (' Configured references are unavailable, invalid or incompatible.' if choices else '')], None
-    defaults = [s for s in candidates if getattr(s, 'bam_default' if isinstance(declared, BamDeclaration) else 'fastq_default')]
+    field = 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
+    defaults = [s for s in candidates if getattr(s, field + '_default')]
     if len(defaults) == 1:
         return [], defaults[0]
     # Identical mappings/whitelists differ only in display/configuration identity.
@@ -271,10 +340,27 @@ def source_binding(origin, source, interaction, field=None):
 
 
 def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
-    field = 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
+    field = 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
     from types import SimpleNamespace
     from .local_resources import LocalResourceAdmission, ResourceAdmissionError, _fastq_member
-    if field == 'bam':
+    if field == 'fragments':
+        missing = [label for key, label in (
+            ('source', 'Identify the external fragments attachment.'),
+            ('namespace', 'Name the single processing library represented by these fragments.'),
+            ('species', 'Specify human or mouse.'), ('assembly', 'Specify the source assembly: hg38 or mm10.'),
+            ('source_profile', 'Confirm 10x ATAC/ARC fragment semantics: zero-based half-open adjusted intervals, corrected barcode identifiers and read-pair support.'))
+            if getattr(declared, key) is None]
+        if any(int(h.split('.')[1]) >= len(binding.members) for h in source_handles(declared)):
+            raise ValueError('Fragment role is outside captured attachments.')
+        if declared.feature_category is not None and declared.feature_source is None:
+            missing.append('Attach the custom BED to define the exact matrix regions; its intervals must use the declared assembly and zero-based half-open coordinates.')
+        if declared.genome_index_source is not None and declared.genome_source is None:
+            missing.append('Identify the plain FASTA paired with the supplied FAI.')
+        if declared.genome_source is not None and declared.feature_source is None:
+            missing.append('Supply a BED of the declared regions for existing feature-reference qualification.')
+        if declared.feature_source is not None and declared.feature_category is None:
+            missing.append('Declare whether the supplied zero-based half-open BED defines peaks or regulatory regions in the source assembly.')
+    elif field == 'bam':
         missing = [label for key, label in (
             ('source', 'Identify the attached BAM for this task.'),
             ('assay', 'Confirm paired scATAC-seq alignments.'),
@@ -313,6 +399,13 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
     choices = resources(input_sets, field)
     if evidence is not None:
         questions, selected = _resolve_resource(declared, choices, evidence, pinned)
+        if field == 'fragments' and not choices and declared.resource is None and pinned is None:
+            # A private BED/genome reference uses the existing reference owner.
+            # It cannot silently replace a captured or offered resource choice.
+            if declared.feature_category is not None or declared.feature_source is not None or declared.genome_source is not None:
+                questions = []
+                if declared.genome_source is None:
+                    questions.append('Attach the plain genome FASTA for the declared species and assembly to qualify these regions and fragments. An FAI is optional; Agent can prepare it.')
         return missing + questions, selected
     # Bounded reader for accepted USI-2 records, whose default-only policy and
     # exact identities must not be reinterpreted by current resource selection.
@@ -340,7 +433,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
 def _captured(interaction, preceding):
     from .dialogue_execution import _role_source
     reference = interaction.snapshot.get('prerequisite')
-    if reference is not None and reference['field'] in {'fastq', 'bam'}:
+    if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments'}:
         return _role_source(reference, preceding)
     return interaction, None
 
@@ -375,8 +468,8 @@ def admit(sessions, interaction, decision, input_sets):
     from .resource_continuation import catalog
     from .dialogue_execution import _arguments
     from .local_resources import LocalResourceAdmission
-    field = 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
-    if field not in ('fastq', 'bam') or (decision.fastq is not None and field != 'fastq'):
+    field = 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    if field not in ('fastq', 'bam', 'fragments') or (decision.fastq is not None and field != 'fastq'):
         raise IntentError('invalid_prerequisite')
     validate_arguments(_arguments(decision), field)
     state = sessions.load(sessions._interaction_session_id)
@@ -452,6 +545,8 @@ def prepare(owner, session_id, candidates, declared, selected, arguments, *, acc
     still execute and verify under RunStore; this preparation admits a request
     resource against the same exact source bytes and intake content identity.
     """
+    if isinstance(declared, FragmentsDeclaration):
+        return _prepare_fragments(owner, session_id, candidates, declared, selected, arguments)
     from agent.tools.data import raw_scatac, raw_scatac_manifest, scatac_library_context as library
     from agent.orchestration.raw_scatac_verifier import verify_raw_scatac_intake
     field = 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
@@ -538,6 +633,98 @@ def prepare(owner, session_id, candidates, declared, selected, arguments, *, acc
                          context_path=pointer['manifest_path'], context_sha256=pointer['manifest_sha256'])
 
 
+def _fragments_identity(candidates, declared, selected):
+    return digest(dict(sources=candidates.attribution(), declaration=asdict(declared),
+                       resource=None if selected is None else selected.resource_choice()))
+
+
+def _fragments_values(declared, selected, arguments, reference):
+    values = {} if selected is None else selected.inputs()
+    if selected is None:
+        values.update(reference_bundle_path=reference['manifest_path'], reference_bundle_sha256=reference['manifest_sha256'])
+    # Sample declarations belong to the task, not to a reusable reference.
+    declarations = dict(namespace=declared.namespace, source_profile=declared.source_profile)
+    if any(key in arguments and arguments[key] != value for key, value in declarations.items()):
+        raise ValueError('Scientific arguments cannot replace captured fragment declarations.')
+    for key, value in (declarations | arguments).items():
+        if key in values and values[key] != value:
+            raise ValueError('Explicit fragment declarations conflict with configured resources.')
+        values[key] = value
+    if reference is not None:
+        values.update(reference_manifest_path=reference['manifest_path'],
+                      reference_manifest_sha256=reference['manifest_sha256'])
+    return values
+
+
+def _prepare_fragments(owner, session_id, candidates, declared, selected, arguments):
+    """Existing import binding plus optional owner-qualified private BED resource."""
+    from .reference_supplementation import qualify_bed
+    identity = _fragments_identity(candidates, declared, selected)
+    records = {h: owner.load(candidates.members[int(h.split('.')[1])]['resource_id'])
+               for h in source_handles(declared)}
+    reference = None
+    if declared.feature_source is not None:
+        root = owner._workspace._ensure_directory(owner._workspace.root / 'fragments_handoffs')
+        directory = owner._workspace._ensure_directory(root / identity)
+        values = {} if selected is None else selected.inputs()
+        fasta = None
+        if declared.genome_source is not None:
+            fasta = owner.bind_raw_source('fragments-genome:' + identity, records[declared.genome_source],
+                session_id=session_id, input_type='fasta', source_index=records.get(declared.genome_index_source))
+        from agent.tools.data.scatac_reference import ScATACReferenceError, species_identity
+        from .reference_supplementation import ReferenceSupplementError
+        try:
+            reference = qualify_bed(owner, records[declared.feature_source],
+                parent_path=values.get('reference_bundle_path'), parent_sha256=values.get('reference_bundle_sha256'),
+                category=declared.feature_category, directory=directory, fasta=fasta,
+                species=species_identity(declared.species), assembly=declared.assembly)
+        except ScATACReferenceError as exc:
+            raise ReferenceSupplementError('The supplied BED or its reference genome failed owner qualification.') from exc
+    record = owner.bind_raw_source('fragments-handoff:' + identity, records[declared.source],
+        session_id=session_id, input_type='external_fragments', source_index=records.get(declared.index_source))
+    binding = owner.compose_fragments(record.resource_id,
+        _fragments_values(declared, selected, arguments, reference),
+        resource_choice=None if selected is None else selected.resource_choice())
+    owner._verify_records(list(records.values()))
+    return binding, dict(identity=identity, feature_reference=reference)
+
+
+def _validate_fragments_completion(interaction, admitted, candidates, declared, selected, arguments):
+    """Pure historical replay; owner resources are checked at new consumption."""
+    from .local_resources import LocalResourceAdmission
+    from .session_state import sha
+    receipt = admitted['fragments_context']
+    identity = _fragments_identity(candidates, declared, selected)
+    if (set(receipt) != {'identity', 'feature_reference'} or receipt['identity'] != identity
+            or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'
+            or (interaction.prerequisite is not None and interaction.prerequisite['field'] != 'parameters')):
+        raise ValueError('Invalid completed fragments handoff.')
+    pointer = receipt['feature_reference']
+    if (pointer is None) != (declared.feature_source is None):
+        raise ValueError('Custom feature binding changed.')
+    if pointer is not None:
+        if set(pointer) != {'manifest_path', 'manifest_sha256'}:
+            raise ValueError('Invalid custom feature pointer.')
+        sha(pointer['manifest_sha256'])
+        path = Path(pointer['manifest_path'])
+        if (not path.is_absolute() or '..' in path.parts or path.name != 'reference.json'
+                or path.parent.name != identity or path.parent.parent.name != 'fragments_handoffs'):
+            raise ValueError('Custom feature identity changed.')
+    source = candidates.members[int(declared.source.split('.')[1])]
+    wanted = _fragments_values(declared, selected, arguments, pointer) | dict(
+        source_path=source['source_path'], source_sha256=source['source_sha256'])
+    if declared.index_source is not None:
+        index = candidates.members[int(declared.index_source.split('.')[1])]
+        wanted.update(source_index_path=index['source_path'], source_index_sha256=index['source_sha256'])
+    bound = LocalResourceAdmission._submission_binding(dict(execution_inputs=admitted['inputs'],
+        registered_input=admitted['registered_input']))
+    if (bound.composition != 'external-fragments-science.v1'
+            or bound.resource_id != LocalResourceAdmission.registration_id('fragments-handoff:' + identity)
+            or _serialize(bound.resource_choice) != (None if selected is None else selected.resource_choice())
+            or admitted['inputs'] != wanted):
+        raise ValueError('Derived fragments binding changed.')
+
+
 def public(interaction, preceding):
     field = _field(interaction)
     origin, source = _captured(interaction, preceding)
@@ -601,6 +788,8 @@ def validate(interaction, preceding):
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
                     or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')
+        elif field == 'fragments':
+            _validate_fragments_completion(interaction, admitted, binding, declared, selected, values)
         else:
             receipt = admitted[field + '_context']
             if (admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'

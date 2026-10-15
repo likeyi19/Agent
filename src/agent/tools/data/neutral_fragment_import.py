@@ -1,7 +1,8 @@
 """Data-layer external adoption with an explicit M14.1 neutral reference.
 
-The registered M11 tool retains its legacy reference scope. Source science,
-producer profile, v2 serialization and durable publication are shared unchanged.
+The registered import also accepts this reference contract. These bounded
+data-layer entry points retain their exact historical identities and the explicit
+primary-preparation variant. Source science and publication remain shared.
 """
 from functools import partial
 from . import scatac_fragment_import as owner

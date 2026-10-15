@@ -74,7 +74,7 @@ _BAM_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
 _FRAGMENTS_COMPANION_TOOLS = ('import_scATAC_fragments', 'compute_scATAC_qc',
-                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre')
+                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features')
 _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_path',
     'source_index_sha256', 'output_dir', 'fragments_manifest_path', 'fragments_manifest_sha256',
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
@@ -1106,12 +1106,15 @@ class LocalResourceAdmission:
             raise _fail('FASTQ_COLLECTION_INVALID')
         return groups
 
-    def bind_raw_source(self, registration_key, source, *, session_id, input_type, declaration=None):
+    def bind_raw_source(self, registration_key, source, *, session_id, input_type, declaration=None, source_index=None):
         """Task-local format metadata shares the exact immutable uploaded source."""
-        if (input_type not in ('fastq', 'bam') or source.input_type != 'attachment'
+        if (input_type not in ('fastq', 'bam', 'external_fragments', 'fasta') or source.input_type != 'attachment'
                 or source.session_id != session_id or self.load(source.resource_id) != source):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        self._verify_records([source])
+        if source_index is not None and (input_type not in ('external_fragments', 'fasta')
+                or source_index.session_id != session_id or self.load(source_index.resource_id) != source_index):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        self._verify_records([source] + ([] if source_index is None else [source_index]))
         technical = None
         if input_type == 'fastq':
             with Path(source.source_path).open('rb') as stream:
@@ -1120,9 +1123,12 @@ class LocalResourceAdmission:
         elif declaration is not None:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         admission = LocalResourceAdmission(self._workspace,
-            approved_source_roots=(Path(source.source_path).parent,), registry=self._registry)
+            approved_source_roots=tuple({Path(r.source_path).parent for r in [source] + ([] if source_index is None else [source_index])}), registry=self._registry)
         return admission.register(registration_key, source.source_path, input_type=input_type, label=source.label,
-            session_id=session_id, fastq_member=technical, expected_source_sha256=source.source_sha256,
+            session_id=session_id, fastq_member=technical,
+            **({} if source_index is None else dict(source_index_path=source_index.source_path,
+                expected_source_index_sha256=source_index.source_sha256, expected_source_index_size_bytes=source_index.size_bytes)),
+            expected_source_sha256=source.source_sha256,
             expected_size_bytes=source.size_bytes, attribution='Task-scoped roles for '
                 + source.resource_id + '; record SHA-256 ' + source.record_sha256)
 
@@ -1794,6 +1800,14 @@ class LocalResourceAdmission:
         Ports allowing upstream resources retain the compiler's exact dependency
         contract; request-only resource ports must consume their captured members.
         """
+        if type(binding) is RegisteredInput and binding.composition == _FRAGMENTS_COMPOSITION:
+            values = _serialize(binding.execution_inputs)
+            for step in steps:
+                if step.tool_name in ('build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features'):
+                    args = step.resolved_arguments if resolved else step.arguments
+                    for key in ('reference_manifest_path', 'reference_manifest_sha256'):
+                        if key in values and args.get(key) != values[key]:
+                            raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
         if binding.resource_choice is None:
             return
         from agent.orchestration.registry import ArtifactSemanticKind

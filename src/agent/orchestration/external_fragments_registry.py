@@ -33,9 +33,13 @@ def validate_external_result(value):
                 or type(value['artifact_schema_version']) is not int or value['artifact_schema_version'] != 2
                 or value['contract_version'] != v2.CONTRACT_VERSION or value['source_profile'] != m.PROFILE_ID
                 or value['source_encoding'] not in ('plain', 'gzip', 'bgzf')
-                or value['species'] not in ('human', 'mouse')
-                or value['assembly'] != {'human': 'hg38', 'mouse': 'mm10'}[value['species']]
                 or value['strand_mode'] not in ('absent', 'present')):
+            raise ValueError()
+        if type(value['species']) is dict:
+            from agent.tools.data.regulatory_matrix_contract import validate_binding
+            validate_binding(value['species'], value['assembly'])
+        elif (value['species'] not in ('human', 'mouse')
+                or value['assembly'] != {'human': 'hg38', 'mouse': 'mm10'}[value['species']]):
             raise ValueError()
         v2.absolute_path(value['manifest_path']); v2.sha(value['manifest_sha256']); v2.token(value['namespace'])
         v2.number(value['n_libraries'], high=1); v2.number(value['n_fragment_records']); v2.number(value['total_support'])
@@ -53,7 +57,7 @@ def external_fragments_tool_spec():
     required = {}; optional = {}; ports = []
     for port, path, sha, mandatory, description in (
         ('source', 'source_path', 'source_sha256', True, 'External fragment file with its full encoded SHA-256; explicit source semantics required.'),
-        ('reference', 'reference_bundle_path', 'reference_bundle_sha256', True, 'Explicit reference bundle; exact species/assembly and contigs, no aliases or conversion.'),
+        ('reference', 'reference_bundle_path', 'reference_bundle_sha256', True, 'Explicit canonical or regulatory-feature reference; exact species/assembly and contigs, no aliases or conversion.'),
         ('source_index', 'source_index_path', 'source_index_sha256', False, 'Optional explicit source TBI and SHA-256 pair; BGZF sources only. Omission means no source index claim.'),
     ):
         target = required if mandatory else optional
@@ -73,7 +77,7 @@ def external_fragments_tool_spec():
     return ToolSpec(name='import_scATAC_fragments', function=import_scATAC_fragments,
         required_arguments=required, optional_arguments=optional,
         result_contract=ResultContract('ExternalFragmentsResult',
-            {k: (int,) if k in integers else (str,) for k in ExternalFragmentsResult.__annotations__},
+            {k: (int,) if k in integers else (str, dict) if k == 'species' else (str,) for k in ExternalFragmentsResult.__annotations__},
             validator=validate_external_result, planning_fields={k: _planning_result(
                 'Verified producer-neutral fragments preserving source records, exact support and optional strand.',
                 bindable=True, artifact=A.SCATAC_FRAGMENTS) for k in ('manifest_path', 'manifest_sha256')}),

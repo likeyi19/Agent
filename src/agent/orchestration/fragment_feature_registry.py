@@ -38,7 +38,8 @@ def tool_spec():
     for port, prefix in (('fragments','fragments_manifest'), ('explicit_cells','explicit_cells_manifest'),
                          ('selected_cells','selected_cells_manifest'), ('reference','reference_manifest')):
         cell_port = port in ('explicit_cells', 'selected_cells')
-        upstream = ('scatac_cell_selection.v1',) if port == 'selected_cells' else ()
+        upstream = (('scatac_cell_selection.v1',) if port == 'selected_cells' else
+                    ('scatac_fragments.v2',) if port == 'fragments' else ())
         for suffix in ('path','sha256'):
             key = prefix+'_'+suffix
             spec = _planning_argument((str,Path) if suffix=='path' else (str,),
@@ -64,9 +65,9 @@ def tool_spec():
         recovery_policy_version=public.RECOVERY_POLICY, durable_hooks=DurableToolHooks(public.execute,public.recover),
         planning=_tool_planning(PlanningToolRole.OPERATION,
             'Build a target-species cell-by-regulatory-feature matrix from producer-qualified fragments.',
-            'Requires neutral fragments v2 and regulatory-feature-reference.v1. Supply exactly one complete cell pair: selected_cells (scatac_cell_selection.v1) or explicit_cells (scatac-explicit-cells.v1 override). Never both.',
+            'Requires producer-qualified fragments v2 and regulatory-feature-reference.v1 with the exact same species, assembly and genome. Supply exactly one complete cell pair: selected_cells (scatac_cell_selection.v1) or explicit_cells (scatac-explicit-cells.v1 override). Never both.',
             'QC-selected rows retain exact fragment/QC lineage; explicit cells assert no QC. Preserve full axes and zero-overlap rows; absent barcodes fail. No cell calling or model-readiness claim.',
-            capability_ids=('species_adaptation',)),
+            capability_ids=('species_adaptation', 'raw_preprocessing')),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_features.v1',
                 (member('manifest_path'),member('manifest_sha256'))),)))

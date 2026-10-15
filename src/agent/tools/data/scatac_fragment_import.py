@@ -25,7 +25,7 @@ class ExternalFragmentsResult(TypedDict):
     contract_version: str
     source_profile: str
     source_encoding: str
-    species: str
+    species: str | dict
     assembly: str
     namespace: str
     n_libraries: int
@@ -109,7 +109,7 @@ def verify_public_result(arguments, result):
     return verified
 
 
-def recover_external_fragments(arguments, execution_identity, *, _neutral_reference=False):
+def recover_external_fragments(arguments, execution_identity, *, _neutral_reference=None):
     args, destination, token = _publication(arguments, execution_identity)
     if 'primary_preparation' in args and not _neutral_reference:
         m.fail('EXTERNAL_FRAGMENTS_PROFILE_UNSUPPORTED')
@@ -124,7 +124,7 @@ def recover_external_fragments(arguments, execution_identity, *, _neutral_refere
     return result
 
 
-def execute_external_fragments(arguments, execution_identity=None, *, _neutral_reference=False):
+def execute_external_fragments(arguments, execution_identity=None, *, _neutral_reference=None):
     from .external_fragments import prepare_in_stage
     args, destination, token = _publication(arguments, execution_identity)
     if 'primary_preparation' in args and not _neutral_reference:

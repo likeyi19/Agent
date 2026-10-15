@@ -540,3 +540,12 @@ def _publish_reference_manifest(path, *, overwrite, resources, payload, loader):
             except OSError as exc:
                 raise ScATACReferenceError(
                     "REFERENCE_PUBLICATION_FAILED", "Reference staging cleanup failed.") from exc
+
+
+def species_identity(species):
+    """Exact taxonomy identity of the two supported canonical species contracts."""
+    identities = {'human': dict(scientific_name='Homo sapiens', taxonomy_id=9606),
+                  'mouse': dict(scientific_name='Mus musculus', taxonomy_id=10090)}
+    if species not in identities:
+        _fail('Unsupported canonical species identity.')
+    return identities[species]

@@ -100,6 +100,7 @@ def test_refresh_reopens_instead_of_replaying_and_retry_keeps_identity():
     convenience_fields = convenience_fields[:convenience_fields.index('};')]
     assert set(re.findall(r'^\s+(\w+):', convenience_fields, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
+        'viewedRevisionId', 'workspacePanel',
     }
 
 
@@ -133,6 +134,10 @@ def _javascript_predicates(code, turns):
     functions = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
     script = ('(() => {\n' + constants + '\n' + functions + '\nreturn ' + json.dumps(turns) +
               '.map(turn => [awaitingPresentation(turn), terminal(turn)]);})()')
+    return _javascript_value(script)
+
+
+def _javascript_value(script):
     runner = '''
 import ctypes, ctypes.util, sys
 library = ctypes.util.find_library('javascriptcoregtk-4.1') or ctypes.util.find_library('javascriptcoregtk-4.0')
@@ -219,16 +224,21 @@ class HierarchyPage(Page):
                 break
 
 
-def test_conversation_composer_precede_secondary_scientific_details():
+def test_results_and_conversation_are_independent_workspace_panels():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
-    assert ids.index('conversation-history') < ids.index('turn-form') < ids.index('scientific-details')
+    assert ids.index('scientific-details') < ids.index('conversation-history') < ids.index('turn-form')
+    assert 'conversation-panel' in page.ancestors['conversation-history']
+    assert 'conversation-panel' in page.ancestors['turn-form']
+    assert 'conversation-panel' not in page.ancestors['scientific-details']
+    assert 'research-layout' in page.ancestors['scientific-panel']
     details = next(attrs for tag, attrs in page.tags if attrs.get('id') == 'scientific-details')
     assert details['tabindex'] == '-1' and details['aria-labelledby'] == 'scientific-heading'
     css = (STATIC / 'styles.css').read_text()
     layouts = re.findall(r'\.research-layout\s*\{([^}]+)\}', css)
-    assert layouts and all('grid-template-columns' not in rule for rule in layouts)
-    assert any(re.search(r'display:\s*block', rule) for rule in layouts)
+    assert any('grid-template-columns' in rule and '400px' in rule for rule in layouts)
+    assert '@media (max-width: 1100px)' in css
+    assert '[data-panel="conversation"]' in css and '[data-panel="results"]' in css
 
 
 def test_technical_details_are_closed_and_result_summary_and_downloads_are_open():
@@ -237,7 +247,7 @@ def test_technical_details_are_closed_and_result_summary_and_downloads_are_open(
     for identifier in ('session-identities', 'revision-identities', 'revision-history-panel',
                        'result-methods', 'technical-report-record', 'evidence-panel'):
         assert identifier in details and 'open' not in details[identifier]
-    for identifier in ('result-panel', 'artifact-panel'):
+    for identifier in ('artifact-panel',):
         assert 'open' in details[identifier]
     for identifier in ('current-session', 'current-generation', 'current-revision'):
         assert 'session-identities' in page.ancestors[identifier]
@@ -257,7 +267,7 @@ def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
     button = code[code.index('result.className = "secondary view-result"'):code.index('(response || article).append(result)')]
     assert 'result.textContent = "View result details"' in button
     assert 'loadRevision(turn.revision_id)' in button
-    assert 'scrollIntoView' in button and 'details.focus' in button
+    assert 'showWorkspacePanel("results")' in button and 'details.focus' in button
     assert 'submitRequest(' not in button and 'postSubmission(' not in button
     assert 'execution_inputs' not in code and 'innerHTML' not in code
 
@@ -270,7 +280,7 @@ def test_compact_header_and_advanced_session_controls_preserve_existing_ids():
         assert 'advanced-controls' in page.ancestors[identifier]
     for identifier in ('model-choice', 'new-session'):
         assert 'advanced-controls' not in page.ancestors[identifier]
-    assert 'open' not in details['scientific-panel']
+    assert any(tag == 'section' and attrs.get('id') == 'scientific-panel' for tag, attrs in page.tags)
     assert 'scientific-panel' in page.ancestors['scientific-details']
 
 
@@ -300,3 +310,54 @@ def test_history_restores_details_and_focus_by_exact_turn_and_action_identity():
     history = code[code.index('function renderHistory'):code.index('function updateControls')]
     assert 'status.textContent = statusLabel(turn.status)' in history
     assert 'checkpointText(turn)' in history
+
+
+@pytest.mark.parametrize('previous_active,viewed,active,offered,expected', [
+    (None, None, 'one', ['one'], 'one'),
+    ('one', 'one', 'two', ['one', 'two'], 'two'),
+    ('two', 'one', 'three', ['one', 'two', 'three'], 'one'),
+    ('two', 'two', 'two', ['one', 'two'], 'two'),
+    ('two', 'one', 'two', ['one', 'two'], 'one'),
+    ('two', 'removed', 'two', ['two'], 'two'),
+    (None, None, None, [], None),
+    (None, None, None, ['unactivated'], None),
+    ('two', 'two', 'not-offered', ['two'], 'two'),
+])
+def test_result_display_follows_server_active_identity_without_discarding_preview(previous_active, viewed, active, offered, expected):
+    code = (STATIC / 'app.js').read_text()
+    function = code[code.index('function revisionToDisplay'):code.index('function displaySession')]
+    previous = dict(session_id='s', active_revision_id=previous_active)
+    view = dict(session_id='s', active_revision_id=active,
+                revisions=[dict(revision_id=name) for name in offered])
+    script = ('(() => {' + function + 'return revisionToDisplay(' + json.dumps(previous) + ','
+              + json.dumps(view) + ',' + json.dumps(viewed) + ');})()')
+    assert _javascript_value(script) == expected
+
+
+def test_result_display_does_not_carry_preview_into_another_session():
+    code = (STATIC / 'app.js').read_text()
+    function = code[code.index('function revisionToDisplay'):code.index('function displaySession')]
+    assert _javascript_value('(() => {' + function + "return revisionToDisplay({session_id:'old',active_revision_id:'two'}, {session_id:'new',active_revision_id:'two',revisions:[{revision_id:'one'},{revision_id:'two'}]}, 'one');})()") == 'two'
+
+
+def test_answer_and_failed_turn_refresh_do_not_replace_same_revision_content():
+    code = (STATIC / 'app.js').read_text()
+    functions = code[code.index('function revisionToDisplay'):code.index('async function refreshCurrentSession')]
+    # Run the production refresh path with the same accepted revision and changed
+    # conversation status. No tool or provider interface exists in this renderer.
+    script = """(() => {
+      const nodes = new Map(); const element = id => {if(!nodes.has(id)) nodes.set(id, {});return nodes.get(id)};
+      const state = {session:{session_id:'s',active_revision_id:'one',generation:1},
+        attachmentSession:'s',viewedRevisionId:'one',revision:{revision_id:'one'}};
+      const loads=[];
+      const loadRevision=id=>loads.push(id), clearRevisionView=()=>loads.push(null);
+      const renderHistory=()=>{},renderRevisionHistory=()=>{},renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{};
+      const shortIdentity=x=>x,resultLabel=x=>x;
+    """ + functions + """
+      for(const status of ['answered','clarification','running','failed','cancelled']) {
+        displaySession({session_id:'s',active_revision_id:'one',generation:1,
+          turns:[{turn_id:'t',status}],revisions:[{revision_id:'one'}]});
+      }
+      return loads;
+    })()"""
+    assert _javascript_value(script) == []

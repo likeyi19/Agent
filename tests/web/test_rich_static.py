@@ -102,13 +102,14 @@ def test_rich_view_is_reconstructed_without_persisting_scientific_state_locally(
     convenience = source[source.index('function saveConveniences'):source.index('async function api')]
     assert set(re.findall(r'^\s+(\w+):', convenience, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
+        'viewedRevisionId', 'workspacePanel',
     }
     initialize = source[source.index('async function initialize'):]
     assert 'choice.input_set_id === conveniences.inputSetId' in initialize
     assert initialize.index('state.inputSets = inputs.choices') < initialize.index('resources = loadResources()')
     display = source[source.index('function displaySession'):source.index('async function refreshCurrentSession')]
     assert 'renderRevisionHistory()' in display
-    assert 'loadRevision(state.viewedRevisionId)' in display
+    assert 'if (refreshRevision) loadRevision(nextRevisionId)' in display
     assert 'state.session = view' in display
 
 

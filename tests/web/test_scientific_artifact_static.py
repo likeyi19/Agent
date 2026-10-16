@@ -81,5 +81,5 @@ def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
     assert 'await loadRevision(revisionId)' in viewer
     assert viewer.index('const epoch = state.epoch') < viewer.index('await loadRevision(revisionId)')
     assert viewer.index('await loadRevision(revisionId)') < viewer.index('if (epoch !== state.epoch) return')
-    assert 'element("scientific-panel").open = true' in viewer
+    assert 'showWorkspacePanel("results")' in viewer
     assert '/activate' not in messages + renderer + viewer

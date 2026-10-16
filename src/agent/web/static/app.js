@@ -60,6 +60,8 @@ function saveConveniences() {
     draft: element("utterance").value,
     inputSetId: element("input-choice").value,
     epizooResourceId: element("epizoo-resource-choice").value,
+    viewedRevisionId: state.session && state.viewedRevisionId !== state.session.active_revision_id ? state.viewedRevisionId : null,
+    workspacePanel: element("research-layout").dataset.panel,
   };
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
 }
@@ -249,12 +251,36 @@ function resultLabel(revisionId) {
   return index < 0 ? "Result outside available history" : `${state.session.history_truncated ? "Recent result" : "Result"} ${index + 1}`;
 }
 
+function showWorkspacePanel(panel, focus = false) {
+  element("research-layout").dataset.panel = panel;
+  element("show-conversation").setAttribute("aria-pressed", String(panel === "conversation"));
+  element("show-results").setAttribute("aria-pressed", String(panel === "results"));
+  if (focus) {
+    const target = element(panel === "results" ? "scientific-details" : "utterance");
+    target.focus({ preventScroll: true });
+  }
+  saveConveniences();
+}
+
+function renderResultNavigation() {
+  const hasResults = Boolean(state.session?.revisions.length);
+  element("research-layout").classList.toggle("has-results", hasResults);
+  element("result-navigation").hidden = !hasResults;
+  element("revision-history-panel").hidden = !hasResults;
+  element("show-results").disabled = !hasResults;
+  const active = state.session?.active_revision_id;
+  const preview = active && state.viewedRevisionId && active !== state.viewedRevisionId;
+  element("result-update").hidden = !preview;
+  element("result-update-text").textContent = preview
+    ? `Preview: ${resultLabel(state.viewedRevisionId)} · Conversation: ${resultLabel(active)}.` : "";
+  element("show-results").textContent = preview ? "Results · preview" : "Results";
+  if (!hasResults) showWorkspacePanel("conversation");
+}
+
 function showResult(revisionId) {
-  element("scientific-panel").open = true;
-  element("result-panel").open = true;
+  showWorkspacePanel("results");
   element("artifact-panel").open = true;
   loadRevision(revisionId);
-  element("scientific-details").scrollIntoView({ block: "start" });
   element("scientific-details").focus({ preventScroll: true });
 }
 
@@ -312,10 +338,11 @@ function clearRevisionView() {
   state.revision = null;
   state.evidence = null;
   state.viewedRevisionId = null;
+  element("result-method").textContent = "Scientific results";
   clearArtifactView();
   element("revision-view").hidden = true;
   element("scientific-empty").hidden = false;
-  element("scientific-empty").textContent = "Accepted revisions will appear here after an analysis.";
+  element("scientific-empty").textContent = "Your accepted results will appear here. Start with a question or attach data in the conversation.";
   updateControls();
 }
 
@@ -324,11 +351,15 @@ async function loadRevision(revisionId) {
   const sessionId = state.session.session_id;
   const epoch = state.epoch;
   const revisionEpoch = ++state.revisionEpoch;
+  const previousOutput = state.revision?.revision_id === revisionId ? element("evidence-output").value : null;
+  if (state.viewedRevisionId !== revisionId) element("scientific-panel").scrollTop = 0;
   state.evidenceEpoch += 1;
   state.revision = null;
   state.evidence = null;
   state.viewedRevisionId = revisionId;
   element("result-choice").value = revisionId;
+  renderResultNavigation();
+  saveConveniences();
   clearArtifactView();
   element("revision-view").hidden = true;
   element("scientific-empty").hidden = false;
@@ -339,6 +370,7 @@ async function loadRevision(revisionId) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     state.revision = revision;
     renderRevision(revision);
+    if (previousOutput && revision.evidence_outputs.includes(previousOutput)) element("evidence-output").value = previousOutput;
     if (revision.evidence_outputs.length) loadEvidence();
     // Presentation order only: no figure is assigned a scientific meaning.
     const figures = revision.artifacts.filter((artifact) => artifact.artifact_type === "analysis_figure");
@@ -350,9 +382,7 @@ async function loadRevision(revisionId) {
   updateControls();
 }
 
-function renderRevision(revision) {
-  element("scientific-empty").hidden = true;
-  element("revision-view").hidden = false;
+function renderRevisionContext(revision) {
   element("result-heading").textContent = `${resultLabel(revision.revision_id)} · ${revision.is_active ? "Current" : "Earlier result"} · ${statusLabel(revision.status)}`;
   element("result-heading").title = revision.revision_id;
   const originatingTurn = state.session.turns.find((turn) => turn.turn_id === revision.turn_id);
@@ -373,6 +403,12 @@ function renderRevision(revision) {
     ["Base generation", revision.base_generation], ["Session generation", revision.session_generation],
   ]));
   element("activate-revision").hidden = revision.is_active;
+}
+
+function renderRevision(revision) {
+  element("scientific-empty").hidden = true;
+  element("revision-view").hidden = false;
+  renderRevisionContext(revision);
   element("result-presentation").textContent = revision.result ? revision.result.text : "Stored result presentation is unavailable.";
   element("result-operations").replaceChildren(...(revision.steps || []).map((step) => {
     const item = document.createElement("li");
@@ -395,7 +431,7 @@ function renderRevision(revision) {
   }));
   element("evidence-output").disabled = !revision.evidence_outputs.length;
   element("load-evidence").disabled = !revision.evidence_outputs.length;
-  element("result-method").textContent = "";
+  element("result-method").textContent = "Scientific results";
   element("result-facts").textContent = "No accepted summary is available.";
   element("result-limitations").replaceChildren();
   element("result-limitations-panel").hidden = true;
@@ -605,7 +641,7 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
   const epoch = state.epoch;
   if (!state.session || state.session.session_id !== sessionId) return;
   if (reveal) {
-    element("scientific-panel").open = true;
+    showWorkspacePanel("results");
     element("artifact-panel").open = true;
   }
   if (!state.revision || state.revision.revision_id !== revisionId) await loadRevision(revisionId);
@@ -805,7 +841,7 @@ async function loadEvidence(detail = false) {
   const target = element(detail ? "detail-content" : "evidence-content");
   if (!detail) {
     state.evidence = null;
-    element("result-method").textContent = "";
+    element("result-method").textContent = "Scientific results";
     element("result-facts").textContent = "Reading accepted summary…";
     element("result-limitations").replaceChildren();
     element("result-limitations-panel").hidden = true;
@@ -821,7 +857,7 @@ async function loadEvidence(detail = false) {
       state.evidence = view;
       // Display accepted quantities for the explicitly displayed output only.
       // This is a bounded view, never a new statistic or a compatibility claim.
-      element("result-method").textContent = view.source ? readableLabel(view.source.tool_name) : "";
+      element("result-method").textContent = view.source ? readableLabel(view.source.tool_name) : "Scientific results";
       // A short view of recorded quantities; full fields, including seeds, remain in evidence.
       const quantities = view.facts.filter((fact) => fact.status === "available"
         && typeof fact.value === "number" && !fact.field.endsWith("seed")).slice(0, 4);
@@ -876,6 +912,7 @@ async function activateViewedRevision(continueFromHere = false) {
     }
   }
   if (continueFromHere && epoch === state.epoch && state.session.active_revision_id === revisionId) {
+    showWorkspacePanel("conversation");
     if (!element("utterance").value.trim()) element("utterance").value = "Continue from this result.";
     element("utterance").focus();
     element("utterance").scrollIntoView({ block: "center", behavior: "smooth" });
@@ -1117,13 +1154,11 @@ function renderHistory() {
       result.title = turn.response && turn.response.kind === "execute"
         ? `View created result revision ${turn.revision_id}` : `View revision ${turn.revision_id}`;
       result.addEventListener("click", () => {
-        element("scientific-panel").open = true;
-        element("result-panel").open = true;
+        showWorkspacePanel("results");
         element("evidence-panel").open = false;
         element("artifact-panel").open = true;
         loadRevision(turn.revision_id);
         const details = element("scientific-details");
-        details.scrollIntoView({ block: "start" });
         details.focus({ preventScroll: true });
       });
       (response || article).append(result);
@@ -1219,8 +1254,24 @@ function stopPolling() {
   state.pollEpoch += 1;
 }
 
-function displaySession(view) {
-  const changedActive = !state.session || state.session.session_id !== view.session_id || state.session.active_revision_id !== view.active_revision_id;
+// Display choice only: revisions and their active identity always come from Agent.
+function revisionToDisplay(previous, view, viewedRevisionId) {
+  const offered = (id) => view.revisions.some((revision) => revision.revision_id === id);
+  const sameSession = previous && previous.session_id === view.session_id;
+  const historicalPreview = sameSession && viewedRevisionId
+    && viewedRevisionId !== previous.active_revision_id && offered(viewedRevisionId);
+  if (historicalPreview) return viewedRevisionId;
+  if (view.active_revision_id && offered(view.active_revision_id)) return view.active_revision_id;
+  // No active revision is not permission to select an arbitrary historical output.
+  return sameSession && offered(viewedRevisionId) ? viewedRevisionId : null;
+}
+
+function displaySession(view, preferredRevisionId = null) {
+  const previous = state.session;
+  const nextRevisionId = preferredRevisionId && view.revisions.some((revision) => revision.revision_id === preferredRevisionId)
+    ? preferredRevisionId : revisionToDisplay(previous, view, state.viewedRevisionId);
+  const refreshRevision = !state.revision || state.revision.revision_id !== nextRevisionId
+    || !previous || previous.session_id !== view.session_id;
   state.session = view;
   if (state.attachmentSession !== view.session_id) restoreAttachments(view.session_id);
   state.durableTurnIds = new Set(view.turns.map((turn) => turn.turn_id));
@@ -1233,10 +1284,16 @@ function displaySession(view) {
   element("history-notice").hidden = !view.history_truncated;
   renderHistory();
   renderRevisionHistory();
-  if (changedActive || !view.revisions.some((revision) => revision.revision_id === state.viewedRevisionId)) {
-    state.viewedRevisionId = view.active_revision_id || (view.revisions.length ? view.revisions[view.revisions.length - 1].revision_id : null);
-  }
-  if (state.viewedRevisionId) loadRevision(state.viewedRevisionId); else clearRevisionView();
+  if (nextRevisionId) {
+    if (refreshRevision) loadRevision(nextRevisionId);
+    else {
+      // Immutable result content stays in place while only Session context changes.
+      state.revision = { ...state.revision, is_active: nextRevisionId === view.active_revision_id,
+        session_generation: view.generation };
+      renderRevisionContext(state.revision);
+    }
+  } else clearRevisionView();
+  renderResultNavigation();
   updateControls();
 }
 
@@ -1304,8 +1361,9 @@ function watchTurn(sessionId, turnId) {
   tick();
 }
 
-async function openSession(sessionId, resumeTurnId = "") {
+async function openSession(sessionId, resumeTurnId = "", preferredRevisionId = null) {
   state.attachmentSession = null;
+  state.revision = null;
   const epoch = ++state.epoch;
   state.scientificFiles.clear();
   stopPolling();
@@ -1319,7 +1377,7 @@ async function openSession(sessionId, resumeTurnId = "") {
   try {
     const view = await api(sessionPath(sessionId));
     if (epoch !== state.epoch) return;
-    displaySession(view);
+    displaySession(view, preferredRevisionId);
     const current = [...view.turns].reverse().find((turn) => (turn.utterance || turn.response) && !terminal(turn));
     const requested = resumeTurnId && view.turns.find((turn) => turn.turn_id === resumeTurnId);
     const requestedConversation = requested && (requested.utterance || requested.response);
@@ -1956,6 +2014,11 @@ element("epizoo-resource-choice").addEventListener("change", () => {
   inputContext();
   saveConveniences();
 });
+element("show-conversation").addEventListener("click", () => showWorkspacePanel("conversation", true));
+element("show-results").addEventListener("click", () => showWorkspacePanel("results", true));
+element("view-current-result").addEventListener("click", () => {
+  if (state.session?.active_revision_id) showResult(state.session.active_revision_id);
+});
 element("show-current-result").addEventListener("click", () => {
   if (state.session?.active_revision_id) showResult(state.session.active_revision_id);
 });
@@ -2017,7 +2080,9 @@ async function initialize() {
     element("connection-state").textContent = "Connected";
     modelDescription();
     if (typeof conveniences.sessionId === "string" && conveniences.sessionId) {
-      await openSession(conveniences.sessionId, typeof conveniences.polledTurnId === "string" ? conveniences.polledTurnId : "");
+      await openSession(conveniences.sessionId, typeof conveniences.polledTurnId === "string" ? conveniences.polledTurnId : "",
+        typeof conveniences.viewedRevisionId === "string" ? conveniences.viewedRevisionId : null);
+      if (conveniences.workspacePanel === "results" && state.viewedRevisionId) showWorkspacePanel("results");
     } else {
       await createSession();
       if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);

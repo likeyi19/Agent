@@ -53,7 +53,103 @@
 
     <p id="client-error" class="error-banner" role="alert" hidden></p>
 
-    <div class="research-layout">
+    <nav class="workspace-switch" aria-label="Workspace view">
+      <button id="show-conversation" type="button" class="secondary" aria-controls="conversation-panel" aria-pressed="true">Conversation</button>
+      <button id="show-results" type="button" class="secondary" aria-controls="scientific-panel" aria-pressed="false" disabled>Results</button>
+    </nav>
+    <div id="research-layout" class="research-layout" data-panel="conversation">
+    <section id="scientific-panel" class="results-workspace panel" aria-label="Scientific results">
+    <aside id="scientific-details" class="scientific-state" aria-labelledby="scientific-heading" tabindex="-1">
+      <div class="results-heading">
+        <h2 id="scientific-heading"><span id="result-method">Scientific results</span></h2>
+        <div id="result-navigation" hidden>
+          <label for="result-choice" class="visually-hidden">Browse a result</label>
+          <select id="result-choice" disabled><option>No results yet</option></select>
+        </div>
+      </div>
+      <div id="result-update" class="result-update" role="status" hidden>
+        <span id="result-update-text"></span>
+        <button id="view-current-result" class="secondary" type="button">View current result</button>
+      </div>
+      <p id="scientific-empty" class="muted small">Your accepted results will appear here. Start with a question or attach data in the conversation.</p>
+      <div id="revision-view" hidden>
+        <p id="result-heading" class="result-heading"></p>
+        <section id="result-panel" aria-labelledby="result-panel-heading">
+          <h3 id="result-panel-heading" class="visually-hidden">Scientific summary</h3>
+          <div class="summary-choice">
+            <label for="evidence-output">Summary</label>
+            <select id="evidence-output"></select>
+          </div>
+          <div id="result-facts" aria-live="polite"></div>
+        </section>
+        <div id="artifact-viewer" hidden>
+          <h3 id="artifact-title"></h3>
+          <p id="report-description" class="muted small" hidden>Execution and verification details from the accepted evidence. This privacy-safe text is not a biological interpretation; the scientific summary and limitations are shown separately.</p>
+          <details id="technical-report-record" hidden>
+            <summary>Full execution &amp; verification record</summary>
+            <pre id="report-content" class="report-content" hidden></pre>
+          </details>
+          <p id="figure-description" class="muted small" hidden>Figure from this result. Changing the summary selection does not change the figure.</p>
+          <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
+          <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
+        </div>
+        <details id="artifact-panel" open>
+          <summary>Downloads &amp; reports</summary>
+          <ul id="artifact-inventory" class="compact-list"></ul>
+          <p class="muted small">Privacy-safe exports may differ from source size. Accepted source files remain unchanged.</p>
+        </details>
+        <section id="result-limitations-panel" aria-labelledby="limitations-heading" hidden>
+          <h3 id="limitations-heading">Interpretation &amp; limitations</h3>
+          <div id="result-limitations"></div>
+        </section>
+        <details id="result-methods">
+          <summary>Methods &amp; execution details</summary>
+          <p id="result-origin" class="muted small"></p>
+          <p id="result-presentation" class="message-text small"></p>
+          <h3>Analysis steps</h3>
+          <ul id="result-operations" class="compact-list"></ul>
+          <h3>Accepted outputs</h3>
+          <p id="result-output-summary" class="muted small"></p>
+          <ul id="revision-outputs" class="compact-list"></ul>
+        </details>
+        <details id="evidence-panel">
+          <summary>Evidence &amp; provenance</summary>
+          <button id="load-evidence" class="secondary" type="button">Show evidence</button>
+          <div id="evidence-content"></div>
+          <form id="detail-form" hidden>
+            <h3>Supported detailed evidence</h3>
+            <label for="detail-section">Detail section</label>
+            <select id="detail-section"></select>
+            <label for="detail-subject">Subject, when required</label>
+            <input id="detail-subject" maxlength="128" autocomplete="off" placeholder="Exact subject ID">
+            <label for="detail-limit">Maximum records</label>
+            <input id="detail-limit" type="number" min="1" max="32" value="8" required>
+            <button id="load-detail" class="secondary" type="submit">Show supported detail</button>
+          </form>
+          <div id="detail-content"></div>
+        </details>
+        <div class="result-continuation">
+          <h3>Work with this result</h3>
+          <p id="result-context-help" class="muted small"></p>
+          <div class="revision-actions">
+            <button id="activate-revision" class="secondary" type="button">Make current</button>
+            <button id="continue-revision" type="button">Continue from this result</button>
+          </div>
+          <p class="muted small">Make current changes the context for your next question. Continue also opens a draft for your next request; nothing runs until you send it. Ask in chat to compare results.</p>
+        </div>
+        <details id="revision-identities" class="identity-details">
+          <summary>Revision details</summary>
+          <p class="small">Viewing <strong id="viewed-revision"></strong></p>
+          <dl id="revision-summary" class="revision-summary"></dl>
+        </details>
+      </div>
+      <details id="revision-history-panel">
+        <summary>Result history &amp; branches</summary>
+        <ol id="revision-history" class="revision-history"></ol>
+      </details>
+    </aside>
+    </section>
+    <section id="conversation-panel" class="conversation-workspace" aria-label="Conversation and message composer">
     <section class="conversation panel" aria-labelledby="conversation-heading">
       <div class="section-heading">
         <h2 id="conversation-heading">Conversation</h2>
@@ -167,90 +263,8 @@
       </form>
     </section>
 
-    <details id="scientific-panel" class="scientific-disclosure panel">
-    <summary>Results, downloads &amp; history</summary>
-    <aside id="scientific-details" class="scientific-state" aria-labelledby="scientific-heading" tabindex="-1">
-      <h2 id="scientific-heading">Analysis results</h2>
-      <label for="result-choice">Browse a result</label>
-      <select id="result-choice" disabled><option>No results yet</option></select>
-      <p class="muted small">Browsing does not change the result used by your conversation.</p>
-      <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
-      <div id="revision-view" hidden>
-        <p id="result-heading" class="result-heading"></p>
-        <details id="result-panel" open>
-          <summary id="result-panel-heading">Scientific summary</summary>
-          <label for="evidence-output">Show summary for</label>
-          <select id="evidence-output"></select>
-          <h3 id="result-method"></h3>
-          <div id="result-facts" aria-live="polite"></div>
-        </details>
-        <div id="artifact-viewer" hidden>
-          <h3 id="artifact-title"></h3>
-          <p id="report-description" class="muted small" hidden>Execution and verification details from the accepted evidence. This privacy-safe text is not a biological interpretation; the scientific summary and limitations are shown separately.</p>
-          <details id="technical-report-record" hidden>
-            <summary>Full execution &amp; verification record</summary>
-            <pre id="report-content" class="report-content" hidden></pre>
-          </details>
-          <p id="figure-description" class="muted small" hidden>Figure from this result. Changing the summary selection does not change the figure.</p>
-          <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
-          <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
-        </div>
-        <details id="artifact-panel" open>
-          <summary>Downloads &amp; reports</summary>
-          <ul id="artifact-inventory" class="compact-list"></ul>
-          <p class="muted small">Privacy-safe exports may differ from source size. Accepted source files remain unchanged.</p>
-        </details>
-        <section id="result-limitations-panel" aria-labelledby="limitations-heading" hidden>
-          <h3 id="limitations-heading">Interpretation &amp; limitations</h3>
-          <div id="result-limitations"></div>
-        </section>
-        <details id="result-methods">
-          <summary>Methods &amp; execution details</summary>
-          <p id="result-origin" class="muted small"></p>
-          <p id="result-presentation" class="message-text small"></p>
-          <h3>Analysis steps</h3>
-          <ul id="result-operations" class="compact-list"></ul>
-          <h3>Accepted outputs</h3>
-          <p id="result-output-summary" class="muted small"></p>
-          <ul id="revision-outputs" class="compact-list"></ul>
-        </details>
-        <details id="evidence-panel">
-          <summary>Evidence &amp; provenance</summary>
-          <button id="load-evidence" class="secondary" type="button">Show evidence</button>
-          <div id="evidence-content"></div>
-          <form id="detail-form" hidden>
-            <h3>Supported detailed evidence</h3>
-            <label for="detail-section">Detail section</label>
-            <select id="detail-section"></select>
-            <label for="detail-subject">Subject, when required</label>
-            <input id="detail-subject" maxlength="128" autocomplete="off" placeholder="Exact subject ID">
-            <label for="detail-limit">Maximum records</label>
-            <input id="detail-limit" type="number" min="1" max="32" value="8" required>
-            <button id="load-detail" class="secondary" type="submit">Show supported detail</button>
-          </form>
-          <div id="detail-content"></div>
-        </details>
-        <div class="result-continuation">
-          <h3>Work with this result</h3>
-          <p id="result-context-help" class="muted small"></p>
-          <div class="revision-actions">
-            <button id="activate-revision" class="secondary" type="button">Make current</button>
-            <button id="continue-revision" type="button">Continue from this result</button>
-          </div>
-          <p class="muted small">Make current changes the context for your next question. Continue also opens a draft for your next request; nothing runs until you send it. Ask in chat to compare results.</p>
-        </div>
-        <details id="revision-identities" class="identity-details">
-          <summary>Revision details</summary>
-          <p class="small">Viewing <strong id="viewed-revision"></strong></p>
-          <dl id="revision-summary" class="revision-summary"></dl>
-        </details>
-      </div>
-      <details id="revision-history-panel">
-        <summary>Result history &amp; branches</summary>
-        <ol id="revision-history" class="revision-history"></ol>
-      </details>
-    </aside>
-    </details>
+    </section>
+
     </div>
   </main>
 </body>

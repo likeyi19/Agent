@@ -672,11 +672,15 @@ for the operator JSON format, launch options and recovery limits.
 See [Post-M18.1 typed turn admission](docs/post-m18.1-typed-turn-admission.md)
 for the current boundary between interpreted intent and deterministic admission.
 
-The browser presents one conversation column with user/Agent bubbles, the
-composer immediately below the transcript, and expandable scientific details
-below the composer. Full Session, turn and Revision identities remain available
-in details. Result actions open the existing scientific view; evidence, reports,
-figures and revision history are secondary to the conversation.
+The browser places scientific results on the left and an independently scrolling
+conversation with its composer on the right. Narrow windows switch between
+Conversation and Results. New accepted results follow the server's current
+Revision automatically; a selected historical preview stays in place with an
+explicit return-to-current action. Previewing never activates a result. Full
+Session, turn and Revision identities remain available in details. Summaries,
+original figures and downloads share the existing accepted scientific view.
+See the [USI-7 layout closeout](docs/usi-7-web-ux-reports-download-closeout.md)
+for the final layout, restoration behavior and browser acceptance.
 
 The interpreter receives safe supplied-input availability and accepted-result
 groups, including current, most recently created and previous-turn result scopes.

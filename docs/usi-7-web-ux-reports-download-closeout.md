@@ -659,3 +659,206 @@ Final `git status --short`:
 ?? docs/usi-7-web-ux-reports-download-closeout.md
 ?? evals/
 ```
+
+## Final Two-Panel Results & Conversation Layout
+
+### A. Baseline and bounded scope
+
+The requested left-results/right-conversation presentation supersedes the earlier
+single-column preference. Long scientific results previously separated the
+composer from the result being discussed. This refinement keeps both available
+within the same desktop viewport.
+
+The actual starting HEAD was `1e3cded096a9db821fbf2eb289033da11ade3d77`
+(`Complete USI-7 web UX scientific reports and downloads`). Earlier USI-7 work
+was already committed; the initial tracked tree and index were clean, with only
+pre-existing `?? evals/`. The preceding sections retain their historical Git
+status and acceptance records. No earlier work was reverted.
+
+New isolated evidence root **L**:
+`/home/likeyi/agent-usi7-layout-s9ekz13p`.
+`L/git-baseline.json` records the starting state; `L/before/` preserves its three
+static files. R and P, defined above, remain protected historical evidence.
+This change touches only HTML/CSS/JavaScript, presentation tests and documentation.
+No backend contract change was necessary.
+
+### B. Layout and interaction
+
+At desktop widths the workspace uses approximately 60% for results and 40% for
+conversation, with a 400 px minimum conversation column and an 1800 px maximum
+overall width. The compact shared header retains the conversational model
+selector, New conversation and expandable Session settings. Scientific checkpoint
+selection retains its separate existing input control.
+
+The results pane and message history scroll independently. The composer remains
+at the bottom of the conversation pane; long attachments or expanded input
+settings can scroll within its bounded area. Chronological messages, full accepted
+answers and caveats remain intact. Existing disclosure, focus and message-scroll
+restoration continues to follow new messages only when the reader was near the
+bottom. The chat retains concise result messages and its existing optional links.
+
+Below 1100 px, the combined ~600 px results / 400 px chat content requirement no
+longer fits comfortably with padding and gutters. Conversation and Results buttons
+then select one pane. The inactive pane retains its geometry while being hidden
+from interaction, preserving both scroll positions even when history updates.
+Buttons expose their selected state; switching focuses the results region or
+composer without scrolling the whole document. No routing framework is added.
+
+Before the first accepted result, a compact centered conversation is prominent.
+Desktop adds a small explanatory results empty state; narrow screens omit that
+card and disable the Results switch. Upload, message entry, model choice and Send
+are visible without a large empty scientific workspace.
+
+The left hierarchy is a grounded method title and compact result selector,
+accepted status/version, selected-output summary quantities, the original accepted
+figure when available, and download/report rows. Figureless results omit the
+viewer. Existing limitations remain readily visible; methods, full evidence,
+resource provenance and execution/lineage details remain expandable. Technical
+reports retain their explicit label and safe delivered projection. File names,
+formats, source-size wording, export-size distinction and native streaming links
+are unchanged. No scientific figure is redrawn or reinterpreted.
+
+### C. Accepted-result selection
+
+The existing Session envelope owns the accepted inventory and active Revision.
+When the displayed result was the previously active result, an updated envelope
+selects the new server-active result automatically. This covers the first result
+and subsequent successful publications without requiring a View result click.
+No arbitrary last historical result is substituted when there is no active result.
+
+A deliberately selected historical Revision remains displayed when new results
+arrive. A compact banner identifies the preview and the active conversation result,
+with **View current result** as an explicit return action. Browsing and this return
+action do not activate a Revision. Make current and Continue retain their existing
+generation-checked activation behavior; Continue then focuses a draft in the chat.
+Science still requires Send.
+
+When the exact displayed Revision is unchanged, Session refresh updates only its
+navigation/context labels. It does not reload the immutable result content. Thus
+an open report, selected evidence output, figure, downloads and results scroll
+position survive answer-only turns, clarification, failure and a new publication
+elsewhere in history. When selection changes, the existing request-epoch guards
+clear stale content and bind the viewer, summary and downloads to that exact
+Revision before rendering it.
+
+Local convenience storage adds only the selected panel and a deliberate historical
+preview ID. The preview must be offered by the restored Session before use. The
+previous active result is not persisted as a forced preview, allowing a fresh load
+to follow the server's current active result. Scientific facts, artifacts and
+activation authority are not cached in convenience storage.
+
+### D. Actual Firefox acceptance
+
+Native Firefox/Marionette uses the existing outside-Git helper and isolated
+servers. Rendered CSS widths are 1600, 1366, 768 and approximately 392 px. The
+narrow view uses desktop Firefox zoom/window simulation, not a physical mobile
+device. All measured document widths equal their scroll widths.
+
+| Scope / evidence | Observed result |
+| --- | --- |
+| `L/browser-interactions.log` | Multiple attachments, removal, real upload rejection, aborted-XHR retry, local oversized-file rejection, IME/Enter protection, keyboard submission, duplicate-submit suppression, clarification supplementation, model choice, historical activation/continuation and stale-generation rejection pass. A detached large-checkpoint descriptor remains a native link with no frontend fetch/buffering; this is not a real 5 GiB transfer. |
+| `L/browser-follow-verified.log` | A simulated two-cell inspection publishes the first result automatically, then follows a second. While previewing the first result, an answer and third publication preserve the exact report text, disclosure, scroll and links. Refresh retains the deliberate preview; View current result returns to the active third result. An actual corrupt-H5AD tool failure and subsequent clarification leave that accepted result intact. |
+| `L/browser-accepted-layout.log` | GET-only preserved USI-6 results show 32 cells / 3 clusters / resolution 0.5 and 32 cells / 4 clusters / resolution 1.0 from their respective evidence. Browsing leaves active Result 4 unchanged. Actual PNG/report previews, exact report text, four H5AD response names/digests and visible unavailable-artifact errors pass. Provider/science forbidden-call counters remain empty. |
+| `L/browser-panels-final.log` | Desktop results scrolling leaves composer geometry unchanged. Older chat scroll survives history rendering. At 768/392 px, switching retains both scroll positions and exact historical identity, including history updates while chat is hidden. Focus and Send bounds pass; refresh restores the Results pane and preview. All four actual native download links save matching exports. |
+| `L/browser-pending-prepare.log`, `browser-pending-restart.log` | A notes-only request clarifies while retaining the old accepted result. After a fresh server starts, history, active/preview identities, model selection, draft and uploaded supplement restore with zero model/science calls. Sending the supplement resumes the original task with one model call and one `inspect_scATAC` call, creates one accepted Revision and retains the deliberate old preview. |
+| `L/browser-models.log` | Actual operator-admitted Groq/OpenRouter profile metadata and selection restore without provider submission. Native Tab traversal has visible 3 px focus; visible controls have accessible labels. |
+
+The successful auto-follow Session is `2ae8fd9c-31ca-4e63-a85b-0eeb4dafb05e`.
+Its first phase has three successful inspections and one deliberately failed
+inspection; the later restart continuation adds one successful inspection.
+Earlier harness attempts use separate Sessions and are not folded into these
+counts. Simulated tiny data and scripted providers establish bounded application
+behavior, not biological or live-provider qualification. The preserved USI-6
+science is read only; no EpiZoo or MAESTRO computation is repeated.
+
+`L/accepted-downloads.json`, `export-comparison.json` and `native-downloads.json`
+record `embeddings.h5ad`, `neighbors.h5ad`, `clusters.h5ad` and `analysis.h5ad`.
+All delivered sizes/digests and accepted source digests match P. Native saved bytes
+match the delivered export digests; exports are not falsely equated with source
+H5AD bytes. Repeated clicks receive Firefox's normal filename suffixes.
+
+Actual before/after captures (all outside Git):
+
+| View | Before, stacked UI | After, two-panel UI |
+| --- | --- | --- |
+| Initial desktop/narrow | `P/initial-1366.png`, `P/initial-390.png` | `L/initial-1366.png`, `L/initial-390.png` |
+| Accepted desktop result | `P/accepted-results-1366.png` | `L/results-1366.png`, `L/results-1600.png` |
+| Original scientific figure | `P/accepted-figure-1366.png`, `P/accepted-figure-390.png` | `L/accepted-figure-1366.png`, `L/accepted-figure-390.png` |
+| Tablet/narrow panes | `P/accepted-results-390.png` | `L/results-768.png`, `L/results-390.png`, `L/conversation-768.png`, `L/conversation-390.png` |
+| Download rows | `P/accepted-results-1366.png` | `L/downloads-1366.png`, `L/downloads-390.png` |
+| Publication/history | Prior stacked result above | `L/publication-first.png`, `L/publication-second.png`, `L/historical-preview-new-result.png` |
+| Pending task | `P/clarification-1366.png` | `L/pending-supplement-desktop.png` |
+
+The screenshots compare preserved previous acceptance to the new rendered UI;
+`L/before/` also freezes the exact starting static source. Final layout captures
+are logged in `browser-layout-verified.log`. Early implementation screenshots
+remain evidence of intermediate states, not all final-layout claims.
+
+### E. Tests and preservation
+
+Focused static/result-display tests pass **59 tests in 0.54 s**. Eleven new cases
+execute the production display-selection/refresh functions through the existing
+JavaScriptCore helper: accepted active follow, historical retention, cross-Session
+isolation, unavailable references, no-active state and unchanged-result content
+across answer/clarification/running/failed/cancelled turn refreshes. Existing tests
+continue to cover exact artifact handles, safe delivery and Session contracts.
+No new browser framework or scientific test infrastructure is introduced.
+
+The final 24-module Web/API/artifact/Session/response regression passes
+**584 tests, three dependency warnings, in 199.59 s**, exit 0. This is the previous
+573-test selected scope plus eleven new cases, not an additional full historical
+suite. See `L/regression-final-command.json`, log and XML. All `RUN_*` gates are
+unset. All **540 frozen source/test/static/resource files** remain unchanged during
+this final run (`L/final-code-hashes.json`, `final-code-check.json`). A preliminary
+584-test run also passed, before the final empty-state CSS adjustment. Earlier
+historical failure records above remain intact.
+
+Harness corrections are retained transparently in L: an initial follow driver
+tried reading lexical JS state from Marionette's sandbox; another clicked before
+startup readiness; a layout driver checked an old same-ID DOM value before a
+revision finished loading; and a download driver counted both chat and results
+links. Drivers now wait on visible loaded state and scope download selectors to
+the inventory. A rapid sequence of native downloads saved only two files; spacing
+native clicks by two seconds delivered all four, without changing browser download
+policy or production links. These checks do not establish a product defect.
+
+The bounded preservation audit confirms all **92,862 protected file entries**,
+**14,586 R evidence files**, and **5,363 P evidence files** retain recorded stat/hash
+identities, with no additions/removals in the protected sets. Operator configuration,
+accepted scientific workspaces, datasets, checkpoints and pre-existing evals remain
+unchanged. See `L/preservation.json`, `prior-evidence-preservation.json`,
+`polish-preservation.json` and logs. Scientific algorithms, Registry,
+Planner/compiler/preflight, qualification, RunStore, authority publication,
+Session/Revision semantics, artifact limits and privacy remain unchanged.
+
+### F. Final disposition
+
+**Final two-panel layout refinement is complete and ready for UA3.6.5 product
+acceptance within this bounded UI scope.** Researchers can inspect the accepted
+result and compose the next instruction together on desktop, switch usable panes
+on narrow screens, automatically see new accepted results, or keep an intentional
+historical preview without mixing result artifacts.
+
+UA3.6.5 and live-provider scientific acceptance have not begun. Existing provider
+availability and scientific qualification limits remain as recorded above. Mobile
+keyboard/device behavior beyond desktop viewport simulation is not qualified.
+Full technical records can still be long when explicitly expanded; semantic figure
+titles and biological interpretations are limited to existing accepted descriptors.
+All owned acceptance servers and Firefox were stopped.
+
+Eight files changed: README, this closeout report, three static frontend files,
+and three Web presentation test files. HEAD remains
+`1e3cded096a9db821fbf2eb289033da11ade3d77`. Nothing is staged, committed or pushed.
+Final `git status --short`:
+
+```text
+ M README.md
+ M docs/usi-7-web-ux-reports-download-closeout.md
+ M src/agent/web/static/app.js
+ M src/agent/web/static/index.html
+ M src/agent/web/static/styles.css
+ M tests/web/test_rich_static.py
+ M tests/web/test_scientific_artifact_static.py
+ M tests/web/test_static.py
+?? evals/
+```

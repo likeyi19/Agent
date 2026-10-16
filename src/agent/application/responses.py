@@ -103,9 +103,10 @@ def clarification_text(clarification):
              choice.partition('.')[2].replace('_', ' ') + ' for '
              + choice.partition('.')[0].replace('_', ' ')) if '.' in choice
             else choice.replace('_', ' ') for choice in clarification.choices)
-        return ('Please identify which selected dataset supplies each scientific role'
-                + (': ' + roles if roles else '')
-                + '. You can refer to the displayed selection positions. '
+        return ('Which file should I use'
+                + (' as the ' + roles if roles else ' for this analysis')
+                + '? Name the file or its displayed number. If it is not attached yet, '
+                  'attach it with your reply. A file still needs to meet the analysis requirements. '
                   'Your original request and selected files are preserved.')
     if clarification.reason == 'conflicting_scientific_parameter':
         return 'The explicit scientific parameter values conflict. Please provide one consistent value.'

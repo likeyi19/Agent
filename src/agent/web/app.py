@@ -446,6 +446,8 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     def uploaded_resources():
         result = {'enabled': uploads is not None,
                   'choices': [] if uploads is None else list(uploads.choices())}
+        if uploads is not None:
+            result['upload_max_bytes'] = uploads.max_bytes
         members = () if uploads is None else uploads.fastq_members()
         if members:
             result['fastq_members'] = list(members)

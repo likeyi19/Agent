@@ -108,7 +108,7 @@ def test_http_partial_members_are_discoverable_only_as_members_then_complete_ato
     client, backend, uploads = supplied
     member = upload(client).json()
     catalog = client.get('/api/v1/resources').json()
-    assert catalog == dict(enabled=True, choices=[], fastq_members=[member])
+    assert catalog == dict(enabled=True, choices=[], fastq_members=[member], upload_max_bytes=uploads.max_bytes)
     assert member['fastq_attribution']['role'] == 'R1'
     assert 'sha256' not in str(catalog) and str(uploads.root) not in str(catalog)
     incomplete = client.post('/api/v1/uploads/fastq-collections',

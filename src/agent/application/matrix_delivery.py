@@ -370,7 +370,11 @@ class MatrixDownloadPreparer:
             filename = model_delivery.FILES[model_role][0]
             content_type = 'application/json' if model_metadata else 'application/octet-stream'
         elif export:
-            filename, content_type = exporter.FILENAME, 'application/octet-stream'
+            filename = (analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
+                        if compact else exporter.FILENAME)
+            if filename is None:
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
+            content_type = 'application/octet-stream'
         else:
             table_roles = {
                 ('scatac-barcode-qc.v1', 'table'): 'barcodes.tsv.gz',

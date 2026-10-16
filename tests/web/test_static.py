@@ -231,12 +231,14 @@ def test_conversation_composer_precede_secondary_scientific_details():
     assert any(re.search(r'display:\s*block', rule) for rule in layouts)
 
 
-def test_full_identities_history_and_artifacts_are_secondary_closed_details():
+def test_technical_details_are_closed_and_result_summary_and_downloads_are_open():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
     for identifier in ('session-identities', 'revision-identities', 'revision-history-panel',
-                       'result-panel', 'artifact-panel', 'evidence-panel'):
+                       'result-methods', 'technical-report-record', 'evidence-panel'):
         assert identifier in details and 'open' not in details[identifier]
+    for identifier in ('result-panel', 'artifact-panel'):
+        assert 'open' in details[identifier]
     for identifier in ('current-session', 'current-generation', 'current-revision'):
         assert 'session-identities' in page.ancestors[identifier]
     for identifier in ('viewed-revision', 'revision-summary'):

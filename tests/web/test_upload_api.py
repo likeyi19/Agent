@@ -40,7 +40,7 @@ def test_upload_registration_discovery_and_retry_use_only_safe_metadata(uploaded
     assert set(resource) == {'resource_id', 'input_type', 'label', 'status'}
     assert resource['input_type'] == 'h5ad' and resource['status'] == 'registered'
     assert str(tmp_path) not in response.text
-    assert client.get('/api/v1/resources').json() == {'enabled': True, 'choices': [resource]}
+    assert client.get('/api/v1/resources').json() == {'enabled': True, 'choices': [resource], 'upload_max_bytes': uploads.max_bytes}
     assert uploads.resolve(resource['resource_id']).resource_id == resource['resource_id']
     retried = attach(client, data)
     assert retried.status_code == 201 and retried.json() == resource
@@ -246,3 +246,19 @@ def test_valid_content_length_accepts_leading_zeroes_without_integer_overflow(up
         headers={'Content-Type': 'application/octet-stream', 'Content-Length': '0' * 100 + '4'})
     assert response.status_code == 201, response.text
     assert not backend.models and not backend.science_calls
+
+
+@pytest.mark.parametrize('limit', [256 * 1024**2, 2 * 1024**3, 8 * 1024**3])
+def test_catalog_advertises_actual_bounded_upload_limit(uploaded_web, limit):
+    client, backend, uploads, _ = uploaded_web
+    uploads.max_bytes = limit
+    catalog = client.get('/api/v1/resources').json()
+    assert catalog == {'enabled': True, 'choices': [], 'upload_max_bytes': limit}
+    # Header admission independently enforces the real limit; no large allocation.
+    response = client.put(
+        '/api/v1/uploads/too-large?filename=tiny.h5ad', content=b'x',
+        headers={'Content-Type': 'application/octet-stream', 'Content-Length': str(limit + 1)})
+    assert response.status_code == 413
+    assert response.json()['error']['code'] == 'UPLOAD_TOO_LARGE'
+    assert list(uploads.staging.iterdir()) == []
+    assert uploads.choices() == () and not backend.models and not backend.science_calls

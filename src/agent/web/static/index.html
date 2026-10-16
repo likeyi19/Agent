@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent — Research session</title>
+  <title>Agent — Scientific workspace</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -12,19 +12,19 @@
     <header class="page-header">
       <div>
         <h1>Agent</h1>
-        <p class="muted small">Single-cell research workspace</p>
+        <p class="muted small">Single-cell scientific assistant</p>
       </div>
       <div class="header-actions">
         <div class="model-controls">
-          <label for="model-choice">Model for next turn</label>
+          <label for="model-choice">Conversation model</label>
           <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
         </div>
-        <button id="new-session" type="button">New session</button>
+        <button id="new-session" type="button" class="secondary">New conversation</button>
       </div>
     </header>
 
     <details id="advanced-controls" class="advanced-controls">
-      <summary>Session &amp; model details <span id="connection-state" class="connection-state" role="status">Connecting…</span></summary>
+      <summary>Session settings <span id="connection-state" class="connection-state" role="status">Connecting…</span></summary>
     <section class="controls" aria-label="Session and model controls">
       <div class="session-controls">
         <p id="session-context" class="muted small">No session open</p>
@@ -57,9 +57,10 @@
     <section class="conversation panel" aria-labelledby="conversation-heading">
       <div class="section-heading">
         <h2 id="conversation-heading">Conversation</h2>
+        <button id="show-current-result" class="secondary" type="button" hidden>Results &amp; downloads</button>
         <span id="history-notice" class="muted small" hidden>Showing bounded recent history.</span>
       </div>
-      <div id="conversation-history" role="log" aria-live="polite" aria-relevant="additions text">
+      <div id="conversation-history" role="log" aria-label="Conversation messages" tabindex="0" aria-live="polite" aria-relevant="additions text">
         <p class="empty-history">Create a session or reopen one to begin.</p>
       </div>
     </section>
@@ -73,18 +74,18 @@
       <form id="turn-form">
         <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
         <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>
-        <label for="utterance">Ask Agent</label>
-        <textarea id="utterance" name="utterance" rows="4" maxlength="4096" placeholder="Describe an analysis, ask about a result, or answer Agent’s question…" required disabled></textarea>
+        <label for="utterance" class="visually-hidden">Ask Agent</label>
+        <textarea id="utterance" name="utterance" rows="3" maxlength="4096" placeholder="Describe an analysis, ask about a result, or answer Agent’s question…" aria-describedby="composer-help" required disabled></textarea>
         <input id="chat-files" type="file" multiple hidden aria-label="Attach scientific files">
         <ul id="chat-attachments" class="chat-attachments" aria-label="Message attachments" aria-live="polite"></ul>
         <p id="chat-attachment-status" class="muted small" role="status"></p>
+
         <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
         <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
         <div class="composer-actions">
           <div class="input-actions">
             <button id="attach-chat-files" class="secondary" type="button" disabled>Attach files</button>
-            <button id="toggle-attachments" class="secondary" type="button" aria-controls="attachment-panel" aria-expanded="false">Advanced inputs</button>
-            <button id="toggle-scientific-inputs" class="secondary" type="button" aria-controls="scientific-input-settings" aria-expanded="false" hidden>Scientific inputs</button>
+            <span id="upload-limit" class="muted small"></span>
           </div>
           <div>
             <button id="retry-turn" class="secondary" type="button" hidden>Retry same submission</button>
@@ -92,7 +93,8 @@
           </div>
         </div>
         <details id="attachment-panel" class="composer-disclosure">
-          <summary>Advanced uploads and registered inputs</summary>
+          <summary>Advanced inputs</summary>
+          <p class="muted small">Usually, attach files and describe your task above. These controls support explicitly configured inputs and declared library uploads.</p>
         <div class="attachment-controls" aria-label="Scientific attachment">
           <h3>Upload a new file</h3>
           <label for="upload-type">Scientific file type</label>
@@ -150,7 +152,7 @@
         </div>
         </details>
         <details id="scientific-input-settings" class="composer-disclosure" hidden>
-          <summary>Scientific declarations &amp; resources</summary>
+          <summary>Configured scientific resources</summary>
           <div id="configured-input-controls">
             <label for="input-choice">Scientific inputs and declarations</label>
             <select id="input-choice" disabled><option value="">No structured inputs</option></select>
@@ -161,46 +163,59 @@
             <select id="epizoo-resource-choice" disabled><option value="">Use applicable configured default</option></select>
           </div>
         </details>
-        <p class="muted small saved-note">Responses and session state are saved by Agent.</p>
+        <p class="muted small saved-note"><span id="composer-help">Enter for a new line · Ctrl / ⌘ + Enter to send</span></p>
       </form>
     </section>
 
     <details id="scientific-panel" class="scientific-disclosure panel">
-    <summary>Scientific details &amp; result history</summary>
+    <summary>Results, downloads &amp; history</summary>
     <aside id="scientific-details" class="scientific-state" aria-labelledby="scientific-heading" tabindex="-1">
-      <h2 id="scientific-heading">Scientific details</h2>
+      <h2 id="scientific-heading">Analysis results</h2>
+      <label for="result-choice">Browse a result</label>
+      <select id="result-choice" disabled><option>No results yet</option></select>
+      <p class="muted small">Browsing does not change the result used by your conversation.</p>
       <p id="scientific-empty" class="muted small">Accepted revisions will appear here after an analysis.</p>
       <div id="revision-view" hidden>
         <p id="result-heading" class="result-heading"></p>
-        <p id="result-origin" class="muted small"></p>
-        <p id="result-output-summary" class="muted small"></p>
-        <div class="revision-actions">
-          <button id="activate-revision" class="secondary" type="button">Switch to this revision</button>
-          <button id="continue-revision" type="button">Continue from here</button>
-        </div>
-        <p class="muted small">Switching changes the active revision. Continue from here selects this revision and returns to the composer; your next analysis creates a child revision.</p>
-        <details id="result-panel">
-          <summary id="result-panel-heading">Current result</summary>
-          <p id="result-presentation" class="message-text small"></p>
-          <h3>Scientific operations</h3>
-          <ul id="result-operations" class="compact-list"></ul>
-          <h3>Accepted output names</h3>
-          <ul id="revision-outputs" class="compact-list"></ul>
+        <details id="result-panel" open>
+          <summary id="result-panel-heading">Scientific summary</summary>
+          <label for="evidence-output">Show summary for</label>
+          <select id="evidence-output"></select>
+          <h3 id="result-method"></h3>
+          <div id="result-facts" aria-live="polite"></div>
         </details>
-        <details id="artifact-panel">
-          <summary>Figures, reports &amp; downloads</summary>
-          <ul id="artifact-inventory" class="compact-list"></ul>
-          <div id="artifact-viewer" hidden>
-            <h3 id="artifact-title"></h3>
+        <div id="artifact-viewer" hidden>
+          <h3 id="artifact-title"></h3>
+          <p id="report-description" class="muted small" hidden>Execution and verification details from the accepted evidence. This privacy-safe text is not a biological interpretation; the scientific summary and limitations are shown separately.</p>
+          <details id="technical-report-record" hidden>
+            <summary>Full execution &amp; verification record</summary>
             <pre id="report-content" class="report-content" hidden></pre>
-            <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
-            <p id="artifact-view-error" class="turn-error" hidden></p>
-          </div>
+          </details>
+          <p id="figure-description" class="muted small" hidden>Figure from this result. Changing the summary selection does not change the figure.</p>
+          <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
+          <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
+        </div>
+        <details id="artifact-panel" open>
+          <summary>Downloads &amp; reports</summary>
+          <ul id="artifact-inventory" class="compact-list"></ul>
+          <p class="muted small">Privacy-safe exports may differ from source size. Accepted source files remain unchanged.</p>
+        </details>
+        <section id="result-limitations-panel" aria-labelledby="limitations-heading" hidden>
+          <h3 id="limitations-heading">Interpretation &amp; limitations</h3>
+          <div id="result-limitations"></div>
+        </section>
+        <details id="result-methods">
+          <summary>Methods &amp; execution details</summary>
+          <p id="result-origin" class="muted small"></p>
+          <p id="result-presentation" class="message-text small"></p>
+          <h3>Analysis steps</h3>
+          <ul id="result-operations" class="compact-list"></ul>
+          <h3>Accepted outputs</h3>
+          <p id="result-output-summary" class="muted small"></p>
+          <ul id="revision-outputs" class="compact-list"></ul>
         </details>
         <details id="evidence-panel">
           <summary>Evidence &amp; provenance</summary>
-          <label for="evidence-output">Accepted output</label>
-          <select id="evidence-output"></select>
           <button id="load-evidence" class="secondary" type="button">Show evidence</button>
           <div id="evidence-content"></div>
           <form id="detail-form" hidden>
@@ -215,6 +230,15 @@
           </form>
           <div id="detail-content"></div>
         </details>
+        <div class="result-continuation">
+          <h3>Work with this result</h3>
+          <p id="result-context-help" class="muted small"></p>
+          <div class="revision-actions">
+            <button id="activate-revision" class="secondary" type="button">Make current</button>
+            <button id="continue-revision" type="button">Continue from this result</button>
+          </div>
+          <p class="muted small">Make current changes the context for your next question. Continue also opens a draft for your next request; nothing runs until you send it. Ask in chat to compare results.</p>
+        </div>
         <details id="revision-identities" class="identity-details">
           <summary>Revision details</summary>
           <p class="small">Viewing <strong id="viewed-revision"></strong></p>
@@ -222,7 +246,7 @@
         </details>
       </div>
       <details id="revision-history-panel">
-        <summary>Revision history</summary>
+        <summary>Result history &amp; branches</summary>
         <ol id="revision-history" class="revision-history"></ol>
       </details>
     </aside>

@@ -130,7 +130,7 @@ def test_uploaded_inspection_dialogue_reselection_branch_and_restart(tmp_path):
         assert not backend.models and not backend.science_calls
         assert backend.service._application.sessions.load('session').generation == 0
         choices = client.get('/api/v1/resources').json()
-        assert choices == {'enabled': True, 'choices': [resource]}
+        assert choices == {'enabled': True, 'choices': [resource], 'upload_max_bytes': uploads.max_bytes}
 
         first_body = body(resource['resource_id'])
         first = submit(client, first_body)

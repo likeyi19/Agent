@@ -990,15 +990,39 @@ Add `"upload_root": "uploads"` to the existing Web operator configuration to
 enable the attachment control near the composer. The location is relative to
 `workspace_root` and must be a canonical descendant of that managed workspace.
 Attachments are disabled when `upload_root` is absent or null. The optional
-`upload_max_bytes` defaults to 268435456 (256 MiB; maximum 1 GiB), and
+`upload_max_bytes` defaults to 268435456 (256 MiB; maximum 8 GiB), and
 `upload_max_concurrent` defaults to 2 (allowed 1–4).
 
-Upload a single H5AD, select its registered label, and send an ordinary request
-such as “Inspect this dataset.” Uploading only registers completed bytes; the
-existing Interpreter/Planner decides the scientific operation. The source can
-be reselected after refresh or server restart, and accepted results remain in
-the existing Session/Revision conversation. Registration does not establish
-H5AD readability, EpiZoo compatibility, or other scientific readiness.
+
+For scientific datasets and genome FASTA files, explicitly configure a bounded
+2 GiB per-file limit with `"upload_max_bytes": 2147483648` alongside
+`"upload_root": "uploads"`. Restart the Web server after editing the operator
+JSON. The browser displays the server's actual limit and rejects oversized local
+files before transfer; the server independently checks headers and streamed bytes.
+Reverse proxies must admit the intended request size and transfer duration.
+Provision sufficient workspace disk for retained uploads, analysis outputs and
+temporary files; raising the per-file bound adds no aggregate disk quota.
+The default and existing production configurations are not changed automatically.
+
+The conversation composer accepts multiple files and repeated **Attach files**
+selections. Send the scientific objective in ordinary language; answer necessary
+questions in the same conversation, adding supplementary files when requested.
+Upload completion is separate from scientific qualification. **Advanced inputs**
+retains declared libraries and existing registered inputs when needed. Failed
+uploads can be retried or removed without losing other attachments. The visible
+conversation model applies to the next turn; EpiZoo resource choices remain
+separate. Use Ctrl/⌘ + Enter to send; Enter inserts a newline. Results and direct
+streamed downloads appear beside accepted replies and under **Results, downloads
+& history**. Browse earlier results without changing context, or choose
+**Continue from here** to activate one. See the
+[USI-7 UI closeout](docs/usi-7-web-ux-reports-download-closeout.md) for browser
+validation, report projection semantics and deployment limits.
+
+The legacy registered-H5AD picker remains under **Advanced inputs**. Its source
+can be reselected after refresh or server restart. Uploading only registers
+completed bytes; the existing Interpreter/Planner decides the scientific
+operation. Registration does not establish H5AD readability, EpiZoo compatibility,
+or other scientific readiness.
 
 This remains a trusted local/lab-host application with loopback-first launch,
 without account authorization. Existing safe report-text and PNG downloads are

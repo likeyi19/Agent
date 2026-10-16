@@ -251,7 +251,7 @@ def test_scientific_controls_use_existing_safe_catalog_visibility_without_infere
     assert 'element("configured-input-controls").hidden' in context
     assert 'element("epizoo-resource-controls").hidden = selectedResourceType() !== "h5ad"' in context
     assert 'element("scientific-input-settings").hidden = irrelevant' in context
-    assert 'element("toggle-scientific-inputs").hidden = irrelevant' in context
+    assert 'toggle-scientific-inputs' not in source()
     assert not any(term in context for term in ('checkpoint_path', 'source_sha256', 'utterance', 'tool_name'))
 
 

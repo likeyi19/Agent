@@ -9,6 +9,7 @@ import numpy as np
 CONTRACT = 'compact-analysis-delivery.v1'
 ROLE = 'compact_analysis_export'
 FILENAME = 'analysis.h5ad'
+FILENAMES = {'embedding': 'embeddings.h5ad', 'clustering': 'clusters.h5ad', 'umap': FILENAME}
 LABEL = 'Embeddings, Leiden and UMAP — safe export'
 
 
@@ -41,10 +42,11 @@ def accepted_analysis(service, session_id, revision, origin, output, *, step_id=
         turn_id=origin.turn_id, run_id=run_id, step_id=step_id, accepted_step=anchor,
         role=ROLE, sha256=sha, size_bytes=size)
     stage = stages[stored.tool_name]
-    filename, label = {'embedding': ('embeddings.h5ad', 'Cell embeddings — safe export'),
-                       'clustering': ('clusters.h5ad', 'Embeddings and Leiden — safe export'),
-                       'umap': (FILENAME, 'Embeddings and UMAP — safe export'
-                                if result.get('clustering_present') is False else LABEL)}[stage]
+    filename = FILENAMES[stage]
+    label = {'embedding': 'Cell embeddings — safe export',
+             'clustering': 'Embeddings and Leiden — safe export',
+             'umap': 'Embeddings and UMAP — safe export'
+                     if result.get('clustering_present') is False else LABEL}[stage]
     reference = ScientificArtifactHandle(digest(identity), 'scientific_analysis', sha,
         revision.revision_id, origin.turn_id, size, filename, label)
     return _ScientificMatrixArtifact(reference, path, root, sha, size, CONTRACT,

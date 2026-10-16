@@ -91,7 +91,7 @@ def test_artifacts_use_handles_safe_types_and_plain_report_display():
     assert 'contentType.startsWith("text/plain")' in source
     assert 'contentType.startsWith("image/png")' in source
     assert 'element("report-content").textContent = text' in source
-    assert 'Client-safe report projection' in source
+    assert 'Technical report' in source
     assert 'URL.revokeObjectURL(state.artifactUrl)' in source
     assert 'innerHTML' not in source and 'insertAdjacentHTML' not in source
     assert 'path=' not in source

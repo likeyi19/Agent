@@ -58,3 +58,26 @@ def test_shared_snapshot_delivers_valid_export(umap_result):
         assert download.filename=='analysis.h5ad'
         assert download.source_sha256==umap_result['analysis_sha256']
     assert prep.active_count==0
+
+
+@pytest.mark.parametrize('stage,filename', [('embedding', 'embeddings.h5ad'), ('clustering', 'clusters.h5ad')])
+def test_stage_download_name_matches_the_accepted_content(clustering_result, stage, filename):
+    path = Path(clustering_result['analysis_path'])
+    if stage == 'embedding':
+        data = ad.read_h5ad(path)
+        embedding = ad.AnnData(obs=data.obs[[]].copy())
+        embedding.obsm['X_epizoo'] = data.obsm['X_epizoo'].copy()
+        path = path.parent / 'embedding-download-fixture.h5ad'
+        embedding.write_h5ad(path)
+    artifact = SimpleNamespace(path=path, managed_root=path.parent,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(), size_bytes=path.stat().st_size,
+        contract=delivery.CONTRACT, role=delivery.ROLE,
+        manifest={'stage': stage, 'n_cells': clustering_result['n_cells']}, manifest_sha256=None)
+    preparer = MatrixDownloadPreparer()
+    snapshot = preparer.prepare(artifact)
+    try:
+        assert snapshot.filename == filename
+        assert hashlib.sha256(b''.join(snapshot.iter_chunks())).hexdigest() == snapshot.sha256
+    finally:
+        snapshot.close()
+    assert preparer.active_count == 0

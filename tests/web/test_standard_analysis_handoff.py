@@ -75,6 +75,7 @@ def test_attachment_catalog_pins_independent_downloads_and_restart(tmp_path, mon
         for item in artifacts:
             delivered = client.get(base + '/scientific-artifacts/' + item['handle'])
             assert delivered.status_code == 200, delivered.text
+            assert delivered.headers['Content-Disposition'] == f'attachment; filename="{item["filename"]}"'
             path = tmp_path / item['filename']; path.write_bytes(delivered.content)
             data = ad.read_h5ad(path)
             assert tuple(data.obs_names) == tuple(original.obs_names)

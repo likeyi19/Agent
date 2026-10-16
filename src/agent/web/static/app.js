@@ -21,13 +21,13 @@ const RESPONSE_LABELS = {
 };
 const element = (id) => document.getElementById(id);
 const state = {
-  session: null, models: [], activeTurn: null, submission: null,
+  session: null, models: [], activeTurn: null, submission: null, initializing: true,
   durableTurnIds: new Set(),
   posting: false, opening: false, timer: null, epoch: 0, pollEpoch: 0,
   navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   attachments: [], attachmentSession: null, restoringAttachments: false,
-  resources: [], resourcesEnabled: false, upload: null,
+  resources: [], resourcesEnabled: false, uploadMaxBytes: null, upload: null,
   selectedResourceIds: [],
   fastqMembers: [], fastqCompletion: null,
   inputSets: [], epizooResources: [],
@@ -52,6 +52,7 @@ function readConveniences() {
 }
 
 function saveConveniences() {
+  if (state.initializing) return;
   const value = {
     sessionId: state.session ? state.session.session_id : "",
     profileId: element("model-choice").value,
@@ -236,13 +237,43 @@ function summaryRows(rows) {
   return nodes;
 }
 
+function formatBytes(bytes) {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return "";
+  const units = ["B", "KiB", "MiB", "GiB"];
+  const index = bytes ? Math.min(3, Math.floor(Math.log(bytes) / Math.log(1024))) : 0;
+  return `${Number((bytes / 1024 ** index).toFixed(1))} ${units[index]}`;
+}
+
+function resultLabel(revisionId) {
+  const index = state.session ? state.session.revisions.findIndex((r) => r.revision_id === revisionId) : -1;
+  return index < 0 ? "Result outside available history" : `${state.session.history_truncated ? "Recent result" : "Result"} ${index + 1}`;
+}
+
+function showResult(revisionId) {
+  element("scientific-panel").open = true;
+  element("result-panel").open = true;
+  element("artifact-panel").open = true;
+  loadRevision(revisionId);
+  element("scientific-details").scrollIntoView({ block: "start" });
+  element("scientific-details").focus({ preventScroll: true });
+}
+
 function renderRevisionHistory() {
   const revisions = state.session ? state.session.revisions : [];
+  element("result-choice").disabled = !revisions.length;
+  element("result-choice").replaceChildren(...revisions.map((revision) => {
+    const option = document.createElement("option");
+    option.value = revision.revision_id;
+    option.textContent = `${resultLabel(revision.revision_id)}${revision.is_active ? " · Current" : ""}`;
+    return option;
+  }));
+  element("result-choice").value = state.viewedRevisionId || state.session?.active_revision_id || "";
+  element("show-current-result").hidden = !state.session?.active_revision_id;
   element("revision-history").replaceChildren(...revisions.map((revision) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = `Revision ${shortIdentity(revision.revision_id)}${revision.is_active ? " · Active" : ""}`;
+    button.textContent = `${resultLabel(revision.revision_id)}${revision.is_active ? " · Current" : ""}`;
     button.title = revision.revision_id;
     button.dataset.revisionId = revision.revision_id;
     button.setAttribute("aria-current", String(revision.is_active));
@@ -265,6 +296,10 @@ function clearArtifactView() {
   state.artifactUrl = null;
   element("artifact-viewer").hidden = true;
   element("report-content").hidden = true;
+  element("report-description").hidden = true;
+  element("technical-report-record").hidden = true;
+  element("technical-report-record").open = false;
+  element("figure-description").hidden = true;
   element("report-content").textContent = "";
   element("figure-content").hidden = true;
   element("figure-content").removeAttribute("src");
@@ -293,6 +328,7 @@ async function loadRevision(revisionId) {
   state.revision = null;
   state.evidence = null;
   state.viewedRevisionId = revisionId;
+  element("result-choice").value = revisionId;
   clearArtifactView();
   element("revision-view").hidden = true;
   element("scientific-empty").hidden = false;
@@ -303,7 +339,10 @@ async function loadRevision(revisionId) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     state.revision = revision;
     renderRevision(revision);
-    if (element("evidence-panel").open && revision.evidence_outputs.length) loadEvidence();
+    if (revision.evidence_outputs.length) loadEvidence();
+    // Presentation order only: no figure is assigned a scientific meaning.
+    const figures = revision.artifacts.filter((artifact) => artifact.artifact_type === "analysis_figure");
+    if (figures.length) viewArtifact(sessionId, revisionId, figures[0], false);
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     element("scientific-empty").textContent = `${error.code}: ${error.message}`;
@@ -314,14 +353,17 @@ async function loadRevision(revisionId) {
 function renderRevision(revision) {
   element("scientific-empty").hidden = true;
   element("revision-view").hidden = false;
-  element("result-heading").textContent = `${revision.is_active ? "Current" : "Historical"} result · ${statusLabel(revision.status)}`;
+  element("result-heading").textContent = `${resultLabel(revision.revision_id)} · ${revision.is_active ? "Current" : "Earlier result"} · ${statusLabel(revision.status)}`;
   element("result-heading").title = revision.revision_id;
   const originatingTurn = state.session.turns.find((turn) => turn.turn_id === revision.turn_id);
   element("result-origin").textContent = originatingTurn && originatingTurn.utterance
     ? `Requested in this turn: ${originatingTurn.utterance}`
     : "Originating analysis identifiers are available in Revision details.";
   element("result-origin").title = `Originating turn: ${revision.turn_id}. Viewing this result does not change the active revision.`;
-  element("result-panel-heading").textContent = revision.is_active ? "Current result" : "Historical result";
+  element("result-panel-heading").textContent = "Scientific summary";
+  element("result-context-help").textContent = revision.is_active
+    ? "This is the current result for your conversation."
+    : `You are browsing ${resultLabel(revision.revision_id)}. Your conversation still uses ${resultLabel(state.session.active_revision_id)}.`;
   element("result-output-summary").textContent = `${revision.outputs.length} accepted outputs${revision.outputs.length ? `: ${revision.outputs.join(", ")}` : ""}`;
   element("viewed-revision").textContent = revision.revision_id;
   element("revision-summary").replaceChildren(...summaryRows([
@@ -353,6 +395,10 @@ function renderRevision(revision) {
   }));
   element("evidence-output").disabled = !revision.evidence_outputs.length;
   element("load-evidence").disabled = !revision.evidence_outputs.length;
+  element("result-method").textContent = "";
+  element("result-facts").textContent = "No accepted summary is available.";
+  element("result-limitations").replaceChildren();
+  element("result-limitations-panel").hidden = true;
   element("evidence-content").replaceChildren();
   element("detail-content").replaceChildren();
   element("detail-form").hidden = true;
@@ -405,11 +451,27 @@ function scientificFileNode(sessionId, artifact) {
   const row = document.createElement("div");
   row.className = "scientific-file";
   const title = document.createElement("span");
-  title.textContent = `${artifact.filename} — ${artifact.label}`;
+  const name = document.createElement("strong");
+  // Only closed, reviewed server descriptors reach this renderer.
+  const names = {
+    "Cell embeddings — safe export": "Cell embeddings (H5AD)",
+    "Cell neighbors — safe export": "Neighbor graph (H5AD)",
+    "Embeddings and Leiden — safe export": "Leiden clusters (H5AD)",
+    "Embeddings and UMAP — safe export": "UMAP analysis (H5AD)",
+    "Embeddings, Leiden and UMAP — safe export": "Leiden and UMAP analysis (H5AD)",
+    "Annotated cells — safe export": "Annotated cells (H5AD)",
+  };
+  name.textContent = names[artifact.label] || artifact.label;
+  const description = document.createElement("span");
+  description.className = "file-description";
+  description.textContent = `${artifact.filename}${formatBytes(artifact.size_bytes) ? ` · Source size: ${formatBytes(artifact.size_bytes)}` : ""}`;
+  title.append(name, description);
   const download = document.createElement("a");
   download.textContent = "Download";
   download.href = `/api/v1${scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)}`;
   download.download = artifact.filename;
+  download.target = "_blank";
+  download.rel = "noopener";
   download.dataset.actionKey = `scientific-download:${artifact.handle}`;
   download.setAttribute("aria-label", `Download ${artifact.filename}`);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
@@ -418,12 +480,6 @@ function scientificFileNode(sessionId, artifact) {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
     note.textContent = "Accepted trained model. Read the configuration and reuse requirements; these downloads are not a standalone inference bundle.";
-    row.append(note);
-  }
-  if (artifact.artifact_type === "scientific_analysis") {
-    const note = document.createElement("span");
-    note.className = "scientific-export-note";
-    note.textContent = "Privacy-safe export; accepted source remains unchanged.";
     row.append(note);
   }
   return row;
@@ -436,23 +492,27 @@ function appendScientificFiles(response, turn) {
   const key = JSON.stringify([sessionId, turn.turn_id, turn.revision_id]);
   const cached = state.scientificFiles.get(key);
   if (cached) {
-    for (const artifact of cached.artifacts) {
-      response.append(scientificFileNode(sessionId, artifact));
+    const details = document.createElement("details");
+    details.className = "message-artifacts";
+    details.dataset.detailKey = "result-artifacts";
+    const summary = document.createElement("summary");
+    summary.textContent = "Downloads & technical report";
+    summary.dataset.actionKey = "result-artifacts";
+    details.append(summary);
+    for (const artifact of cached.artifacts) details.append(scientificFileNode(sessionId, artifact));
+    if (cached.error) {
+      const note = document.createElement("p");
+      note.className = "turn-error";
+      note.textContent = "Downloads could not be listed. Open result details to try again.";
+      response.append(note);
     }
-    if (cached.revision && cached.revision.artifacts.some((artifact) =>
-      ["analysis_report", "analysis_figure"].includes(artifact.artifact_type))) {
-      const details = document.createElement("details");
-      details.className = "message-artifacts";
-      details.dataset.detailKey = "result-artifacts";
-      const summary = document.createElement("summary");
-      summary.textContent = "Figures & report";
-      summary.dataset.actionKey = "result-artifacts";
+    if (cached.revision) {
       const inventory = document.createElement("ul");
       inventory.className = "compact-list";
       renderArtifacts(cached.revision, inventory, true);
-      details.append(summary, inventory);
-      response.append(details);
+      details.append(inventory);
     }
+    if (cached.artifacts.length || cached.revision?.artifacts.length) response.append(details);
     return;
   }
   const epoch = state.epoch;
@@ -471,6 +531,7 @@ function appendScientificFiles(response, turn) {
     }
     if (revision.status === "fulfilled" && revision.value.revision_id === turn.revision_id
         && revision.value.turn_id === turn.turn_id) entry.revision = revision.value;
+    entry.error = inventory.status === "rejected" || revision.status === "rejected";
     renderHistory();
   }).catch(() => {
     // Missing or unqualified historical associations expose no download.
@@ -485,34 +546,45 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
     const item = document.createElement("li");
     const supported = ["analysis_report", "analysis_figure"].includes(artifact.artifact_type);
     const title = document.createElement("span");
-    title.textContent = artifact.artifact_type === "analysis_report" ? "Report projection" : artifact.artifact_type === "analysis_figure" ? "PNG figure" : artifact.artifact_type;
+    const kind = artifact.artifact_type;
+    const siblings = artifacts.filter((entry) => entry.artifact_type === kind);
+    const number = siblings.length > 1 ? ` ${siblings.indexOf(artifact) + 1}` : "";
+    const name = kind === "analysis_report" ? `Technical report${number} (TXT)`
+      : kind === "analysis_figure" ? `Analysis figure${number} (PNG)` : "Accepted artifact";
+    title.className = "artifact-name";
+    title.textContent = name;
     const metadata = document.createElement("details");
     metadata.dataset.detailKey = `artifact:${artifact.handle}`;
     const label = document.createElement("summary");
     label.dataset.actionKey = `artifact-identity:${artifact.handle}`;
-    label.textContent = "Artifact identity";
+    label.textContent = "File provenance";
     const identity = document.createElement("p");
     identity.className = "small";
     identity.textContent = `Handle: ${artifact.handle}\nSource SHA-256: ${artifact.sha256}\nRevision: ${artifact.revision_id}`;
     metadata.append(label, identity);
-    item.append(title, metadata);
+    item.append(title);
     if (supported) {
       const actions = document.createElement("div");
       actions.className = "artifact-actions";
       const view = document.createElement("button");
       view.type = "button";
       view.className = "secondary";
-      view.textContent = "View";
+      view.textContent = artifact.artifact_type === "analysis_report" ? "Read technical report" : "View figure";
+      view.setAttribute("aria-label", `${view.textContent}: ${name}`);
       view.dataset.artifactHandle = artifact.handle;
       view.dataset.actionKey = `artifact-view:${artifact.handle}`;
       view.addEventListener("click", () => viewArtifact(sessionId, revision.revision_id, artifact));
       const download = document.createElement("a");
       download.textContent = "Download";
+      download.setAttribute("aria-label", `Download ${name}`);
       download.dataset.actionKey = `artifact-download:${artifact.handle}`;
       download.href = `/api/v1${artifactPath(sessionId, revision.revision_id, artifact.handle)}?download=true`;
+      download.target = "_blank";
+      download.rel = "noopener";
       actions.append(view, download);
       item.append(actions);
     }
+    item.append(metadata);
     return item;
   });
   for (const artifact of inConversation ? [] : revision.scientific_artifacts || []) {
@@ -526,20 +598,16 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
     empty.textContent = "No accepted reports, figures or eligible scientific downloads are available.";
     nodes.push(empty);
   }
-  if (!inConversation && !revision.artifacts.some((artifact) => artifact.artifact_type === "analysis_figure")) {
-    const note = document.createElement("li");
-    note.className = "muted small";
-    note.textContent = "No reviewed figure is available for this result. Figure availability is separate from analysis success.";
-    nodes.push(note);
-  }
   target.replaceChildren(...nodes);
 }
 
-async function viewArtifact(sessionId, revisionId, artifact) {
+async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
   const epoch = state.epoch;
   if (!state.session || state.session.session_id !== sessionId) return;
-  element("scientific-panel").open = true;
-  element("artifact-panel").open = true;
+  if (reveal) {
+    element("scientific-panel").open = true;
+    element("artifact-panel").open = true;
+  }
   if (!state.revision || state.revision.revision_id !== revisionId) await loadRevision(revisionId);
   if (epoch !== state.epoch) return;
   if (!state.session || state.session.session_id !== sessionId
@@ -551,7 +619,9 @@ async function viewArtifact(sessionId, revisionId, artifact) {
   const artifactEpoch = state.artifactEpoch;
   const revisionEpoch = state.revisionEpoch;
   element("artifact-viewer").hidden = false;
-  element("artifact-title").textContent = artifact.artifact_type === "analysis_report" ? "Client-safe report projection" : "Accepted PNG figure";
+  const figures = state.revision.artifacts.filter((entry) => entry.artifact_type === "analysis_figure");
+  element("artifact-title").textContent = artifact.artifact_type === "analysis_report" ? "Technical report"
+    : `Analysis figure${figures.length > 1 ? ` ${figures.findIndex((entry) => entry.handle === artifact.handle) + 1} of ${figures.length}` : ""}`;
   try {
     const response = await fetch(`/api/v1${artifactPath(sessionId, revisionId, artifact.handle)}`, {
       credentials: "same-origin", cache: "no-store",
@@ -567,6 +637,8 @@ async function viewArtifact(sessionId, revisionId, artifact) {
       if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || artifactEpoch !== state.artifactEpoch) return;
       element("report-content").textContent = text;
       element("report-content").hidden = false;
+      element("report-description").hidden = false;
+      element("technical-report-record").hidden = false;
     } else if (artifact.artifact_type === "analysis_figure") {
       if (!contentType.startsWith("image/png")) throw new ApiError("ARTIFACT_TYPE_UNSUPPORTED", "This artifact is not a supported PNG figure.");
       const blob = await response.blob();
@@ -574,8 +646,9 @@ async function viewArtifact(sessionId, revisionId, artifact) {
       state.artifactUrl = URL.createObjectURL(blob);
       element("figure-content").src = state.artifactUrl;
       element("figure-content").hidden = false;
+      element("figure-description").hidden = false;
     }
-    element("artifact-viewer").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (reveal) element("artifact-viewer").scrollIntoView({ block: "nearest" });
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || artifactEpoch !== state.artifactEpoch) return;
     element("artifact-view-error").textContent = `${error.code || "ARTIFACT_UNAVAILABLE"}: ${error instanceof ApiError ? error.message : "The accepted artifact could not be read."}`;
@@ -584,6 +657,15 @@ async function viewArtifact(sessionId, revisionId, artifact) {
 }
 
 function readableLabel(value) {
+  const tools = {
+    inspect_scATAC: "Dataset inspection", inspect_raw_scATAC: "Raw data inspection",
+    epizoo_embed_cells: "EpiZoo cell embeddings", build_cell_neighbors: "Cell neighbors",
+    cluster_cells: "Leiden clustering", compute_cell_umap: "UMAP",
+    annotate_scATAC_cell_types: "MAESTRO cell annotation", adapt_epizoo_species: "EpiZoo post-training",
+    compute_scATAC_qc: "Barcode quality control", select_scATAC_cells: "Cell selection",
+    build_scATAC_cell_by_ccre: "Cell-by-cCRE matrix", build_scATAC_cell_by_features: "Cell-by-feature matrix",
+  };
+  if (Object.hasOwn(tools, value)) return tools[value];
   const label = String(value).replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
@@ -723,6 +805,10 @@ async function loadEvidence(detail = false) {
   const target = element(detail ? "detail-content" : "evidence-content");
   if (!detail) {
     state.evidence = null;
+    element("result-method").textContent = "";
+    element("result-facts").textContent = "Reading accepted summary…";
+    element("result-limitations").replaceChildren();
+    element("result-limitations-panel").hidden = true;
     element("detail-form").hidden = true;
     element("detail-content").replaceChildren();
   }
@@ -733,6 +819,16 @@ async function loadEvidence(detail = false) {
     renderEvidence(view, target);
     if (!detail) {
       state.evidence = view;
+      // Display accepted quantities for the explicitly displayed output only.
+      // This is a bounded view, never a new statistic or a compatibility claim.
+      element("result-method").textContent = view.source ? readableLabel(view.source.tool_name) : "";
+      // A short view of recorded quantities; full fields, including seeds, remain in evidence.
+      const quantities = view.facts.filter((fact) => fact.status === "available"
+        && typeof fact.value === "number" && !fact.field.endsWith("seed")).slice(0, 4);
+      element("result-facts").replaceChildren(...evidenceFactNodes(quantities, view.field_labels || {}));
+      if (!quantities.length) element("result-facts").textContent = "No summary quantities are offered for this output. See the accepted response, report and evidence.";
+      element("result-limitations").replaceChildren(textList(view.limitations));
+      element("result-limitations-panel").hidden = !view.limitations.length;
       element("detail-section").replaceChildren(...view.supported_details.map((section) => {
         const option = document.createElement("option");
         option.value = section;
@@ -747,6 +843,7 @@ async function loadEvidence(detail = false) {
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
     target.textContent = `${error.code}: ${error.message}`;
+    if (!detail) element("result-facts").textContent = "Summary unavailable. Use Show evidence to retry.";
   }
 }
 
@@ -791,13 +888,16 @@ function captureConversationUi(history) {
     JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey])));
   const focused = document.activeElement;
   const turn = focused && history.contains(focused) && focused.closest(".turn");
-  return { expanded, focus: turn && focused.dataset.actionKey
+  const known = new Set(Array.from(history.querySelectorAll("details[data-detail-key]")).map((details) =>
+    JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey])));
+  return { expanded, known, focus: turn && focused.dataset.actionKey
     ? { turnId: turn.dataset.turnId, actionKey: focused.dataset.actionKey } : null };
 }
 
 function restoreConversationUi(history, captured) {
   for (const details of history.querySelectorAll("details[data-detail-key]")) {
-    details.open = captured.expanded.has(JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey]));
+    const key = JSON.stringify([details.closest(".turn").dataset.turnId, details.dataset.detailKey]);
+    if (captured.known.has(key)) details.open = captured.expanded.has(key);
   }
   if (!captured.focus) return;
   const turn = Array.from(history.children).find((node) => node.dataset.turnId === captured.focus.turnId);
@@ -810,16 +910,22 @@ function restoreConversationUi(history, captured) {
 function saveAttachments() {
   if (!state.attachmentSession) return;
   try { localStorage.setItem(`agent.web.attachments.${state.attachmentSession}`, JSON.stringify(
-    state.attachments.map((a) => ({ resource: a.resource, label: a.label })))); } catch (_) {}
+    state.attachments.map((a) => ({ resource: a.resource, label: a.label, size: a.size })))); } catch (_) {}
 }
 
 function renderAttachments() {
   element("chat-attachments").replaceChildren(...state.attachments.map((a) => {
     const row = document.createElement("li");
     const label = document.createElement("span");
-    label.textContent = `${a.label} · ${a.status === "uploaded" ?
-      (a.resource.input_type === "h5ad" ? "Uploaded H5AD candidate; analysis will check eligibility" : "Uploaded; staged, scientific handoff pending") :
-      a.status === "uploading" ? `Uploading ${a.percent || 0}%` : a.error || "Waiting to upload"}`;
+    row.className = `attachment attachment-${a.status}`;
+    const name = document.createElement("strong");
+    name.textContent = a.label;
+    const detail = document.createElement("span");
+    detail.className = "attachment-state";
+    detail.textContent = [formatBytes(a.size), a.status === "uploaded" ? "Uploaded · eligibility checked during analysis"
+      : a.status === "uploading" ? (a.percent === 100 ? "Transfer complete · registering…" : `Uploading ${a.percent || 0}%`)
+        : a.status === "failed" ? a.error || "Upload failed" : "Waiting to upload"].filter(Boolean).join(" · ");
+    label.append(name, detail);
     row.append(label);
     if (a.status === "uploading") {
       const progress = document.createElement("progress");
@@ -829,7 +935,7 @@ function renderAttachments() {
     }
     if (a.status === "failed" && a.file) {
       const retry = document.createElement("button"); retry.type = "button"; retry.className = "secondary";
-      retry.textContent = "Retry"; retry.addEventListener("click", () => uploadChatAttachment(a)); row.append(retry);
+      retry.textContent = "Retry"; retry.setAttribute("aria-label", `Retry upload ${a.label}`); retry.addEventListener("click", () => uploadChatAttachment(a)); row.append(retry);
     }
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary";
     remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove attachment ${a.label}`);
@@ -838,6 +944,7 @@ function renderAttachments() {
       state.attachments = state.attachments.filter((item) => item !== a);
       if (a.request) a.request.abort();
       saveAttachments(); renderAttachments(); inputContext(); updateControls();
+      element("attach-chat-files").focus();
     });
     row.append(remove); return row;
   }));
@@ -860,7 +967,7 @@ async function restoreAttachments(sessionId) {
     if (Array.isArray(saved)) state.attachments = saved.slice(0, 16).filter((a) => a && typeof a.label === "string")
       .filter((a) => !(a.resource && used.has(a.resource.resource_id))).map((a) => {
         const resource = catalog.choices.find((r) => a.resource && r.resource_id === a.resource.resource_id);
-        return { label: resource ? resource.label : a.label, resource, status: resource ? "uploaded" : "failed",
+        return { label: resource ? resource.label : a.label, size: a.size, resource, status: resource ? "uploaded" : "failed",
           error: "Transfer unavailable after refresh. Remove and select the file again." };
       });
     saveAttachments();
@@ -879,6 +986,11 @@ async function restoreAttachments(sessionId) {
 
 async function uploadChatAttachment(a) {
   if (a.status === "uploading") return;
+  if (state.uploadMaxBytes && a.file.size > state.uploadMaxBytes) {
+    a.status = "failed";
+    a.error = `Exceeds this server’s ${formatBytes(state.uploadMaxBytes)} per-file limit. Remove this file or ask the operator to raise the limit, then retry.`;
+    renderAttachments(); updateControls(); saveAttachments(); return;
+  }
   a.status = "uploading"; a.percent = 0;
   renderAttachments(); updateControls(); saveAttachments();
   try {
@@ -915,7 +1027,7 @@ element("chat-files").addEventListener("change", () => {
   if (state.attachments.length + files.length > 16) {
     showError(new Error("Attach at most 16 files to one message. Remove a file before adding more.")); return;
   }
-  const additions = files.map((file) => ({file, label: file.name, status: "selected", uploadId: newTurnId(), sessionId: state.session.session_id}));
+  const additions = files.map((file) => ({file, label: file.name, size: file.size, status: "selected", uploadId: newTurnId(), sessionId: state.session.session_id}));
   state.attachments.push(...additions);
   // Sequential transfers use the existing bounded server capacity; failures are independent.
   (async () => { for (const a of additions) if (state.attachments.includes(a)) await uploadChatAttachment(a); })();
@@ -925,6 +1037,8 @@ element("chat-files").addEventListener("change", () => {
 function renderHistory() {
   const history = element("conversation-history");
   const captured = captureConversationUi(history);
+  const followLatest = history.scrollHeight - history.scrollTop - history.clientHeight < 80;
+  const scrollTop = history.scrollTop;
   const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response) : [];
   const visibleFileKeys = new Set(turns.map((turn) =>
     JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id])));
@@ -934,7 +1048,11 @@ function renderHistory() {
   if (!turns.length) {
     const empty = document.createElement("p");
     empty.className = "empty-history";
-    empty.textContent = state.session ? "Your session is ready. Enter a request below." : "Create a session or reopen one to begin.";
+    const welcome = document.createElement("strong");
+    welcome.textContent = state.session ? "Start with your data, or a question." : "Opening your scientific workspace…";
+    const help = document.createElement("span");
+    help.textContent = "Attach files or describe what you want to learn.";
+    empty.append(welcome, help);
     history.replaceChildren(empty);
     return;
   }
@@ -947,10 +1065,10 @@ function renderHistory() {
       const attachments = document.createElement("ul"); attachments.className = "message-attachments";
       for (const a of turn.attachments) {
         const item = document.createElement("li");
-        item.textContent = `${a.label} · ${a.use === "staged" ? "Staged only; scientific handoff unresolved" : a.use === "consumed" ? "Used in the accepted analysis" : "Offered for analysis; scientific acceptance pending"}`;
+        item.textContent = `${a.label} · ${a.use === "staged" ? "Not yet used in an analysis" : a.use === "consumed" ? "Used in the accepted analysis" : "Attached for analysis"}`;
         attachments.append(item);
       }
-      article.append(attachments);
+      (article.querySelector(".user") || article).append(attachments);
     }
     let response = null;
     if (turn.response) {
@@ -1001,7 +1119,7 @@ function renderHistory() {
       result.addEventListener("click", () => {
         element("scientific-panel").open = true;
         element("result-panel").open = true;
-        element("evidence-panel").open = true;
+        element("evidence-panel").open = false;
         element("artifact-panel").open = true;
         loadRevision(turn.revision_id);
         const details = element("scientific-details");
@@ -1021,6 +1139,7 @@ function renderHistory() {
     return article;
   }));
   restoreConversationUi(history, captured);
+  history.scrollTop = followLatest ? history.scrollHeight : scrollTop;
 }
 
 function updateControls() {
@@ -1033,7 +1152,7 @@ function updateControls() {
   element("activate-revision").disabled = !state.revision || busy || state.opening || state.navigating;
   element("continue-revision").disabled = !state.revision || busy || state.opening || state.navigating;
   element("utterance").disabled = !state.session;
-  element("new-session").disabled = state.opening;
+  element("new-session").disabled = state.opening || state.posting;
   element("reopen-session").disabled = state.opening;
   const cancel = element("cancel-turn");
   cancel.hidden = !(state.activeTurn && state.activeTurn.run_id &&
@@ -1064,11 +1183,12 @@ function updateControls() {
 }
 
 function renderExecution() {
+  element("turn-status").parentElement.hidden = !state.posting && !state.activeTurn;
   element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
-  list.hidden = !steps.length;
+  list.hidden = !steps.length || !state.activeTurn || terminal(state.activeTurn);
   list.replaceChildren(...steps.map((step) => {
     const item = document.createElement("li");
     item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
@@ -1108,7 +1228,7 @@ function displaySession(view) {
   element("session-input").value = view.session_id;
   element("current-generation").textContent = String(view.generation);
   element("current-revision").textContent = view.active_revision_id || "None";
-  element("session-context").textContent = `Session ${shortIdentity(view.session_id)} · Generation ${view.generation} · Active revision ${view.active_revision_id ? shortIdentity(view.active_revision_id) : "None"}`;
+  element("session-context").textContent = `Session ${shortIdentity(view.session_id)} · ${view.active_revision_id ? resultLabel(view.active_revision_id) + " is current" : "No analysis yet"}`;
   element("session-context").title = view.session_id;
   element("history-notice").hidden = !view.history_truncated;
   renderHistory();
@@ -1274,7 +1394,8 @@ function inputContext() {
     choice && choice.value ? choice.textContent : "",
     selectedResourceType() === "h5ad" && epizoo && epizoo.value ? epizoo.textContent : ""].filter(Boolean);
   const label = labels.length ? labels.join(" · ") : "none selected";
-  element("selected-input-context").textContent = `Scientific inputs for next turn: ${label}`;
+  element("selected-input-context").textContent = `Additional configured inputs: ${label}`;
+  element("selected-input-context").hidden = !selectedResourceIds().length && !(choice && choice.value) && !(epizoo && epizoo.value);
   const fragments = selectedResourceType() === "external_fragments";
   const bam = selectedResourceType() === "bam";
   const fastq = selectedResourceType() === "fastq";
@@ -1306,7 +1427,7 @@ function inputContext() {
   element("epizoo-resource-controls").hidden = selectedResourceType() !== "h5ad" || !state.epizooResources.length;
   const irrelevant = element("configured-input-controls").hidden && element("epizoo-resource-controls").hidden;
   element("scientific-input-settings").hidden = irrelevant;
-  element("toggle-scientific-inputs").hidden = irrelevant;
+
 }
 
 function selectedResourceIds() {
@@ -1370,6 +1491,7 @@ function saveResourceSelection() {
 function uploadStatus(text, failed = false) {
   element("upload-status").textContent = text;
   element("upload-status").classList.toggle("upload-error", failed);
+  element("upload-status").hidden = !failed && !state.upload;
 }
 
 function renderResources(selectedId = "", restoreSavedSelection = false) {
@@ -1412,6 +1534,10 @@ async function loadResources() {
   try {
     const catalog = await api("/resources");
     state.resourcesEnabled = catalog.enabled === true;
+    state.uploadMaxBytes = Number.isSafeInteger(catalog.upload_max_bytes) && catalog.upload_max_bytes > 0 ? catalog.upload_max_bytes : null;
+    element("upload-limit").textContent = state.resourcesEnabled
+      ? `Up to 16 files per message${state.uploadMaxBytes ? ` · ${formatBytes(state.uploadMaxBytes)} per file` : ""}`
+      : "File uploads are not configured on this server.";
     state.resources = state.resourcesEnabled ? catalog.choices : [];
     state.fastqMembers = state.resourcesEnabled && Array.isArray(catalog.fastq_members) ? catalog.fastq_members : [];
     savedIds = savedIds.filter((id) => state.resources.some((choice) => choice.resource_id === id));
@@ -1695,7 +1821,9 @@ element("add-scientific-input").addEventListener("click", () => {
   renderResources();
 });
 
-element("new-session").addEventListener("click", async () => {
+element("new-session").addEventListener("click", () => createSession());
+
+async function createSession() {
   const epoch = ++state.epoch;
   state.scientificFiles.clear();
   stopPolling();
@@ -1709,6 +1837,12 @@ element("new-session").addEventListener("click", async () => {
   try {
     const view = await api("/sessions", "POST", {});
     if (epoch !== state.epoch) return;
+    element("utterance").value = "";
+    state.selectedResourceIds = [];
+    element("resource-choice").value = "";
+    element("input-choice").value = "";
+    element("epizoo-resource-choice").value = "";
+    saveResourceSelection(); renderSelectedResources();
     displaySession(view);
     saveConveniences();
     element("utterance").focus();
@@ -1717,7 +1851,7 @@ element("new-session").addEventListener("click", async () => {
   } finally {
     if (epoch === state.epoch) { state.opening = false; updateControls(); }
   }
-});
+}
 
 element("reopen-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1822,16 +1956,19 @@ element("epizoo-resource-choice").addEventListener("change", () => {
   inputContext();
   saveConveniences();
 });
-for (const [buttonId, detailsId] of [["toggle-attachments", "attachment-panel"],
-  ["toggle-scientific-inputs", "scientific-input-settings"]]) {
-  element(buttonId).addEventListener("click", () => {
-    const details = element(detailsId);
-    details.open = !details.open;
-  });
-  element(detailsId).addEventListener("toggle", () => {
-    element(buttonId).setAttribute("aria-expanded", String(element(detailsId).open));
-  });
-}
+element("show-current-result").addEventListener("click", () => {
+  if (state.session?.active_revision_id) showResult(state.session.active_revision_id);
+});
+element("result-choice").addEventListener("change", () => {
+  if (element("result-choice").value) loadRevision(element("result-choice").value);
+});
+element("utterance").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)
+      && !event.isComposing && event.keyCode !== 229) {
+    event.preventDefault();
+    element("turn-form").requestSubmit();
+  }
+});
 element("utterance").addEventListener("input", saveConveniences);
 
 async function initialize() {
@@ -1847,6 +1984,7 @@ async function initialize() {
       const option = document.createElement("option");
       option.value = choice.profile_id;
       option.textContent = `${choice.display_label}${choice.is_default ? " (default)" : ""}`;
+      option.title = choice.display_label;
       return option;
     }));
     const selected = state.models.find((choice) => choice.profile_id === conveniences.profileId) || state.models.find((choice) => choice.is_default) || state.models[0];
@@ -1880,6 +2018,9 @@ async function initialize() {
     modelDescription();
     if (typeof conveniences.sessionId === "string" && conveniences.sessionId) {
       await openSession(conveniences.sessionId, typeof conveniences.polledTurnId === "string" ? conveniences.polledTurnId : "");
+    } else {
+      await createSession();
+      if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
     }
   } catch (error) {
     element("connection-state").textContent = "Connection unavailable";
@@ -1891,7 +2032,8 @@ async function initialize() {
     element("epizoo-resource-choice").value = conveniences.epizooResourceId;
   }
   inputContext();
-  if (resources) saveConveniences();
+  state.initializing = false;
+  if (state.session) saveConveniences();
   updateControls();
 }
 

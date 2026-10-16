@@ -19,7 +19,9 @@ def test_download_uses_server_descriptor_identity_and_normal_browser_attachment(
     files = source[source.index('function scientificArtifactPath'):source.index('function renderArtifacts')]
     assert 'scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)' in files
     assert 'download.download = artifact.filename' in files
-    assert '`${artifact.filename} — ${artifact.label}`' in files
+    assert 'names[artifact.label] || artifact.label' in files
+    assert '${artifact.filename}' in files
+    assert 'formatBytes(artifact.size_bytes)' in files
     assert 'artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id' in files
     assert 'active_revision_id' not in files
     assert 'fetch(' not in files and '.blob(' not in files and 'createObjectURL' not in files

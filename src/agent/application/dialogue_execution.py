@@ -855,11 +855,11 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
     if pending['field'] == 'resources':
         from .resource_continuation import capture
         return capture(prior, origin, current)
-    if pending['field'] in {'roles', 'fastq', 'bam', 'fragments'}:
+    if pending['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation'}:
         _, source = _role_source(pending, preceding)
         try:
             from types import SimpleNamespace
-            if pending['field'] in {'fastq', 'bam', 'fragments'}:
+            if pending['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
                 from .raw_handoff import source_binding
                 source_binding(origin, source, SimpleNamespace(submission=current))
             else:
@@ -903,7 +903,7 @@ def validate_prerequisite(interaction, preceding):
     from .session_state import SessionError
     admitted = interaction.admitted or {}
     reference = interaction.snapshot.get('prerequisite') or {}
-    if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments'}):
+    if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or 'annotation' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments', 'annotation'}):
         from .raw_handoff import validate
         validate(interaction, preceding)
         if (interaction.prerequisite or {}).get('field') == 'parameters':
@@ -1041,7 +1041,7 @@ def prerequisite_public(interaction, preceding):
     if reference['field'] == 'resources':
         from .resource_continuation import public
         return public(interaction, preceding)
-    if reference['field'] in {'fastq', 'bam', 'fragments'}:
+    if reference['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
         from .raw_handoff import public
         return public(interaction, preceding)
     if reference['field'] == 'roles':
@@ -1513,6 +1513,11 @@ def completion_outcome(state, turn_id, *, error=None):
     interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
     continuation = {} if interaction is None or interaction.admitted is None else interaction.admitted.get('continuation', {})
     declaration = '' if 'species' not in continuation else 'The dataset is declared as ' + continuation['species'] + '. '
+    if (status == 'activated' and interaction is not None
+            and (interaction.admitted or {}).get('tool') == 'annotate_scATAC_cell_types'):
+        declaration += ('MAESTRO annotation completed. Labels are group-derived marker inferences, '
+            'stored for each corresponding cell in a new H5AD; they are not independently validated biological identities. '
+            'The annotation report and annotated H5AD are available in the result downloads. ')
     return TurnOutcome('execute', status,
         text=declaration + 'The request followed the registered scientific execution path. '
              + ('Its accepted outputs form the active revision.' if active

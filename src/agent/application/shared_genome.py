@@ -39,9 +39,8 @@ def validate_record(record):
         refs._fail('Genome index binding differs.')
     if identity(req, g) != q['identity_sha256']:
         refs._fail('Genome identity differs.')
-    if (set(q['review']) != {'operator', 'provenance', 'reuse_basis'}
-            or any(type(v) is not str or not v.strip() or len(v) > 1024 for v in q['review'].values())):
-        refs._fail('Genome reuse requires explicit operator review.')
+    from .shared_resources import validate_review
+    validate_review(q['review'], q['files'])
     if set(q['evidence']) != {'record_sha256', 'manifest_sha256', 'reference_identity_sha256'}:
         refs._fail('Missing original reference qualification evidence.')
     for value in q['evidence'].values(): r._sha(value)
@@ -58,7 +57,7 @@ def validate_record(record):
         refs._fail('Genome qualification pins differ.')
 
 
-def promote(resources, resource_id, *, operator, provenance, reuse_basis):
+def promote(resources, resource_id, *, operator, provenance, reuse_basis, redistribution=None):
     """Explicit new approval from a verified combined reference; no file copy."""
     record = resources.load(resource_id)
     if record.input_type != 'regulatory_reference':
@@ -67,9 +66,10 @@ def promote(resources, resource_id, *, operator, provenance, reuse_basis):
     required = dict(species=asdict(reference.species), assembly=reference.target_assembly)
     genome = asdict(reference.genome)
     files = [f for f in _serialize(record.reference_qualification['files']) if f['path'] != reference.features.bed.path]
+    from .shared_resources import review
     q = dict(contract='qualified-genome.v1', requirement=required, genome=genome,
         identity_sha256=identity(required, genome), files=files,
-        review=dict(operator=operator, provenance=provenance, reuse_basis=reuse_basis),
+        review=review(operator, provenance, reuse_basis, redistribution, files),
         evidence=dict(record_sha256=record.record_sha256, manifest_sha256=record.source_sha256,
                       reference_identity_sha256=reference.reference_identity_sha256))
     return resources.register('deployment-genome:' + digest(q), reference.genome.fasta.path,
@@ -87,6 +87,8 @@ def check_record(resources, record):
     files = _serialize(record.reference_qualification['files'])
     if VerificationContext().files(row['path'] for row in files) != files:
         refs._fail('Qualified genome bytes or qualification implementation changed.')
+    from .shared_resources import check_review
+    check_review(_serialize(record.reference_qualification['review']))
     return _serialize(record.reference_qualification['genome'])
 
 

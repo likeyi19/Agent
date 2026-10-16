@@ -114,6 +114,9 @@ def requirement(inputs, category):
 
 
 def validate_record(record):
+    if record.input_type == 'scientific_reference':
+        from .shared_resources import validate_record as validate_scientific
+        return validate_scientific(record)
     if record.input_type == 'genome_reference':
         from .shared_genome import validate_record as validate_genome
         return validate_genome(record)
@@ -145,10 +148,8 @@ def validate_record(record):
     if q['scope'] == 'session' and q['review'] is not None:
         _fail('Private reference cannot claim deployment review.')
     if q['scope'] == 'deployment':
-        review = q['review']
-        if (not isinstance(review, dict) or set(review) != {'operator', 'provenance', 'reuse_basis'}
-                or any(type(v) is not str or not v.strip() or len(v) > 1024 for v in review.values())):
-            _fail('Deployment reuse requires explicit operator provenance and authorization.')
+        from .shared_resources import validate_review
+        validate_review(q['review'], q['files'])
 
 
 def input_set(record):
@@ -163,7 +164,7 @@ def _records(resources):
     rows = {}
     for root in resources._approved:
         for record in resources.list_records(source_root=root):
-            if record.input_type in ('regulatory_reference', 'genome_reference'):
+            if record.input_type in ('regulatory_reference', 'genome_reference', 'scientific_reference'):
                 rows[record.resource_id] = record
     return tuple(rows.values())
 
@@ -171,6 +172,8 @@ def _records(resources):
 def choices(resources, session_id, required, *, origin_turn_id=None):
     rows = []
     for record in _records(resources):
+        if record.input_type == 'scientific_reference':
+            continue
         q = record.reference_qualification
         if 'genome_resource_id' in q:
             continue  # The genome offers the choice; this is its private resolved binding.
@@ -186,6 +189,9 @@ def choices(resources, session_id, required, *, origin_turn_id=None):
 
 def check_record(resources, record):
     """Exact byte/code integrity; never repeat FASTA sequence qualification."""
+    if record.input_type == 'scientific_reference':
+        from .shared_resources import check_record as check_scientific
+        return check_scientific(resources, record)
     if record.input_type == 'genome_reference':
         from .shared_genome import check_record as check_genome
         return check_genome(resources, record)
@@ -202,6 +208,9 @@ def check_record(resources, record):
     _, reference, _ = load_regulatory_feature_reference(record.source_path, expected_sha256=record.source_sha256)
     _check_owner_files(reference, expected)
     q = record.reference_qualification
+    if q['review'] is not None:
+        from .shared_resources import check_review
+        check_review(_serialize(q['review']))
     if (dict(species=asdict(reference.species), assembly=reference.target_assembly,
              feature_category=reference.features.category) != _serialize(q['requirement'])
             or reference.reference_identity_sha256 != q['reference_identity_sha256']
@@ -355,16 +364,23 @@ def qualify(service, uploads, session_id, *, resource_id, expected_generation, o
         os.close(lease)
 
 
-def promote(resources, resource_id, *, operator, provenance, reuse_basis):
+def promote(resources, resource_id, *, operator, provenance, reuse_basis, redistribution=None):
     """Operator-only deployment provisioning; deliberately no public HTTP route.
 
     Review is an explicit authorization record, not proof produced by FASTA parsing.
     Existing private registrations/files are never changed or duplicated.
     """
     record = resources.load(resource_id)
+    if record.input_type == 'scientific_reference':
+        from .shared_resources import promote as promote_scientific
+        return promote_scientific(resources, resource_id, operator=operator, provenance=provenance,
+                                  reuse_basis=reuse_basis, redistribution=redistribution)
+    if record.input_type != 'regulatory_reference':
+        _fail('Choose a qualified reference.')
     check_record(resources, record)
-    review = dict(operator=operator, provenance=provenance, reuse_basis=reuse_basis)
+    from .shared_resources import review as sharing_review
     q = _serialize(record.reference_qualification)
+    review = sharing_review(operator, provenance, reuse_basis, redistribution, q['files'])
     q.update(scope='deployment', review=review)
     return resources.register('deployment-reference:' + digest(dict(source=record.record_sha256, review=review)),
         record.source_path, input_type='regulatory_reference', label=record.label,

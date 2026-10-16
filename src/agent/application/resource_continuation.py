@@ -183,6 +183,9 @@ def answer(sessions, interaction, decision, input_sets, *, reference_resources=N
         reference_record, reference_source = select(reference_resources, state.session_id, origin, decision.choice)
     completed = _completed(origin, source, interaction, decision.choice, decision.arguments,
                            sessions._application.registry, reference_record, reference_source)
+    if reference_resources is not None:
+        from .shared_resources import check_choice
+        check_choice(reference_resources, state.session_id, decision.choice)
     if 'registered_input' in completed:
         owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
         owner.validate_binding(LocalResourceAdmission._submission_binding(completed))

@@ -13,7 +13,7 @@ from test_dialogue_evidence import app, accepted, forbid_work, files
 from test_scientific_dialogue import Model, question, ask
 
 
-def publication(app, *, qc=False, candidates=2, huge=False):
+def publication(app, *, qc=False, candidates=2, huge=False, current_contract=False):
     root = app.workspace_root / 'published'
     root.mkdir(exist_ok=True)
     def write(name, value, raw=False):
@@ -46,6 +46,8 @@ def publication(app, *, qc=False, candidates=2, huge=False):
                 'primary/signature_coverage.json':write('primary/signature_coverage.json',coverage)})
         tool = 'annotate_scATAC_cell_types'
         values = dict(group_summary=[{k:g[k] for k in ('group','n_cells','primary_annotation','status')} for g in groups], groups_omitted=0)
+    if current_contract:
+        manifest['arguments'] = {}  # Explicit legacy method identity for this new fixture.
     binding = write('manifest.json',manifest)
     rid = accepted(app, tool, overrides=dict(values, manifest_path=str(root/'manifest.json'),
         manifest_sha256=binding['sha256'], contract_version=CONTRACT, artifact_type=ARTIFACT, artifact_schema_version=1))[0]
@@ -187,3 +189,28 @@ def test_changed_detail_during_generation_is_rejected(app):
         return dict(support='supported',paragraphs=[dict(parts=[dict(kind='claim',id=c['claim_id'])])])
     result=ask(app,'a','Why cluster 3?',Model(question(subject='3'),response=reply))
     assert result.status=='unavailable' and result.scientific is None
+
+
+def test_whole_annotation_rationale_preserves_group_marker_correspondence(app, monkeypatch):
+    rid, root = publication(app, candidates=3, current_contract=True)
+    guarded = forbid_work(app, monkeypatch)
+    before = files(app)
+    view = guarded.sessions.evidence('session',rid,'output0',
+        detail=DetailRequest('annotation_rationale',limit=1))
+    assert view.status == 'available', view
+    facts = {f.field:f for f in view.detail}
+    assert facts['assignment.0'].value['group'] == '3'
+    assert facts['assignment.records_omitted'].value == 1
+    assert facts['candidate.0'].value['group'] == '3'
+    assert facts['candidate.0'].value['candidate'] == 'B'
+    assert facts['candidate.0'].value['positive'] == ('MS4A1',)
+    assert facts['signature_coverage.0'].value['candidate'] == 'B'
+    assert any('primary candidate' in text for text in view.limitations)
+    response = ask(guarded,'whole','Which groups were annotated as B cells, and what markers supported those assignments?',
+        Model(question(subject=None),['detail.assignment.0','detail.assignment.1','detail.candidate.0','detail.candidate.1']))
+    assert response.status == 'answered',response
+    assert {c.value['group'] for c in response.scientific.claims} == {'3','7'}
+    assert all(c.source['artifact_sha256'] for c in response.scientific.claims)
+    assert all(c.source['revision_id'] == rid for c in response.scientific.claims)
+    # Science is forbidden; only the ordinary answer Session envelope is written.
+    assert all(files(app)[path] == value for path, value in before.items() if '/published/' in path)

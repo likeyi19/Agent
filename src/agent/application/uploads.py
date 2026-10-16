@@ -195,7 +195,8 @@ class H5ADUploadAdmission:
             self._check_directories()
             return tuple(self._owned(record).public()
                          for record in self.resources.list_records(source_root=self.completed, listing='choices')
-                         if record.input_type not in ('fasta', 'attachment') and getattr(record, 'session_id', None) is None)
+                         if record.input_type in ('h5ad', 'groups', 'external_fragments', 'bam', 'fastq')
+                         and getattr(record, 'session_id', None) is None)
         except (ResourceAdmissionError, UploadError):
             raise
         except (ValueError, OSError, RuntimeError) as exc:

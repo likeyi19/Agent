@@ -17,6 +17,22 @@ from agent.application import reference_supplementation as refs
 from agent.schemas.orchestration import _serialize
 
 
+def sharing_permission(record, *, genome=False):
+    """Explicit simulated author permission for the new promotion contract."""
+    from agent.tools.analysis.marker_annotation import sha256
+    from agent.application.shared_resources import redistribution_files
+    evidence = Path(record.source_path).parent / 'simulated-sharing-permission.txt'
+    evidence.write_text('Synthetic test author permits isolated test deployment reuse. No public biological qualification.\n')
+    files = record.reference_qualification['files']
+    if genome:
+        from agent.tools.data.regulatory_feature_reference import load_regulatory_feature_reference
+        reference = load_regulatory_feature_reference(record.source_path)[1]
+        files = [r for r in files if r['path'] != reference.features.bed.path]
+    return [dict(sha256=s, source_url='https://example.org/fixture', license_url='https://example.org/fixture/permission',
+        evidence_path=str(evidence), evidence_sha256=sha256(evidence), basis='Synthetic author permission; isolated software test only')
+        for s in sorted({r['sha256'] for r in redistribution_files(files)})]
+
+
 @pytest.fixture
 def reference_web(tmp_path, monkeypatch):
     class Model(helpers.ScriptedModel):
@@ -88,7 +104,7 @@ def test_generate_qualify_continue_promote_and_reopen(reference_web,monkeypatch)
     assert qualify(client,pending,record).json()==r.json();assert len(calls)==1
     assert not refs.choices(uploads.resources,'another',private.reference_qualification['requirement'])
     next_pending=start('second');assert not next_pending['choices']
-    promoted=refs.promote(uploads.resources,private.resource_id,operator='test operator',provenance='Simulated test fixture',reuse_basis='Test authorization only')
+    promoted=refs.promote(uploads.resources,private.resource_id,operator='test operator',provenance='Simulated test fixture',reuse_basis='Test authorization only', redistribution=sharing_permission(private))
     assert promoted.source_path==private.source_path
     assert client.get('/api/v1/sessions/second/reference-prerequisite').json()['pending']['choices']
     body=submission(turn='answer',resource_id=source['resource_id'],input_set_id='fish',utterance='Use the qualified reference and continue.')
@@ -151,7 +167,7 @@ def test_catalog_mutation_and_changed_feature_order_rejected(reference_web):
     client,backend,uploads,source,start,_=reference_web
     pending=start();r=qualify(client,pending,upload(client));assert r.status_code==200,r.text
     private=uploads.resources.load(r.json()['resource_id'])
-    promoted=refs.promote(uploads.resources,private.resource_id,operator='test',provenance='simulated',reuse_basis='test only')
+    promoted=refs.promote(uploads.resources,private.resource_id,operator='test',provenance='simulated',reuse_basis='test only', redistribution=sharing_permission(private))
     # Mutation of a catalog payload without its original content binding fails closed.
     path=uploads.resources._path(promoted.resource_id);original=path.read_bytes()
     d=json.loads(original);d['record']['label']='substituted';path.write_text(json.dumps(d))
@@ -181,7 +197,7 @@ def test_deployment_reuse_checks_a_new_registered_matrix(reference_web,tmp_path,
     client,backend,uploads,source,start,_=reference_web
     pending=start();response=qualify(client,pending,upload(client));assert response.status_code==200,response.text
     reference=uploads.resources.load(response.json()['resource_id'])
-    shared=refs.promote(uploads.resources,reference.resource_id,operator='test',provenance='simulated fixture',reuse_basis='test deployment')
+    shared=refs.promote(uploads.resources,reference.resource_id,operator='test',provenance='simulated fixture',reuse_basis='test deployment', redistribution=sharing_permission(reference))
     matrix=ad.read_h5ad(backend.source);matrix.obs_names=['new-a','new-b']
     if not same_vocabulary:matrix.var_names=matrix.var_names[::-1]
     path=tmp_path/'new-matrix.h5ad';matrix.write_h5ad(path)
@@ -205,7 +221,11 @@ def test_genome_reuse_binds_distinct_features_and_replays(reference_web, tmp_pat
     response = qualify(client, pending, upload(client))
     original = uploads.resources.load(response.json()['resource_id'])
     genome = shared_genome.promote(uploads.resources, original.resource_id,
-        operator='test', provenance='simulated', reuse_basis='isolated test deployment')
+        operator='test', provenance='simulated', reuse_basis='isolated test deployment', redistribution=sharing_permission(original, genome=True))
+    response = client.get('/api/v1/resources')
+    assert response.status_code == 200, response.text
+    listed = {row['resource_id'] for row in response.json()['choices']}
+    assert source['resource_id'] in listed and genome.resource_id not in listed
     old = refs.check_record(uploads.resources, original)
     before = sorted(uploads.root.rglob('*.fa'))
     matrix = ad.read_h5ad(backend.source)
@@ -245,7 +265,7 @@ def test_shared_genome_does_not_authorize_incompatible_regions(reference_web, tm
     pending = start(); response = qualify(client, pending, upload(client))
     reference = uploads.resources.load(response.json()['resource_id'])
     genome = shared_genome.promote(uploads.resources, reference.resource_id,
-        operator='test', provenance='simulated', reuse_basis='test deployment')
+        operator='test', provenance='simulated', reuse_basis='test deployment', redistribution=sharing_permission(reference, genome=True))
     matrix = ad.read_h5ad(backend.source); matrix.var_names = names
     path = tmp_path/'invalid-regions.h5ad'; matrix.write_h5ad(path)
     source.update(attach(client, path.read_bytes(), upload_id='invalid-regions').json())

@@ -506,7 +506,9 @@ def _project(sessions, state, revision, output, fields, detail):
         result = replace(result, detail=_detail(sessions, step, detail),
             evidence_scope='accepted_summary_and_published_detail',
             limitations=tuple(x for x in result.limitations if x != 'Detailed sidecars and raw artifacts are not read.') + (
-                'Detail is a bounded owner-order subset, not a ranking; omissions are not scientific absence.',))
+                'Detail is a bounded owner-order subset, not a ranking; omissions are not scientific absence.',) + (
+                ('Whole-result annotation support includes only the published primary candidate for each displayed group; other candidates require a group-specific question.',)
+                if detail.section == 'annotation_rationale' and detail.subject is None else ()))
     if len(_bytes(result)) > MAX_VIEW_BYTES:
         raise _Unavailable('evidence_view_size_limit')
     return result
@@ -514,7 +516,9 @@ def _project(sessions, state, revision, output, fields, detail):
 
 def detail_request(view, subject):
     """Reviewed result shapes only; no language/intent routing or scientific work."""
-    if view.source.tool_name == 'annotate_scATAC_cell_types' and subject is not None:
+    if view.source.tool_name == 'annotate_scATAC_cell_types':
+        if subject is None:
+            return DetailRequest('annotation_rationale')
         rows = next((f.value for f in view.facts if f.field == 'group_summary' and f.status == 'available'), ())
         labels = [row.get('primary_annotation') for row in rows if row['group'] == subject]
         return DetailRequest('annotation_rationale', subject, candidate=labels[0] if len(labels) == 1 else None)
@@ -528,9 +532,9 @@ def _detail(sessions, step, request):
                 'compute_scATAC_qc': 'length_histogram'}
     if expected.get(step.tool_name) != request.section:
         raise _Unsupported('unsupported_detail_section')
-    if (request.section == 'annotation_rationale') != (request.subject is not None):
+    if request.section != 'annotation_rationale' and request.subject is not None:
         raise _Unsupported('unsupported_detail_subject')
-    if request.section != 'annotation_rationale' and request.candidate is not None:
+    if (request.section != 'annotation_rationale' or request.subject is None) and request.candidate is not None:
         raise _Unsupported('unsupported_detail_candidate')
     result = step.result
 
@@ -602,15 +606,20 @@ def _detail(sessions, step, request):
         from agent.tools.analysis.annotation_contract import CONTRACT, profile_sha
         if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != profile_sha(manifest['arguments']):
             raise _Unsupported('unsupported_detail_profile')
-        groups = records('primary/groups.json', lambda row: row['group'] == request.subject, 'assignment')
-        if len(groups) != 1:
+        groups = records('primary/groups.json', lambda row: request.subject is None or row['group'] == request.subject, 'assignment')
+        if request.subject is not None and len(groups) != 1:
             raise _Unavailable('unknown_or_ambiguous_detail_subject')
-        candidates = records('primary/candidate_evidence.json', lambda row: row['group'] == request.subject
-            and (request.candidate is None or row['candidate'] == request.candidate), 'candidate')
+        # Whole-result questions receive published primary-candidate support for
+        # the same bounded groups, never inferred labels or a new ranking.
+        selected = {row['group']: row['primary_annotation'] for _, row in groups[:request.limit]}
+        candidates = records('primary/candidate_evidence.json', lambda row:
+            (row['group'] in selected and row['candidate'] == selected[row['group']]) if request.subject is None else
+            (row['group'] == request.subject and (request.candidate is None or row['candidate'] == request.candidate)), 'candidate')
         if request.candidate is not None and len(candidates) != 1:
             raise _Unavailable('unknown_or_ambiguous_detail_candidate')
-        coverage = records('primary/signature_coverage.json', lambda row: request.candidate is None
-            or row['candidate'] == request.candidate, 'signature_coverage')
+        coverage = records('primary/signature_coverage.json', lambda row:
+            row['candidate'] in set(selected.values()) if request.subject is None else
+            (request.candidate is None or row['candidate'] == request.candidate), 'signature_coverage')
         if request.candidate is not None and len(coverage) != 1:
             raise _Unavailable('unknown_or_ambiguous_detail_candidate')
         if request.candidate is not None:

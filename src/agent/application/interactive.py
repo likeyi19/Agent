@@ -479,6 +479,17 @@ class InteractiveAgentApplication:
         except (ValueError, TypeError, UnicodeError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
+        existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if (type(registered_input) is RegisteredInput and registered_input.tool_name == 'inspect_scATAC'
+                and set(inputs) == {'input_path'} and registered_input.resource_choice is None):
+            # A second view of the exact selected registration, not another input
+            # or execution path. Legacy completed retries retain their old shape.
+            if existing is None:
+                candidates = self.resources.compose_group([registered_input.resource_id],
+                    attachment_candidates=True, verify_source=False)
+                submission['candidate_input'] = candidates.attribution()
+            elif existing.submission is not None and 'candidate_input' in existing.submission:
+                submission['candidate_input'] = _serialize(existing.submission['candidate_input'])
         duplicate = self._duplicate(state, turn_id, utterance, submission)
         if not duplicate and state.generation != expected_generation:
             raise _fail('INTERACTIVE_GENERATION_CONFLICT')
@@ -638,8 +649,8 @@ class InteractiveAgentApplication:
                                 else interaction.submission.get('attachments', ()))
         metadata = {} if interaction is None else (interaction.admitted or {}).get('registered_input', {})
         raw = {} if interaction is None else (interaction.admitted or {})
-        if any(f + '_sources' in raw for f in ('fastq', 'bam', 'fragments')):
-            field = 'fragments' if 'fragments_sources' in raw else 'bam' if 'bam_sources' in raw else 'fastq'
+        if any(f + '_sources' in raw for f in ('fastq', 'bam', 'fragments', 'annotation')):
+            field = 'annotation' if 'annotation_sources' in raw else 'fragments' if 'fragments_sources' in raw else 'bam' if 'bam_sources' in raw else 'fastq'
             metadata = raw[field + '_sources']
             from .raw_handoff import declaration, source_handles
             offered = set(source_handles(declaration(_serialize(raw[field]), field)))

@@ -1,7 +1,7 @@
-"""Task-scoped raw declarations; scientific qualification remains with owners.
+"""Task-scoped source declarations; scientific qualification remains with owners.
 
-This is the raw-library variant of role continuation, not a scientific planner.
-Only explicitly captured attachments can become members of one declared library.
+These are bounded variants of existing role continuation, not a scientific planner.
+Only explicitly captured attachments can supply scientific source roles.
 """
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -123,15 +123,81 @@ class FragmentsDeclaration:
             raise ValueError('Invalid external resource handle.')
 
 
+@dataclass(frozen=True)
+class AnnotationUploads:
+    """Explicit file roles and declared provenance, never inferred from filenames."""
+    gene_source: str | None = None
+    signature_source: str | None = None
+    gene_provenance: str | None = None
+    gene_release: str | None = None
+    signature_provenance: str | None = None
+    signature_release: str | None = None
+    species: str | None = None
+    assembly: str | None = None
+    context: str | None = None
+    gene_namespace: str | None = None
+
+    def __post_init__(self):
+        from agent.tools.analysis.marker_annotation import identifier
+        for name, value in asdict(self).items():
+            if value is None:
+                continue
+            identifier(value)
+            if len(value) > 512 or name.endswith('_source') and re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None:
+                raise ValueError('Invalid uploaded annotation resource declaration.')
+        if self.gene_source is not None and self.gene_source == self.signature_source:
+            raise ValueError('Gene annotations and signatures require distinct files.')
+
+
+@dataclass(frozen=True)
+class AnnotationDeclaration:
+    """Source history and biological context for the existing annotation owner."""
+    source: str | None = None
+    groups_source: str | None = None
+    species: str | None = None
+    assembly: str | None = None
+    measurement: str | None = None
+    context: str | None = None
+    grouping_provenance: str | None = None
+    resource: str | None = None
+    uploaded: AnnotationUploads | None = None
+
+    def __post_init__(self):
+        from agent.tools.analysis.marker_annotation import identifier
+        if self.uploaded is not None and type(self.uploaded) is not AnnotationUploads:
+            raise ValueError('Invalid uploaded resource declarations.')
+        for name in ('source', 'groups_source'):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None):
+                raise ValueError('Invalid annotation source handle.')
+        if self.source is not None and self.source == self.groups_source:
+            raise ValueError('Counts and group TSV require distinct sources.')
+        handles = source_handles(self)
+        if len(handles) != len(set(handles)):
+            raise ValueError('Annotation scientific file roles require distinct sources.')
+        for name in ('species', 'assembly', 'measurement', 'context', 'grouping_provenance'):
+            value = getattr(self, name)
+            if value is not None:
+                identifier(value)
+                if len(value) > 128:
+                    raise ValueError('Annotation declaration exceeds its 128-character bound.')
+        if self.resource is not None and (type(self.resource) is not str or re.fullmatch(r'resource\.[a-z][a-z0-9_-]{0,63}', self.resource) is None):
+            raise ValueError('Invalid annotation resource handle.')
+
+
 def target(field):
-    return {'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
+    return {'annotation': 'annotate_scATAC_cell_types', 'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
 
 
 def empty(field):
-    return {'fragments': FragmentsDeclaration, 'bam': BamDeclaration, 'fastq': FastqDeclaration}[field]()
+    return {'annotation': AnnotationDeclaration, 'fragments': FragmentsDeclaration, 'bam': BamDeclaration, 'fastq': FastqDeclaration}[field]()
 
 
 def source_handles(declared):
+    if isinstance(declared, AnnotationDeclaration):
+        return [h for h in (declared.source, declared.groups_source,
+            *(getattr(declared.uploaded, k) for k in ('gene_source', 'signature_source')
+              if declared.uploaded is not None)) if h is not None]
     if isinstance(declared, FragmentsDeclaration):
         return [h for h in (declared.source, declared.index_source, declared.feature_source, declared.genome_source, declared.genome_index_source) if h is not None]
     return ([declared.source] if declared.source else []) if isinstance(declared, BamDeclaration) else [m.source for m in declared.members]
@@ -139,17 +205,26 @@ def source_handles(declared):
 
 def _field(interaction):
     admitted = interaction.admitted or {}
-    return 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    return 'annotation' if 'annotation' in admitted else 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
 
 
 def validate_arguments(arguments, field='fastq'):
     from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
-    allowed = {'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
+    allowed = {'annotation': ('annotate_scATAC_cell_types',), 'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
     if any(a.tool not in allowed for a in arguments):
         raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
 
 
 def declaration(value, field='fastq'):
+    if field == 'annotation':
+        if type(value) is not dict or set(value) - {'uploaded'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded'}:
+            raise ValueError('Invalid annotation declaration shape.')
+        value = dict(value)
+        if value.get('uploaded') is not None:
+            if type(value['uploaded']) is not dict or set(value['uploaded']) != set(AnnotationUploads.__dataclass_fields__):
+                raise ValueError('Invalid uploaded annotation resource shape.')
+            value['uploaded'] = AnnotationUploads(**value['uploaded'])
+        return AnnotationDeclaration(**value)
     if field == 'fragments':
         if type(value) is not dict or set(value) != set(FragmentsDeclaration.__dataclass_fields__):
             raise ValueError('Invalid fragment declaration shape.')
@@ -167,13 +242,30 @@ def merge(previous, additions):
     if type(previous) is not type(additions):
         raise ValueError('Raw declaration kind cannot change.')
     values = asdict(previous)
+    if isinstance(previous, AnnotationDeclaration):
+        values['uploaded'] = previous.uploaded
     for key in values.keys() - {'members'}:
         value = getattr(additions, key)
         if value is not None:
-            if key != 'resource' and values[key] is not None and values[key] != value:
+            if key == 'uploaded':
+                old = asdict(previous.uploaded or AnnotationUploads())
+                for role in ('gene', 'signature'):
+                    supplied = getattr(value, role + '_source')
+                    if supplied is not None and supplied != old[role + '_source']:
+                        old[role + '_provenance'] = None
+                        old[role + '_release'] = None
+                for name, supplied in asdict(value).items():
+                    if supplied is not None:
+                        # Explicit uploaded reference corrections retain source
+                        # registrations and are recorded as new typed additions.
+                        old[name] = supplied
+                values[key] = AnnotationUploads(**old)
+                continue
+            if (key != 'resource' and not (isinstance(previous, AnnotationDeclaration) and key == 'grouping_provenance')
+                    and values[key] is not None and values[key] != value):
                 raise ValueError('Captured FASTQ declarations cannot be replaced.')
             values[key] = value
-    if isinstance(previous, (BamDeclaration, FragmentsDeclaration)):
+    if isinstance(previous, (BamDeclaration, FragmentsDeclaration, AnnotationDeclaration)):
         return type(previous)(**values)
     members = {m.source: m for m in previous.members}
     for member in additions.members:
@@ -183,11 +275,29 @@ def merge(previous, additions):
     return FastqDeclaration(**dict(values, members=tuple(members.values())))
 
 
+def declaration_dict(value):
+    """Preserve the exact pre-extension declaration identity when absent."""
+    result = asdict(value)
+    if isinstance(value, AnnotationDeclaration) and value.uploaded is None:
+        result.pop('uploaded')
+    return result
+
+
 def schema(sources, resources, field='fastq'):
     from .turn_decisions import _object
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
         return {'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
+    if field == 'annotation':
+        text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
+        uploaded = _object({k: optional([s['source'] for s in sources]) if k.endswith('_source') else
+            {'anyOf': [{'type': 'string', 'maxLength': 512}, {'type': 'null'}]}
+            for k in AnnotationUploads.__dataclass_fields__})
+        return _object(dict(source=optional([s['source'] for s in sources]),
+            groups_source=optional([s['source'] for s in sources]),
+            **{k: text for k in ('species', 'assembly', 'measurement', 'context', 'grouping_provenance')},
+            resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
+            uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
     if field == 'fragments':
         return _object(dict(source=optional([s['source'] for s in sources]),
             index_source=optional([s['source'] for s in sources]),
@@ -218,6 +328,9 @@ def schema(sources, resources, field='fastq'):
 
 
 def resources(input_sets, field='fastq'):
+    if field == 'annotation':
+        return tuple(s for s in input_sets if 'annotation_spec_path' in s.inputs()
+                     or {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'} <= set(s.inputs()))
     if field == 'fragments':
         return tuple(s for s in input_sets if s.fragments_companion)
     if field == 'bam':
@@ -227,8 +340,18 @@ def resources(input_sets, field='fastq'):
 
 
 def offers(input_sets, field='fastq'):
-    return [dict(handle='resource.' + s.input_set_id, label=s.label, default=getattr(s, field + '_default'))
-            for s in resources(input_sets, field)]
+    result = [dict(handle='resource.' + s.input_set_id, label=s.label, default=getattr(s, field + '_default', False))
+              for s in resources(input_sets, field)]
+    if field == 'annotation':
+        from .interactive import _unsafe_fact_value
+        evidence = resource_evidence(input_sets, field)
+        for row, choice in zip(result, resources(input_sets, field), strict=True):
+            spec = evidence[choice.input_set_id]
+            if spec is not None:
+                context = {k: spec[k] for k in ('species', 'assembly', 'measurement', 'context') if k in spec}
+                if not _unsafe_fact_value(context):
+                    row['context'] = context
+    return result
 
 
 def resource_evidence(input_sets, field):
@@ -243,6 +366,10 @@ def resource_evidence(input_sets, field):
     for choice in resources(input_sets, field):
         values = choice.inputs()
         try:
+            if field == 'annotation':
+                from agent.tools.analysis.annotation_input import resource_base
+                result[choice.input_set_id] = resource_base(values)
+                continue
             if not values.get('reference_bundle_sha256'):
                 raise ValueError('A reference content pin is required.')
             if field == 'fragments':
@@ -253,7 +380,7 @@ def resource_evidence(input_sets, field):
                 _, bundle, _ = reference.load_scatac_reference_bundle(
                     values.get('reference_bundle_path'), expected_sha256=values['reference_bundle_sha256'])
                 result[choice.input_set_id] = bundle.to_dict()
-        except (ValueError, OSError, TypeError):
+        except (ValueError, OSError, TypeError, KeyError):
             result[choice.input_set_id] = None
     return result
 
@@ -268,6 +395,23 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         raw = evidence[choice.input_set_id]
         if raw is None:
             descriptions[choice.input_set_id] = 'its pinned reference is unavailable or invalid'
+            continue
+        if isinstance(declared, AnnotationDeclaration):
+            from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC, EXTERNAL_PRIMARY
+            uploaded = declared.uploaded
+            scope_only = 'schema' not in raw and 'contig_scope' in raw
+            permitted = {'annotation_spec_path', 'annotation_spec_sha256', 'annotation_method', 'count_slot',
+                         'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}
+            keys = ('species', 'assembly') if uploaded is not None and uploaded.signature_source else ('species', 'assembly', 'measurement', 'context')
+            compatible = ((scope_only and uploaded is not None or raw.get('schema') == EXTERNAL_SPEC and raw.get('method') == EXTERNAL_PRIMARY)
+                and (scope_only or not set(choice.inputs()) - permitted)
+                and choice.inputs().get('annotation_method', EXTERNAL_PRIMARY) == EXTERNAL_PRIMARY
+                and all(getattr(declared, key) is None or getattr(declared, key) == raw.get(key)
+                        for key in (('species', 'assembly') if scope_only else keys)))
+            descriptions[choice.input_set_id] = ('compatible annotation reference' if compatible else
+                'its method, species, assembly, measurement or tissue context conflicts with this task')
+            if compatible:
+                candidates.append(choice)
             continue
         if isinstance(declared, FragmentsDeclaration) and raw.get('contract_version') == 'regulatory-feature-reference.v1':
             from agent.tools.data.regulatory_feature_reference import validate_regulatory_feature_reference
@@ -295,26 +439,41 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
             return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}. Supply a corrected resource or explicitly choose an alternative.'], None
         return [], selected
     # An available reference cannot establish the sample's species/alignment history.
-    if declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None:
+    if (declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None
+            or isinstance(declared, AnnotationDeclaration) and any(getattr(declared, k) is None
+                for k in ('assembly', 'measurement', 'context'))):
         return [], None
     if not candidates:
-        needed = ('A qualified fragments reference compatible with the declared species and assembly'
+        if isinstance(declared, AnnotationDeclaration):
+            return ['No compatible annotation resource is available. Upload a MAESTRO refgenes transcript/exon table and a marker-signature TSV (candidate, gene), with species, assembly, gene namespace, tissue applicability, publisher/derivation and release. A compatible qualified genome chromosome scope must also be available.'], None
+        needed = ('A qualified annotation gene/marker resource compatible with species, assembly, measurement and tissue context'
+                  if isinstance(declared, AnnotationDeclaration) else 'A qualified fragments reference compatible with the declared species and assembly'
                   if isinstance(declared, FragmentsDeclaration) else 'A qualified BAM reference compatible with the declared species and assembly'
                   if isinstance(declared, (BamDeclaration, FragmentsDeclaration)) else
                   'A qualified FASTQ reference and barcode whitelist compatible with the declared species')
         return [needed + ' must be provisioned before preprocessing.'
                 + (' Configured references are unavailable, invalid or incompatible.' if choices else '')], None
-    field = 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
-    defaults = [s for s in candidates if getattr(s, field + '_default')]
+    field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
+    defaults = [s for s in candidates if getattr(s, field + '_default', False)]
     if len(defaults) == 1:
         return [], defaults[0]
     # Identical mappings/whitelists differ only in display/configuration identity.
     # Stable ID order is an explicit tie policy for these equivalent aliases only.
     def equivalence(choice):
         values = choice.inputs()
+        if isinstance(declared, AnnotationDeclaration) and declared.uploaded is not None:
+            # Uploaded roles supersede only those dependencies. Two catalog
+            # entries with identical remaining dependencies are exact aliases.
+            raw = evidence[choice.input_set_id]
+            retained = {k: raw.get(k) for k in ('species', 'assembly', 'contig_scope')}
+            for role in ('gene', 'signature'):
+                if getattr(declared.uploaded, role + '_source') is None:
+                    retained[role + '_resource'] = raw.get(role + '_resource')
+            retained['count_slot'] = values.get('count_slot')
+            return digest(retained)
         # The same pinned manifest at another locator is the same dependency.
         # All other scientific arguments and provenance remain significant.
-        values.pop('reference_bundle_path')
+        values.pop('annotation_spec_path' if isinstance(declared, AnnotationDeclaration) else 'reference_bundle_path')
         values.setdefault('species', evidence[choice.input_set_id]['species'])
         return digest(values), digest(_serialize(choice.fastq_whitelist))
     equivalent = {}
@@ -329,6 +488,9 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
 
 def source_binding(origin, source, interaction, field=None):
     field = field or (_field(source) if source is not None else _field(interaction))
+    if field == 'annotation':
+        origin = _candidate_view(origin)
+        interaction = _candidate_view(interaction)
     from .dialogue_execution import _role_binding
     # Reuse the existing exact-prefix/explicit-append rule. The scientific
     # collection is distinct from the immutable captured candidate group.
@@ -340,7 +502,7 @@ def source_binding(origin, source, interaction, field=None):
 
 
 def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
-    field = 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
+    field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
     from types import SimpleNamespace
     from .local_resources import LocalResourceAdmission, ResourceAdmissionError, _fastq_member
     if field == 'fragments':
@@ -415,7 +577,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
         if selected is None:
             raise ValueError('Raw resource is not offered.')
     else:
-        defaults = [s for s in choices if getattr(s, field + '_default')]
+        defaults = [s for s in choices if getattr(s, field + '_default', False)]
         if len(defaults) == 1:
             selected = defaults[0]
     if selected is None:
@@ -433,7 +595,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
 def _captured(interaction, preceding):
     from .dialogue_execution import _role_source
     reference = interaction.snapshot.get('prerequisite')
-    if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments'}:
+    if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
         return _role_source(reference, preceding)
     return interaction, None
 
@@ -446,7 +608,7 @@ def _extend_catalog(previous, current):
     return current
 
 
-def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None):
+def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None):
     from .dialogue_execution import _bind_arguments
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
@@ -455,21 +617,57 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
     previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
     declared = merge(previous, addition)
     values = _bind_arguments(registry, interaction.utterance,
-        {} if source is None else _serialize(source.admitted[field + '_arguments']), arguments)
+        {} if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
+        replace_existing=field == 'annotation')
+    if (field == 'annotation' and source is not None and addition.grouping_provenance is None
+            and 'group_column' in source.admitted[field + '_arguments']
+            and values.get('group_column') != source.admitted[field + '_arguments'].get('group_column')):
+        declared = replace(declared, grouping_provenance=None)
     choices = tuple(ScientificInputSet(**_serialize(r)) for r in rows)
     pinned = None if source is None else source.admitted.get('raw_resource_choice')
-    missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned)
+    if field == 'annotation':
+        declared, values, missing = _annotation_requirements(binding, declared, values, source_evidence)
+        questions, selected = _resolve_resource(declared, resources(choices, field), evidence, pinned)
+        if (selected is not None and 'annotation_spec_path' in selected.inputs()
+                and 'count_slot' not in values and 'count_slot' in selected.inputs()):
+            values['count_slot'] = selected.inputs()['count_slot']
+            declared, values, missing = _annotation_requirements(binding, declared, values, source_evidence)
+        missing += questions
+        if declared.uploaded is not None:
+            from agent.tools.analysis.annotation_input import resource_specification
+            spec, problems = resource_specification(evidence[selected.input_set_id] if selected else None,
+                declared, binding.members)
+            missing += problems
+            if resource_observation is not None:
+                if (set(resource_observation) != {'specification_sha256', 'qualification', 'problem'}
+                        or resource_observation['specification_sha256'] != digest(spec)
+                        or type(resource_observation['problem']) is not str):
+                    raise ValueError('Uploaded reference observation changed its captured specification.')
+                qualification = resource_observation['qualification']
+                if not resource_observation['problem'] and (type(qualification) is not dict
+                        or set(qualification) != {'gene_sha256', 'signature_sha256', 'gene_count', 'primary_transcripts', 'candidate_count', 'interpretation'}
+                        or any(qualification[role + '_sha256'] != spec[role + '_resource']['sha256'] for role in ('gene', 'signature'))
+                        or any(type(qualification[key]) is not int or qualification[key] <= 0
+                               for key in ('gene_count', 'primary_transcripts', 'candidate_count'))
+                        or qualification['interpretation'] != 'declared_provenance_and_applicability;not_independent_biological_validation'):
+                    raise ValueError('Invalid uploaded reference qualification observation.')
+                if resource_observation['problem'] and qualification is not None:
+                    raise ValueError('Failed resource qualification cannot carry a success observation.')
+                if resource_observation['problem']:
+                    missing.append(resource_observation['problem'])
+    else:
+        missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned)
     return binding, declared, values, missing, selected
 
 
-def admit(sessions, interaction, decision, input_sets):
+def admit(sessions, interaction, decision, input_sets, *, reference_resources=None):
     """The raw declaration variant of existing role request/answer admission."""
     from .turn_decisions import RequestRoles, IntentError
     from .resource_continuation import catalog
     from .dialogue_execution import _arguments
     from .local_resources import LocalResourceAdmission
-    field = 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
-    if field not in ('fastq', 'bam', 'fragments') or (decision.fastq is not None and field != 'fastq'):
+    field = 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    if field not in ('fastq', 'bam', 'fragments', 'annotation') or (decision.fastq is not None and field != 'fastq'):
         raise IntentError('invalid_prerequisite')
     validate_arguments(_arguments(decision), field)
     state = sessions.load(sessions._interaction_session_id)
@@ -490,8 +688,24 @@ def admit(sessions, interaction, decision, input_sets):
             raise IntentError('invalid_prerequisite')
         rows = _extend_catalog(previous_rows, catalog(input_sets))
     evidence = resource_evidence(input_sets, field)
+    source_evidence = None
+    if field == 'annotation':
+        candidate = source_binding(origin, source, interaction, field)
+        previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
+        declared_source = merge(previous, decision.annotation or empty(field)).source
+        if declared_source is not None:
+            from agent.tools.analysis.annotation_input import observe
+            if int(declared_source.split('.')[1]) >= len(candidate.members):
+                raise ValueError('Annotation source is outside the captured attachments.')
+            member = candidate.members[int(declared_source.split('.')[1])]
+            owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
+            record = owner.load(member['resource_id'])
+            if record.session_id not in (None, state.session_id):
+                raise IntentError('invalid_prerequisite')
+            owner._verify_records([record])
+            source_evidence = observe(record.source_path, record.source_sha256)
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
-        getattr(decision, field) or empty(field), _arguments(decision), rows, sessions._application.registry, field, evidence)
+        getattr(decision, field) or empty(field), _arguments(decision), rows, sessions._application.registry, field, evidence, source_evidence)
     owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
     owner.validate_binding(binding)
     # Candidate validation intentionally does not open unused attachments.
@@ -499,14 +713,36 @@ def admit(sessions, interaction, decision, input_sets):
     if any(r.session_id not in (None, state.session_id) for r in records):
         raise IntentError('invalid_prerequisite')
     owner._verify_records(records)
+    if selected is not None and not missing and reference_resources is not None:
+        from .shared_resources import check_choice
+        check_choice(reference_resources, state.session_id, 'resource.' + selected.input_set_id)
+    resource_observation = None
+    if field == 'annotation' and declared.uploaded is not None and not missing:
+        import csv
+        from agent.tools.analysis.annotation_input import resource_specification, qualify_resources
+        spec, _ = resource_specification(evidence[selected.input_set_id], declared, binding.members)
+        resource_observation = dict(specification_sha256=digest(spec), qualification=None, problem='')
+        try:
+            resource_observation['qualification'] = qualify_resources(spec)
+        except (ValueError, OSError, TypeError, KeyError, csv.Error) as exc:
+            from .interactive import _unsafe_fact_value
+            detail = str(exc)
+            if len(detail) > 512 or _unsafe_fact_value(detail):
+                detail = 'The supplied resource cannot be qualified; check its content and declared compatibility.'
+            resource_observation['problem'] = 'Uploaded annotation reference: ' + detail
+            missing.append(resource_observation['problem'])
     admitted = dict(kind='clarify' if missing else 'execute', tool=target(field),
         revision_id=interaction.base_revision_id, resource_catalog=rows, raw_resource_evidence=evidence,
         raw_resource_choice=(declared.resource or ('resource.' + selected.input_set_id if selected is not None
             else source.admitted.get('raw_resource_choice') if source is not None else None)),
-        **{field: asdict(declared), field + '_addition': asdict(getattr(decision, field) or empty(field)),
+        **{field: declaration_dict(declared), field + '_addition': declaration_dict(getattr(decision, field) or empty(field)),
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
         arguments=[asdict(a) for a in _arguments(decision)])
+    if field == 'annotation':
+        admitted['annotation_source_evidence'] = source_evidence
+        if declared.uploaded is not None:
+            admitted['annotation_resource_observation'] = resource_observation
     if not initial:
         admitted['continuation'] = {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}
     pending = None
@@ -521,11 +757,20 @@ def admit(sessions, interaction, decision, input_sets):
         admitted.update(inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution(),
             **{field + '_context': receipt}, operation='plan',
             request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)))
+        if field == 'annotation' and declared.uploaded is not None and reference_resources is not None:
+            from .shared_resources import persist
+            uploaded_source = declared.uploaded.gene_source or declared.uploaded.signature_source
+            persist(reference_resources, dict(annotation_spec_path=receipt['resource']['path'],
+                annotation_spec_sha256=receipt['resource']['sha256']), session_id=state.session_id,
+                origin_turn_id=origin.turn_id, label='Qualified annotation references',
+                qualification=resource_observation['qualification'],
+                publication_source=(binding.members[int(uploaded_source.split('.')[1])]['source_path']
+                                    if uploaded_source is not None else None))
     return admitted, pending
 
 
 def _context_identity(candidates, declared, selected, *, mode='original', scope=None):
-    declaration = asdict(declared)
+    declaration = declaration_dict(declared)
     if scope == 'library.v1':
         # Reference selection is independent of library/barcode processing.
         # Keep the genuine whitelist dependency; never reuse across libraries.
@@ -545,6 +790,8 @@ def prepare(owner, session_id, candidates, declared, selected, arguments, *, acc
     still execute and verify under RunStore; this preparation admits a request
     resource against the same exact source bytes and intake content identity.
     """
+    if isinstance(declared, AnnotationDeclaration):
+        return _prepare_annotation(owner, candidates, declared, selected, arguments)
     if isinstance(declared, FragmentsDeclaration):
         return _prepare_fragments(owner, session_id, candidates, declared, selected, arguments)
     from agent.tools.data import raw_scatac, raw_scatac_manifest, scatac_library_context as library
@@ -769,12 +1016,13 @@ def validate(interaction, preceding):
             raise ValueError('FASTQ resource catalog changed.')
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
-            rows, build_default_tool_registry(), field, evidence)
+            rows, build_default_tool_registry(), field, evidence, admitted.get('annotation_source_evidence'),
+            admitted.get('annotation_resource_observation'))
         if evidence is not None and admitted.get('raw_resource_choice') != (declared.resource or
                 ('resource.' + selected.input_set_id if selected is not None else
                  source.admitted.get('raw_resource_choice') if source is not None else None)):
             raise ValueError('Captured resource selection changed.')
-        if (admitted[field] != _serialize(asdict(declared)) or admitted[field + '_sources'] != binding.attribution()
+        if (admitted[field] != _serialize(declaration_dict(declared)) or admitted[field + '_sources'] != binding.attribution()
                 or admitted[field + '_arguments'] != values or admitted['tool'] != target(field)
                 or admitted['revision_id'] != interaction.base_revision_id or admitted['roles']):
             raise ValueError('FASTQ declarations changed.')
@@ -788,6 +1036,8 @@ def validate(interaction, preceding):
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
                     or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')
+        elif field == 'annotation':
+            _validate_annotation_completion(admitted, binding, declared, selected, values)
         elif field == 'fragments':
             _validate_fragments_completion(interaction, admitted, binding, declared, selected, values)
         else:
@@ -860,3 +1110,160 @@ def validate(interaction, preceding):
                     raise ValueError('Derived FASTQ binding changed.')
     except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
         raise SessionError('Invalid task-scoped raw handoff.') from exc
+
+
+def _annotation_requirements(binding, declared, arguments, observation):
+    """Resolve exact source declarations; never classify groups by their names."""
+    from agent.tools.analysis import annotation_contract as c
+    values = dict(arguments)
+    missing = []
+    if any(int(h.split('.')[1]) >= len(binding.members) for h in source_handles(declared)):
+        raise ValueError('Annotation source is outside the captured attachments.')
+    if declared.source is None:
+        if observation is not None:
+            raise ValueError('Unexpected annotation source observation.')
+        return declared, values, ['Identify the uploaded peak-count H5AD.']
+    member = binding.members[int(declared.source.split('.')[1])]
+    if (not isinstance(observation, dict) or set(observation) != {
+            'source_sha256', 'declarations', 'grouping_columns', 'qualified_groupings'}
+            or observation['source_sha256'] != member['source_sha256']):
+        raise ValueError('Annotation observation is not bound to the captured source.')
+    additions = {k: v for k, v in observation['declarations'].items() if k != 'count_slot'}
+    declared = merge(declared, AnnotationDeclaration(**additions))
+    for key, question in (
+            ('species', 'Specify the source species.'), ('assembly', 'Specify the genome assembly.'),
+            ('measurement', 'Confirm the raw measurement history; this method supports Cell Ranger ATAC cut-site counts.'),
+            ('context', 'Specify the tissue context for the marker resource.')):
+        if getattr(declared, key) is None:
+            missing.append(question)
+    if any(value is not None and value != expected for value, expected in (
+            (declared.species, 'human'), (declared.assembly, 'hg38'), (declared.measurement, c.EXTERNAL_SEMANTICS))):
+        missing.append('This annotation method requires human hg38 raw Cell Ranger ATAC cut-site counts; the captured declarations are incompatible.')
+    if 'count_slot' not in values and 'count_slot' in observation['declarations']:
+        values['count_slot'] = observation['declarations']['count_slot']
+    if 'count_slot' not in values:
+        missing.append('Identify the raw-count slot: X or layers/name.')
+    if declared.groups_source is not None:
+        if 'group_column' in values:
+            raise ValueError('Select an obs grouping column or an ordered group TSV, not both.')
+    elif 'group_column' not in values:
+        qualified = observation['qualified_groupings']
+        if len(qualified) == 1:
+            values['group_column'] = qualified[0]['column']
+            if declared.grouping_provenance is None:
+                declared = replace(declared, grouping_provenance=qualified[0]['provenance'])
+        else:
+            columns = observation['grouping_columns']
+            missing.append('Choose the independently derived clustering column in obs'
+                + (': ' + ', '.join(columns) if columns else ', or attach an exact ordered cell_id/group TSV')
+                + '. Sample, batch and condition columns are not automatically treated as clusters.')
+    if 'group_column' in values:
+        if values['group_column'] not in observation['grouping_columns']:
+            missing.append('The selected obs column is absent or is not a valid complete grouping; it cannot be replaced automatically.')
+        for row in observation['qualified_groupings']:
+            if row['column'] == values['group_column'] and declared.grouping_provenance is None:
+                declared = replace(declared, grouping_provenance=row['provenance'])
+    if declared.grouping_provenance is None:
+        missing.append('Describe how the chosen groups were derived and whether they were independent of marker/signature inspection.')
+    return declared, values, missing
+
+
+def _annotation_binding(candidates, declared, selected, arguments, pointer):
+    from .local_resources import RegisteredInputGroup, group_role_inputs
+    from agent.orchestration.registry import build_default_tool_registry
+    from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY
+    roles = [dict(tool='annotate_scATAC_cell_types', port='source', source=declared.source)]
+    if declared.groups_source is not None:
+        roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=declared.groups_source))
+    values = dict(arguments, annotation_method=EXTERNAL_PRIMARY,
+                  annotation_spec_path=pointer['path'], annotation_spec_sha256=pointer['sha256'])
+    bound = RegisteredInputGroup(candidates.members, values, roles,
+        resource_choice=selected.resource_choice(), attachment_candidates=True)
+    return replace(bound, execution_inputs=group_role_inputs(bound, roles, build_default_tool_registry()))
+
+
+def _prepare_annotation(owner, candidates, declared, selected, arguments):
+    """Bind a reviewed resource to declared grouping through its existing owner."""
+    from agent.tools.analysis import annotation_contract as c
+    from agent.tools.analysis.marker_annotation import sha256
+    identity = _context_identity(candidates, declared, selected)
+    directory = owner._workspace._ensure_directory(owner._workspace.root / 'annotation_handoffs')
+    root = owner._workspace._ensure_directory(directory / identity)
+    from agent.tools.analysis.annotation_input import resource_base, resource_specification
+    specification, problems = resource_specification(resource_base(selected.inputs()), declared, candidates.members)
+    if problems:
+        raise ValueError('Incomplete uploaded annotation resources.')
+    content = c.matrix.canonical(specification)
+    path = root / 'resources.json'
+    # Ordinary immutable workspace publication, never mutate selected resources.
+    if path.exists():
+        if path.read_bytes() != content:
+            raise ValueError('Captured annotation resource binding changed.')
+    else:
+        import os, tempfile
+        fd, temporary = tempfile.mkstemp(dir=root, prefix='.resources-')
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(content); stream.flush(); os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if path.read_bytes() != content:
+                    raise ValueError('Captured annotation resource binding changed.')
+            directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    pointer = dict(path=str(path), sha256=sha256(path))
+    bound = _annotation_binding(candidates, declared, selected, arguments, pointer)
+    owner.validate_binding(bound)
+    return bound, dict(identity=identity, specification=specification, resource=pointer)
+
+
+def _validate_annotation_completion(admitted, candidates, declared, selected, arguments):
+    """Replay the captured source/resource binding without scientific IO."""
+    from .session_state import sha
+    from agent.tools.analysis import annotation_contract as c
+    receipt = admitted['annotation_context']
+    if (set(receipt) != {'identity', 'specification', 'resource'}
+            or receipt['identity'] != _context_identity(candidates, declared, selected)
+            or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'):
+        raise ValueError('Invalid annotation handoff receipt.')
+    from agent.tools.analysis.annotation_input import resource_specification
+    spec, problems = resource_specification(admitted['raw_resource_evidence'][selected.input_set_id], declared, candidates.members)
+    if problems or declared.uploaded is not None and (not admitted.get('annotation_resource_observation')
+            or not admitted['annotation_resource_observation']['qualification']
+            or admitted['annotation_resource_observation']['problem']):
+        raise ValueError('Missing uploaded resource qualification.')
+    pointer = receipt['resource']; path = Path(pointer['path'])
+    sha(pointer['sha256'])
+    if (receipt['specification'] != spec or set(pointer) != {'path', 'sha256'}
+            or not path.is_absolute() or '..' in path.parts or path.name != 'resources.json'
+            or path.parent.name != receipt['identity'] or path.parent.parent.name != 'annotation_handoffs'):
+        raise ValueError('Annotation resource derivation changed.')
+    import hashlib
+    if hashlib.sha256(c.matrix.canonical(spec)).hexdigest() != pointer['sha256']:
+        raise ValueError('Derived annotation resource digest changed.')
+    bound = _annotation_binding(candidates, declared, selected, arguments, pointer)
+    if _serialize(admitted['inputs']) != _serialize(bound.execution_inputs) or admitted['registered_input'] != bound.attribution():
+        raise ValueError('Annotation binding changed.')
+
+
+def _candidate_view(interaction):
+    """Pure exact view of a captured single H5AD for typed role admission."""
+    from .local_resources import RegisteredInputGroup
+    submission = _serialize(interaction.submission or {})
+    if 'candidate_input' not in submission:
+        return interaction
+    metadata = submission['candidate_input']
+    bound = RegisteredInputGroup(metadata['members'], {}, attachment_candidates=True)
+    original = submission['registered_input']
+    if (len(bound.members) != 1 or bound.attribution() != metadata
+            or original.get('tool_name') != 'inspect_scATAC' or original.get('resource_choice') is not None
+            or submission['execution_inputs'] != {'input_path': bound.members[0]['source_path']}
+            or any(original[k] != bound.members[0][k] for k in ('resource_id', 'record_sha256'))):
+        raise ValueError('Candidate view changed the selected source.')
+    return replace(interaction, submission=dict(submission, execution_inputs={}, registered_input=metadata))

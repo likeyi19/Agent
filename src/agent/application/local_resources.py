@@ -44,7 +44,7 @@ _GROUP_PORTS = (
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
-_INPUT_TYPES = ('attachment', 'h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference')
+_INPUT_TYPES = ('attachment', 'h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference', 'scientific_reference')
 _OPERATION_TYPES = {
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
@@ -344,7 +344,7 @@ class LocalResourceRecord:
             from .reference_supplementation import validate_record
             validate_record(self)
             object.__setattr__(self, 'reference_qualification', freeze_json_mapping(self.reference_qualification, 'reference_qualification'))
-        elif self.input_type in ('regulatory_reference', 'genome_reference'):
+        elif self.input_type in ('regulatory_reference', 'genome_reference', 'scientific_reference'):
             raise _fail('LOCAL_RESOURCE_RECORD_INVALID')
 
     def to_dict(self):

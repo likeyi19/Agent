@@ -1738,7 +1738,7 @@ function submitRequest(utterance, predecessorTurnId = null) {
     showError(new Error("New H5AD attachments and previously selected inputs are both present. Remove the earlier input selection or the new H5AD attachments before sending.")); return;
   }
   const lastTurn = state.session.turns[state.session.turns.length - 1];
-  const pendingRoles = lastTurn && lastTurn.response && lastTurn.response.clarification && ["missing_input_roles", "missing_fastq_declarations", "missing_bam_declarations", "missing_fragments_declarations"].includes(lastTurn.response.clarification.reason);
+  const pendingRoles = lastTurn && lastTurn.response && lastTurn.response.clarification && ["missing_input_roles", "missing_fastq_declarations", "missing_bam_declarations", "missing_fragments_declarations", "missing_annotation_declarations"].includes(lastTurn.response.clarification.reason);
   if (h5ads.length === 1 && state.attachments.length === 1 && !pendingRoles) {
     body.resource_id = h5ads[0];
     if (element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;

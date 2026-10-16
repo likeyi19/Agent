@@ -838,7 +838,7 @@ class InteractiveAgentApplication:
                             None if output.run_id == origin.run_id else output, step_id=output.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                if step.tool_name == 'compute_cell_umap':
+                if step.tool_name in ('epizoo_embed_cells', 'cluster_cells', 'compute_cell_umap'):
                     from .analysis_delivery import accepted_analysis
                     try:
                         items.append(accepted_analysis(self, session_id, revision, origin, output))
@@ -878,7 +878,7 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                elif planned.tool_name == 'compute_cell_umap':
+                elif planned.tool_name in ('epizoo_embed_cells', 'cluster_cells', 'compute_cell_umap'):
                     from .analysis_delivery import accepted_analysis
                     try:
                         items.append(accepted_analysis(self, session_id, revision, origin, None,

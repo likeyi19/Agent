@@ -76,6 +76,7 @@ class CellClusteringToolResult(TypedDict):
     status: Literal["success"]
     input_analysis_path: str
     analysis_path: str
+    analysis_sha256: NotRequired[str]
     n_cells: int
     n_clusters: int
     cluster_key: str
@@ -580,6 +581,7 @@ def cluster_cells(
         "analysis_path": str(output_path),
         "n_cells": int(adata.n_obs),
         "n_clusters": n_clusters,
+        "analysis_sha256": _analysis_digest(output_path),
         "cluster_key": LEIDEN_KEY,
         "algorithm": "leiden",
         "resolution": normalized_resolution,

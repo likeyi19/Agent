@@ -1775,6 +1775,10 @@ class LocalResourceAdmission:
         for step in steps:
             spec = registry.get(step.tool_name)
             arguments = step.resolved_arguments if resolved else step.arguments
+            if step.tool_name == 'epizoo_embed_cells' and 'expected_resource_identity' in binding.execution_inputs:
+                if any(arguments.get(k) != binding.execution_inputs.get(k)
+                       for k in ('species', 'checkpoint_path', 'expected_resource_identity')):
+                    raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
             for port in spec.semantic_planning.consumer_ports:
                 values = binding.execution_inputs
                 # Complete paired request resources are explicit captured

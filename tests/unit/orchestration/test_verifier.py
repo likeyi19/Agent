@@ -109,6 +109,26 @@ def _artifacts(tmp_path):
     return embedding_path, cell_ids_path
 
 
+@pytest.mark.parametrize('missing', ['analysis_path', 'analysis_sha256'])
+def test_partial_embedding_export_returns_verification_failure(registry, tmp_path, missing):
+    from agent.tools.analysis.embedding_analysis import _analysis_digest
+    paths = _artifacts(tmp_path)
+    values = np.zeros((2, 512), dtype=np.float32)
+    np.save(paths[0], values)
+    compact = tmp_path / 'embeddings.h5ad'
+    ad.AnnData(obs=pd.DataFrame(index=['cell-1', 'cell-2']),
+               obsm={'X_epizoo': values}).write_h5ad(compact)
+    step = _embedding_step()
+    result = dict(_embedding_result(step.arguments['input_path'], *(str(p) for p in paths)),
+                  analysis_path=str(compact), analysis_sha256=_analysis_digest(compact))
+    assert verify_step(step, step.arguments, result, registry).passed
+    del result[missing]
+    verification = verify_step(step, step.arguments, result, registry)
+    assert not verification.passed
+    assert verification.error.code == 'RESULT_IDENTITY_MISMATCH'
+    assert 'embedding_export_conservation' in verification.error.details['failed_checks']
+
+
 def _resource_provenance(pins: dict[str, str]) -> dict[str, object]:
     return {"schema": "epizoo-resource-provenance.v1", "expected_resource_identity": dict(pins),
             "actual_resource_identity": dict(pins), "species": "mouse",

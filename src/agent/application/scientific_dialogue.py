@@ -27,6 +27,7 @@ NOTES = {
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'adapt_epizoo_species': 'Adaptation completion and structural qualification do not establish improved biological performance.',
     'cluster_cells': 'Clustering summaries record method parameters and cluster counts. They do not establish cluster correspondence, cell-type identity, biological superiority, significance or causality.',
+    'compute_cell_umap': 'UMAP parameters and output dimensions describe a layout. Independently computed coordinates have no established alignment: rotation, reflection or scale differences do not establish biological change. No coordinate comparison or biological superiority is established.',
     'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
 }
 
@@ -168,6 +169,17 @@ def capture(sessions, state, snapshot, requested_predecessor, *, tool_names=None
             reference = (target['revision_id'], target['output_name'])
             if reference not in refs:
                 refs.append(reference)
+    # Offer earlier branches through the same exact result handles. Capture only
+    # whole revisions within the existing bound; no scientific result is selected
+    # by this inventory ordering. Older snapshots keep their original inventory.
+    historical = []
+    for revision in reversed(state.revisions):
+        extra = [(revision.revision_id, o.name) for o in revision.outputs
+                 if (revision.revision_id, o.name) not in refs]
+        if extra and len(refs) + len(extra) <= 128:
+            historical.append(revision.revision_id)
+            refs.extend(extra)
+    context['historical_revisions'] = historical
     # M15 allows 32 outputs in each of current/parent/previous-active. Include
     # the predecessor's explicit references without shrinking that existing scope.
     if len(refs) > 128:
@@ -211,7 +223,8 @@ def validate_capture(state, interaction, preceding):
         required_refs.update((t['revision_id'], t['output_name']) for t in discussion_targets(prior.admitted))
     if 'context' in value:
         context = _serialize(value['context'])
-        _shape(context, ('revision_count', 'previous_turn_id', 'previous_created_result', 'previous_scientific_answer'))
+        keys = ('revision_count', 'previous_turn_id', 'previous_created_result', 'previous_scientific_answer')
+        _shape(context, keys + (('historical_revisions',) if 'historical_revisions' in context else ()))
         if (type(context['revision_count']) is not int or not 0 <= context['revision_count'] <= len(state.revisions)
                 or type(context['previous_created_result']) is not bool
                 or type(context['previous_scientific_answer']) is not bool
@@ -232,6 +245,14 @@ def validate_capture(state, interaction, preceding):
         referents = _result_referent_targets(state, interaction.base_revision_id, context, preceding)
         allowed.update(t['revision_id'] for targets in referents.values() for t in targets)
         required_refs.update((t['revision_id'], t['output_name']) for targets in referents.values() for t in targets)
+        historical = context.get('historical_revisions', [])
+        if (type(historical) is not list or len(historical) > 128 or len(historical) != len(set(historical))
+                or any(rid not in {r.revision_id for r in state.revisions[:context['revision_count']]}
+                       for rid in historical)):
+            raise ValueError('Invalid captured historical revisions.')
+        allowed.update(historical)
+        required_refs.update((r.revision_id, o.name) for r in state.revisions
+                             if r.revision_id in historical for o in r.outputs)
     if interaction.admitted is not None and interaction.admitted.get('intent') == 'guidance':
         from .scientific_guidance import validate_admitted
         validate_admitted(state, interaction, preceding)
@@ -304,6 +325,9 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
             canonical_output=canonical['handle'], **{k:canonical[k] for k in
                 ('tool', 'version', 'is_active', 'evidence_status')}))
     result['result_referents'] = _referent_choices(captured, state, groups, state.interactions)
+    offered = {(o['revision_id'], o['output_name']) for o in value['outputs']}
+    result['history_complete'] = all((r.revision_id, o.name) in offered
+        for r in state.revisions[:value.get('context', {}).get('revision_count', 0)] for o in r.outputs)
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return result
@@ -517,6 +541,26 @@ def _comparison_fields(views, targets):
     return None  # Existing M16.3 eligible field-pair rules.
 
 
+def _descriptive_fields(views):
+    """Reviewed method/settings pairs imply no common cells or coordinate space."""
+    a, b = views
+    if (a.source.tool_name != b.source.tool_name
+            or a.source.result_contract != b.source.result_contract
+            or a.source.recovery_identity != b.source.recovery_identity):
+        return frozenset()
+    fields = {
+        'epizoo_embed_cells': ('species', 'embedding_dim', 'embedding_dtype', 'device',
+                              'target_model_method', 'target_assembly', 'target_matrix_semantics'),
+        'build_cell_neighbors': ('n_neighbors', 'metric', 'neighbors_method', 'transformer',
+                                 'embedding_dim', 'random_seed'),
+        'cluster_cells': ('resolution', 'random_seed', 'algorithm', 'clustering_parameters.resolution',
+                          'clustering_parameters.random_seed', 'clustering_resolution_origin'),
+        'compute_cell_umap': ('min_dist', 'spread', 'random_seed', 'n_components', 'coordinate_dtype',
+                              'clustering_present'),
+    }
+    return frozenset(fields.get(a.source.tool_name, ()))
+
+
 def context(sessions, session_id, admitted, *, evidence_targets=None):
     targets = ([admitted['target']] + ([] if admitted['comparison'] is None else [admitted['comparison']])
                if evidence_targets is None else list(evidence_targets))
@@ -533,6 +577,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 targets[1]['accepted_step_sha256']):
             raise IntentError('incompatible_comparison')
     comparison_fields = _comparison_fields(views, targets) if comparing else None
+    descriptive_fields = _descriptive_fields(views) if comparing else frozenset()
     claims, meanings, labels, limitations = [], {}, [], []
     for index, (target, view) in enumerate(zip(targets, views)):
         claim_limit = (index + 1) * (MAX_CLAIMS // len(targets))
@@ -689,9 +734,13 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
     if any(c.field.startswith('detail.') for c in claims):
         public['scope'] = 'accepted_summary_and_published_detail'
     if comparing:
-        independent = comparison_fields == frozenset()
+        descriptive = comparison_fields == frozenset() and bool(descriptive_fields)
+        independent = comparison_fields == frozenset() and not descriptive
         boundary = ('Each result supplies independently accepted facts. No compatible measurement pairs are established; '
                     'do not assert a common population, relative change or correspondence.' if independent else
+                    'Descriptive comparison covers recorded methods, settings and output dimensions only. '
+                    'It does not establish common cells, comparable measurements, cluster correspondence or aligned coordinates. '
+                    'Population and cluster counts remain separately attributed facts.' if descriptive else
                     'Comparison describes accepted summary operands only. It establishes no cluster matching, cell transitions, '
                     'cell-type equivalence, statistical significance, biological superiority or causality.')
         public['limitations'].append(boundary)
@@ -704,14 +753,15 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         # Direct accepted records only. No differences, statistics or rankings
         # are calculated. Candidate row offsets are not subject correspondence.
         def comparable(a, b):
-            if comparison_fields is not None and a.field not in comparison_fields:
+            if comparison_fields is not None and a.field not in comparison_fields | descriptive_fields:
                 return False
             if not a.field.startswith('detail.'):
                 return a.field == b.field
             if a.field.startswith(('detail.candidate.', 'detail.signature_coverage.')):
                 return b.field.startswith(a.field.rsplit('.', 1)[0] + '.') and a.value.get('candidate') == b.value.get('candidate')
             return a.field == b.field
-        public['comparison'] = dict(mode='independent_accepted_facts' if independent else 'direct_accepted_operands', ranking_available=False,
+        public['comparison'] = dict(mode='independent_accepted_facts' if independent else
+            'descriptive_accepted_operands' if descriptive else 'direct_accepted_operands', ranking_available=False,
             pairs=[dict(left=a.claim_id, right=b.claim_id,
                         relationship='equal' if a.value == b.value else 'different')
                    for a in claims if a.target == 't0'
@@ -757,6 +807,7 @@ def generate(model, question, focus, public, claims):
             'No raw scientific numbers, categorical values, subject IDs or paths in text parts. Text may connect and explain references but may not introduce unsupported scientific assertions.',
             'If required rationale, significance, certainty, quality assessment or causality is absent, support=insufficient_evidence. Say the compact evidence does not establish it, not that it does not exist scientifically.',
             'Answer supported parts even when stronger conclusions are unavailable. In independent_accepted_facts mode, report attributed facts separately; do not compare measurements. Explain the offered limitation.',
+            'In descriptive_accepted_operands mode, compare only offered method/settings/dimension pairs. They do not establish compatible populations, model spaces, cluster memberships or aligned coordinates.',
             'Comparison only describes supplied operands. Never infer statistical significance or causal effects. Exact source attribution accompanies returned claims.',
             'A comparison part selects an offered pair id. The Agent inserts both complete operands and their exact equal/different relationship; do not supply a relationship yourself.',
             'No ranking criterion is offered. Biggest/most important differences require clarification of a dimension; never rank fields, candidates, markers or populations. Detail records are in publication order, not rank order.',
@@ -867,7 +918,7 @@ def render_response(result, public, claims):
     if result['support'] == 'supported' and 'comparison' in public and {c.target for c in used} != {'t0','t1'}:
         raise _AnswerFailure('comparison_binding', 'missing_operand')
     if (result['support'] == 'supported' and 'comparison' in public
-            and public['comparison']['mode'] == 'direct_accepted_operands'):
+            and public['comparison']['mode'] in ('direct_accepted_operands', 'descriptive_accepted_operands')):
         ids = {c.claim_id for c in used}
         if not any({pair['left'], pair['right']} <= ids for pair in public['comparison']['pairs']):
             raise _AnswerFailure('comparison_binding', 'missing_compatible_pair')

@@ -386,6 +386,8 @@ function supportedScientificFile(artifact) {
     },
     scientific_analysis: {
       "neighbors.h5ad": "Cell neighbors — safe export",
+      "embeddings.h5ad": "Cell embeddings — safe export",
+      "clusters.h5ad": "Embeddings and Leiden — safe export",
       "analysis.h5ad": "Embeddings, Leiden and UMAP — safe export",
     },
     scientific_annotation: { "annotated.h5ad": "Annotated cells — safe export" },

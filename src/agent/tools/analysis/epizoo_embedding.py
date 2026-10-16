@@ -160,6 +160,8 @@ def _pinned_provenance(
 class _OptionalEpiZooEmbeddingFields(TypedDict, total=False):
     resource_provenance: dict[str, object]
     target_model_provenance: dict[str, object]
+    analysis_path: str
+    analysis_sha256: str
 
 
 class EpiZooEmbeddingToolResult(_OptionalEpiZooEmbeddingFields):
@@ -351,13 +353,14 @@ def epizoo_embed_cells(
         from agent.tools.data.regulatory_feature_reference import validate_species
         identity = validate_species(dict(species))
         species, taxonomy_id = identity.scientific_name, identity.taxonomy_id
-        return embed_target(input_path, output_dir, species=species, taxonomy_id=taxonomy_id,
+        result = embed_target(input_path, output_dir, species=species, taxonomy_id=taxonomy_id,
             assembly=assembly, matrix_semantics=matrix_semantics,
             target_model_manifest_path=target_model_manifest_path,
             target_model_manifest_sha256=target_model_manifest_sha256,
             target_model_source_run_id=target_model_source_run_id,
             target_model_source_step_id=target_model_source_step_id,
             device=device, overwrite=overwrite)
+        return _publish_compact_embedding(result, overwrite=overwrite)
     if any(value is not None for value in (assembly, matrix_semantics,
                                           target_model_source_run_id, target_model_source_step_id)):
         raise ValueError('Target species declarations require a qualified target model binding.')
@@ -475,7 +478,26 @@ def epizoo_embed_cells(
     }
     if resource_provenance is not None:
         result["resource_provenance"] = resource_provenance
-    return result
+    return _publish_compact_embedding(result, overwrite=overwrite)
+
+
+def _publish_compact_embedding(result, *, overwrite):
+    """Pin a compact download of the already computed values and ordered cells.
+
+    This adds no inference, preprocessing, graph or reusable execution authority.
+    The normal verifier independently checks conservation against both artifacts.
+    """
+    import pandas as pd
+    from .embedding_analysis import _atomic_write_h5ad, _analysis_digest, _load_embeddings, _load_cell_ids
+    values = _load_embeddings(Path(result['embedding_path']))
+    ids = _load_cell_ids(Path(result['cell_ids_path']))
+    path = Path(result['embedding_path']).with_suffix('.h5ad')
+    data = ad.AnnData(obs=pd.DataFrame(index=ids), obsm={'X_epizoo': np.asarray(values)})
+    def validate(written):
+        if tuple(written.obs_names) != ids or not np.array_equal(written.obsm['X_epizoo'], values):
+            raise ValueError('Embedding export changed its source values or cells.')
+    _atomic_write_h5ad(data, path, overwrite=overwrite, validator=validate)
+    return dict(result, analysis_path=str(path), analysis_sha256=_analysis_digest(path))
 
 
 __all__ = ["EpiZooEmbeddingToolResult", "EpiZooResourceIdentityError", "epizoo_embed_cells",

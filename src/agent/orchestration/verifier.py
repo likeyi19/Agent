@@ -592,6 +592,7 @@ def _verify_clustering(
     result: Mapping[str, object],
     checks: _VerificationChecks,
 ) -> None:
+    _verify_analysis_digest(result, checks)
     checks.add(
         "success_status",
         result.get("status") == "success",
@@ -695,19 +696,23 @@ def _verify_clustering(
     )
 
 
+def _verify_analysis_digest(result, checks):
+    if 'analysis_sha256' in result:
+        from agent.tools.analysis.embedding_analysis import _analysis_digest
+        try:
+            matches = _analysis_digest(result['analysis_path']) == result['analysis_sha256']
+        except (OSError, ValueError, TypeError, KeyError):
+            matches = False
+        checks.add('analysis_payload_identity', matches, 'Analysis bytes match the producer digest.',
+                   'Analysis bytes differ from the producer digest.', 'RESULT_IDENTITY_MISMATCH')
+
+
 def _verify_umap(
     resolved_arguments: Mapping[str, object],
     result: Mapping[str, object],
     checks: _VerificationChecks,
 ) -> None:
-    if 'analysis_sha256' in result:
-        from agent.tools.analysis.embedding_analysis import _analysis_digest
-        try:
-            matches = _analysis_digest(result['analysis_path']) == result['analysis_sha256']
-        except (OSError, ValueError, TypeError):
-            matches = False
-        checks.add('umap_payload_identity', matches, 'UMAP bytes match the producer digest.',
-                   'UMAP bytes differ from the producer digest.', 'RESULT_IDENTITY_MISMATCH')
+    _verify_analysis_digest(result, checks)
     checks.add(
         "success_status",
         result.get("status") == "success",
@@ -977,6 +982,23 @@ def _verify_embedding(
     dependency_results: Mapping[str, Mapping[str, object]],
     checks: _VerificationChecks,
 ) -> None:
+    if 'analysis_path' in result or 'analysis_sha256' in result:
+        _verify_analysis_digest(result, checks)
+        try:
+            import anndata as ad
+            import numpy as np
+            from agent.tools.analysis.embedding_analysis import _load_embeddings, _load_cell_ids
+            data = ad.read_h5ad(result['analysis_path'])
+            values = _load_embeddings(Path(result['embedding_path']))
+            ids = _load_cell_ids(Path(result['cell_ids_path']))
+            conserved = ('analysis_sha256' in result and data.X is None and data.n_vars == 0
+                         and tuple(data.obs_names) == ids
+                         and np.array_equal(data.obsm['X_epizoo'], values))
+        except (ValueError, TypeError, KeyError, OSError):
+            conserved = False
+        checks.add('embedding_export_conservation', conserved,
+                   'Compact embedding preserves exact values and ordered cells.',
+                   'Compact embedding differs from accepted arrays or cells.', 'RESULT_IDENTITY_MISMATCH')
     if (resolved_arguments.get('target_model_manifest_path') is not None
             or 'target_model_provenance' in result):
         try:

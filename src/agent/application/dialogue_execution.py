@@ -125,6 +125,17 @@ def _replay_initial_inputs(registry, interaction, declarations):
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
             group_role_inputs(binding, roles, registry), declarations)
+        receipt = admitted.get('resource_selection')
+        if receipt is not None:
+            _shape(receipt, ('catalog', 'resource_context_sha256'))
+            resources = qualified_epizoo_resources(tuple(QualifiedEpiZooResource(**_serialize(row))
+                for row in receipt['catalog']))
+            if (resource_context_digest(resources) != receipt['resource_context_sha256']
+                    or not any(r['tool'] == 'epizoo_embed_cells' for r in roles)):
+                raise ValueError('Captured resource catalog changed.')
+            values, error = _select_declared_resource(values, resources)
+            if error is not None:
+                raise ValueError('Captured embedding resource is unavailable.')
         expected = RegisteredInputGroup(binding.members, values, roles=roles,
             resource_choice=binding.resource_choice, attachment_candidates=binding.attachment_candidates).attribution()
         if _serialize(admitted.get('registered_input')) != expected:
@@ -1238,7 +1249,14 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
             if grouped:
                 # Scalar declarations add values; exact selected membership and
                 # Registry consumer associations remain the admitted group.
-                pass
+                if (epizoo_resources and any(r.tool == 'epizoo_embed_cells' for r in decision.roles)
+                        and 'species' in values and 'target_model_manifest_path' not in values):
+                    values, selection_error = _select_declared_resource(values, epizoo_resources)
+                    if selection_error is not None:
+                        raise ResourceAdmissionError(selection_error)
+                    admitted['resource_selection'] = dict(catalog=[asdict(r) for r in epizoo_resources],
+                        resource_context_sha256=resource_context_digest(epizoo_resources))
+                    admitted['inputs'] = values
             elif original.tool_name == 'inspect_scATAC' and original.composition in (None, 'h5ad-science.v1'):
                 selection_error = original.resource_selection_error
                 if any(isinstance(d, ScalarChoiceArgument) for d in decision.arguments):

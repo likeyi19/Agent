@@ -22,7 +22,8 @@ def validate_record(record):
     from agent.tools.data import scatac_reference as r
     from agent.tools.data.regulatory_feature_reference import validate_species
     q = _serialize(record.reference_qualification)
-    if (set(q) != {'contract', 'requirement', 'genome', 'identity_sha256', 'files', 'review', 'evidence'}
+    if (set(q) not in ({'contract', 'requirement', 'genome', 'identity_sha256', 'files', 'review', 'evidence'},
+                      {'contract', 'requirement', 'genome', 'identity_sha256', 'files', 'review', 'evidence', 'session_id'})
             or q['contract'] != 'qualified-genome.v1' or record.source_index is None):
         refs._fail('Invalid genome qualification.')
     req = q['requirement']
@@ -40,7 +41,12 @@ def validate_record(record):
     if identity(req, g) != q['identity_sha256']:
         refs._fail('Genome identity differs.')
     from .shared_resources import validate_review
-    validate_review(q['review'], q['files'])
+    if 'session_id' in q:
+        if not q['session_id'] or q['session_id'] != record.session_id or q['review'] is not None:
+            refs._fail('Invalid private genome scope.')
+    else:
+        if record.session_id is not None: refs._fail('Deployment genome cannot carry a private Session.')
+        validate_review(q['review'], q['files'])
     if set(q['evidence']) != {'record_sha256', 'manifest_sha256', 'reference_identity_sha256'}:
         refs._fail('Missing original reference qualification evidence.')
     for value in q['evidence'].values(): r._sha(value)
@@ -79,16 +85,47 @@ def promote(resources, resource_id, *, operator, provenance, reuse_basis, redist
         reference_qualification=q)
 
 
+def persist_private(resources, resource_id):
+    """Retain an uploaded, owner-qualified genome independently of task peaks.
+
+    Qualification does not authorize sharing. The original Session remains the
+    sole access scope and existing promotion still requires permission review.
+    """
+    record = resources.load(resource_id)
+    if record.input_type != 'regulatory_reference' or record.reference_qualification['scope'] != 'session':
+        refs._fail('A private owner-qualified feature reference is required.')
+    reference = refs.check_record(resources, record)
+    required = dict(species=asdict(reference.species), assembly=reference.target_assembly)
+    genome = asdict(reference.genome)
+    files = [f for f in _serialize(record.reference_qualification['files']) if f['path'] != reference.features.bed.path]
+    session = record.reference_qualification['session_id']
+    q = dict(contract='qualified-genome.v1', requirement=required, genome=genome,
+        identity_sha256=identity(required, genome), files=files, review=None, session_id=session,
+        evidence=dict(record_sha256=record.record_sha256, manifest_sha256=record.source_sha256,
+                      reference_identity_sha256=reference.reference_identity_sha256))
+    return resources.register('private-genome:' + digest(q), reference.genome.fasta.path,
+        input_type='genome_reference', source_index_path=reference.genome.fai.path,
+        label=(required['species']['scientific_name'] + ' ' + required['assembly'] + ' — private genome')[:160],
+        attribution='Owner-qualified uploaded genome; private Session reuse only.',
+        reference_qualification=q, session_id=session)
+
+
 def check_record(resources, record):
-    from agent.tools.data.authority_context import VerificationContext
-    validate_record(record)
     if resources.load(record.resource_id) != record:
         refs._fail('Genome registration changed.')
+    return check_content(record)
+
+
+def check_content(record):
+    """Read existing qualification pins, without reconstructing genome science."""
+    from agent.tools.data.authority_context import VerificationContext
+    validate_record(record)
     files = _serialize(record.reference_qualification['files'])
     if VerificationContext().files(row['path'] for row in files) != files:
         refs._fail('Qualified genome bytes or qualification implementation changed.')
     from .shared_resources import check_review
-    check_review(_serialize(record.reference_qualification['review']))
+    if record.reference_qualification['review'] is not None:
+        check_review(_serialize(record.reference_qualification['review']))
     return _serialize(record.reference_qualification['genome'])
 
 
@@ -97,6 +134,7 @@ def bind(resources, record, source, session_id, origin):
     from agent.tools.data import regulatory_feature_reference as owner
     from agent.tools.data import scatac_reference as r, chromap_reference_index
     from agent.tools.data.authority_context import VerificationContext
+    if record.session_id not in (None, session_id): refs._fail('This genome belongs to another Session.')
     genome = check_record(resources, record)
     required = _serialize(origin.admitted['reference_requirement'])
     if {k: required[k] for k in ('species', 'assembly')} != _serialize(record.reference_qualification['requirement']):

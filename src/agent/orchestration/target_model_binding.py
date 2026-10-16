@@ -11,15 +11,29 @@ from pathlib import Path
 from agent.schemas.verification_authority import AuthorityError
 from agent.tools.data.authority_context import current, VerificationContext
 from agent.tools.models.epizoo_adaptation import publication, contract
-from .run_store import FileRunStore
+from .run_store import FileRunStore, RunNotFoundError
 from .verification_authority import _accepted
 
 
 def accepted_target(path, sha, run_id, step_id):
-    root = os.environ.get('AGENT_EPIZOO_SOURCE_STORE')
-    if not root or not Path(root).is_absolute() or Path(root) != Path(root).resolve():
-        raise AuthorityError('A trusted operator EpiZoo source RunStore is required.')
-    store = FileRunStore(root)
+    from .prior_outputs import required_store
+    try:
+        store = required_store()
+    except AuthorityError:
+        store = None
+    if store is not None:
+        try:
+            store.load(run_id)
+        except RunNotFoundError:
+            store = None
+    # Exact local execution identity takes precedence. A corrupt or mismatched
+    # local record must never fall back to an external publication with that ID.
+    if store is None:
+        root = os.environ.get('AGENT_EPIZOO_SOURCE_STORE')
+        if not root or not Path(root).is_absolute() or Path(root) != Path(root).resolve():
+            raise AuthorityError('A trusted operator EpiZoo source RunStore is required.')
+        store = FileRunStore(root)
+    root = str(store.root)
     stored, authority, _, anchor = _accepted(store, run_id, step_id)
     record = authority.to_dict()
     path = Path(path).resolve(strict=True)

@@ -46,11 +46,11 @@ def _terminal(sessions, interaction, clarification):
     species_reason = clarification.reason in {'missing_species', 'ambiguous_species', 'unsupported_species', 'conflicting_species'}
     parameter_reason = clarification.reason in {'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'}
     reference = captured.get('prerequisite')
-    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources', 'fastq', 'bam', 'fragments', 'annotation'}:
+    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
         if reference['field'] == 'parameters':
             choices = tuple(reference['missing'])
-        elif reference['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
+        elif reference['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
             from .raw_handoff import public
             choices = tuple(public(interaction, sessions.load(sessions_id(sessions)).interactions)['missing'])
         elif reference['field'] == 'resources':
@@ -82,7 +82,7 @@ def _terminal(sessions, interaction, clarification):
         if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
                             value_required=clarification.reason in {'missing_parameter_value', 'missing_species', 'ambiguous_species',
-                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources', 'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations', 'missing_annotation_declarations'})
+                                                                   'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources', 'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations', 'missing_annotation_declarations', 'missing_epizoo_declarations'})
     admitted = dict(kind='clarify', **asdict(clarification))
     def change(state):
         turns = state.turns
@@ -412,9 +412,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     sessions._store._update(session_id, capture)
     decision = None
     try:
+        from .epizoo_handoff import captured_models
+        input_sets = tuple(input_sets) + captured_models(sessions, state)
         if reference_resources is not None:
             from .shared_resources import discover
-            input_sets = tuple(input_sets) + discover(reference_resources, session_id)
+            from .epizoo_handoff import genomes
+            input_sets = tuple(input_sets) + discover(reference_resources, session_id) + genomes(reference_resources, session_id)
         visible = public_context(captured)
         from .scientific_dialogue import public as dialogue_public
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
@@ -436,11 +439,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
-        if pending_public is not None and pending_public['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation'}:
+        if pending_public is not None and pending_public['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
             reference = interaction.snapshot['prerequisite']
             from .dialogue_execution import _role_source, _role_binding
             origin, source = _role_source(reference, state.interactions)
-            if pending_public['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
+            if pending_public['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
                 from .raw_handoff import source_binding
                 binding = source_binding(origin, source, interaction)
             else:
@@ -461,6 +464,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 visible['dialogue']['bam_resources'] = raw_offers(input_sets, 'bam')
                 visible['dialogue']['fragments_resources'] = raw_offers(input_sets, 'fragments')
                 visible['dialogue']['annotation_resources'] = raw_offers(input_sets, 'annotation')
+                visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
         if (submission or {}).get('candidate_input') is not None:
             from .raw_handoff import _candidate_view, offers as raw_offers
             from .local_resources import LocalResourceAdmission, group_choices
@@ -468,6 +472,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             binding = LocalResourceAdmission._submission_binding(candidate.submission)
             visible['dialogue']['annotation_sources'] = group_choices(binding, sessions._application.registry)['sources']
             visible['dialogue']['annotation_resources'] = raw_offers(input_sets, 'annotation')
+            visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         if context is not None:
             visible['dialogue']['planning_context'] = list(context.public_items())
@@ -504,7 +509,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .resource_continuation import answer
             admitted = answer(sessions, interaction, decision, input_sets, reference_resources=reference_resources)
         elif isinstance(decision, (RequestRoles, RoleAnswer)) and (
-                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam', 'fragments', 'annotation'}):
+                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or decision.epizoo is not None or (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
             from .raw_handoff import admit as admit_raw
             admitted, prerequisite = admit_raw(sessions, interaction, decision, input_sets,
                                                reference_resources=reference_resources)

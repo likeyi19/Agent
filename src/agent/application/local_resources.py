@@ -33,6 +33,8 @@ _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
     ('inspect_scATAC', 'dataset'),
+    ('epizoo_embed_cells', 'dataset'),
+    ('adopt_scATAC_cell_by_features', 'source'),
     ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
     ('evaluate_cell_clustering', 'ground_truth_dataset'),
@@ -553,7 +555,9 @@ def _group_declarations(registry):
         aliases.update(m.input_name for s in port.request_sources for m in s.members)
         aliases.update(m.field_name for m in port.members)
     declarations = {}
-    for tool in sorted({tool for tool, _ in _GROUP_PORTS}):
+    # Adaptation consumes the explicitly adopted matrix and its qualified model
+    # specification; it contributes companion parameters, not another file role.
+    for tool in sorted({tool for tool, _ in _GROUP_PORTS} | {'adapt_epizoo_species'}):
         spec = registry.get(tool)
         arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
         for port in spec.semantic_planning.consumer_ports:
@@ -562,6 +566,20 @@ def _group_declarations(registry):
                 for member in source.members:
                     if member.input_name not in aliases and fields[member.name] != 'output_dir':
                         declarations.setdefault(member.input_name, []).append(arguments[fields[member.name]])
+    # Downstream scalar settings share the same Registry handoff. Adding a
+    # numeric setting does not authorize another dataset/path consumer.
+    for tool in _H5AD_COMPANION_TOOLS:
+        spec = registry.get(tool)
+        arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
+        for port in spec.semantic_planning.consumer_ports:
+            fields = {m.name: m.field_name for m in port.members}
+            for source in port.request_sources:
+                for member in source.members:
+                    argument = arguments[fields[member.name]]
+                    if (member.input_name not in aliases and argument.planning is not None
+                            and argument.planning.scientific_parameter
+                            and set(argument.accepted_types) <= {int, float}):
+                        declarations.setdefault(member.input_name, []).append(argument)
     return aliases, declarations
 
 
@@ -1758,6 +1776,16 @@ class LocalResourceAdmission:
             spec = registry.get(step.tool_name)
             arguments = step.resolved_arguments if resolved else step.arguments
             for port in spec.semantic_planning.consumer_ports:
+                values = binding.execution_inputs
+                # Complete paired request resources are explicit captured
+                # choices, even when the same port also supports dependencies.
+                pairs = [s for s in port.request_sources if len(s.members) > 1
+                         and all(m.input_name in values for m in s.members)]
+                if pairs:
+                    fields = {m.name: m.field_name for m in port.members}
+                    if len(pairs) != 1 or any(arguments.get(fields[m.name]) != values[m.input_name]
+                                              for m in pairs[0].members):
+                        raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
                 for member in port.members:
                     actual = arguments.get(member.field_name)
                     if type(actual) is str and actual in selected_paths:

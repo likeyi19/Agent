@@ -218,7 +218,7 @@ class Interaction:
             roles = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
                                     'binding_turn_id', 'tool', 'required_roles'} and frozen['field'] == 'roles')
             resources = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
-                                        'binding_turn_id', 'tool'} and frozen['field'] in {'resources', 'fastq', 'bam', 'fragments', 'annotation'})
+                                        'binding_turn_id', 'tool'} and frozen['field'] in {'resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'})
             if not (legacy or parameters or roles or resources):
                 raise SessionError('Invalid pending scientific declaration.')
             text(frozen['origin_turn_id'])

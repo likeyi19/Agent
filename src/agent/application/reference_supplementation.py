@@ -178,7 +178,8 @@ def choices(resources, session_id, required, *, origin_turn_id=None):
         if 'genome_resource_id' in q:
             continue  # The genome offers the choice; this is its private resolved binding.
         if record.input_type == 'genome_reference':
-            if _serialize(q['requirement']) == {k: _serialize(required[k]) for k in ('species', 'assembly')}:
+            if (record.session_id in (None, session_id)
+                    and _serialize(q['requirement']) == {k: _serialize(required[k]) for k in ('species', 'assembly')}):
                 rows.append(record)
             continue
         if (_serialize(q['requirement']) == _serialize(required) and (q['scope'] == 'deployment'

@@ -855,11 +855,11 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
     if pending['field'] == 'resources':
         from .resource_continuation import capture
         return capture(prior, origin, current)
-    if pending['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation'}:
+    if pending['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         _, source = _role_source(pending, preceding)
         try:
             from types import SimpleNamespace
-            if pending['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
+            if pending['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
                 from .raw_handoff import source_binding
                 source_binding(origin, source, SimpleNamespace(submission=current))
             else:
@@ -903,7 +903,7 @@ def validate_prerequisite(interaction, preceding):
     from .session_state import SessionError
     admitted = interaction.admitted or {}
     reference = interaction.snapshot.get('prerequisite') or {}
-    if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or 'annotation' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments', 'annotation'}):
+    if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or 'annotation' in admitted or 'epizoo' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
         from .raw_handoff import validate
         validate(interaction, preceding)
         if (interaction.prerequisite or {}).get('field') == 'parameters':
@@ -1041,7 +1041,7 @@ def prerequisite_public(interaction, preceding):
     if reference['field'] == 'resources':
         from .resource_continuation import public
         return public(interaction, preceding)
-    if reference['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
+    if reference['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         from .raw_handoff import public
         return public(interaction, preceding)
     if reference['field'] == 'roles':

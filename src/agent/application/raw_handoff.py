@@ -9,6 +9,7 @@ import re
 
 from agent.schemas.orchestration import _serialize
 from .session_state import digest
+from .epizoo_handoff import EpiZooDeclaration
 
 
 @dataclass(frozen=True)
@@ -185,15 +186,21 @@ class AnnotationDeclaration:
             raise ValueError('Invalid annotation resource handle.')
 
 
-def target(field):
+def target(field, declared=None):
+    if field == 'epizoo':
+        from .epizoo_handoff import target as epizoo_target
+        return epizoo_target(declared or EpiZooDeclaration())
     return {'annotation': 'annotate_scATAC_cell_types', 'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
 
 
 def empty(field):
-    return {'annotation': AnnotationDeclaration, 'fragments': FragmentsDeclaration, 'bam': BamDeclaration, 'fastq': FastqDeclaration}[field]()
+    return {'epizoo': EpiZooDeclaration, 'annotation': AnnotationDeclaration, 'fragments': FragmentsDeclaration, 'bam': BamDeclaration, 'fastq': FastqDeclaration}[field]()
 
 
 def source_handles(declared):
+    if isinstance(declared, EpiZooDeclaration):
+        from .epizoo_handoff import sources
+        return sources(declared)
     if isinstance(declared, AnnotationDeclaration):
         return [h for h in (declared.source, declared.groups_source,
             *(getattr(declared.uploaded, k) for k in ('gene_source', 'signature_source')
@@ -205,17 +212,22 @@ def source_handles(declared):
 
 def _field(interaction):
     admitted = interaction.admitted or {}
-    return 'annotation' if 'annotation' in admitted else 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    return 'epizoo' if 'epizoo' in admitted else 'annotation' if 'annotation' in admitted else 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
 
 
 def validate_arguments(arguments, field='fastq'):
     from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
-    allowed = {'annotation': ('annotate_scATAC_cell_types',), 'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
+    from .epizoo_handoff import TOOLS
+    allowed = {'epizoo': TOOLS, 'annotation': ('annotate_scATAC_cell_types',), 'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
     if any(a.tool not in allowed for a in arguments):
         raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
 
 
 def declaration(value, field='fastq'):
+    if field == 'epizoo':
+        if type(value) is not dict or set(value) != set(EpiZooDeclaration.__dataclass_fields__):
+            raise ValueError('Invalid EpiZoo declaration shape.')
+        return EpiZooDeclaration(**value)
     if field == 'annotation':
         if type(value) is not dict or set(value) - {'uploaded'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded'}:
             raise ValueError('Invalid annotation declaration shape.')
@@ -242,6 +254,10 @@ def merge(previous, additions):
     if type(previous) is not type(additions):
         raise ValueError('Raw declaration kind cannot change.')
     values = asdict(previous)
+    if isinstance(previous, EpiZooDeclaration) and additions.genome_source is not None:
+        # An explicit uploaded genome supersedes the resource role only. It
+        # never changes the original H5AD or another captured scientific input.
+        values['genome_resource'] = additions.genome_resource
     if isinstance(previous, AnnotationDeclaration):
         values['uploaded'] = previous.uploaded
     for key in values.keys() - {'members'}:
@@ -261,11 +277,11 @@ def merge(previous, additions):
                         old[name] = supplied
                 values[key] = AnnotationUploads(**old)
                 continue
-            if (key != 'resource' and not (isinstance(previous, AnnotationDeclaration) and key == 'grouping_provenance')
+            if (key not in ('resource', 'genome_resource') and not (isinstance(previous, AnnotationDeclaration) and key == 'grouping_provenance')
                     and values[key] is not None and values[key] != value):
                 raise ValueError('Captured FASTQ declarations cannot be replaced.')
             values[key] = value
-    if isinstance(previous, (BamDeclaration, FragmentsDeclaration, AnnotationDeclaration)):
+    if isinstance(previous, (BamDeclaration, FragmentsDeclaration, AnnotationDeclaration, EpiZooDeclaration)):
         return type(previous)(**values)
     members = {m.source: m for m in previous.members}
     for member in additions.members:
@@ -284,6 +300,9 @@ def declaration_dict(value):
 
 
 def schema(sources, resources, field='fastq'):
+    if field == 'epizoo':
+        from .epizoo_handoff import schema as epizoo_schema
+        return epizoo_schema(sources, resources)
     from .turn_decisions import _object
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
@@ -328,6 +347,9 @@ def schema(sources, resources, field='fastq'):
 
 
 def resources(input_sets, field='fastq'):
+    if field == 'epizoo':
+        from .epizoo_handoff import resources as epizoo_resources
+        return epizoo_resources(input_sets)
     if field == 'annotation':
         return tuple(s for s in input_sets if 'annotation_spec_path' in s.inputs()
                      or {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'} <= set(s.inputs()))
@@ -361,6 +383,9 @@ def resource_evidence(input_sets, field):
     Source freshness and full qualification remain with the consuming owners.
     Persisting the owner contract permits history replay without scientific IO.
     """
+    if field == 'epizoo':
+        from .epizoo_handoff import evidence
+        return evidence(input_sets)
     from agent.tools.data import scatac_reference as reference
     result = {}
     for choice in resources(input_sets, field):
@@ -488,7 +513,7 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
 
 def source_binding(origin, source, interaction, field=None):
     field = field or (_field(source) if source is not None else _field(interaction))
-    if field == 'annotation':
+    if field in ('annotation', 'epizoo'):
         origin = _candidate_view(origin)
         interaction = _candidate_view(interaction)
     from .dialogue_execution import _role_binding
@@ -595,7 +620,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
 def _captured(interaction, preceding):
     from .dialogue_execution import _role_source
     reference = interaction.snapshot.get('prerequisite')
-    if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments', 'annotation'}:
+    if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         return _role_source(reference, preceding)
     return interaction, None
 
@@ -618,14 +643,17 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
     declared = merge(previous, addition)
     values = _bind_arguments(registry, interaction.utterance,
         {} if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
-        replace_existing=field == 'annotation')
+        replace_existing=field in ('annotation', 'epizoo'))
     if (field == 'annotation' and source is not None and addition.grouping_provenance is None
             and 'group_column' in source.admitted[field + '_arguments']
             and values.get('group_column') != source.admitted[field + '_arguments'].get('group_column')):
         declared = replace(declared, grouping_provenance=None)
     choices = tuple(ScientificInputSet(**_serialize(r)) for r in rows)
     pinned = None if source is None else source.admitted.get('raw_resource_choice')
-    if field == 'annotation':
+    if field == 'epizoo':
+        from .epizoo_handoff import requirements as epizoo_requirements
+        declared, missing, selected = epizoo_requirements(binding, declared, resources(choices, field), evidence, source_evidence, pinned)
+    elif field == 'annotation':
         declared, values, missing = _annotation_requirements(binding, declared, values, source_evidence)
         questions, selected = _resolve_resource(declared, resources(choices, field), evidence, pinned)
         if (selected is not None and 'annotation_spec_path' in selected.inputs()
@@ -666,8 +694,8 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     from .resource_continuation import catalog
     from .dialogue_execution import _arguments
     from .local_resources import LocalResourceAdmission
-    field = 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
-    if field not in ('fastq', 'bam', 'fragments', 'annotation') or (decision.fastq is not None and field != 'fastq'):
+    field = 'epizoo' if decision.epizoo is not None else 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    if field not in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo') or (decision.fastq is not None and field != 'fastq'):
         raise IntentError('invalid_prerequisite')
     validate_arguments(_arguments(decision), field)
     state = sessions.load(sessions._interaction_session_id)
@@ -689,12 +717,15 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         rows = _extend_catalog(previous_rows, catalog(input_sets))
     evidence = resource_evidence(input_sets, field)
     source_evidence = None
-    if field == 'annotation':
+    if field in ('annotation', 'epizoo'):
         candidate = source_binding(origin, source, interaction, field)
         previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
-        declared_source = merge(previous, decision.annotation or empty(field)).source
+        declared_source = merge(previous, getattr(decision, field) or empty(field)).source
         if declared_source is not None:
-            from agent.tools.analysis.annotation_input import observe
+            if field == 'epizoo':
+                from agent.tools.models.epizoo_inputs import observe_source as observe
+            else:
+                from agent.tools.analysis.annotation_input import observe
             if int(declared_source.split('.')[1]) >= len(candidate.members):
                 raise ValueError('Annotation source is outside the captured attachments.')
             member = candidate.members[int(declared_source.split('.')[1])]
@@ -731,7 +762,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 detail = 'The supplied resource cannot be qualified; check its content and declared compatibility.'
             resource_observation['problem'] = 'Uploaded annotation reference: ' + detail
             missing.append(resource_observation['problem'])
-    admitted = dict(kind='clarify' if missing else 'execute', tool=target(field),
+    admitted = dict(kind='clarify' if missing else 'execute', tool=target(field, declared),
         revision_id=interaction.base_revision_id, resource_catalog=rows, raw_resource_evidence=evidence,
         raw_resource_choice=(declared.resource or ('resource.' + selected.input_set_id if selected is not None
             else source.admitted.get('raw_resource_choice') if source is not None else None)),
@@ -739,6 +770,8 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
         arguments=[asdict(a) for a in _arguments(decision)])
+    if field == 'epizoo':
+        admitted['epizoo_source_evidence'] = source_evidence
     if field == 'annotation':
         admitted['annotation_source_evidence'] = source_evidence
         if declared.uploaded is not None:
@@ -749,11 +782,18 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if missing:
         admitted.update(reason='missing_' + field + '_declarations', choices=missing, value_required=True)
         pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
-            field=field, tool=target(field), resource_context_sha256=digest(rows))
+            field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
     else:
-        binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
-            accepted_contexts=tuple(i.admitted[field + '_context'] for i in state.interactions[:-1]
-                if i.admitted and field + '_context' in i.admitted))
+        if field == 'epizoo':
+            from .epizoo_handoff import prepare as prepare_epizoo
+            from agent.orchestration.prior_outputs import prior_output_store
+            with prior_output_store(sessions._application.run_store):
+                binding, receipt = prepare_epizoo(owner, state.session_id, binding, declared, selected, values,
+                    input_sets=input_sets, resource_owner=reference_resources, origin_turn_id=origin.turn_id)
+        else:
+            binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
+                accepted_contexts=tuple(i.admitted[field + '_context'] for i in state.interactions[:-1]
+                    if i.admitted and field + '_context' in i.admitted))
         admitted.update(inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution(),
             **{field + '_context': receipt}, operation='plan',
             request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)))
@@ -975,7 +1015,7 @@ def _validate_fragments_completion(interaction, admitted, candidates, declared, 
 def public(interaction, preceding):
     field = _field(interaction)
     origin, source = _captured(interaction, preceding)
-    return dict(handle='@roles', field=field, tool=target(field),
+    return dict(handle='@roles', field=field, tool=source.admitted['tool'],
         objective=origin.utterance, declarations=_serialize(source.admitted[field]),
         missing=list(source.admitted['choices']))
 
@@ -1016,14 +1056,14 @@ def validate(interaction, preceding):
             raise ValueError('FASTQ resource catalog changed.')
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
-            rows, build_default_tool_registry(), field, evidence, admitted.get('annotation_source_evidence'),
+            rows, build_default_tool_registry(), field, evidence, admitted.get(field + '_source_evidence'),
             admitted.get('annotation_resource_observation'))
         if evidence is not None and admitted.get('raw_resource_choice') != (declared.resource or
                 ('resource.' + selected.input_set_id if selected is not None else
                  source.admitted.get('raw_resource_choice') if source is not None else None)):
             raise ValueError('Captured resource selection changed.')
         if (admitted[field] != _serialize(declaration_dict(declared)) or admitted[field + '_sources'] != binding.attribution()
-                or admitted[field + '_arguments'] != values or admitted['tool'] != target(field)
+                or admitted[field + '_arguments'] != values or admitted['tool'] != target(field, declared)
                 or admitted['revision_id'] != interaction.base_revision_id or admitted['roles']):
             raise ValueError('FASTQ declarations changed.')
         if source is not None and admitted.get('continuation') != {
@@ -1031,11 +1071,14 @@ def validate(interaction, preceding):
             raise ValueError('FASTQ continuation changed.')
         if missing:
             pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
-                field=field, tool=target(field), resource_context_sha256=digest(rows))
+                field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
             if (admitted['kind'] != 'clarify' or admitted['choices'] != missing
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
                     or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')
+        elif field == 'epizoo':
+            from .epizoo_handoff import validate_completion
+            validate_completion(admitted, binding, declared, selected, values)
         elif field == 'annotation':
             _validate_annotation_completion(admitted, binding, declared, selected, values)
         elif field == 'fragments':

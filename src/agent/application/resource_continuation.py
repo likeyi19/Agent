@@ -45,7 +45,7 @@ def catalog(input_sets):
         raise IntentError('invalid_prerequisite')
     return [s.definition()
             for s in input_sets if not s.h5ad_companion
-            or 'target_model_manifest_path' in s.execution_inputs]
+            or 'target_model_manifest_path' in s.execution_inputs or 'adaptation_spec_path' in s.execution_inputs]
 
 
 def offers(submission, input_sets):

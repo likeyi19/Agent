@@ -105,6 +105,10 @@ def tool_specs():
                 'Explicit supplied binding; no inferred resources or strategy fallback.',
                 source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key.startswith('matrix_manifest') else S.REQUEST_INPUT_ONLY,
                 choices=choices.get(key,()))
+            if name == 'adopt_scATAC_cell_by_features' and key == 'source_path':
+                from dataclasses import replace
+                spec = replace(spec, planning=replace(spec.planning,
+                    accepted_artifact_kinds=(A.RAW_SCATAC,)))
             required[key]=(ArgumentSpec if key in choices else MatrixArgument)(spec.accepted_types,planning=spec.planning,choices=choices.get(key,()))
         for port,prefix,upstream in bindings:
             members=('manifest_path','manifest_sha256') if upstream else ('path','sha256')

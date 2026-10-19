@@ -42,8 +42,8 @@ def _strings(item):
             yield text
 
 
-def _feature_axis(group, length, *, external=False):
-    columns = ('_index',) if external else ('_index', 'chrom', 'start', 'end', 'matrix_column_index')
+def _feature_axis(group, length):
+    columns = ('_index', 'chrom', 'start', 'end', 'matrix_column_index')
     matrix._reject(not isinstance(group, h5py.Group) or set(group) != set(columns))
     matrix._attrs(group, {'encoding-type': 'dataframe', 'encoding-version': '0.2.0',
                          '_index': '_index', 'column-order': columns[1:]})
@@ -64,7 +64,7 @@ def _inspect(file, manifest, *, exported=False):
         from agent.tools.analysis.scatac_annotation import _provenance
         peak_h5ad.inspect(file, privacy=True,
             private_paths=() if exported else ('/uns/cell_type_annotation/source_path',))
-        provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'])
+        provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'], manifest.get('feature_participation'))
         if exported: provenance.pop('source_path')
         io._group(file['uns/cell_type_annotation'],provenance)
         for name,value in provenance.items():
@@ -88,8 +88,7 @@ def _inspect(file, manifest, *, exported=False):
         d = x[name]
         reject(not isinstance(d, h5py.Dataset) or d.ndim != 1 or len(d.attrs) or d.dtype != np.dtype('int64'))
     reject(len(x['data']) != len(x['indices']) or len(x['indptr']) != n + 1)
-    external = manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256
-    base = ('_index',) if external else ('_index', 'namespace', 'barcode_identifier', 'matrix_row_index')
+    base = ('_index', 'namespace', 'barcode_identifier', 'matrix_row_index')
     columns = (*base, *owner.OBS_COLUMNS)
     obs = file['obs']
     reject(not isinstance(obs, h5py.Group) or set(obs) != set(columns))
@@ -120,8 +119,8 @@ def _inspect(file, manifest, *, exported=False):
         for left in range(0, n, 65536):
             values = codes[left:left+65536]
             reject(np.any(values < (-1 if name == 'primary_annotation' else 0)) or np.any(values >= len(categories)))
-    _feature_axis(file['var'], p, external=external)
-    source_uns = {'species', 'assembly', 'matrix_semantics', 'reference_identity_sha256'} if external else matrix._CREATED_UNS
+    _feature_axis(file['var'], p)
+    source_uns = matrix._CREATED_UNS
     io._group(file['uns'], source_uns | {'cell_type_annotation'} | ({io.EXPORT_KEY} if exported else set()))
     for name in source_uns:
         d = file['uns'][name]

@@ -13,6 +13,14 @@ Leiden and UMAP tools with their actual representation and dimensions. Explicit
 EpiZoo requests retain exact model-vocabulary requirements and never silently
 switch methods. PCA applies no normalization or feature/cell filtering.
 
+[UA3.6.5-R3](docs/ua3.6.5-r3-native-tool-first-simplification.md) removes the
+primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,
+counts and names stay exact; native zero-weight and unmatched-contig participation
+is recorded in annotation details and exported H5AD provenance. Complete annotation
+references no longer require a QC catalog. This does not change primary-nuclear
+preprocessing or establish biological annotation accuracy. Common deployment of
+the retained marker signature still awaits an applicable permission basis.
+
 [M14.10 generic QC integration](docs/m14.10-generic-qc.md) admits independently
 qualified normalized transcript-TSS resources through the existing QC and
 explicit cell-selection tools. QC-selected neutral matrices use the existing

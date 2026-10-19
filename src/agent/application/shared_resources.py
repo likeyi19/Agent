@@ -86,7 +86,7 @@ def _qc_closure(path, sha):
 
 def persist(resources, inputs, *, session_id, origin_turn_id, label, qualification=None, publication_source=None):
     """Publish one private owner-qualified reference in the existing catalog."""
-    from agent.tools.analysis import annotation_input, annotation_contract, marker_annotation, external_marker_annotation
+    from agent.tools.analysis import annotation_input, annotation_contract
     from agent.tools.data.authority_context import VerificationContext
     inputs = _serialize(inputs)
     if set(inputs) == {'annotation_spec_path', 'annotation_spec_sha256'}:
@@ -96,10 +96,12 @@ def persist(resources, inputs, *, session_id, origin_turn_id, label, qualificati
         qualification = qualification or annotation_input.qualify_resources(spec)
         # Grouping is a task declaration, never a reusable reference property.
         spec['grouping_provenance'] = 'Grouping must be supplied by each consuming task'
-        scope = spec['contig_scope']
         # The annotation owner consumes the already-qualified chromosome scope,
         # not a legacy cCRE vocabulary or FASTA. Do not recreate that old gate.
-        pins = {scope['path']: scope['sha256']}
+        pins = {}
+        if 'contig_scope' in spec:
+            scope = spec['contig_scope']
+            pins[scope['path']] = scope['sha256']
         pins.update({spec[k]['path']: spec[k]['sha256'] for k in ('gene_resource', 'signature_resource')})
         payload = canonical(spec)
         roots = [root for root in resources._approved if root.is_relative_to(resources._workspace.root)]
@@ -132,8 +134,10 @@ def persist(resources, inputs, *, session_id, origin_turn_id, label, qualificati
         inputs = dict(annotation_spec_path=str(target), annotation_spec_sha256=digest(spec))
         source = target
         pins[str(target)] = digest(spec)
-        paths = [annotation_input.__file__, annotation_contract.__file__,
-                 marker_annotation.__file__, external_marker_annotation.__file__]
+        # A resource qualification establishes facts about these pinned bytes.
+        # Current method compatibility belongs to the consuming owner, not the
+        # incidental source-file hash of the implementation that admitted it.
+        paths = []
     elif set(inputs) == {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}:
         source = inputs['qc_reference_manifest_path']
         bundle, pins, qualification = _qc_closure(source, inputs['qc_reference_manifest_sha256'])
@@ -191,8 +195,10 @@ def check_record(resources, record):
     validate_record(record)
     if resources.load(record.resource_id) != record: _fail('Resource registration changed.')
     q = _serialize(record.reference_qualification)
-    if VerificationContext().files(r['path'] for r in q['files']) != q['files']:
-        _fail('Qualified resource bytes or owner version changed; admit a new immutable version.')
+    from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC
+    files = redistribution_files(q['files']) if q['profile'] == EXTERNAL_SPEC else q['files']
+    if VerificationContext().files(r['path'] for r in files) != files:
+        _fail('Qualified resource bytes changed; admit a new immutable version.')
     if q['review']: check_review(q['review'])
     return q['inputs']
 

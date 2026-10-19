@@ -502,6 +502,9 @@ def _project(sessions, state, revision, output, fields, detail):
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
         unselected_fields=tuple(sorted((set(facts) | set(parameters)) - set(selected))))
+    if step.tool_name == 'annotate_scATAC_cell_types' and step.resolved_arguments.get('source_path'):
+        result = replace(result, limitations=result.limitations + (
+            'Native MAESTRO uses exact supplied contig names. Peaks without native transcript weights do not contribute; this is not biological absence. No alias correction is performed. Feature participation, when recorded, is available in annotation details. Annotation is a computational result, not independent biological validation.',))
     if detail is not None:
         result = replace(result, detail=_detail(sessions, step, detail),
             evidence_scope='accepted_summary_and_published_detail',
@@ -606,6 +609,12 @@ def _detail(sessions, step, request):
         from agent.tools.analysis.annotation_contract import CONTRACT, profile_sha
         if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != profile_sha(manifest['arguments']):
             raise _Unsupported('unsupported_detail_profile')
+        name = 'primary/result.json'
+        if 'primary/feature-participation.tsv' in manifest['sidecars']:
+            binding = manifest['sidecars'][name]
+            primary = parse(sidecar(name, binding))
+            for key, value in primary['feature_participation'].items():
+                emit('feature_participation.' + key, value, name, binding['sha256'], '/feature_participation/' + key)
         groups = records('primary/groups.json', lambda row: request.subject is None or row['group'] == request.subject, 'assignment')
         if request.subject is not None and len(groups) != 1:
             raise _Unavailable('unknown_or_ambiguous_detail_subject')

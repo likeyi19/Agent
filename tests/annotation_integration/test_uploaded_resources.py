@@ -265,3 +265,20 @@ def test_bad_refgenes_exons_are_not_accepted(resources):
     assert not problems
     with pytest.raises(ValueError,match='transcript/exon'):
         annotation_input.qualify_resources(spec)
+
+
+def test_complete_uploaded_references_need_no_qc_catalog(resources, tmp_path, monkeypatch):
+    args, calls, genes, signatures, _ = resources
+    app, web = app_for(resources, tmp_path, monkeypatch, [decision(uploaded())], choices=())
+    with TestClient(web) as client:
+        source = h.stage(client, args)
+        g = attach(client, genes, 'genes'); s = attach(client, signatures, 'signatures')
+        done = h.send(client, 'first', OBJECTIVE, [source, g, s])
+        assert done['status'] == 'succeeded', done
+        assert len(calls) == 2
+        step = app._application.run_store.load(done['run_id']).steps[0]
+        spec = json.loads(Path(step.resolved_arguments['annotation_spec_path']).read_text())
+        assert 'contig_scope' not in spec
+        assert spec['gene_resource']['path'] == app.resources.load(g).source_path
+        assert spec['signature_resource']['path'] == app.resources.load(s).source_path
+        assert client.get('/api/v1/sessions/upload').status_code == 200

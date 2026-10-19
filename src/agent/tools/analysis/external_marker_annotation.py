@@ -19,10 +19,6 @@ BINDING_FIELDS = ('method','source_path','source_sha256','count_slot','species',
 _REGION = re.compile(r'([^:\s]+):(0|[1-9][0-9]*)-([1-9][0-9]*)\Z')
 
 
-class PeakScopeError(ValueError):
-    """The declared peak axis extends outside the qualified analysis scope."""
-
-
 def counts(a, slot):
     if slot == 'X': x = a.X
     elif slot.startswith('layers/') and slot[7:] in a.layers: x = a.layers[slot[7:]]
@@ -45,14 +41,18 @@ def logical(x):
     return h.hexdigest()
 
 
+def _validate_matrix(a):
+    if not 1 <= a.n_obs <= 100000 or not 1 <= a.n_vars <= 2000000 or not a.obs_names.is_unique or not a.var_names.is_unique:
+        raise ValueError('Nonempty unique bounded cell and feature axes required')
+    for name in [*a.obs_names,*a.var_names]: legacy.identifier(name)
+
+
 def load_matrix(binding):
     path=legacy.checked_file(binding['source_path'],binding['source_sha256'])
     if path.stat().st_size > peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB source limit')
     peak_h5ad.inspect(path)
     a=ad.read_h5ad(path)
-    if not 1 <= a.n_obs <= 100000 or not 1 <= a.n_vars <= 2000000 or not a.obs_names.is_unique or not a.var_names.is_unique:
-        raise ValueError('Nonempty unique bounded cell and feature axes required')
-    for name in [*a.obs_names,*a.var_names]: legacy.identifier(name)
+    _validate_matrix(a)
     if binding['method'] != c.EXTERNAL_PRIMARY or binding['value_semantics'] != c.EXTERNAL_SEMANTICS:
         raise ValueError('Unsupported explicit method or measurement')
     if binding['ordered_cells_sha256'] != legacy.ordered_identity_sha256(a.obs_names.tolist()) or binding['ordered_features_sha256'] != legacy.ordered_identity_sha256(a.var_names.tolist()):
@@ -78,22 +78,31 @@ def group_rows(a, spec):
     return rows
 
 
-def coordinates(features, spec):
+def contig_lengths(spec):
+    """Optional existing genome bounds, never an annotation scope restriction."""
+    if 'contig_scope' not in spec:
+        return {}
     from agent.tools.data.scatac_qc_reference import load_scatac_qc_reference_bundle
     from agent.tools.data._barcode_qc_binding import resource_qualification
     scope=spec['contig_scope']
     _,bundle,_=load_scatac_qc_reference_bundle(scope['path'],expected_sha256=scope['sha256'])
     resource_qualification(bundle)
     if (bundle.species,bundle.assembly)!=(spec['species'],spec['assembly']): raise ValueError('Incompatible contig scope')
-    primary={v.name:v.length for v in bundle.contigs if v.classification=='primary_nuclear_qc'}
+    return {v.name:v.length for v in bundle.contigs}
+
+
+def coordinates(features, spec):
+    lengths=contig_lengths(spec)
     encoded=[]
     for value in features:
         match=_REGION.fullmatch(value)
         if match is None: raise ValueError('Peak var_names require exact chrom:start-end zero-based intervals')
         chrom,start,end=match.groups(); start,end=int(start),int(end)
-        if chrom not in primary:
-            raise PeakScopeError('Peak outside qualified primary nuclear scope')
-        if not 0<=start<end<=primary[chrom]: raise ValueError('Peak outside qualified primary nuclear scope')
+        # Native RP matches exact contig strings. A missing name is not evidence
+        # of invalid coordinates, nor permission to repair aliases. The complete
+        # supplied axis reaches MAESTRO; native noncontribution is recorded below.
+        if not 0 <= start < end <= 2**52 or chrom in lengths and end > lengths[chrom]:
+            raise ValueError('Invalid peak interval or coordinate beyond the declared contig length')
         encoded.append(f'{chrom}_{start}_{end}'.encode())
     return encoded
 
@@ -102,7 +111,7 @@ def qualify(args,spec):
     path=legacy.checked_file(args['source_path'],args['source_sha256'])
     if path.stat().st_size>peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB limit')
     peak_h5ad.inspect(path,privacy=True)
-    a=ad.read_h5ad(path); x=counts(a,args['count_slot'])
+    a=ad.read_h5ad(path); _validate_matrix(a); x=counts(a,args['count_slot'])
     for key,expected in (('species',spec['species']),('assembly',spec['assembly']),
                          ('measurement',spec['measurement']),('matrix_semantics',spec['measurement'])):
         if key in a.uns and a.uns[key] != expected:
@@ -111,19 +120,30 @@ def qualify(args,spec):
         species=spec['species'],assembly=spec['assembly'],value_semantics=spec['measurement'],
         ordered_cells_sha256=legacy.ordered_identity_sha256(a.obs_names.tolist()),
         ordered_features_sha256=legacy.ordered_identity_sha256(a.var_names.tolist()),logical_matrix_sha256=logical(x))
-    load_matrix(binding); coordinates(a.var_names.tolist(),spec); group_rows(a,spec)
+    coordinates(a.var_names.tolist(),spec); group_rows(a,spec)
     qualification=dict(contract='external-peak-annotation-input.v1',binding=binding,declarations=spec,
                        upstream_counting_history='declared_not_reconstructed')
-    return c.digest(qualification),dict(shape=list(a.shape),logical_matrix_sha256=logical(x)),binding
+    return c.digest(qualification),dict(shape=list(a.shape),logical_matrix_sha256=binding['logical_matrix_sha256']),binding
 
 
-def weighted_rp(x,features,cells,gene_path,source):
+def weighted_rp(x,features,cells,gene_path,source, *, participation=None):
     legacy.checked_file(source,legacy.SOURCES['MAESTRO/scATAC_Genescore.py'])
     tree=ast.parse(Path(source).read_text()); tree.body=[n for n in tree.body if isinstance(n,ast.FunctionDef)]
     output={}
     def capture(path,matrix,genes,barcodes,**kwargs): output.update(matrix=matrix,genes=list(genes),cells=list(barcodes))
     ns=dict(np=np,pd=pd,sp_sparse=sparse,write_10X_h5=capture)
     exec(compile(tree,str(source),'exec'),ns)
+    if participation is not None:
+        native = ns['RP_AddExonRemovePromoter']
+        def observe(*args):
+            weights = native(*args)
+            # Observe the native transcript weights; do not reproduce RP or
+            # interpret this as contribution to every selected representative gene.
+            observed = weights.tocsr(copy=True)
+            observed.eliminate_zeros()
+            participation['transcript_weight_nnz'] = np.asarray(observed.getnnz(axis=0)).ravel()
+            return weights
+        ns['RP_AddExonRemovePromoter'] = observe
     ns['calculate_RP_score'](x.astype(np.float64,copy=True).T.tocsr(),features,cells,str(gene_path),10000,'unused','Enhanced')
     rp,genes=output['matrix'].T.tocsr(),output['genes']
     if (output['cells']!=cells or rp.shape!=(len(cells),len(genes)) or not np.isfinite(rp.data).all()
@@ -132,6 +152,24 @@ def weighted_rp(x,features,cells,gene_path,source):
     legacy.ordered_identity_sha256(genes)
     if len({g.upper() for g in genes})!=len(genes): raise ValueError('Ambiguous RP gene namespace')
     rp.eliminate_zeros(); return rp,genes
+
+
+def write_participation(x,features,gene_path,participation,root):
+    weights=participation['transcript_weight_nnz']
+    gene_contigs=set(pd.read_csv(gene_path,sep='\t',usecols=['chrom'])['chrom'])
+    matched=np.array([name.rsplit(b'_',2)[0].decode() in gene_contigs for name in features])
+    # Integer accumulation keeps supplied counts exact, including float-stored
+    # integral inputs. Only sparse data and feature-length vectors are visited.
+    columns=x.tocsc(copy=False)
+    totals=[sum(map(int,columns.data[columns.indptr[i]:columns.indptr[i+1]])) for i in range(len(features))]
+    pd.DataFrame(dict(feature=[f'{chrom}:{start}-{end}' for chrom,start,end in (f.decode().rsplit('_',2) for f in features)],supplied_counts=totals,
+        exact_gene_contig_present=matched, native_transcript_weight_nnz=weights)).to_csv(
+            root/'feature-participation.tsv',sep='\t',index=False)
+    return dict(n_features=len(features),unmatched_contig_features=int((~matched).sum()),
+        unmatched_contig_counts=sum(v for v,m in zip(totals,matched) if not m),
+        zero_transcript_weight_features=int((weights==0).sum()),
+        zero_transcript_weight_counts=sum(v for v,w in zip(totals,weights) if w==0),
+        interpretation='Exact supplied contig names and all counts retained. Unmatched names have zero native RP weight; this is not biological absence. No alias correction or genome-length validation for names absent from the declared reference. Nonzero transcript weights precede native representative-transcript selection, not proof of final gene or label influence. Biological validation not assessed.')
 
 
 def annotate_cell_groups(*,binding,specification,runtime,output_dir):
@@ -143,7 +181,9 @@ def annotate_cell_groups(*,binding,specification,runtime,output_dir):
     gene=specification['gene_resource'];signature=specification['signature_resource']
     legacy.checked_file(gene['path'],gene['sha256']);legacy.checked_file(signature['path'],signature['sha256'])
     cancellation_checkpoint()
-    rp,genes=weighted_rp(counts(a,binding['count_slot']),features,cells,gene['path'],upstream/'MAESTRO/scATAC_Genescore.py')
+    x=counts(a,binding['count_slot']); participation={}
+    rp,genes=weighted_rp(x,features,cells,gene['path'],upstream/'MAESTRO/scATAC_Genescore.py',participation=participation)
+    participation=write_participation(x,features,gene['path'],participation,root)
     sparse.save_npz(root/'rp.npz',rp);mmwrite(str(root/'rp-genes-by-cells.mtx'),rp.T,precision=17)
     (root/'genes.tsv').write_text('\n'.join(genes)+'\n');(root/'cells.tsv').write_text('\n'.join(cells)+'\n')
     pd.DataFrame(groups,columns=['cell_id','group']).to_csv(root/'groups.tsv',sep='\t',index=False,quoting=csv.QUOTE_NONE)
@@ -169,5 +209,6 @@ def annotate_cell_groups(*,binding,specification,runtime,output_dir):
     value=dict(schema='agent.peak-marker-annotation.v1',profile=c.EXTERNAL_PROFILE,binding=binding,inputs=specification,
         upstream_revision=legacy.REVISION,upstream_sources=legacy.SOURCES,adapter_sha256=legacy.sha256(__file__),
         r_adapter_sha256=legacy.sha256(script),inherited_policy_adapter_sha256=legacy.sha256(legacy.__file__),
+        feature_participation=participation,
         sidecars={p.name:legacy.sha256(p) for p in sorted(root.iterdir())})
     (root/'result.json').write_text(json.dumps(value,sort_keys=True,allow_nan=False)+'\n');return value

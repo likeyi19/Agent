@@ -110,7 +110,13 @@ def test_uploaded_matrix_then_group_file_continues_original_objective(external_c
             assert 'matrix_manifest_path' not in exported['uns/cell_type_annotation']
             assert 'source_path' not in exported['uns/cell_type_annotation']
             assert exported['uns/measurement'].asstr()[()] == c.EXTERNAL_SEMANTICS
+            assert exported['uns/cell_type_annotation/rp_n_features'][()] > 0
+            assert 'Simulated' in exported['uns/cell_type_annotation/rp_interpretation'].asstr()[()]
             assert 'supplied_groups' in exported['obs'] and 'raw_counts' in exported['layers']
+        detail = client.get(base + '/evidence?output_name=annotation&detail_section=annotation_rationale')
+        assert detail.status_code == 200
+        assert 'feature_participation.n_features' in detail.text
+        assert 'Simulated participation' in detail.text
         assert all(str(upload_root) not in json.dumps(p) for p in prompts)
 
 
@@ -151,7 +157,16 @@ def external_case(case,tmp_path,monkeypatch):
         (output/'genes.tsv').write_text('G\nH\n');(output/'cells.tsv').write_text('\n'.join(a.obs_names)+'\n')
         pd.DataFrame(rows,columns=['cell_id','group']).to_csv(output/'groups.tsv',sep='\t',index=False)
         (output/'marker-runtime.txt').write_text('synthetic native backend only\n')
-        value=dict(binding=binding,inputs=specification,sidecars={p.name:science.sha256(p) for p in output.iterdir()})
+        # Synthetic native output includes the new publication observation. Real
+        # weight mathematics is exercised separately with the pinned backend.
+        participation = dict(n_features=a.n_vars, unmatched_contig_features=0,
+            unmatched_contig_counts=0, zero_transcript_weight_features=0,
+            zero_transcript_weight_counts=0, interpretation='Simulated participation; not native scientific evidence.')
+        pd.DataFrame(dict(feature=a.var_names, supplied_counts=__import__('numpy').asarray(a.X.sum(axis=0)).ravel(),
+            exact_gene_contig_present=True, native_transcript_weight_nnz=1)).to_csv(
+                output/'feature-participation.tsv', sep='\t', index=False)
+        value=dict(binding=binding,inputs=specification,feature_participation=participation,
+            sidecars={p.name:science.sha256(p) for p in output.iterdir()})
         (output/'result.json').write_text(json.dumps(value));return value
     monkeypatch.setattr(external,'annotate_cell_groups',component)
     return annotation,calls
@@ -206,7 +221,7 @@ def test_direct_input_rejects(external_case,problem):
     if problem in ('negative','fractional','nonfinite','overflow'):
         a.X=a.X.astype(np.float64);a.X.data[0]={'negative':-1,'fractional':.5,'nonfinite':np.inf,'overflow':2**53}[problem]
     elif problem=='duplicate':a.obs_names=[a.obs_names[0]]*a.n_obs
-    elif problem=='coordinate':a.var_names=['chrM:1-2']+list(a.var_names[1:])
+    elif problem=='coordinate':a.var_names=['chrM:2-1']+list(a.var_names[1:])
     elif problem=='metadata':a.uns['measurement']='binary_accessibility'
     elif problem=='one_group':
         args={k:v for k,v in args.items() if not k.startswith('groups_')};args['group_column']='supplied_groups';a.obs['supplied_groups']='one'
@@ -272,6 +287,7 @@ def test_direct_native_child_cancellation_reaps(external_case,tmp_path,monkeypat
     for name in science.SOURCES:
         p=upstream/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('synthetic cancellation fixture')
         monkeypatch.setitem(science.SOURCES,name,science.sha256(p))
+    monkeypatch.setattr(external,'write_participation',lambda *a: {})
     monkeypatch.setattr(external,'weighted_rp',lambda *a,**kw:(sparse.csr_matrix([[1.,1.]]*len(a[2])),['G','H']))
     started=tmp_path/'child.pid';exe=tmp_path/'rscript'
     exe.write_text('#!'+sys.executable+'\nimport os,time\nfrom pathlib import Path\nPath('+repr(str(started))+').write_text(str(os.getpid()))\ntime.sleep(30)\n');exe.chmod(0o700)
@@ -354,26 +370,19 @@ def test_selected_resources_empty_offer_does_not_assert_missing_reference(extern
         assert len(prompts)==1 and not calls
 
 
-def test_out_of_scope_peaks_have_safe_actionable_error(external_case, tmp_path):
-    from agent.orchestration.error_policy import safe_message_for, recovery_disposition_for
-    from agent.schemas import RecoveryDisposition
+def test_nonprimary_and_unmatched_peaks_reach_native_owner(external_case, tmp_path):
     args, calls = external_case
     a = ad.read_h5ad(args['source_path'])
-    features = a.var_names.tolist(); features[0] = 'unqualified_contig:0-10'
-    a.var_names = features; a.write_h5ad(args['source_path'])
+    a.var_names = ['KI270728.1:232298-233201'] + list(a.var_names[1:])
+    a.write_h5ad(args['source_path'], convert_strings_to_categoricals=False)
     args['source_sha256'] = science.sha256(args['source_path'])
-    before = Path(args['source_path']).read_bytes()
-    app = ResearchAgentApplication(tmp_path/'scope', planner=Planner(args))
-    result = app.run(AgentRequest('outside-scope', 'Annotate declared cut-site counts.', {}))
-    assert result.status.value == 'FAILED' and not calls
-    error = result.run_result.steps[0].error
-    assert error.code == 'ANNOTATION_PEAK_SCOPE_UNSUPPORTED'
-    message = safe_message_for(error.code)
-    assert 'primary nuclear chromosome scope' in message
-    assert args['source_path'] not in message and 'unqualified_contig' not in message
-    assert recovery_disposition_for(error.code) == RecoveryDisposition.USER_ACTION_REQUIRED
-    assert Path(args['source_path']).read_bytes() == before
-    assert not list((tmp_path/'scope').rglob('annotated.h5ad'))
+    result = ResearchAgentApplication(tmp_path/'scope', planner=Planner(args)).run(
+        AgentRequest('outside-scope', 'Annotate declared cut-site counts.', {}))
+    assert result.status.value == 'SUCCEEDED', result
+    assert len(calls) == 2  # Simulated backend, not biological qualification.
+    output = ad.read_h5ad(result.run_result.steps[0].result['annotated_h5ad_path'])
+    assert output.var_names.equals(a.var_names)
+    assert (output.X != a.X).nnz == 0
 
 
 def test_cellranger_h5_renaming_does_not_convert_to_h5ad(tmp_path):
@@ -385,3 +394,51 @@ def test_cellranger_h5_renaming_does_not_convert_to_h5ad(tmp_path):
     with pytest.raises(ValueError, match='Cell Ranger .h5 is unsupported'):
         inspect(path)
     assert 'renaming the extension is not conversion' in safe_message_for('ANNOTATION_PREREQUISITE_INVALID')
+
+
+@pytest.mark.parametrize('feature', ['chr1:5-5', 'chr1:9-2', 'chr1:-1-2', 'chr1:0-4503599627370497', 'chr1:01-9', 'bad chr:1-3'])
+def test_native_coordinate_syntax_still_rejects_invalid_intervals(feature):
+    with pytest.raises(ValueError):
+        external.coordinates([feature], {})
+
+
+def test_native_coordinates_preserve_unmatched_and_nonprimary_names():
+    assert external.coordinates(['KI270728.1:232298-233201', 'chrM:1-10', 'chrUn_KI270442v1:0-10'], {}) == [
+        b'KI270728.1_232298_233201', b'chrM_1_10', b'chrUn_KI270442v1_0_10']
+
+
+def test_optional_genome_bounds_still_reject_out_of_bounds(external_case, monkeypatch):
+    monkeypatch.setattr(external, 'contig_lengths', lambda spec: {'chr1': 10})
+    with pytest.raises(ValueError, match='contig length'):
+        external.coordinates(['chr1:1-11'], {})
+
+
+def test_participation_uses_native_weights_and_exact_count_totals(tmp_path):
+    import numpy as np
+    import pandas as pd
+    from scipy import sparse
+    gene = tmp_path/'genes.tsv'; gene.write_text('chrom\nchr1\n')
+    x = sparse.csr_matrix([[1, 2, 3], [2, 1, 4]], dtype=np.int64)
+    before = x.copy()
+    summary = external.write_participation(x, [b'chr1_1_2', b'chr1_3_4', b'KI270728.1_1_2'],
+        gene, {'transcript_weight_nnz': np.array([2, 0, 0])}, tmp_path)
+    assert summary['unmatched_contig_features'] == 1
+    assert summary['unmatched_contig_counts'] == 7
+    assert summary['zero_transcript_weight_features'] == 2
+    assert summary['zero_transcript_weight_counts'] == 10
+    assert (x != before).nnz == 0
+    rows = pd.read_csv(tmp_path/'feature-participation.tsv', sep='\t')
+    assert rows.feature.tolist() == ['chr1:1-2', 'chr1:3-4', 'KI270728.1:1-2']
+    assert rows.native_transcript_weight_nnz.tolist() == [2, 0, 0]
+
+
+def test_participation_tampering_fails_even_with_rehashed_metadata(external_case):
+    from agent.tools.analysis import scatac_annotation as owner
+    args, _ = external_case
+    result = owner.execute_annotation(args, 'participation-tamper')
+    path = Path(result['manifest_path'])
+    value = json.loads(path.read_text())
+    value['feature_participation']['unmatched_contig_counts'] = 999
+    path.write_bytes(c.matrix.canonical(value))
+    with pytest.raises(ValueError, match='participation'):
+        owner.verify_annotation(path, expected_sha256=science.sha256(path))

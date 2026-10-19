@@ -12,6 +12,10 @@ from .session_state import digest
 from .epizoo_handoff import EpiZooDeclaration
 
 
+_ANNOTATION_REFERENCE_MISSING = 'No compatible annotation resource is available. Upload a MAESTRO refgenes transcript/exon table and a marker-signature TSV (candidate, gene), with species, assembly, gene namespace, tissue applicability, publisher/derivation and release.'
+_LEGACY_ANNOTATION_REFERENCE_MISSING = (_ANNOTATION_REFERENCE_MISSING
+    + ' A compatible qualified genome chromosome scope must also be available.')
+
 @dataclass(frozen=True)
 class FastqMember:
     source: str
@@ -472,6 +476,10 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         if selected not in candidates:
             return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}. Supply a corrected resource or explicitly choose an alternative.'], None
         return [], selected
+    if (not candidates and isinstance(declared, AnnotationDeclaration) and declared.uploaded is not None
+            and declared.uploaded.gene_source is not None and declared.uploaded.signature_source is not None):
+        # Explicit complete scientific resources need no unrelated QC InputSet.
+        return [], None
     # An available reference cannot establish the sample's species/alignment history.
     if (declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None
             or isinstance(declared, AnnotationDeclaration) and any(getattr(declared, k) is None
@@ -479,7 +487,7 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         return [], None
     if not candidates:
         if isinstance(declared, AnnotationDeclaration):
-            return ['No compatible annotation resource is available. Upload a MAESTRO refgenes transcript/exon table and a marker-signature TSV (candidate, gene), with species, assembly, gene namespace, tissue applicability, publisher/derivation and release. A compatible qualified genome chromosome scope must also be available.'], None
+            return [_ANNOTATION_REFERENCE_MISSING], None
         needed = ('A qualified annotation gene/marker resource compatible with species, assembly, measurement and tissue context'
                   if isinstance(declared, AnnotationDeclaration) else 'A qualified fragments reference compatible with the declared species and assembly'
                   if isinstance(declared, FragmentsDeclaration) else 'A qualified BAM reference compatible with the declared species and assembly'
@@ -685,10 +693,12 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
                     raise ValueError('Uploaded reference observation changed its captured specification.')
                 qualification = resource_observation['qualification']
                 if not resource_observation['problem'] and (type(qualification) is not dict
-                        or set(qualification) != {'gene_sha256', 'signature_sha256', 'gene_count', 'primary_transcripts', 'candidate_count', 'interpretation'}
+                        or set(qualification) not in (
+                            {'gene_sha256', 'signature_sha256', 'gene_count', 'primary_transcripts', 'candidate_count', 'interpretation'},
+                            {'gene_sha256', 'signature_sha256', 'gene_count', 'transcript_count', 'candidate_count', 'interpretation'})
                         or any(qualification[role + '_sha256'] != spec[role + '_resource']['sha256'] for role in ('gene', 'signature'))
                         or any(type(qualification[key]) is not int or qualification[key] <= 0
-                               for key in ('gene_count', 'primary_transcripts', 'candidate_count'))
+                               for key in ('gene_count', 'candidate_count', 'primary_transcripts' if 'primary_transcripts' in qualification else 'transcript_count'))
                         or qualification['interpretation'] != 'declared_provenance_and_applicability;not_independent_biological_validation'):
                     raise ValueError('Invalid uploaded reference qualification observation.')
                 if resource_observation['problem'] and qualification is not None:
@@ -767,7 +777,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if field == 'annotation' and declared.uploaded is not None and not missing:
         import csv
         from agent.tools.analysis.annotation_input import resource_specification, qualify_resources
-        spec, _ = resource_specification(evidence[selected.input_set_id], declared, binding.members)
+        spec, _ = resource_specification(evidence[selected.input_set_id] if selected else None, declared, binding.members)
         resource_observation = dict(specification_sha256=digest(spec), qualification=None, problem='')
         try:
             resource_observation['qualification'] = qualify_resources(spec)
@@ -836,7 +846,7 @@ def _context_identity(candidates, declared, selected, *, mode='original', scope=
     if scope is not None:
         raise ValueError('Unsupported library identity scope.')
     return digest(dict(sources=candidates.attribution(), declaration=declaration,
-                       resource=selected.resource_choice(), **({'source_mode': mode} if mode else {})))
+                       resource=None if selected is None else selected.resource_choice(), **({'source_mode': mode} if mode else {})))
 
 
 def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=()):
@@ -1088,7 +1098,7 @@ def validate(interaction, preceding):
         if missing:
             pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
                 field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
-            if (admitted['kind'] != 'clarify' or admitted['choices'] != missing
+            if (admitted['kind'] != 'clarify' or [(_ANNOTATION_REFERENCE_MISSING if field == 'annotation' and x == _LEGACY_ANNOTATION_REFERENCE_MISSING else x) for x in admitted['choices']] != missing
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
                     or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')
@@ -1237,7 +1247,7 @@ def _annotation_binding(candidates, declared, selected, arguments, pointer):
     values = dict(arguments, annotation_method=EXTERNAL_PRIMARY,
                   annotation_spec_path=pointer['path'], annotation_spec_sha256=pointer['sha256'])
     bound = RegisteredInputGroup(candidates.members, values, roles,
-        resource_choice=selected.resource_choice(), attachment_candidates=True)
+        resource_choice=None if selected is None else selected.resource_choice(), attachment_candidates=True)
     return replace(bound, execution_inputs=group_role_inputs(bound, roles, build_default_tool_registry()))
 
 
@@ -1249,7 +1259,7 @@ def _prepare_annotation(owner, candidates, declared, selected, arguments):
     directory = owner._workspace._ensure_directory(owner._workspace.root / 'annotation_handoffs')
     root = owner._workspace._ensure_directory(directory / identity)
     from agent.tools.analysis.annotation_input import resource_base, resource_specification
-    specification, problems = resource_specification(resource_base(selected.inputs()), declared, candidates.members)
+    specification, problems = resource_specification(resource_base(selected.inputs()) if selected else None, declared, candidates.members)
     if problems:
         raise ValueError('Incomplete uploaded annotation resources.')
     content = c.matrix.canonical(specification)
@@ -1292,7 +1302,7 @@ def _validate_annotation_completion(admitted, candidates, declared, selected, ar
             or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'):
         raise ValueError('Invalid annotation handoff receipt.')
     from agent.tools.analysis.annotation_input import resource_specification
-    spec, problems = resource_specification(admitted['raw_resource_evidence'][selected.input_set_id], declared, candidates.members)
+    spec, problems = resource_specification(admitted['raw_resource_evidence'][selected.input_set_id] if selected else None, declared, candidates.members)
     if problems or declared.uploaded is not None and (not admitted.get('annotation_resource_observation')
             or not admitted['annotation_resource_observation']['qualification']
             or admitted['annotation_resource_observation']['problem']):

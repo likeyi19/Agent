@@ -1460,6 +1460,11 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
             "Validation was not assessed. CellMarker and EpiAgent are optional, non-gating validators; "
             "neither changes or rescues primary labels. No accuracy or probability calibration is established.",
             "", _fact_ids_line(step.facts), ""))
+        if any(f.field == 'annotation_profile' and f.value == 'maestro-enhanced-count-weighted-peaks.v1' for f in step.facts):
+            lines.extend(("Native MAESTRO matches supplied contig names exactly, without alias correction. "
+                "Unmatched names and peaks with zero transcript weight do not contribute to RP; "
+                "this is not evidence of biological absence. The full supplied matrix is preserved. "
+                "Annotation details expose native feature participation when recorded.", ""))
         return lines
     if step.tool_name == "adopt_scATAC_cell_by_ccre":
         lines=[f"### External cell-by-cCRE adoption {occurrence}", "",

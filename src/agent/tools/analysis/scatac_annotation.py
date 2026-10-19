@@ -125,13 +125,14 @@ def _counts(groups, matrix):
         groups_omitted=max(0,len(groups)-50))
 
 
-def _provenance(args, authority):
+def _provenance(args, authority, participation=None):
     if c.profile(args) == c.EXTERNAL_PROFILE:
         return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args), source_path=args['source_path'],
                     source_sha256=args['source_sha256'], input_qualification_sha256=authority,
                     source_contract='external-peak-annotation-input.v1',
                     counting_history='declared_not_reconstructed', count_slot=args['count_slot'],
-                    annotation_spec_sha256=args['annotation_spec_sha256'])
+                    annotation_spec_sha256=args['annotation_spec_sha256'],
+                    **({'rp_' + k: v for k, v in participation.items()} if participation is not None else {}))
     return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args),
                 matrix_manifest_path=args['matrix_manifest_path'], matrix_manifest_sha256=args['matrix_manifest_sha256'],
                 matrix_authority_sha256=authority, annotation_spec_sha256=args['annotation_spec_sha256'])
@@ -141,7 +142,8 @@ def _build(args, output):
     spec = c.resolved_specification(args)
     authority, matrix, binding = source(args, spec)
     output.mkdir()
-    c.backend(binding).annotate_cell_groups(**c.component_arguments(args, spec, binding, output/'primary'))
+    primary = c.backend(binding).annotate_cell_groups(**c.component_arguments(args, spec, binding, output/'primary'))
+    participation = primary.get('feature_participation')
     cells = c.read_json(output/'primary/cells.json', limit=1024**3)
     groups = c.read_json(output/'primary/groups.json', limit=1024**3)
     a, _ = c.load_source(binding)
@@ -151,13 +153,15 @@ def _build(args, output):
         raise ValueError('Annotation cell propagation identity mismatch')
     for column, key in zip(c.OBS_COLUMNS, ('group','primary_annotation','status'), strict=True):
         a.obs[column] = pd.Categorical([r[key] for r in cells])
-    a.uns['cell_type_annotation'] = _provenance(args, authority)
+    a.uns['cell_type_annotation'] = _provenance(args, authority, participation)
     a.write_h5ad(output/'annotated.h5ad', convert_strings_to_categoricals=False)
     value = dict(artifact_type=c.ARTIFACT, schema_version=1, contract_version=c.CONTRACT,
         profile=c.profile(args), profile_sha256=c.profile_sha(args), arguments=args, inputs=spec,
         source_authority_sha256=authority, matrix_binding=binding,
         sidecars={str(p.relative_to(output)):dict(sha256=science.sha256(p),size_bytes=p.stat().st_size)
                   for p in sorted(output.rglob('*')) if p.is_file()}, summary=_counts(groups,matrix))
+    if participation is not None:
+        value['feature_participation'] = participation
     path = output/'manifest.json'
     path.write_bytes(c.matrix.canonical(value))
     sha = science.sha256(path)
@@ -174,7 +178,7 @@ def _same_sparse(left, right):
             all(np.array_equal(getattr(left,k),getattr(right,k)) for k in ('indptr','indices','data')))
 
 
-def _verify_derivative(path, binding, cells, args, authority):
+def _verify_derivative(path, binding, cells, args, authority, participation=None):
     original, _ = c.load_source(binding)
     derived = ad.read_h5ad(path)
     direct = binding.get('method') == c.EXTERNAL_PRIMARY
@@ -188,7 +192,7 @@ def _verify_derivative(path, binding, cells, args, authority):
         actual = [None if pd.isna(x) else str(x) for x in derived.obs[column]]
         if actual != [r[key] for r in cells]:
             raise ValueError('Annotated H5AD metadata differs from exact cell propagation')
-    if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority):
+    if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority, participation):
         raise ValueError('Annotated H5AD matrix/annotation lineage mismatch')
     np.testing.assert_equal(original.uns, derived.uns)
     if direct:
@@ -238,6 +242,8 @@ def verify_annotation(path, *, expected_sha256):
         if p != root/name or p.stat().st_size != entry['size_bytes']:
             raise ValueError('Annotation sidecar size or path mismatch')
     provenance = c.read_json(root/'primary/result.json')
+    if value.get('feature_participation') != provenance.get('feature_participation'):
+        raise ValueError('Native feature participation metadata differs from the backend')
     expected_sidecars = {name.removeprefix('primary/'): entry['sha256']
                         for name,entry in value['sidecars'].items()
                         if name.startswith('primary/') and name != 'primary/result.json'}
@@ -261,11 +267,15 @@ def verify_annotation(path, *, expected_sha256):
         for name in ('genes.tsv','cells.tsv','groups.tsv'):
             if (root/'primary'/name).read_bytes() != (replay/name).read_bytes():
                 raise ValueError('Annotation evidence axes differ from scientific inputs')
+        name = 'feature-participation.tsv'
+        if 'primary/' + name in value['sidecars']:
+            if (root/'primary'/name).read_bytes() != (replay/name).read_bytes():
+                raise ValueError('Native feature participation differs from scientific replay')
     cells = c.read_json(root/'primary/cells.json',limit=1024**3)
     groups = c.read_json(root/'primary/groups.json',limit=1024**3)
     if value['summary'] != _counts(groups,matrix):
         raise ValueError('Annotation summary mismatch')
-    _verify_derivative(root/'annotated.h5ad',binding,cells,args,authority)
+    _verify_derivative(root/'annotated.h5ad',binding,cells,args,authority,value.get('feature_participation'))
     cancellation_checkpoint()
     return _summary(value,Path(path),expected_sha256)
 

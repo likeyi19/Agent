@@ -78,7 +78,7 @@ def specification(path, sha):
     value = read_json(path, sha)
     external = value.get('schema') == EXTERNAL_SPEC
     matrix.shape(value, ('schema', 'species', 'assembly', 'context', 'gene_resource', 'signature_resource',
-        *(('grouping_provenance', 'method', 'measurement', 'coordinate_system', 'contig_scope')
+        *(('grouping_provenance', 'method', 'measurement', 'coordinate_system', *(['contig_scope'] if 'contig_scope' in value else []))
           if external else ('source_run_id', 'source_step_id', 'groups'))))
     if value['schema'] not in (SPEC, EXTERNAL_SPEC) or (value['species'], value['assembly']) not in (('human', 'hg38'), ('mouse', 'mm10')):
         raise ValueError('Unsupported annotation input specification')
@@ -94,9 +94,10 @@ def specification(path, sha):
                 or value['method'] != EXTERNAL_PRIMARY or value['measurement'] != EXTERNAL_SEMANTICS
                 or value['coordinate_system'] != 'zero-based-half-open'):
             raise ValueError('Only declared human hg38 Cell Ranger ATAC cut-site counts are qualified')
-        matrix.shape(value['contig_scope'], ('path', 'sha256'))
-        matrix.absolute_path(value['contig_scope']['path']); matrix.sha(value['contig_scope']['sha256'])
-        science.checked_file(value['contig_scope']['path'], value['contig_scope']['sha256'])
+        if 'contig_scope' in value:
+            matrix.shape(value['contig_scope'], ('path', 'sha256'))
+            matrix.absolute_path(value['contig_scope']['path']); matrix.sha(value['contig_scope']['sha256'])
+            science.checked_file(value['contig_scope']['path'], value['contig_scope']['sha256'])
     for name, semantics, normalization in (
         ('gene_resource', 'maestro-refgenes-transcripts-exons.v1', 'none'),
         ('signature_resource', 'candidate-gene-list.v1', 'uppercase')):
@@ -148,7 +149,8 @@ def load_manifest(path, sha=None):
     value = read_json(path, sha)
     matrix.shape(value, ('artifact_type', 'schema_version', 'contract_version', 'profile',
                         'profile_sha256', 'arguments', 'inputs', 'source_authority_sha256',
-                        'matrix_binding', 'sidecars', 'summary'))
+                        'matrix_binding', 'sidecars', 'summary',
+                        *(['feature_participation'] if 'feature_participation' in value else [])))
     if (value['artifact_type'] != ARTIFACT or type(value['schema_version']) is not int or
         value['schema_version'] != 1 or value['contract_version'] != CONTRACT or
         value['profile'] != profile(value['arguments']) or value['profile_sha256'] != profile_sha(value['arguments'])):
@@ -164,6 +166,11 @@ def load_manifest(path, sha=None):
                 'primary/markers-native.tsv.gz', 'primary/markers-maestro-filtered.tsv',
                 'primary/markers-signature-input.tsv', 'primary/group-sizes.tsv',
                 *(f'primary/{key}.json' for key in ('groups','cells','candidate_evidence','signature_coverage'))}
+    # Existing publications predate native feature-participation observations.
+    if value['profile'] == EXTERNAL_PROFILE and 'primary/feature-participation.tsv' in value['sidecars']:
+        expected.add('primary/feature-participation.tsv')
+    if ('feature_participation' in value) != ('primary/feature-participation.tsv' in expected):
+        raise ValueError('Native feature participation metadata and sidecar must be published together')
     matrix.shape(value['sidecars'], expected)
     for entry in value['sidecars'].values():
         matrix.shape(entry, ('sha256', 'size_bytes'))

@@ -176,3 +176,24 @@ def test_publication_uses_the_configured_attachment_root(resources, tmp_path, mo
 
 def test_operator_resource_labels_do_not_claim_shared_catalog_identity():
     assert shared.check_choice(None, 'session', 'resource.qualified-human') is None
+
+
+def test_annotation_qualification_survives_owner_code_updates(resources, tmp_path, monkeypatch):
+    app, record, _ = private(resources, tmp_path, monkeypatch)
+    q = _serialize(record.reference_qualification)
+    assert all('/src/agent/' not in row['path'] for row in q['files'])
+    # Model an accepted historical record with its original implementation pin.
+    # Never edit real source files to simulate a software update.
+    old_code = dict(path=u.annotation_input.__file__, sha256='a'*64, size_bytes=1)
+    q['files'] = sorted([*q['files'], old_code], key=lambda row: row['path'])
+    legacy = app.resources.register('historical-code-pin-fixture', record.source_path,
+        input_type='scientific_reference', label=record.label, attribution='Simulated historical qualification',
+        reference_qualification=q, session_id=record.session_id)
+    monkeypatch.setattr(u.annotation_input, 'qualify_resources', lambda *a: pytest.fail('Repeated qualification'))
+    assert shared.check_record(app.resources, legacy) == shared.input_set(record).inputs()
+    spec = json.loads(Path(record.source_path).read_text())
+    Path(spec['signature_resource']['path']).write_text('changed scientific data')
+    with pytest.raises(refs.ReferenceSupplementError) as error:
+        shared.check_record(app.resources, legacy)
+    assert error.value.code == 'REFERENCE_SUPPLEMENT_INVALID'
+    assert 'resource bytes' in error.value.message

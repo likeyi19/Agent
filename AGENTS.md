@@ -332,6 +332,17 @@ state/result responses; broad biological interpretation remains deferred.
 
 ## Primary nuclear analysis scope
 
+Direct MAESTRO annotation is an explicit exception to this preprocessing scope:
+[UA3.6.5-R3](docs/ua3.6.5-r3-native-tool-first-simplification.md) admits the
+unchanged supplied peak axis to native Enhanced RP and records unmatched names
+and zero native transcript weights. No aliases are repaired and no counts are
+discarded. A QC chromosome reference is optional for annotation; when supplied,
+known exact contig bounds still apply. Missing bounds are not independently
+qualified. Fragment/QC/matrix production retains the primary-nuclear scope below.
+Reference reuse checks scientific bytes and permission, not incidental annotation
+implementation hashes; scientific result authority remains unchanged. Common
+marker-reference deployment remains blocked by unverified signature permission.
+
 The project default target is the declared species/assembly's canonical primary
 nuclear chromosomes, including primary sex chromosomes where present. Mitochondrial,
 unplaced/unlocalized, alternate/random and other scaffold contigs are excluded.

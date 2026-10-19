@@ -40,11 +40,8 @@ def classify(exception):
     from .registry import ErrorClassification
     from agent.schemas import ErrorCategory
     from agent.schemas.verification_authority import AuthorityError
-    from agent.tools.analysis.external_marker_annotation import PeakScopeError
     if isinstance(exception, AuthorityError):
         return ErrorClassification(ErrorCategory.VERIFICATION_ERROR,'ANNOTATION_AUTHORITY_INVALID')
-    if isinstance(exception, PeakScopeError):
-        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR,'ANNOTATION_PEAK_SCOPE_UNSUPPORTED')
     if isinstance(exception,(ValueError,FileNotFoundError)):
         return ErrorClassification(ErrorCategory.USER_INPUT_ERROR,'ANNOTATION_PREREQUISITE_INVALID')
     return ErrorClassification(ErrorCategory.TOOL_EXECUTION_ERROR,'ANNOTATION_EXECUTION_FAILED')

@@ -112,8 +112,6 @@ def resource_specification(base, declared, members):
     spec.update(schema=c.EXTERNAL_SPEC, method=c.EXTERNAL_PRIMARY, measurement=declared.measurement,
                 species=declared.species, assembly=declared.assembly, context=declared.context,
                 coordinate_system='zero-based-half-open', grouping_provenance=declared.grouping_provenance)
-    if 'contig_scope' not in spec:
-        problems.append('A compatible qualified genome chromosome scope is unavailable; gene and marker tables alone cannot establish chromosome lengths or primary-nuclear classification.')
     return spec, problems
 
 
@@ -124,14 +122,8 @@ def qualify_resources(spec):
     correspondence. It neither assigns labels nor certifies biological accuracy.
     The computation and independent result replay retain their existing owners.
     """
-    from agent.tools.data.scatac_qc_reference import load_scatac_qc_reference_bundle
-    from agent.tools.data._barcode_qc_binding import resource_qualification
-    scope = spec['contig_scope']
-    _, bundle, _ = load_scatac_qc_reference_bundle(scope['path'], expected_sha256=scope['sha256'])
-    resource_qualification(bundle)
-    if (bundle.species, bundle.assembly) != (spec['species'], spec['assembly']):
-        raise ValueError('Reference genome species/assembly differs from the annotation task.')
-    contigs = {row.name: row.length for row in bundle.contigs}
+    from .external_marker_annotation import contig_lengths
+    contigs = contig_lengths(spec)
     gene, signature = (science.Resource(**spec[k]) for k in ('gene_resource', 'signature_resource'))
     gene.check(spec['species'], spec['assembly'], 'maestro-refgenes-transcripts-exons.v1', 'none')
     signature.check(spec['species'], spec['assembly'], 'candidate-gene-list.v1', 'uppercase')
@@ -140,8 +132,7 @@ def qualify_resources(spec):
     if any(Path(r.path).stat().st_size > 64 * 1024**2 for r in (gene, signature)):
         raise ValueError('Annotation resource exceeds the 64 MiB per-component admission bound.')
     genes = set()
-    primary = {row.name for row in bundle.contigs if row.classification == 'primary_nuclear_qc'}
-    primary_transcripts = 0
+    transcript_count = 0
     columns = 'bin name chrom strand txStart txEnd cdsStart cdsEnd exonCount exonStarts exonEnds score name2 cdsStartStat cdsEndStat exonFrames'.split()
     with Path(gene.path).open(newline='') as stream:
         rows = csv.DictReader(stream, delimiter='\t')
@@ -163,15 +154,12 @@ def qualify_resources(spec):
                     or any(b > a for b, a in zip(ends, starts[1:]))):
                 raise ValueError('Refgenes transcript/exon coordinates or genome chromosome compatibility are invalid.')
             genes.add(row['name2'].upper())
-            primary_transcripts += row['chrom'] in primary
-    # Native refgenes also contains patch transcripts. They remain byte-exact;
-    # peaks cannot map to them because the owner admits only primary chromosomes.
-    # Do not mistake absent patch sequence metadata for incompatible primary genes.
-    if not genes or not primary_transcripts:
-        raise ValueError('Gene annotation contains no transcripts on the qualified primary chromosomes.')
+            transcript_count += 1
+    if not genes:
+        raise ValueError('Gene annotation contains no transcripts.')
     signatures = science.read_signatures(signature.path)
     if not any(g in genes for values in signatures.values() for g in values):
         raise ValueError('Signature gene identifiers have no correspondence with the supplied gene annotation.')
     return dict(gene_sha256=gene.sha256, signature_sha256=signature.sha256,
-                gene_count=len(genes), primary_transcripts=primary_transcripts, candidate_count=len(signatures),
+                gene_count=len(genes), transcript_count=transcript_count, candidate_count=len(signatures),
                 interpretation='declared_provenance_and_applicability;not_independent_biological_validation')

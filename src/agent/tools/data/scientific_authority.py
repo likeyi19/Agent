@@ -155,9 +155,11 @@ def describe(kind, path, sha, context):
             raise AuthorityError('Annotation source authority or specification changed.')
         if spec['schema'] == annotation.EXTERNAL_SPEC:
             from agent.tools.analysis import peak_h5ad
-            resources.extend([args['source_path'],spec['contig_scope']['path'],peak_h5ad.__file__])
-            if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
-                resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
+            resources.extend([args['source_path'],peak_h5ad.__file__])
+            if 'contig_scope' in spec:
+                resources.append(spec['contig_scope']['path'])
+                if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
+                    resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
         else:
             dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
         owned.extend(root / name for name in value['sidecars'])

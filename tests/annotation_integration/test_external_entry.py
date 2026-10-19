@@ -374,3 +374,14 @@ def test_out_of_scope_peaks_have_safe_actionable_error(external_case, tmp_path):
     assert recovery_disposition_for(error.code) == RecoveryDisposition.USER_ACTION_REQUIRED
     assert Path(args['source_path']).read_bytes() == before
     assert not list((tmp_path/'scope').rglob('annotated.h5ad'))
+
+
+def test_cellranger_h5_renaming_does_not_convert_to_h5ad(tmp_path):
+    from agent.tools.analysis.peak_h5ad import inspect
+    from agent.orchestration.error_policy import safe_message_for
+    path = tmp_path/'renamed.h5ad'
+    with h5py.File(path, 'w') as f:
+        f.create_group('matrix')
+    with pytest.raises(ValueError, match='Cell Ranger .h5 is unsupported'):
+        inspect(path)
+    assert 'renaming the extension is not conversion' in safe_message_for('ANNOTATION_PREREQUISITE_INVALID')

@@ -168,7 +168,13 @@ def test_provider_cannot_replace_claim_values_or_subjects(app, monkeypatch, atta
         if attack == 'legacy_slot': item['parts'] = [dict(kind='text',text='{{'+c+'}}')]
         return dict(support='supported', paragraphs=[item])
     response = ask(forbid_work(app,monkeypatch), 'attack', 'Explain cluster 3', Model(question(subject='3'), response=forged))
-    assert response.status == 'unavailable' and response.scientific is None
+    if attack in ('number', 'number_word', 'category'):
+        assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
+        claim, = response.scientific.claims
+        assert (claim.subject, claim.field, claim.value) == ('3', 'primary_annotation', 'CD8 T')
+        assert not any(v in response.text for v in ('999', 'ninety nine', 'is CD8 T'))
+    else:
+        assert response.status == 'unavailable' and response.scientific is None
 
 
 def nnz_response(value, text):
@@ -212,7 +218,10 @@ def test_nonzero_metric_term_keeps_unbound_literals_rejected(app, monkeypatch, u
     accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823, x_storage_type='csr'))
     model = Model(question(), response=lambda value: nnz_response(value, f'non-zero entries; {unbound}'))
     response = ask(forbid_work(app, monkeypatch), 'invalid', 'Explain the nonzero entry count.', model)
-    assert response.status == 'unavailable' and response.scientific is None
+    assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
+    claim, = response.scientific.claims
+    assert (claim.field, claim.value) == ('nnz', 11535823)
+    assert f'non-zero entries; {unbound}' not in response.text
 
 
 @pytest.mark.parametrize('hyphen', ['-', '\u2010', '\u2011'])
@@ -230,7 +239,10 @@ def test_nonzero_metric_term_cannot_span_parts(app, monkeypatch, hyphen, separat
         return result
     response = ask(forbid_work(app, monkeypatch), 'split', 'Explain the nonzero entry count.',
                    Model(question(), response=split))
-    assert response.status == 'unavailable' and response.scientific is None
+    assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
+    claim, = response.scientific.claims
+    assert (claim.field, claim.value) == ('nnz', 11535823)
+    assert 'zero cells' not in response.text
 
 
 def test_reordered_completions_require_explicit_predecessor(app, monkeypatch):

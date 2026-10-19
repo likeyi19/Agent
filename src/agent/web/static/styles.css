@@ -226,6 +226,7 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 
 #result-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 12px; }
 #result-facts .scientific-fact { margin: 0; padding: 12px; }
+#result-facts .annotation-groups { grid-column: 1 / -1; }
 #result-facts .scientific-fact > span { font-size: 20px; font-weight: 600; }
 
 /* Keep the ordinary conversation and result reading path concise. */

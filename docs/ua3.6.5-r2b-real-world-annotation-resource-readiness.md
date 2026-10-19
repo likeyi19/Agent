@@ -1,9 +1,12 @@
 # UA3.6.5-R2B — Real-world annotation and resource readiness
 
-2026-10-19 (Asia/Shanghai). **R2B PARTIAL.** Four bounded product repairs, a test-contract cleanup and a live native
-positive-control chain are demonstrated. The full external matrix does not
-complete annotation; conversational evidence answers and production readiness
-remain incomplete. Evidence root **R**:
+2026-10-19 (Asia/Shanghai). **R2B PARTIAL.** The targeted closeout below adds shared
+evidence-only answer recovery, verified native scope diagnostics, clearer H5AD
+guidance and annotation summaries, and persistent normal-runtime activation.
+Both original questions now return accepted facts in the live control journey.
+The full external matrix remains outside the qualified input policy; common
+annotation-reference deployment remains blocked by signature permission.
+Original evidence root **R**:
 `/home/likeyi/agent-ua365-r2b-6zkcjv2c`, outside Git. UA3.6.5 remains open.
 
 ## Baseline and reviewed boundaries
@@ -320,3 +323,287 @@ included in the authorized Part A commit, titled
 `Complete UA3.6.5-R2B annotation handoff corrections`. Evals and scientific data
 are excluded. Product acceptance remains **PARTIAL**. The earlier unstaged Git
 record above describes the original exploration checkpoint.
+
+## Targeted follow-up — scientific answers, scope review and normal runtime
+
+Part A was committed and pushed as
+`b9a2819f4ef7480bf76a3f226c89e4ea08b50213`; HEAD, main, origin/main and remote main
+were verified equal before Part B. All additional evidence is under **F** above;
+R remains unchanged. This section supersedes the earlier prospective closeout
+recommendations where the investigation below supplies new evidence.
+
+### Shared answer boundary
+
+`F/answer-diagnostics.json` independently reproduces both original responses as
+`factual_binding/unbound_categorical_value`. Their reference IDs are valid. The
+word `assigned` collides with status values inside detailed assignment claims.
+The second response also calls “groups omitted” unresolved groups, although that
+field measures summary truncation. Allowing its surrounding prose solely because
+some referenced claims are valid would preserve an unsupported interpretation.
+
+The existing Answerer now recovers from a factual-literal prose rejection by
+using the same renderer to retain only complete selected claims, reviewed
+meanings and qualified comparison pairs. It discards **all** model-authored prose
+in that response, states that the explanation could not safely be used, and
+marks the result `insufficient_evidence`. This is one provider call, not a retry,
+new Answerer, word exemption or MAESTRO-specific rule. The strict renderer still
+rejects unbound numerical/categorical literals. Invalid shapes, references,
+substituted values/subjects, missing comparison operands or compatible pairs,
+and changed accepted evidence remain failures. All later paragraphs are checked;
+an earlier prose failure cannot conceal a later forged reference.
+
+`F/answer-recovered.json` replays the exact two captured responses through the
+new generation boundary without providers or science. Both return their selected
+accepted facts. The unsupported equivalence between unresolved and omitted groups
+is absent. Recovery preserves exact Revision/subject/value/source identities;
+it does not certify that every question is completely answered or that arbitrary
+model prose is entailed by evidence. Ordinary valid prose retains its existing
+behavior. New tests cover annotation status terms, PCA/EpiZoo accepted metadata,
+scientific numbers, malformed claims and cross-Revision discussions.
+
+`F/accepted-answer-replay.json` additionally reloads the original Session's
+actual accepted context, checks that its offered claims exactly match the
+captured prompts, and replays both original responses with exact source and
+Revision attribution. Its 71 workspace files remain unchanged.
+`F/accepted-embedding-answers.json` independently uses preserved R2A PCA,
+EpiZoo-derived Leiden and cross-Revision Leiden evidence. All three contexts
+pass valid-answer, unsafe-prose recovery and forged-reference rejection checks;
+72 historical workspace files remain unchanged. These are scripted answer
+organization over real accepted evidence, with zero providers or science,
+not additional live language-quality qualification.
+
+### Native MAESTRO scope finding
+
+The exact R2B input remains SHA
+`c75bca64515710f6045a1c65d9f0dfb9fe9827102501856007b2bfcb58b33c81`,
+1,004 cells × 82,579 peaks. No source bytes, axes, counts or identifiers change.
+The 31 outside-primary peaks contain 6,062 of 22,279,127 counts. Their exact
+coordinates and per-peak counts are in `F/native-scope.json`.
+
+The pinned native Enhanced RP routine matches contig strings and reference gene
+geometry; it does not consult Agent's QC classification. Instrumentation captures
+the actual native transcript-by-peak weight matrix, independently of final
+annotations. With original names, all 31 extra columns have zero native weights.
+Full-input and primary-only diagnostic calculations give identical RP values and
+exact gene/cell axes (28,307 × 1,004; 12,960,672 nonzeros). This comparison never
+replaces the source H5AD or publishes an acceptance-tailored input.
+
+That equality is **not** sufficient evidence for safe noncontribution. The
+[official UCSC hg38 alias table](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/chromAlias.txt.gz)
+provides exact accession/UCSC correspondences for all ten affected contigs. The
+bounded diagnostic download is 13,393 bytes, SHA
+`43aac315a93939c54d8b168ea8118fb7760b5e7ff8653f59dd712cfc7467be56`;
+URL/date/publisher/role are in `F/alias-acquisition.json`. All coordinates fit the
+corresponding lengths in the preserved hg38 FAI. Nine of these contigs have
+transcripts under their UCSC names in the pinned gene resource.
+
+A **diagnostic-only**, explicit alias substitution into native RP gives 55
+nonzero transcript/peak weights across **26 of the 31 peaks**. Their weighted
+transcript contribution sums to 11,244.555314815603 before gene aggregation and
+normalization; this is not a cell count or a claim about label changes.
+`F/alias-diagnostic.json` records each correspondence and weight count. No aliases
+are inferred from spelling or repaired in production. This establishes that the
+original zero contribution is a naming mismatch, not biological absence.
+
+The existing qualified primary-only admission is therefore retained for this
+round. It is an Agent qualification policy, **not a universal MAESTRO algorithm
+requirement**. The safe error now says so explicitly. Admitting this full input
+by quietly letting unmatched accessions contribute zero would be misleading;
+using the alternative names changes scientific inputs, and a primary analysis
+view must explicitly qualify and record its exclusions. Neither interpretation
+is silently introduced. A broader owner contract needs explicit, qualified
+coordinate correspondence or a reproducible declared analysis view. Native
+algorithms, EpiZoo, original inputs and historical publication identities remain
+unchanged. No new adapter or conversion framework is added.
+
+### Format and interface corrections
+
+The dual-pane interface is preserved. Composer guidance explicitly requires H5AD
+for matrix analysis/annotation, explains that Cell Ranger `.h5` needs a scientific
+conversion, and requires preservation of cells × features, counts and identifiers.
+Renaming is not conversion. The existing H5AD owner and annotation error catalog
+now explain the same boundary. No native H5 import or automatic conversion exists.
+
+The annotation summary displays accepted cell/group counts, assigned/unassigned/
+ambiguous counts and group labels, instead of prioritizing artifact-schema and
+summary-truncation numbers. Full evidence remains available. Failed read-only
+answers display “Answer unavailable · Accepted result unchanged”; execution
+failures retain their execution status. These are presentation changes, not
+scientific state transitions or new evidence.
+Native Firefox exposed a narrow summary card that wrapped group records into
+nearly vertical text. The existing group-summary card now spans the result
+grid. `F/final-annotation-summary.png` and the computed layout check verify the
+permanent CSS in a fresh browser/server, without injected preview styles.
+
+### Deployment permission and runtime
+
+`F/deployment-before.json` captures the normal operator and conda-environment
+identities. Owner-only backups are under `F/secure-backup` (directory 0700,
+files 0600); they contain sensitive environment state and are never committed.
+No Agent Web service or active execution was running before activation. The
+candidate configuration was first composed under an isolated workspace and the
+native source/package pins were checked (`F/runtime-candidate.json`).
+
+The normal `agent` conda environment now persistently sets the existing
+`AGENT_QC_RESOURCE_CATALOG`, `AGENT_ANNOTATION_MAESTRO_ROOT`,
+`AGENT_ANNOTATION_RSCRIPT` and `AGENT_ANNOTATION_R_LIBRARY` pointers. Only those
+four environment entries change. Fresh activation verifies R 4.6.1, Presto 1.1.0,
+Matrix 1.7.6 and dplyr 1.2.1, plus the pinned native source files
+(`F/runtime-normal-environment.json`). No model, batch/device/dtype, credential,
+resource binary or existing choice changes. The normal operator JSON remains SHA
+`f59312491c2719ae93bc3366724335550a713e5c76cf6bd84ddbc01a0558477e`.
+The credential-bearing conda state file is restricted from its existing mode
+0664 to 0600; existing credential values are preserved (`F/deployment-after.json`).
+
+**Runtime availability is improved; a common annotation reference is not activated.**
+The exact CIBERSORT-derived signature still lacks a verified deployment-sharing
+permission basis. MAESTRO's GPL code license does not independently establish
+permission for third-party signature bytes. The inspected
+[Stanford CIBERSORTx terms](https://cibersortx.stanford.edu/runcibersortx.php)
+restrict service use and supply no verified redistribution grant for this retained
+file; this is not a finding that all local research use is prohibited.
+
+Alternative review is recorded in `F/permission_review.json`. The inspected
+[PanglaoDB publisher repository](https://github.com/oscar-franzen/PanglaoDB) does
+not establish the required grant in its reviewed pages.
+[CellMarkers](https://www.cellmarkers.com/docs/copyright) explicitly offers
+CC BY 4.0 database content with exceptions, but its stated flow-cytometry/CyTOF/
+microscopy marker purpose is not a qualified native MAESTRO PBMC gene-signature
+replacement. No protein-panel conversion or biological qualification is invented.
+No private resource is promoted, and no configured InputSet bypasses the trusted
+sharing boundary. The smallest resolution is applicable permission for the exact
+retained signature and intended deployment, or a qualified permitted replacement,
+followed by the existing shared-resource promotion with pinned permission evidence.
+
+The actual normal configuration was launched after ordinary conda activation and
+used through Firefox/OpenRouter. Session
+`5cb9ff19-83c8-4a15-8fb8-4212c7c99fc4` correctly captures the source, asks for count
+slot/group provenance, accepts the reply, and reports the unavailable compatible
+reference. Generation stays zero; no annotation runs. Restart restores the four
+conversation texts and pending task exactly (`F/normal-restart-check.json`).
+This is a verified deployment blocker, not a successful normal annotation trial.
+
+### Live replay, exports and historical compatibility
+
+A separate isolated Session uses the existing private reference InputSet; it
+inherits the newly activated normal runtime environment. It is explicitly not
+common-reference deployment acceptance. Real Firefox and the existing OpenRouter
+GPT-5.6 Sol profile perform ordinary upload, clarification and grouping reply:
+
+- Session `543f7e1b-8163-4efe-9fac-3dbb2a1f540f`.
+- Run `turn-7baafbff9df3f06d90002edb3b0b702875d500e73f2909ced53ab726cc346bc2:run`.
+- Revision `888b54d347f071b1102ed06f785e4d9fe8377f3172268e72dcc0b9bc3dfc696e`.
+- Manifest SHA `1809cb83471bd9bfa067d8cb33af10be344181549fc58b755e249552fa5fd16a`.
+
+The 484-cell historical control completes exactly two native annotation backend
+calls: production and one independent verifier replay. Labels/counts match the
+historical control, with validation still `not_assessed`. The two original
+questions are then asked verbatim through the browser. Both display “Answer
+available”, keep generation 1 and the same active Revision, and execute zero
+additional science. The first response uses accepted prose and bound detail;
+the second invokes the new evidence-only recovery. The latter presents 484
+assigned cells, four groups and their exact assignment records, while explicitly
+withholding the rejected explanation. These are useful accepted facts, not a
+claim of fully conversational or concise presentation quality.
+
+Firefox accesses the technical report (34,090 characters), assignment/marker
+detail, and native annotated-H5AD download. The downloaded bytes have SHA
+`5f0a255ab8e5efb2f4ff31d1ad4005b88c73612264d3e2a7faf62f657d76cad2`.
+`F/control-science-check.json` independently reopens the actual download and
+verifies exact cells/features, original obs/var, sparse X/raw values and dtypes,
+and group-to-cell assignment propagation. The original source and delivered
+content identities remain distinct under the established privacy-safe export.
+No annotation biology is reconstructed by download verification.
+
+The full external input is also replayed in Session
+`530618f0-40bf-4c5b-b275-abee2d184d5d`. Its first real interpreter response wrongly
+sets the H5AD as both matrix and separate grouping-file source; admission rejects
+it. An ordinary follow-up explicitly states that the grouping is an obs column
+inside the H5AD. The same uploaded source then reaches the owner and displays the
+revised actionable scope error, with zero native annotation calls and no Revision.
+No model-specific repair or forced planning follows the first semantic error.
+
+`F/audit-summary.json` records **16 provider calls across eight live turns**:
+eight interpreter, two capability selection, two Planner, two output selection
+and two answerer calls. All use the configured model, without transport failures
+or model fallback. These counts exclude offline captured-response replay and
+are not billing measurements or a provider-reliability estimate. Source
+qualification runs three times (control production/replay and external rejection);
+the separately recorded native scope diagnostics are not Agent tool executions.
+
+Read-only historical compatibility checks reopen the preserved USI-4 and original
+R2B Sessions, Revisions, scientific artifact inventory and accepted evidence.
+They preserve all **38** and **71** respective workspace files byte-for-byte,
+with zero provider construction or scientific calls (`F/historical-read.json`,
+`F/r2b-historical-read.json`). Protected-entry checks find zero changes among
+**123,109** historical entries and **14,501** original R evidence files. The
+normal smoke test adds a new Session/upload through ordinary APIs; it does not
+rewrite any previously existing production record.
+
+Fresh Firefox and server processes restore the control's eight conversation
+texts, generation 1 and exact Revision, reopen the report, and preserve all
+55 isolated workspace files (`F/recovery.json`). Provider and science audit
+files remain byte-identical. The restored fallback text remains its originally
+persisted wording; the final rendering copy clarifies that stronger conclusions
+are unestablished without denying the accepted count facts. Existing history
+is never rewritten. The browser also verifies the H5AD guidance and distinct
+answer-failure versus execution-failure labels. Initial harness interruptions
+and retries are retained in F; they are not counted as successful product turns.
+
+### Targeted validation and disposition
+
+The adjacent regression covers scientific dialogue, annotation integration,
+rich Web/API/static behavior, uploads, scientific artifacts and planning scope:
+**473 passed, seven failed, one warning in 905.59 seconds**, exit 1.
+All 550 frozen source/test/static/R files remain unchanged during that run;
+no `RUN_*` gates or test exclusions are used (`F/regression-command.json`,
+`F/regression-result.json`, `F/regression.xml`). This is not an all-green run.
+
+Five failures reproduce on untouched `d5320be` in
+`tests/application/test_dialogue_detail.py` (**17 passed, five failed, 12.57 s**).
+The old fixture omitted the manifest arguments that establish method identity.
+Its default now supplies the explicit legacy-method arguments already used by
+the module's current-contract test. Scientific readers and evidence admission
+are not weakened. One static assertion is updated for the intentional
+response-kind argument to `statusLabel`.
+
+The remaining `test_first_threshold_execution_retains_exact_qc_for_followup_guidance`
+failure reproduces unchanged on `d5320be` (**one failed, 43.13 s**): the existing
+20-second polling window expires with the selection step `SUCCEEDED`, presentation
+`finalizing`, and no error. Both current and baseline persisted turns subsequently
+reach `activated` at generation 2 (`F/rich-timeout-completion.json`). No timeout
+increase, application workaround or unrelated refactor is introduced. The
+timing limitation is retained as an unresolved baseline test failure.
+
+The final affected-module run passes **227 tests**, with that **one reproduced
+baseline timeout**, one warning, in **265.83 seconds** (exit 1). It includes
+dialogue detail, the shared answerer, categorical binding, cross-Revision
+comparison, Web static/rich/upload presentation, rich API and external-entry
+annotation tests (`F/final-focused.xml`, `F/final-focused.log`). All five
+fixture failures and the stale static assertion are corrected. The separate
+final answer-focused run passes **55 tests in 11.84 seconds**. These scopes
+overlap; they are not summed into an all-green regression total.
+
+Final preservation checks again find zero changes in 123,109 protected entries,
+14,501 original evidence files and the 1,274-file eval inventory. As at intake,
+large-file protection uses recorded size/mtime; stored hashes are checked where
+present. This is not a fresh full-byte audit of all historical data. Native
+EpiZoo source is unchanged. Both temporary Web and Firefox processes are stopped;
+the normal deployment was initially stopped and remains so, with its reviewed
+runtime settings persistent for the next ordinary launch.
+
+**R2B remains PARTIAL.** The independently verified answer, format, error and
+presentation corrections can close out separately from external-input and
+shared-reference readiness. The highest-value next step is permission for the
+exact signature and intended deployment, or qualification of a permitted
+replacement through the existing resource system. Full external peak admission
+additionally needs qualified, explicit coordinate correspondence or an explicitly
+declared analysis view. No next scientific work unit is begun.
+
+The reviewed Part B implementation, tests and this record are the sole payload
+of the authorized second commit, titled
+`Improve UA3.6.5 scientific answers and annotation readiness`. Pre-commit
+HEAD/main/origin/main/remote main all equal Part A `b9a2819`. `git diff --check`
+passes. No eval, dataset, resource binary, checkpoint, operator file or credential
+is staged. `F/final-git.json` records the resulting commit and post-push branch
+agreement; the commit identity is also returned in the closeout response.

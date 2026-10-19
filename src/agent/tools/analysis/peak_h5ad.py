@@ -30,10 +30,10 @@ def strings(item, selection):
 def inspect(source, *, private_paths=(), privacy=False):
     """Reject indirect HDF5, unsupported encodings and unbounded allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
+        if not {'X','obs','var'} <= set(f):
+            raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
         if f.userblock_size or set(f) - {'X','obs','var','uns','layers','obsm','obsp','varm','varp','raw'}:
             raise ValueError('Unsupported H5AD top-level layout')
-        if not {'X','obs','var'} <= set(f):
-            raise ValueError('H5AD requires X, obs and var')
         seen = set(); objects = 0; size = 0
         def visit(item, depth):
             nonlocal objects, size

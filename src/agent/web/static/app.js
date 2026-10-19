@@ -706,7 +706,8 @@ function readableLabel(value) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function statusLabel(status) {
+function statusLabel(status, responseKind = null) {
+  if (status === "failed" && responseKind === "answer") return "Answer unavailable · Accepted result unchanged";
   const labels = {
     activated: "Analysis completed", succeeded: "Analysis completed",
     stale: "Analysis completed · Historical result", failed: "Analysis failed",
@@ -758,6 +759,7 @@ function evidenceFactNodes(facts, fieldLabels = {}) {
     const technical = fact.field.endsWith("_sha256") || fact.field.includes("contract");
     const item = document.createElement(technical ? "details" : "section");
     item.className = "scientific-fact";
+    if (fact.field === "group_summary") item.classList.add("annotation-groups");
     const title = document.createElement(technical ? "summary" : "h4");
     title.textContent = `${fieldLabels[fact.field] || readableLabel(fact.field)}${fact.status === "available" ? "" : ` · ${fact.status}`}`;
     const content = fact.status === "available" ? evidenceValueNode(fact.value) : document.createElement("p");
@@ -859,8 +861,12 @@ async function loadEvidence(detail = false) {
       // This is a bounded view, never a new statistic or a compatibility claim.
       element("result-method").textContent = view.source ? readableLabel(view.source.tool_name) : "Scientific results";
       // A short view of recorded quantities; full fields, including seeds, remain in evidence.
-      const quantities = view.facts.filter((fact) => fact.status === "available"
-        && typeof fact.value === "number" && !fact.field.endsWith("seed")).slice(0, 4);
+      const annotation = view.source && view.source.tool_name === "annotate_scATAC_cell_types";
+      const summaryFields = ["n_cells", "n_groups", "assigned_cells", "unassigned_cells", "ambiguous_cells", "group_summary"];
+      const quantities = annotation
+        ? summaryFields.flatMap((field) => view.facts.filter((fact) => fact.status === "available" && fact.field === field))
+        : view.facts.filter((fact) => fact.status === "available"
+          && typeof fact.value === "number" && !fact.field.endsWith("seed")).slice(0, 4);
       element("result-facts").replaceChildren(...evidenceFactNodes(quantities, view.field_labels || {}));
       if (!quantities.length) element("result-facts").textContent = "No summary quantities are offered for this output. See the accepted response, report and evidence.";
       element("result-limitations").replaceChildren(textList(view.limitations));
@@ -1116,7 +1122,7 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = statusLabel(turn.status) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
+    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     metadata.dataset.detailKey = "turn-details";
@@ -1219,7 +1225,7 @@ function updateControls() {
 
 function renderExecution() {
   element("turn-status").parentElement.hidden = !state.posting && !state.activeTurn;
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status) : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");

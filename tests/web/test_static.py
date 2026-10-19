@@ -308,7 +308,7 @@ def test_history_restores_details_and_focus_by_exact_turn_and_action_identity():
     assert 'target.focus({ preventScroll: true })' in capture
     assert 'restoreConversationUi(history, captured)' in code
     history = code[code.index('function renderHistory'):code.index('function updateControls')]
-    assert 'status.textContent = statusLabel(turn.status)' in history
+    assert 'status.textContent = statusLabel(turn.status, turn.response && turn.response.kind)' in history
     assert 'checkpointText(turn)' in history
 
 

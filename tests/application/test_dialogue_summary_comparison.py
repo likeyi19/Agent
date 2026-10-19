@@ -178,3 +178,19 @@ def test_same_literal_graph_path_does_not_establish_qualified_lineage(app, monke
     view = forbid_work(app, monkeypatch).sessions.evidence('session', rid, 'output0')
     assert view.status == 'available'
     assert not any(f.field == 'clustering_neighbors_identity_sha256' for f in view.facts)
+
+
+@pytest.mark.parametrize('tool,method', [('pca_embed_cells', 'pca'), ('epizoo_embed_cells', 'epizoo')])
+def test_embedding_answer_recovery_keeps_accepted_revision_and_values(app, monkeypatch, tool, method):
+    old = accepted(app, tool, overrides={'n_cells': 8})[0]
+    new = accepted(app, tool, name='next', overrides={'n_cells': 12})[0]
+    def prose(value):
+        return dict(support='supported', paragraphs=[dict(parts=[
+            *[dict(kind='claim', id=c['claim_id']) for c in value['evidence']['claims'] if c['field']=='n_cells'],
+            dict(kind='comparison', id=value['evidence']['comparison']['pairs'][0]['id']),
+            dict(kind='text', text=f'These {method} results have 999 identical cells.')])])
+    result = ask(forbid_work(app, monkeypatch), 'recovered', 'Discuss the current result and its parent.',
+        Model(question(comparison=dict(output='r1', subject=None)), response=prose))
+    assert result.status == 'answered' and result.scientific.support == 'insufficient_evidence'
+    assert {(c.source['revision_id'], c.value) for c in result.scientific.claims if c.field == 'n_cells'} == {(old, 8), (new, 12)}
+    assert '999' not in result.text and 'identical cells' not in result.text

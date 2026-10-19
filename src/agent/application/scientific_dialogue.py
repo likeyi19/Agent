@@ -3,7 +3,7 @@
 Only references are persisted. Claims are reloaded and bound as whole
 subject/predicate/value records; model-authored explanation is not authority.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import logging
 import re
@@ -782,7 +782,7 @@ class _AnswerFailure(ValueError):
 
 
 def _diagnose(stage, reason):
-    logging.getLogger(__name__).warning('Scientific answer unavailable: %s/%s', stage, reason,
+    logging.getLogger(__name__).warning('Scientific answer diagnostic: %s/%s', stage, reason,
         extra={'scientific_answer_stage': stage, 'scientific_answer_reason': reason})
 
 
@@ -824,8 +824,25 @@ def generate(model, question, focus, public, claims):
         raise _AnswerFailure('parsing', 'malformed_provider_output') from exc
     try:
         return render_response(result, public, claims)
-    except _AnswerFailure:
-        raise
+    except _AnswerFailure as exc:
+        if exc.stage != 'factual_binding':
+            raise
+        # A lexical collision does not establish that the prose is false, and
+        # a valid reference does not establish that surrounding prose is true.
+        # Discard all model prose; retain only complete, attributed evidence.
+        # The same renderer still checks every shape, reference and comparison.
+        try:
+            recovered = render_response(result, public, claims, evidence_only=True)
+        except _AnswerFailure as failure:
+            if failure.reason == 'missing_evidence':
+                raise exc
+            raise
+        if not recovered.claims:
+            raise exc
+        _diagnose('evidence_only_recovery', exc.reason)
+        return replace(recovered, support='insufficient_evidence', explanation=(
+            'I could not safely use the generated explanation. These are the selected accepted facts:\n\n'
+            + recovered.explanation))
     except (IntentError, ValueError, TypeError, KeyError) as exc:
         raise _AnswerFailure('response_schema', 'malformed_provider_output') from exc
 
@@ -844,7 +861,7 @@ def response_schema(public, claims):
             parts={'type':'array','minItems':1,'maxItems':32,'items':{'anyOf':variants}}))}))
 
 
-def render_response(result, public, claims):
+def render_response(result, public, claims, *, evidence_only=False):
     pairs = {p['id']:p for p in public.get('comparison', {}).get('pairs', ())}
     _shape(result, ('support','paragraphs'))
     if result['support'] not in ('supported','insufficient_evidence') or not isinstance(result['paragraphs'], list) or not 1 <= len(result['paragraphs']) <= 6:
@@ -853,6 +870,7 @@ def render_response(result, public, claims):
     labels = {t['handle']:t for t in public['targets']}
     semantics = {c['claim_id']:c.get('semantics', {}) for c in public['claims']}
     used, rendered = [], []
+    prose_failure = None
     def render_claim(c):
         if c not in used: used.append(c)
         label = labels[c.target]['label']
@@ -879,7 +897,8 @@ def render_response(result, public, claims):
                     categorical_prose[-1] += ' ' + text
                 else:
                     categorical_prose.append(text)
-                output.append(text)
+                if not evidence_only:
+                    output.append(text)
                 continue
             _shape(part, ('kind', 'id'))
             key = part['id']
@@ -901,7 +920,7 @@ def render_response(result, public, claims):
         literal_text = ''.join(re.sub(r'\bnon[-\u2010\u2011]zero\b', 'nonzero', text, flags=re.I)
                                for text in prose)
         if re.search(r'[0-9{}]|https?://|/[A-Za-z]|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', literal_text, re.I):
-            raise _AnswerFailure('factual_binding', 'unbound_factual_literal')
+            prose_failure = prose_failure or 'unbound_factual_literal'
         def strings(value):
             if isinstance(value, str):
                 yield value
@@ -913,8 +932,13 @@ def render_response(result, public, claims):
             for literal in strings(claim.value):
                 if literal and any(re.search(r'(?<!\w)' + re.escape(literal) + r'(?!\w)', span, re.I)
                                    for span in categorical_prose):
-                    raise _AnswerFailure('factual_binding', 'unbound_categorical_value')
-        rendered.append(' '.join(output))
+                    prose_failure = prose_failure or 'unbound_categorical_value'
+        if output:
+            rendered.append(' '.join(output))
+    # Validate the entire structure even when an earlier prose span is unsafe.
+    # In particular, recovery cannot hide a later forged reference or operand.
+    if prose_failure and not evidence_only:
+        raise _AnswerFailure('factual_binding', prose_failure)
     if result['support'] == 'supported' and not used: raise _AnswerFailure('evidence_binding', 'missing_evidence')
     if result['support'] == 'supported' and 'comparison' in public and {c.target for c in used} != {'t0','t1'}:
         raise _AnswerFailure('comparison_binding', 'missing_operand')
@@ -939,7 +963,7 @@ def answer(sessions, session_id, interaction, model):
         if (current_claims != claims or refreshed.get('comparison') != public.get('comparison')):
             raise IntentError('unavailable_context')
         prefix = '' if all(t['is_active'] for t in refreshed['targets']) else 'This discussion includes explicitly referenced historical results.\n\n'
-        suffix = '\n\nThe compact accepted evidence does not establish the requested conclusion.' if response.support == 'insufficient_evidence' else ''
+        suffix = '\n\nI can report these accepted facts, but they do not establish any stronger conclusion.' if response.support == 'insufficient_evidence' else ''
         return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix, scientific=response)
     except _AnswerFailure as exc:
         _diagnose(exc.stage, exc.reason)

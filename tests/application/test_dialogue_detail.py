@@ -13,7 +13,7 @@ from test_dialogue_evidence import app, accepted, forbid_work, files
 from test_scientific_dialogue import Model, question, ask
 
 
-def publication(app, *, qc=False, candidates=2, huge=False, current_contract=False):
+def publication(app, *, qc=False, candidates=2, huge=False, current_contract=True):
     root = app.workspace_root / 'published'
     root.mkdir(exist_ok=True)
     def write(name, value, raw=False):

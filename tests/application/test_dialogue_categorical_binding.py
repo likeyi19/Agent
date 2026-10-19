@@ -105,3 +105,57 @@ def test_raw_method_mention_is_a_contract_violation_not_proof_of_a_false_asserti
     public, claims = evidence(('leiden', 'leiden'))
     with pytest.raises(sd._AnswerFailure, match='unbound_categorical_value'):
         sd.render_response(response(text('Leiden terminology appears in the accepted records.')), public, claims)
+
+
+class CapturedResponse:
+    def __init__(self, value):
+        self.value = value
+        self.calls = 0
+
+    def complete(self, **kwargs):
+        import json
+        self.calls += 1
+        return json.dumps(self.value)
+
+
+@pytest.mark.parametrize('values,prose', [
+    (('assigned', 'unassigned'), 'The cells were assigned.'),
+    (('PCA', 'EpiZoo'), 'PCA and EpiZoo have identical biological coordinates.'),
+    (('leiden', 'louvain'), 'The historical result used leiden and had 999 clusters.'),
+])
+def test_rejected_prose_recovers_only_exact_attributed_facts(values, prose):
+    public, claims = evidence(values)
+    model = CapturedResponse(response(text(prose)))
+    result = sd.generate(model, 'Explain these results.', 'summary', public, claims)
+    assert model.calls == 1
+    assert result.support == 'insufficient_evidence'
+    assert result.claims == claims
+    assert prose not in result.explanation and '999' not in result.explanation
+    assert 'identical biological coordinates' not in result.explanation
+    assert '[recorded revision 0: method = ' in result.explanation
+    assert [c.source['revision_id'] for c in result.claims] == ['revision-0', 'revision-1']
+
+
+@pytest.mark.parametrize('part', [dict(kind='claim', id='forged'),
+    dict(kind='claim', id='c0', value='invented'), dict(kind='comparison', id='unoffered')])
+def test_recovery_cannot_hide_later_invalid_evidence(part):
+    public, claims = evidence(('assigned', 'unassigned'))
+    value = response(text('assigned'))
+    value['paragraphs'].append(dict(parts=[part]))
+    with pytest.raises((sd.IntentError, ValueError)):
+        sd.generate(CapturedResponse(value), 'Explain.', 'summary', public, claims)
+
+
+def test_recovery_preserves_comparison_operand_requirement():
+    public, claims = evidence(('PCA', 'EpiZoo'))
+    value = dict(support='supported', paragraphs=[dict(parts=[
+        dict(kind='claim', id='c0'), text('PCA is better than EpiZoo.')])])
+    with pytest.raises(sd._AnswerFailure, match='missing_operand'):
+        sd.generate(CapturedResponse(value), 'Compare.', 'summary', public, claims)
+
+
+def test_unsupported_prose_without_facts_still_fails():
+    public, claims = evidence()
+    value = dict(support='insufficient_evidence', paragraphs=[dict(parts=[text('99 cells')])])
+    with pytest.raises(sd._AnswerFailure, match='unbound_factual_literal'):
+        sd.generate(CapturedResponse(value), 'Explain.', 'summary', public, claims)

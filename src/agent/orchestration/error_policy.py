@@ -395,10 +395,15 @@ for _code in ('CHROMAP_UNAVAILABLE', 'CHROMAP_VERSION_UNSUPPORTED', 'CHROMAP_IND
         'The qualified fragment runtime configuration or index is unavailable or incompatible.', _USER)
 
 _ERROR_POLICY_CATALOG.update({
+    "ANNOTATION_PREREQUISITE_INVALID": ErrorPolicyEntry(
+        "Annotation requires a compatible H5AD, explicit count and grouping declarations, and qualified references. "
+        "Cell Ranger .h5 must be converted with standard scientific software preserving cells, features and counts; "
+        "renaming the extension is not conversion.", _USER),
     "ANNOTATION_PEAK_SCOPE_UNSUPPORTED": ErrorPolicyEntry(
-        "The peak matrix contains features outside the qualified primary nuclear chromosome scope. "
-        "Annotation requires an explicitly prepared compatible peak matrix with its processing provenance; "
-        "Agent does not silently remove or relabel these features.", _USER),
+        "The peak matrix extends outside Agent's qualified primary nuclear chromosome scope. "
+        "This is the current qualified input policy, not a universal native MAESTRO requirement. "
+        "Use an explicitly prepared compatible H5AD with documented chromosome scope and processing provenance; "
+        "Agent does not silently remove features or repair contig aliases.", _USER),
     "EPIZOO_RESOURCE_IDENTITY_INVALID": ErrorPolicyEntry(
         "The approved EpiZoo resource selection is invalid.", _USER),
     "EPIZOO_RESOURCE_IDENTITY_MISMATCH": ErrorPolicyEntry(

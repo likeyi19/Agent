@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import numpy as np
 import pytest
 
-from agent.web.app import create_app
+from helpers import model_web as create_app
 from test_h5ad_analysis import analysis_harness, ScientificPlanModel, CHECKPOINT_HASH
 from helpers import wait_turn
 

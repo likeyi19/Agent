@@ -118,6 +118,7 @@ def test_scientific_completion_waits_for_persisted_display_without_replay():
     pending = pending[:pending.index(']);')]
     assert set(re.findall(r'"([a-z]+)"', pending)) == {
         'succeeded', 'planned', 'activated', 'stale', 'failed', 'cancelled',
+        'answered', 'clarification', 'navigated',
     }
     gate = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
     assert 'typeof turn.profile_id === "string"' in gate
@@ -176,6 +177,16 @@ print(ctypes.string_at(result).decode())
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
     pytest.skip('Optional JavaScriptCore runtime is unavailable')
+
+
+def test_dialogue_completion_waits_for_display_but_legacy_turns_remain_terminal():
+    code = (STATIC / 'app.js').read_text()
+    turns = []
+    for status in ('answered', 'clarification', 'navigated'):
+        pending = dict(profile_id='captured-profile', status=status, response=None)
+        turns.extend([pending, dict(pending, response={'kind': 'answer'}),
+                      dict(pending, profile_id=None)])
+    assert _javascript_predicates(code, turns) == [[True, False], [False, True], [False, True]] * 3
 
 
 def test_no_run_failed_answer_waits_for_display_without_waiting_on_submission_errors():

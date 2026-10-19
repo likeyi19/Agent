@@ -416,8 +416,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         input_sets = tuple(input_sets) + captured_models(sessions, state)
         if reference_resources is not None:
             from .shared_resources import discover
-            from .epizoo_handoff import genomes
-            input_sets = tuple(input_sets) + discover(reference_resources, session_id) + genomes(reference_resources, session_id)
+            input_sets = tuple(input_sets) + discover(reference_resources, session_id)
         visible = public_context(captured)
         from .scientific_dialogue import public as dialogue_public
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
@@ -529,8 +528,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             choices = tuple(c['label'] for c in offers(submission, input_sets))
             reason = 'missing_resources'
             if 'reference_requirement' in admitted:
-                from .reference_supplementation import choices as reference_choices
-                choices = tuple(r.label for r in reference_choices(reference_resources, session_id,
+                from .reference_supplementation import choices as reference_choices, input_set as reference_input_set
+                choices = tuple(reference_input_set(r).label for r in reference_choices(reference_resources, session_id,
                     admitted['reference_requirement'], origin_turn_id=turn_id)) if reference_resources else ()
                 reason = 'missing_reference'
             return TurnOutcome('clarify', 'clarification', Clarify(reason, choices, True))

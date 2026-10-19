@@ -7,6 +7,7 @@ structural witnesses, not compatible human/mouse inference qualification.
 """
 from dataclasses import asdict, replace
 import json
+from agent.application.shared_resources import ScientificResourceLibrary
 from pathlib import Path
 
 import pytest
@@ -89,7 +90,8 @@ def harness(tmp_path, *, objective=EXPLICIT, declarations=None, species='human',
             initial_decision=None):
     config = configuration(tmp_path)
     if resources is not None:
-        config = replace(config, epizoo_resources=resources(config.epizoo_resources))
+        from test_human_epizoo_mapping import model_library
+        model_library(config.scientific_resource_root, resources(ScientificResourceLibrary(config.scientific_resource_root).models()))
     registry = build_default_tool_registry()
     executor = WithholdScience(registry)
     calls = []
@@ -109,7 +111,7 @@ def harness(tmp_path, *, objective=EXPLICIT, declarations=None, species='human',
         attribution='Exact source identity only; scientific compatibility is not asserted.')
     from agent.application.local_resources import select_epizoo_resource
     settings = dict(device='cuda:0') | (typed or {})
-    settings, selection_error = select_epizoo_resource(settings, selected_id, config.epizoo_resources)
+    settings, selection_error = select_epizoo_resource(settings, selected_id, ScientificResourceLibrary(config.scientific_resource_root).models())
     binding = (app.resources.resolve(registered.resource_id, tool_name='inspect_scATAC') if plain else
         app.resources.compose_h5ad(registered.resource_id, settings, resource_selection_error=selection_error))
     return app, config, registered, binding, executor, calls, application
@@ -140,7 +142,7 @@ def assert_admitted(h, result, *, species='human', objective=EXPLICIT, extra=Non
     if 'continuation' not in interaction.admitted:
         assert interaction.submission['execution_inputs'] == received
     selected = interaction.admitted['inputs']['expected_resource_identity']['resource_id']
-    resource = next(row for row in config.epizoo_resources if row.species == species and row.resource_id == selected)
+    resource = next(row for row in ScientificResourceLibrary(config.scientific_resource_root).models() if row.species == species and row.resource_id == selected)
     expected = received | dict(species=species) | resource.inputs() | (extra or {})
     assert _serialize(interaction.admitted['inputs']) == expected
     assert interaction.admitted['registered_input']['resource_id'] == record.resource_id

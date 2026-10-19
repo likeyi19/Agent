@@ -116,3 +116,29 @@ def wait_turn(client, turn='first', *, session='session', timeout=20, terminal_s
             return last
         time.sleep(0.03)
     raise AssertionError(f'Turn did not finish: {last}')
+
+
+def model_library(root, resources):
+    """Persist metadata-only model fixtures; never claim checkpoint qualification.
+
+    These admission witnesses withhold inference or mock the existing native
+    inference boundary. Library installation/byte checks have separate tests.
+    """
+    from dataclasses import asdict, is_dataclass
+    from agent.application.shared_resources import ScientificResourceLibrary
+    from agent.application.session_state import canonical, digest
+    library = ScientificResourceLibrary(root)
+    entries = []
+    for resource in resources:
+        row = dict(kind='epizoo', label='Simulated model declaration', version='fixture',
+            provenance='Scripted software fixture; not scientifically qualified', usage='isolated test',
+            resource=asdict(resource) if is_dataclass(resource) else resource, files=[])
+        entries.append(dict(id=digest(row)[:56], **row))
+    library.path.write_bytes(canonical(dict(version=1, resources=entries)))
+    return library
+
+
+def model_web(application, *, epizoo_resources=(), **kwargs):
+    from agent.web.app import create_app
+    application.resources.library = model_library(application.resources._workspace.root.parent / 'model-library', epizoo_resources)
+    return create_app(application, **kwargs)

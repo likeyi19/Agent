@@ -754,9 +754,11 @@ def test_pending_string_answer_rejects_changed_captured_resource_catalog_without
     changed = QualifiedEpiZooResource('synthetic-context', 'Synthetic catalog context', 'mouse',
         '/unqualified/model.pth', '1' * 64, '2' * 64, '3' * 64,
         'Context-digest test only; no scientific resource qualification.')
+    from test_human_epizoo_mapping import model_library
+    model_library(harness.service.resources.library.root, (changed,))
     with evaluation_work() as calls:
         rejected = harness.service.submit_turn('session', 'changed-context', STRING_ANSWER,
-            expected_generation=0, epizoo_resources=(changed,)).to_dict()
+            expected_generation=0).to_dict()
     assert not calls
     assert rejected['response']['clarification']['reason'] == 'invalid_prerequisite', rejected
     state = harness.service._application.sessions.load('session')

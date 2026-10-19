@@ -794,9 +794,11 @@ class RegisteredInputCollection:
 
 class LocalResourceAdmission:
     """Small application source store and resolver, with no scientific admission."""
-    def __init__(self, workspace, *, approved_source_roots=(), registry=None):
+    def __init__(self, workspace, *, approved_source_roots=(), registry=None, scientific_resource_root=None):
         self._workspace = workspace if isinstance(workspace, ManagedWorkspace) else ManagedWorkspace(workspace)
         self._registry = registry
+        from .shared_resources import ScientificResourceLibrary
+        self.library = ScientificResourceLibrary(scientific_resource_root) if scientific_resource_root is not None else None
         try:
             roots = []
             for value in approved_source_roots:
@@ -909,6 +911,13 @@ class LocalResourceAdmission:
                  fastq_member=None, reference_qualification=None, session_id=None):
         if input_type not in _INPUT_TYPES:
             raise _fail('LOCAL_RESOURCE_TYPE_UNSUPPORTED')
+        if input_type in ('scientific_reference', 'regulatory_reference', 'genome_reference'):
+            q = reference_qualification or {}
+            if not isinstance(q, Mapping):
+                raise ResourceConfigurationError('Reference qualification must be a mapping.')
+            if (q.get('scope') == 'deployment'
+                    or input_type == 'genome_reference' and session_id is None):
+                raise ResourceConfigurationError('Common references must be installed in ScientificResourceLibrary; legacy records are read-only.')
         resource_id = self.registration_id(registration_key)
         _text(label, 160, 'LOCAL_RESOURCE_RECORD_INVALID', display=True)
         _text(attribution, 1024, 'LOCAL_RESOURCE_RECORD_INVALID')

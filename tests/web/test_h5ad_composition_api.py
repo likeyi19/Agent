@@ -6,7 +6,7 @@ import pytest
 
 from agent.application.local_resources import LocalResourceAdmission, RegisteredInput
 from agent.application.uploads import H5ADUploadAdmission
-from agent.web.app import create_app
+from helpers import model_web as create_app
 from agent.web.config import QualifiedEpiZooResource, ScientificInputSet
 
 from helpers import harness, submission, wait_turn

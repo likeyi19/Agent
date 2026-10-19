@@ -40,7 +40,7 @@ class WebConfiguration:
     upload_root: Path | None = None
     upload_max_bytes: int = 256 * 1024 * 1024
     upload_max_concurrent: int = 2
-    epizoo_resources: tuple[QualifiedEpiZooResource, ...] = ()
+    scientific_resource_root: Path | None = None
 
     def __post_init__(self):
         if not isinstance(self.workspace_root, (str, Path)) or not str(self.workspace_root).strip():
@@ -68,14 +68,21 @@ class WebConfiguration:
                 or any(not isinstance(s, ScientificInputSet) for s in self.input_sets)
                 or len({s.input_set_id for s in self.input_sets}) != len(self.input_sets)):
             raise WebConfigurationError("Input sets must have bounded unique identities.")
-        if (type(self.epizoo_resources) is not tuple or len(self.epizoo_resources) > 64
-                or any(not isinstance(r, QualifiedEpiZooResource) for r in self.epizoo_resources)
-                or len({r.resource_id for r in self.epizoo_resources}) != len(self.epizoo_resources)):
-            raise WebConfigurationError("EpiZoo resources must have bounded unique identities.")
+        for item in self.input_sets:
+            keys = set(item.inputs())
+            if (keys in ({'annotation_spec_path', 'annotation_spec_sha256'},
+                         {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'})
+                    or {'qualified_genome', 'library_genome'}.intersection(keys)):
+                raise WebConfigurationError('Install common references in ScientificResourceLibrary; input sets describe task bindings.')
         if type(self.upload_max_bytes) is not int or not 1 <= self.upload_max_bytes <= 8 * 1024 ** 3:
             raise WebConfigurationError("The attachment size limit must be between one byte and eight GiB.")
         if type(self.upload_max_concurrent) is not int or not 1 <= self.upload_max_concurrent <= 4:
             raise WebConfigurationError("Concurrent attachments must be between one and four.")
+        if self.scientific_resource_root is not None:
+            root = Path(self.scientific_resource_root).expanduser().absolute()
+            if root.is_relative_to(self.workspace_root) or self.workspace_root.is_relative_to(root):
+                raise WebConfigurationError("The scientific library must be separate from task storage.")
+            object.__setattr__(self, "scientific_resource_root", root)
         if self.upload_root is not None:
             if not isinstance(self.upload_root, (str, Path)) or not str(self.upload_root).strip():
                 raise WebConfigurationError("An attachment root must be a workspace directory.")
@@ -116,8 +123,10 @@ def load_web_configuration(path):
         if len(content) > _CONFIGURATION_BYTES:
             raise WebConfigurationError("Operator configuration exceeds one MiB.")
         value = json.loads(content.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_reject_constant)
+        if isinstance(value, dict) and 'epizoo_resources' in value:
+            raise WebConfigurationError('Inline EpiZoo catalogs are retired. Install models in ScientificResourceLibrary and configure scientific_resource_root.')
         allowed = {"workspace_root", "model_profiles", "default_profile_id", "input_sets",
-                   "upload_root", "upload_max_bytes", "upload_max_concurrent", "epizoo_resources"}
+                   "upload_root", "upload_max_bytes", "upload_max_concurrent", "scientific_resource_root"}
         required = {"workspace_root", "model_profiles", "default_profile_id"}
         if type(value) is not dict or set(value) - allowed or required - set(value):
             raise WebConfigurationError("Operator configuration fields are invalid.")
@@ -153,19 +162,14 @@ def load_web_configuration(path):
                     or {"input_set_id", "label", "execution_inputs"} - set(item)):
                 raise WebConfigurationError("Operator input-set fields are invalid.")
             input_sets.append(ScientificInputSet(**item))
-        resource_values = value.get("epizoo_resources", [])
-        if type(resource_values) is not list or len(resource_values) > 64:
-            raise WebConfigurationError("Operator EpiZoo resources must be a bounded list.")
-        resources = []
-        resource_keys = {"resource_id", "label", "species", "checkpoint_path", "checkpoint_sha256",
-                         "frequencies_sha256", "filter_indices_sha256", "qualification", "default"}
-        for item in resource_values:
-            if type(item) is not dict or set(item) - resource_keys or resource_keys - {"default"} - set(item):
-                raise WebConfigurationError("Operator EpiZoo resource fields are invalid.")
-            resources.append(QualifiedEpiZooResource(**item))
+        library = value.get('scientific_resource_root')
+        if library is not None:
+            if type(library) is not str or not library.strip(): raise WebConfigurationError('A resource library path is required.')
+            library = Path(library).expanduser()
+            if not library.is_absolute(): library = path.parent / library
         return WebConfiguration(workspace, tuple(profiles), value["default_profile_id"], labels, tuple(input_sets),
             value.get('upload_root'), value.get('upload_max_bytes', 256 * 1024 * 1024),
-            value.get('upload_max_concurrent', 2), tuple(resources))
+            value.get('upload_max_concurrent', 2), library)
     except WebConfigurationError:
         raise
     except (ValueError, TypeError, OSError, UnicodeError, RecursionError) as exc:
@@ -204,4 +208,4 @@ def build_interactive_application(configuration, *, planning_model_factory_regis
         model_profiles=configuration.model_profiles, default_profile_id=configuration.default_profile_id,
         display_labels=configuration.display_labels, planning_model_factory_registry=factory,
         registry=registry, executor=executor, approved_source_roots=approved_source_roots,
-        epizoo_resources=configuration.epizoo_resources)
+        scientific_resource_root=configuration.scientific_resource_root)

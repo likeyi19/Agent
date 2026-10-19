@@ -17,20 +17,11 @@ from agent.application import reference_supplementation as refs
 from agent.schemas.orchestration import _serialize
 
 
-def sharing_permission(record, *, genome=False):
-    """Explicit simulated author permission for the new promotion contract."""
-    from agent.tools.analysis.marker_annotation import sha256
-    from agent.application.shared_resources import redistribution_files
-    evidence = Path(record.source_path).parent / 'simulated-sharing-permission.txt'
-    evidence.write_text('Synthetic test author permits isolated test deployment reuse. No public biological qualification.\n')
-    files = record.reference_qualification['files']
-    if genome:
-        from agent.tools.data.regulatory_feature_reference import load_regulatory_feature_reference
-        reference = load_regulatory_feature_reference(record.source_path)[1]
-        files = [r for r in files if r['path'] != reference.features.bed.path]
-    return [dict(sha256=s, source_url='https://example.org/fixture', license_url='https://example.org/fixture/permission',
-        evidence_path=str(evidence), evidence_sha256=sha256(evidence), basis='Synthetic author permission; isolated software test only')
-        for s in sorted({r['sha256'] for r in redistribution_files(files)})]
+def install_shared(resources, record):
+    from agent.application.shared_resources import ScientificResourceLibrary, install_private
+    if resources.library is None:
+        resources.library = ScientificResourceLibrary(resources._workspace.root.parent / 'scientific-library')
+    return install_private(resources, record.reference_qualification['session_id'], record.resource_id, shared_use=True)
 
 
 @pytest.fixture
@@ -91,7 +82,7 @@ def qualify(client,pending,record,session='session'):
         expected_generation=pending['expected_generation'],origin_turn_id=pending['origin_turn_id']))
 
 
-def test_generate_qualify_continue_promote_and_reopen(reference_web,monkeypatch):
+def test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch):
     client,backend,uploads,source,start,admitted=reference_web
     pending=start();assert not pending['choices']
     from agent.tools.data import regulatory_feature_reference as owner
@@ -101,11 +92,15 @@ def test_generate_qualify_continue_promote_and_reopen(reference_web,monkeypatch)
     record=upload(client)
     r=qualify(client,pending,record);assert r.status_code==200,r.text
     private=uploads.resources.load(r.json()['resource_id']);assert len(calls)==1
+    choices=client.get('/api/v1/sessions/session/references').json()['choices']
+    assert choices == [dict(resource_id=private.resource_id, label=private.label)]
     assert qualify(client,pending,record).json()==r.json();assert len(calls)==1
     assert not refs.choices(uploads.resources,'another',private.reference_qualification['requirement'])
     next_pending=start('second');assert not next_pending['choices']
-    promoted=refs.promote(uploads.resources,private.resource_id,operator='test operator',provenance='Simulated test fixture',reuse_basis='Test authorization only', redistribution=sharing_permission(private))
-    assert promoted.source_path==private.source_path
+    assert client.get('/api/v1/sessions/second/references').json()['choices'] == []
+    promoted=install_shared(uploads.resources,private)
+    assert promoted['resource']['genome']['fasta']['sha256'] == refs.check_record(uploads.resources,private).genome.fasta.sha256
+    assert Path(promoted['resource']['genome']['fasta']['path']).is_relative_to(uploads.resources.library.root)
     assert client.get('/api/v1/sessions/second/reference-prerequisite').json()['pending']['choices']
     body=submission(turn='answer',resource_id=source['resource_id'],input_set_id='fish',utterance='Use the qualified reference and continue.')
     assert client.post('/api/v1/sessions/session/turns',json=body).status_code==202
@@ -114,17 +109,17 @@ def test_generate_qualify_continue_promote_and_reopen(reference_web,monkeypatch)
     state=backend.service._application.sessions.load('session')
     resolved=state.interactions[-1].admitted
     assert resolved['inputs']['input_path']==uploads.resources.load(source['resource_id']).source_path
-    assert resolved['inputs']['reference_manifest_path']==private.source_path
+    assert resolved['inputs']['reference_manifest_path'] != private.source_path  # Exact task feature binding to library genome.
     assert backend.service._application.run_store.load(result['run_id']).request.prompt == state.interactions[0].utterance
-    assert len(calls)==1
+    assert len(calls)==2  # Initial task reference plus new task feature binding, not repeated genome installation.
     from agent.application.local_resources import LocalResourceAdmission
-    reopened=LocalResourceAdmission(backend.service._application._workspace,approved_source_roots=(uploads.root,))
+    reopened=LocalResourceAdmission(backend.service._application._workspace,approved_source_roots=(uploads.root,), scientific_resource_root=uploads.resources.library.root)
     assert refs.choices(reopened,'new',private.reference_qualification['requirement'])==(promoted,)
-    refs.check_record(reopened,promoted);assert len(calls)==1
+    reopened.library.check(promoted);assert len(calls)==2
     wrong=_serialize(private.reference_qualification['requirement']);wrong['assembly']='danRer10'
     assert not refs.choices(reopened,'new',wrong)
-    Path(private.source_path).write_text('{}')
-    with pytest.raises(Exception):refs.check_record(reopened,promoted)
+    Path(promoted['resource']['genome']['fasta']['path']).write_text('corrupt')
+    with pytest.raises(ValueError):reopened.library.check(promoted)
 
 
 @pytest.mark.parametrize('data,index',[(b'not fasta\n',None),(b'>chr1\nACGTACGT\n',b'chr1\t8\t7\t8\t9\n'),(b'>chr2\nACGTACGT\n',None),(b'>chr1\nACGT\n',None),(b'\x1f\x8bbad',None)])
@@ -142,7 +137,8 @@ def test_stale_task_private_scope_and_changed_content(reference_web):
     assert qualify(client,dict(pending,expected_generation=9),record).status_code==400
     assert qualify(client,dict(pending,origin_turn_id='other'),record).status_code==400
     assert client.post('/api/v1/resources/promote',json={'resource_id':private.resource_id}).status_code in (404,405)
-    with pytest.raises(Exception):refs.promote(uploads.resources,private.resource_id,operator='',provenance='',reuse_basis='')
+    from agent.application.shared_resources import install_private
+    with pytest.raises(ValueError):install_private(uploads.resources,'second',private.resource_id,shared_use=True)
     start('second')
     origin=backend.service._application.sessions.load('second').interactions[0]
     with pytest.raises(Exception):refs.select(uploads.resources,'second',origin,'resource.'+refs.input_set(private).input_set_id)
@@ -167,11 +163,11 @@ def test_catalog_mutation_and_changed_feature_order_rejected(reference_web):
     client,backend,uploads,source,start,_=reference_web
     pending=start();r=qualify(client,pending,upload(client));assert r.status_code==200,r.text
     private=uploads.resources.load(r.json()['resource_id'])
-    promoted=refs.promote(uploads.resources,private.resource_id,operator='test',provenance='simulated',reuse_basis='test only', redistribution=sharing_permission(private))
+    promoted=install_shared(uploads.resources,private)
     # Mutation of a catalog payload without its original content binding fails closed.
-    path=uploads.resources._path(promoted.resource_id);original=path.read_bytes()
-    d=json.loads(original);d['record']['label']='substituted';path.write_text(json.dumps(d))
-    with pytest.raises(Exception):refs.check_record(uploads.resources,promoted)
+    path=uploads.resources.library.path;original=path.read_bytes()
+    d=json.loads(original);d['resources'][0]['label']='substituted';path.write_text(json.dumps(d))
+    with pytest.raises(ValueError):uploads.resources.library.check(promoted)
     path.write_bytes(original)
     start('second');state=backend.service._application.sessions.load('second');origin=state.interactions[0]
     source_record=uploads.resources.load(source['resource_id'])
@@ -197,7 +193,7 @@ def test_deployment_reuse_checks_a_new_registered_matrix(reference_web,tmp_path,
     client,backend,uploads,source,start,_=reference_web
     pending=start();response=qualify(client,pending,upload(client));assert response.status_code==200,response.text
     reference=uploads.resources.load(response.json()['resource_id'])
-    shared=refs.promote(uploads.resources,reference.resource_id,operator='test',provenance='simulated fixture',reuse_basis='test deployment', redistribution=sharing_permission(reference))
+    shared=install_shared(uploads.resources,reference)
     matrix=ad.read_h5ad(backend.source);matrix.obs_names=['new-a','new-b']
     if not same_vocabulary:matrix.var_names=matrix.var_names[::-1]
     path=tmp_path/'new-matrix.h5ad';matrix.write_h5ad(path)
@@ -205,12 +201,37 @@ def test_deployment_reuse_checks_a_new_registered_matrix(reference_web,tmp_path,
     source.update(new_source)  # start captures this explicitly selected new source.
     start('second');origin=backend.service._application.sessions.load('second').interactions[0]
     handle='resource.'+refs.input_set(shared).input_set_id
-    if same_vocabulary:
-        selected,record=refs.select(uploads.resources,'second',origin,handle)
-        assert selected==shared and record.resource_id==new_source['resource_id']
-        assert record.record_sha256!=shared.reference_qualification['source_record_sha256']
-    else:
-        with pytest.raises(Exception):refs.select(uploads.resources,'second',origin,handle)
+    selected,record=refs.select(uploads.resources,'second',origin,handle)
+    assert record.resource_id==new_source['resource_id']
+    bound=refs.check_record(uploads.resources,selected)
+    from agent.tools.data.scatac_reference import ordered_identity_sha256
+    assert bound.features.ordered_feature_sha256 == ordered_identity_sha256(matrix.var_names)
+    from dataclasses import replace
+    expected = refs.check_record(uploads.resources,reference).genome
+    assert replace(bound.genome, fasta=replace(bound.genome.fasta, path=expected.fasta.path),
+                   fai=replace(bound.genome.fai, path=expected.fai.path)) == expected
+    assert Path(bound.genome.fasta.path).is_relative_to(uploads.resources.library.root)
+
+
+def test_private_genome_sharing_choices_remain_session_scoped(reference_web):
+    from agent.application.shared_genome import persist_private
+    client, backend, uploads, source, start, admitted = reference_web
+    response = qualify(client, start(), upload(client))
+    private = uploads.resources.load(response.json()['resource_id'])
+    genome = persist_private(uploads.resources, private.resource_id)
+    from dataclasses import replace
+    from agent.application import shared_genome
+    qualification = _serialize(genome.reference_qualification)
+    qualification.pop('session_id')
+    qualification['review'] = dict(operator='Historical fixture', provenance='Simulated', reuse_basis='historical')
+    historical = replace(genome, session_id=None, reference_qualification=qualification)
+    assert shared_genome.check_content(historical) == _serialize(genome.reference_qualification['genome'])
+    with pytest.raises(ValueError):
+        shared_genome.bind(uploads.resources, historical, None, 'session', None)
+    choices = client.get('/api/v1/sessions/session/references').json()['choices']
+    assert {r['resource_id'] for r in choices} == {private.resource_id, genome.resource_id}
+    start('second')
+    assert client.get('/api/v1/sessions/second/references').json()['choices'] == []
 
 
 def test_genome_reuse_binds_distinct_features_and_replays(reference_web, tmp_path):
@@ -220,13 +241,15 @@ def test_genome_reuse_binds_distinct_features_and_replays(reference_web, tmp_pat
     pending = start()
     response = qualify(client, pending, upload(client))
     original = uploads.resources.load(response.json()['resource_id'])
-    genome = shared_genome.promote(uploads.resources, original.resource_id,
-        operator='test', provenance='simulated', reuse_basis='isolated test deployment', redistribution=sharing_permission(original, genome=True))
+    genome = install_shared(uploads.resources, original)
     response = client.get('/api/v1/resources')
     assert response.status_code == 200, response.text
     listed = {row['resource_id'] for row in response.json()['choices']}
-    assert source['resource_id'] in listed and genome.resource_id not in listed
+    assert source['resource_id'] in listed and genome['id'] not in listed
     old = refs.check_record(uploads.resources, original)
+    for component in (old.genome.fasta, old.genome.fai):
+        path = Path(component.path)
+        path.rename(path.with_name(path.name + '.unavailable'))
     before = sorted(uploads.root.rglob('*.fa'))
     matrix = ad.read_h5ad(backend.source)
     matrix.var_names = ['chr1:1-3', 'chr1:5-7']
@@ -242,20 +265,21 @@ def test_genome_reuse_binds_distinct_features_and_replays(reference_web, tmp_pat
     resolved = state.interactions[-1].admitted
     from agent.tools.data.regulatory_feature_reference import load_regulatory_feature_reference
     new = load_regulatory_feature_reference(resolved['inputs']['reference_manifest_path'])[1]
-    assert new.genome == old.genome
+    assert new.genome.ordered_contig_sha256 == old.genome.ordered_contig_sha256
+    assert new.genome.fasta.sha256 == old.genome.fasta.sha256
     assert new.reference_identity_sha256 != old.reference_identity_sha256
     assert new.features.ordered_feature_sha256 != old.features.ordered_feature_sha256
     assert sorted(uploads.root.rglob('*.fa')) == before
-    reopened = LocalResourceAdmission(backend.service._application._workspace, approved_source_roots=(uploads.root,))
+    reopened = LocalResourceAdmission(backend.service._application._workspace, approved_source_roots=(uploads.root,), scientific_resource_root=uploads.resources.library.root)
     assert refs.choices(reopened, 'another', original.reference_qualification['requirement']) == (genome,)
-    shared_genome.check_record(reopened, genome)
+    reopened.library.check(genome)
     wrong = _serialize(original.reference_qualification['requirement']); wrong['assembly'] = 'danRer10'
     assert not refs.choices(reopened, 'another', wrong)
     # A dataset BED is not part of the independent genome's content closure.
     Path(old.features.bed.path).write_text('dataset-specific binding no longer available\n')
-    shared_genome.check_record(reopened, genome)
-    Path(genome.source_path).write_bytes(b'>chr1\nAAAAAAAA\n')
-    with pytest.raises(Exception): shared_genome.check_record(reopened, genome)
+    reopened.library.check(genome)
+    Path(genome['resource']['genome']['fasta']['path']).write_bytes(b'>chr1\nAAAAAAAA\n')
+    with pytest.raises(Exception): reopened.library.check(genome)
 
 
 @pytest.mark.parametrize('names', [['chr2:0-4','chr2:4-8'], ['chr1:0-4','chr1:4-9']])
@@ -264,8 +288,7 @@ def test_shared_genome_does_not_authorize_incompatible_regions(reference_web, tm
     client, backend, uploads, source, start, _ = reference_web
     pending = start(); response = qualify(client, pending, upload(client))
     reference = uploads.resources.load(response.json()['resource_id'])
-    genome = shared_genome.promote(uploads.resources, reference.resource_id,
-        operator='test', provenance='simulated', reuse_basis='test deployment', redistribution=sharing_permission(reference, genome=True))
+    genome = install_shared(uploads.resources, reference)
     matrix = ad.read_h5ad(backend.source); matrix.var_names = names
     path = tmp_path/'invalid-regions.h5ad'; matrix.write_h5ad(path)
     source.update(attach(client, path.read_bytes(), upload_id='invalid-regions').json())

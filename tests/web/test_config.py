@@ -1,6 +1,7 @@
 """Operator configuration stays immutable, strict, and private to the server."""
 from dataclasses import replace
 import json
+from agent.application.shared_resources import ScientificResourceLibrary
 
 import pytest
 
@@ -160,12 +161,13 @@ def test_typed_companion_and_reviewed_epizoo_configuration_are_explicit_and_priv
     value = configuration_json()
     value['input_sets'] = [dict(input_set_id='mouse', label='Mouse declarations',
         execution_inputs={'species': 'mouse', 'resolution': 0.7}, h5ad_companion=True)]
-    value['epizoo_resources'] = [qualified_resource()]
+    from helpers import model_library
+    value['scientific_resource_root'] = str(model_library(tmp_path/'library', [qualified_resource()]).root)
     config = load_web_configuration(write_configuration(tmp_path, value))
     companion = config.input_sets[0]
     assert companion.choice() == dict(input_set_id='mouse', display_label='Mouse declarations', h5ad_companion=True)
     assert companion.inputs() == {'species': 'mouse', 'resolution': 0.7}
-    resource = config.epizoo_resources[0]
+    resource = ScientificResourceLibrary(config.scientific_resource_root).models()[0]
     assert resource.choice() == dict(resource_id='mouse-reviewed', display_label='Reviewed mouse resource',
                                      species='mouse', is_default=True)
     assert '/operator' not in json.dumps(resource.choice())
@@ -188,16 +190,9 @@ def test_epizoo_configuration_requires_explicit_review_and_exact_pins(changes):
         QualifiedEpiZooResource(**qualified_resource(**changes))
 
 
-@pytest.mark.parametrize('change', [
-    lambda value: value['epizoo_resources'][0].update(auxiliary_directory='/operator/unreviewed'),
-    lambda value: value['epizoo_resources'][0].pop('qualification'),
-    lambda value: value['epizoo_resources'].append(dict(value['epizoo_resources'][0])),
-    lambda value: value['input_sets'][0].update(h5ad_companion='yes'),
-])
-def test_epizoo_config_loader_rejects_extra_missing_and_duplicate_fields(tmp_path, change):
+def test_companion_role_must_be_boolean(tmp_path):
     value = configuration_json()
-    value['epizoo_resources'] = [qualified_resource()]
-    change(value)
+    value['input_sets'][0]['h5ad_companion'] = 'yes'
     with pytest.raises(WebConfigurationError):
         load_web_configuration(write_configuration(tmp_path, value))
 
@@ -327,3 +322,15 @@ def test_upload_parent_alias_is_rejected_before_admission(tmp_path):
         build_interactive_application(configuration,
             planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': lambda profile: None}))
     assert list(parent.iterdir()) == []
+
+
+def test_inline_common_reference_catalog_is_retired(tmp_path):
+    value = configuration_json()
+    value['input_sets'] = [dict(input_set_id='old-reference', label='Old common reference',
+        execution_inputs=dict(annotation_spec_path='/old/reference.json', annotation_spec_sha256='a'*64))]
+    with pytest.raises(WebConfigurationError, match='ScientificResourceLibrary'):
+        load_web_configuration(write_configuration(tmp_path, value))
+    value.pop('input_sets')
+    value['epizoo_resources'] = [qualified_resource()]
+    with pytest.raises(WebConfigurationError):
+        load_web_configuration(write_configuration(tmp_path, value))

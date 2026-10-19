@@ -1,7 +1,7 @@
-"""Explicit genome-only deployment approval in the existing local catalog.
+"""Private feature binding to a library genome, plus small historical readers.
 
-Old combined reference approvals are evidence, never implicit genome approvals.
-Feature binding still belongs to the unchanged M14.1 scientific owner.
+Experimental feature axes remain task-scoped. Common genome installation belongs
+only to ScientificResourceLibrary; there is no promotion writer here.
 """
 from dataclasses import asdict
 from pathlib import Path
@@ -53,7 +53,7 @@ def validate_record(record):
     from agent.tools.data import regulatory_feature_reference, chromap_reference_index
     required = {record.source_path, record.source_index['path'], regulatory_feature_reference.__file__,
                 r.__file__, chromap_reference_index.__file__}
-    if len(q['files']) != len(required) or {f['path'] for f in q['files']} != required:
+    if {f['path'] for f in q['files']} not in (required, {record.source_path, record.source_index['path']}):
         refs._fail('Incomplete genome qualification content closure.')
     for row in q['files']:
         if set(row) != {'path', 'size_bytes', 'sha256'}: refs._fail('Invalid content pin.')
@@ -63,33 +63,11 @@ def validate_record(record):
         refs._fail('Genome qualification pins differ.')
 
 
-def promote(resources, resource_id, *, operator, provenance, reuse_basis, redistribution=None):
-    """Explicit new approval from a verified combined reference; no file copy."""
-    record = resources.load(resource_id)
-    if record.input_type != 'regulatory_reference':
-        refs._fail('Choose an existing owner-qualified feature reference as evidence.')
-    reference = refs.check_record(resources, record)
-    required = dict(species=asdict(reference.species), assembly=reference.target_assembly)
-    genome = asdict(reference.genome)
-    files = [f for f in _serialize(record.reference_qualification['files']) if f['path'] != reference.features.bed.path]
-    from .shared_resources import review
-    q = dict(contract='qualified-genome.v1', requirement=required, genome=genome,
-        identity_sha256=identity(required, genome), files=files,
-        review=review(operator, provenance, reuse_basis, redistribution, files),
-        evidence=dict(record_sha256=record.record_sha256, manifest_sha256=record.source_sha256,
-                      reference_identity_sha256=reference.reference_identity_sha256))
-    return resources.register('deployment-genome:' + digest(q), reference.genome.fasta.path,
-        input_type='genome_reference', source_index_path=reference.genome.fai.path,
-        label=(required['species']['scientific_name'] + ' ' + required['assembly'] + ' — genome')[:160],
-        attribution='Explicit operator-approved genome reuse; dataset vocabulary and models are not shared.',
-        reference_qualification=q)
-
-
 def persist_private(resources, resource_id):
     """Retain an uploaded, owner-qualified genome independently of task peaks.
 
     Qualification does not authorize sharing. The original Session remains the
-    sole access scope and existing promotion still requires permission review.
+    sole access scope unless the user explicitly installs it for shared future use.
     """
     record = resources.load(resource_id)
     if record.input_type != 'regulatory_reference' or record.reference_qualification['scope'] != 'session':
@@ -97,7 +75,8 @@ def persist_private(resources, resource_id):
     reference = refs.check_record(resources, record)
     required = dict(species=asdict(reference.species), assembly=reference.target_assembly)
     genome = asdict(reference.genome)
-    files = [f for f in _serialize(record.reference_qualification['files']) if f['path'] != reference.features.bed.path]
+    from .shared_resources import redistribution_files
+    files = [f for f in redistribution_files(_serialize(record.reference_qualification['files'])) if f['path'] != reference.features.bed.path]
     session = record.reference_qualification['session_id']
     q = dict(contract='qualified-genome.v1', requirement=required, genome=genome,
         identity_sha256=identity(required, genome), files=files, review=None, session_id=session,
@@ -120,12 +99,10 @@ def check_content(record):
     """Read existing qualification pins, without reconstructing genome science."""
     from agent.tools.data.authority_context import VerificationContext
     validate_record(record)
-    files = _serialize(record.reference_qualification['files'])
+    from .shared_resources import redistribution_files
+    files = redistribution_files(_serialize(record.reference_qualification['files']))
     if VerificationContext().files(row['path'] for row in files) != files:
-        refs._fail('Qualified genome bytes or qualification implementation changed.')
-    from .shared_resources import check_review
-    if record.reference_qualification['review'] is not None:
-        check_review(_serialize(record.reference_qualification['review']))
+        refs._fail('Qualified genome bytes changed.')
     return _serialize(record.reference_qualification['genome'])
 
 
@@ -134,12 +111,22 @@ def bind(resources, record, source, session_id, origin):
     from agent.tools.data import regulatory_feature_reference as owner
     from agent.tools.data import scatac_reference as r, chromap_reference_index
     from agent.tools.data.authority_context import VerificationContext
-    if record.session_id not in (None, session_id): refs._fail('This genome belongs to another Session.')
-    genome = check_record(resources, record)
+    if isinstance(record, dict):
+        if resources.library is None: refs._fail('Scientific resource library unavailable.')
+        resource = resources.library.check(record)
+        genome = resource['genome']
+        requirement = {k: resource[k] for k in ('species', 'assembly')}
+        record_identity, genome_id, label = record['id'], 'library-' + record['id'], record['label']
+    else:
+        if record.session_id != session_id:
+            refs._fail('Use a library genome or this Session\'s private genome; legacy shared selection is retired.')
+        genome = check_record(resources, record)
+        requirement = _serialize(record.reference_qualification['requirement'])
+        record_identity, genome_id, label = record.record_sha256, record.resource_id, record.label
     required = _serialize(origin.admitted['reference_requirement'])
-    if {k: required[k] for k in ('species', 'assembly')} != _serialize(record.reference_qualification['requirement']):
+    if {k: required[k] for k in ('species', 'assembly')} != requirement:
         refs._fail('Genome species/assembly conflicts with the task.')
-    key = 'genome-feature-binding:' + digest(dict(genome=record.record_sha256,
+    key = 'genome-feature-binding:' + digest(dict(genome=record_identity,
         source=source.record_sha256, session=session_id, origin=origin.turn_id, requirement=required))
     with resources._lock(resources.registration_id(key)):
         from .local_resources import ResourceAdmissionError
@@ -169,13 +156,12 @@ def bind(resources, record, source, session_id, origin):
                 refs._fail('Previously published feature binding changed.')
         else:
             owner.publish_regulatory_feature_reference(reference, manifest)
-        files = VerificationContext().files([genome['fasta']['path'], genome['fai']['path'], bed,
-                                             owner.__file__, r.__file__, chromap_reference_index.__file__])
+        files = VerificationContext().files([genome['fasta']['path'], genome['fai']['path'], bed])
         refs._check_owner_files(reference, files)
         # Catalog registration has its own lock; use a distinct lock above.
-    return resources.register(key, manifest, input_type='regulatory_reference', label=record.label,
+    return resources.register(key, manifest, input_type='regulatory_reference', label=label,
         attribution='Private task feature binding to an explicitly approved deployment genome.',
         reference_qualification=dict(requirement=required, reference_identity_sha256=reference.reference_identity_sha256,
             ordered_feature_sha256=reference.features.ordered_feature_sha256, files=files,
             session_id=session_id, origin_turn_id=origin.turn_id, source_record_sha256=source.record_sha256,
-            scope='session', review=None, genome_resource_id=record.resource_id))
+            scope='session', review=None, genome_resource_id=genome_id))

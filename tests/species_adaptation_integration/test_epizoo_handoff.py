@@ -143,7 +143,7 @@ def test_missing_genome_append_restart_retains_source_and_parameters(case, nativ
         assert admitted['inputs']['source_path'] == app.resources.load(source).source_path
         assert calls[0].steps[-1].arguments['max_steps'] == 2
         assert not state.revisions  # Deliberately stopped before science.
-        from agent.application.epizoo_handoff import genomes
+        from agent.application.shared_resources import discover as genomes
         from agent.application import shared_genome, reference_supplementation as refs
         from agent.application.local_resources import LocalResourceRecord
         choices = genomes(app.resources, 'test')

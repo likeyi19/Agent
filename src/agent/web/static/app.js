@@ -13,6 +13,7 @@ const TERMINAL_STATES = new Set([
   "interrupted", "unavailable", "stale", "activated", "planned",
 ]);
 const PRESENTATION_PENDING_STATES = new Set([
+  "answered", "clarification", "navigated",
   "succeeded", "planned", "activated", "stale", "failed", "cancelled",
 ]);
 const RESPONSE_LABELS = {
@@ -2109,3 +2110,34 @@ async function initialize() {
 }
 
 initialize();
+
+// Explicit sharing is separate from ordinary attachment upload and analysis.
+element("shared-reference-controls").addEventListener("toggle", async (event) => {
+  if (!event.target.open) return;
+  const target = element("private-reference-choices");
+  target.replaceChildren();
+  const sessionId = state.session && state.session.session_id;
+  if (!sessionId) { target.textContent = "Open a session to see its references."; return; }
+  try {
+    const result = await api(`${sessionPath(sessionId)}/references`);
+    if (!state.session || state.session.session_id !== sessionId) return;
+    if (!result.enabled) { target.textContent = "A shared reference library is not configured."; return; }
+    if (!result.choices.length) { target.textContent = "This session has no reusable references yet."; return; }
+    for (const reference of result.choices) {
+      const row = document.createElement("p");
+      const name = document.createElement("span"); name.textContent = reference.label + " ";
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "secondary";
+      button.textContent = "Share for future laboratory analyses";
+      button.addEventListener("click", async () => {
+        if (!state.session || state.session.session_id !== sessionId) return;
+        button.disabled = true;
+        try {
+          await api(`${sessionPath(sessionId)}/references/${encodeURIComponent(reference.resource_id)}/share`, "POST", {shared_use: true});
+          button.textContent = "Available in the shared library";
+        } catch (error) { button.disabled = false; showError(error); }
+      });
+      row.append(name, button); target.append(row);
+    }
+  } catch (error) { showError(error); }
+});

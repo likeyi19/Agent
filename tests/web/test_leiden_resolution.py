@@ -187,7 +187,7 @@ def test_text_and_typed_resolution_agree_or_require_explicit_conflict_resolution
 @pytest.mark.parametrize('literal,changes', [
     ('0', {}), ('-0.2', {}), ('NaN', {}), ('inf', {}), ('1e309', {}),
     ('0.7', {'literal': True}), ('0.7', {'tool': 'compute_cell_umap'}),
-    ('0.7', {'argument': 'min_dist'}), ('0.7', {'start': 0, 'end': 3}),
+    ('0.7', {'argument': 'min_dist'}),
 ])
 def test_invalid_explicit_declaration_never_reaches_scientific_production(
         tmp_path, monkeypatch, literal, changes):
@@ -199,6 +199,18 @@ def test_invalid_explicit_declaration_never_reaches_scientific_production(
         result, _, _ = start(client, harness, utterance=utterance)
         assert_no_science(harness, result)
         assert result['response']['kind'] == 'clarify', result
+
+
+def test_unique_legacy_literal_normalizes_offsets_before_verified_execution(tmp_path, monkeypatch):
+    # R2B normalizes unique literal spans; persisted declarations remain exact.
+    harness, inputs = resolution_harness(tmp_path, monkeypatch,
+        decisions={EXPLICIT: execute(EXPLICIT, start=0, end=3)})
+    with TestClient(web(harness, inputs)) as client:
+        client.post('/api/v1/sessions', json={'session_id': 'session'})
+        result, _, _ = start(client, harness)
+        assert_chain(harness, result, .7, explicit=True)
+        interaction = harness.service._application.sessions.load('session').interactions[0]
+        assert _serialize(interaction.admitted['argument']) == argument(EXPLICIT)
 
 
 @pytest.mark.parametrize('utterance,decision', [

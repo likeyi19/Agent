@@ -1,8 +1,8 @@
-"""Qualified reference variants in LocalResourceAdmission, not a second catalog.
+"""One persistent library for common references; task uploads stay in Session storage.
 
-Only existing annotation and QC contracts are projected to existing InputSets.
-Promotion is a trusted operator API; uploads and interpreter decisions cannot call
-it. Permission evidence records an operator's review, never an inferred license.
+Installation is the explicit sharing boundary. Scientific owners qualify once;
+lookup projects exact immutable identities without replay or legal-document checks.
+The remaining local-record functions read history and retain private task resources.
 """
 from pathlib import Path
 from agent.schemas.orchestration import _serialize
@@ -20,48 +20,10 @@ def redistribution_files(files):
     return [row for row in files if row['path'] not in implementations]
 
 
-def review(operator, provenance, reuse_basis, redistribution, files):
-    value = dict(operator=operator, provenance=provenance, reuse_basis=reuse_basis,
-                 redistribution=redistribution)
-    validate_review(value, files, legacy=False)
-    check_review(value)
-    return value
-
-
 def validate_review(value, files, *, legacy=True):
-    from agent.tools.data.scatac_reference import _sha
-    basic = {'operator', 'provenance', 'reuse_basis'}
-    if (not isinstance(value, dict) or set(value) not in (basic, basic | {'redistribution'})
-            or any(type(value[k]) is not str or not value[k].strip() or len(value[k]) > 1024 for k in basic)):
-        _fail('Deployment reuse requires explicit operator review.')
-    if 'redistribution' not in value:
-        if legacy: return  # Preserve previously accepted, explicitly reviewed records.
-        _fail('New promotion requires pinned redistribution permission evidence.')
-    rows = value['redistribution']
-    required = {f['sha256'] for f in redistribution_files(files)}
-    if (not isinstance(rows, list) or not rows or len(rows) > 32
-            or {r.get('sha256') for r in rows if isinstance(r, dict)} != required
-            or len(rows) != len(required)):
-        _fail('Redistribution review must cover every shared scientific file.')
-    for row in rows:
-        if set(row) != {'sha256', 'source_url', 'license_url', 'evidence_path', 'evidence_sha256', 'basis'}:
-            _fail('Incomplete redistribution evidence.')
-        for name in ('sha256', 'evidence_sha256'): _sha(row[name])
-        for name in ('source_url', 'license_url'):
-            if type(row[name]) is not str or not row[name].startswith('https://') or len(row[name]) > 1024:
-                _fail('Public publisher and permission URLs are required.')
-        if (not Path(row['evidence_path']).is_absolute() or type(row['basis']) is not str
-                or not row['basis'].strip() or len(row['basis']) > 1024):
-            _fail('An explicit permitted reuse basis and pinned evidence are required.')
-
-
-def check_review(value):
-    from agent.tools.analysis.marker_annotation import checked_file
-    for row in value.get('redistribution', []):
-        path = Path(row['evidence_path'])
-        if path.stat().st_size > 65536:
-            _fail('Permission evidence exceeds its bound.')
-        checked_file(path, row['evidence_sha256'])
+    """Read historical review metadata; new resource installation has no review protocol."""
+    if not isinstance(value, dict) or not {'operator', 'provenance', 'reuse_basis'} <= set(value):
+        _fail('Invalid historical resource review.')
 
 
 def _qc_closure(path, sha):
@@ -81,6 +43,8 @@ def _qc_closure(path, sha):
     pins = {r.path: r.sha256 for r in (bundle.parent_manifest, bundle.annotation.resource,
         bundle.tss, bundle.lineage, parent.genome.fasta, parent.genome.fai, parent.ccre.bed)}
     pins[str(path)] = sha
+    if parent.annotation is not None:
+        pins[parent.annotation.resource.path] = parent.annotation.resource.sha256
     return bundle, pins, qualification
 
 
@@ -145,7 +109,7 @@ def persist(resources, inputs, *, session_id, origin_turn_id, label, qualificati
         # Source reconstruction is a qualification step, not a discovery/read step.
         scatac_qc_reference.reinspect_scatac_qc_reference_bundle_sources(bundle)
         profile = bundle.contract_version
-        paths = [scatac_qc_reference.__file__]
+        paths = []
     else:
         _fail('Only existing annotation and QC reference contracts are supported.')
     files = VerificationContext().files([*pins, *paths])
@@ -195,11 +159,9 @@ def check_record(resources, record):
     validate_record(record)
     if resources.load(record.resource_id) != record: _fail('Resource registration changed.')
     q = _serialize(record.reference_qualification)
-    from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC
-    files = redistribution_files(q['files']) if q['profile'] == EXTERNAL_SPEC else q['files']
+    files = redistribution_files(q['files'])
     if VerificationContext().files(r['path'] for r in files) != files:
         _fail('Qualified resource bytes changed; admit a new immutable version.')
-    if q['review']: check_review(q['review'])
     return q['inputs']
 
 
@@ -212,11 +174,16 @@ def input_set(record):
 def discover(resources, session_id):
     """Scope before projection; listing neither reads data nor repeats science."""
     from .reference_supplementation import _records
-    choices = []
+    choices = list(resources.library.choices()) if resources.library is not None else []
     for record in _records(resources):
+        if record.input_type == 'genome_reference':
+            if record.session_id == session_id:
+                from .input_sets import ScientificInputSet
+                choices.append(ScientificInputSet('genome-' + record.resource_id[6:46], record.label, dict(qualified_genome=record.to_dict())))
+            continue
         if record.input_type != 'scientific_reference': continue
         q = record.reference_qualification
-        if q['scope'] != 'deployment' and q['session_id'] != session_id: continue
+        if q['scope'] != 'session' or q['session_id'] != session_id: continue
         choices.append(input_set(record))
     return tuple(choices)
 
@@ -224,23 +191,338 @@ def discover(resources, session_id):
 def check_choice(resources, session_id, handle):
     """Verify only the selected reference before new scientific consumption."""
     import re
+    if handle.startswith('resource.library-'):
+        if resources is None or resources.library is None: _fail('Scientific resource library unavailable.')
+        entry = resources.library.get(handle.removeprefix('resource.library-'))
+        resources.library.check(entry)
+        return resources.library.input_set(entry).inputs()
     if re.fullmatch(r'resource\.qualified-[0-9a-f]{40}', handle) is None: return
     from .reference_supplementation import _records
     for record in _records(resources):
         if record.input_type != 'scientific_reference' or 'resource.' + input_set(record).input_set_id != handle: continue
         q = record.reference_qualification
-        if q['scope'] != 'deployment' and q['session_id'] != session_id:
+        if q['scope'] == 'deployment':
+            _fail('Legacy shared selection is retired; install the reference in ScientificResourceLibrary.')
+        if q['session_id'] != session_id:
             _fail('Private reference is unavailable in this Session.')
         return check_record(resources, record)
     _fail('Selected shared reference is no longer registered.')
 
 
-def promote(resources, resource_id, *, operator, provenance, reuse_basis, redistribution=None):
+
+class ScientificResourceLibrary:
+    """Trusted local index. No upload registration, promotion, or result authority.
+
+    The caller explicitly installs a common reference and establishes its usage
+    basis at provisioning time. Experimental files have no supported library kind.
+    """
+    def __init__(self, root):
+        self.root = Path(root).expanduser().absolute()
+        if self.root != self.root.resolve() or self.root.is_symlink():
+            _fail('Resource library must be a canonical directory.')
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.path = self.root / 'index.json'
+
+    def entries(self):
+        import json
+        if not self.path.exists(): return ()
+        if self.path.is_symlink() or self.path.stat().st_size > 4 * 1024**2:
+            _fail('Invalid scientific resource index.')
+        def _json_object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result: _fail('Duplicate scientific index key.')
+                result[key] = value
+            return result
+        def _reject_constant(value): _fail('Nonfinite scientific index value.')
+        value = json.loads(self.path.read_text(), object_pairs_hook=_json_object_pairs, parse_constant=_reject_constant)
+        if (not isinstance(value, dict) or set(value) != {'version', 'resources'}
+                or type(value['version']) is not int or value['version'] != 1 or not isinstance(value['resources'], list)
+                or len(value['resources']) > 256):
+            _fail('Unsupported scientific resource index.')
+        identities = set()
+        for row in value['resources']:
+            if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo')
+                    or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
+                    or row['id'] in identities):
+                _fail('Scientific resource identity is corrupt.')
+            identities.add(row['id'])
+        return tuple(value['resources'])
+
+    def get(self, identity):
+        matches = [r for r in self.entries() if r['id'] == identity]
+        if len(matches) != 1: _fail('Scientific resource is unavailable.')
+        return matches[0]
+
+    def check(self, entry):
+        from agent.tools.data.authority_context import VerificationContext
+        if self.get(entry['id']) != entry: _fail('Scientific resource index changed.')
+        if VerificationContext().files(r['path'] for r in entry['files']) != entry['files']:
+            _fail('Scientific resource bytes changed; install a new immutable version.')
+        return entry['resource']
+
+    def install(self, kind, resource, *, label, version, provenance, usage, own_files=False):
+        """Explicit operator/shared-use installation, with one owner qualification.
+
+        Index existing files in place. Exact repeated installation checks integrity
+        and returns the same entry without repeating scientific qualification.
+        """
+        import fcntl, os, tempfile
+        from agent.tools.data.authority_context import VerificationContext
+        from .input_sets import _label
+        resource = _serialize(resource)
+        for text in (label, version, provenance, usage): _label(text)
+        if own_files:
+            resource = self._own_files(kind, resource)
+        qualifier = None
+        if kind == 'annotation':
+            from agent.tools.analysis import annotation_contract as c, annotation_input
+            # Retain the owner's scientific specification, not task grouping.
+            resource = dict(resource, grouping_provenance='Grouping must be supplied by each consuming task')
+            target = self.root / 'annotations' / (digest(resource) + '.json')
+            target.parent.mkdir(exist_ok=True)
+            self._publish(target, canonical(resource))
+            resource = c.specification(target, digest(resource))
+            if resource['schema'] != c.EXTERNAL_SPEC: _fail('Direct annotation references required.')
+            pins = {r['path']: r['sha256'] for r in (resource['gene_resource'], resource['signature_resource'])}
+            if 'contig_scope' in resource:
+                pins[resource['contig_scope']['path']] = resource['contig_scope']['sha256']
+            pins[str(target)] = digest(resource)
+            qualifier = lambda: annotation_input.qualify_resources(resource)
+        elif kind == 'genome':
+            from agent.tools.data import scatac_reference as r, regulatory_feature_reference as owner
+            from agent.tools.data.chromap_reference_index import verify_fasta_fai
+            from types import SimpleNamespace
+            if set(resource) != {'species', 'assembly', 'genome'}: _fail('Genome species, assembly and exact FASTA/FAI required.')
+            owner.validate_species(resource['species']); r._text(resource['assembly'])
+            g = dict(resource['genome'])
+            for key in ('fasta', 'fai'):
+                r._resource(g[key]); g[key] = r.ResourceIdentity(g[key]['path'], g[key]['sha256'], r.SourceProvenance(**g[key]['provenance']))
+            genome = r.GenomeReference(**g)
+            pins = {v.path: v.sha256 for v in (genome.fasta, genome.fai)}
+            qualifier = lambda: verify_fasta_fai(SimpleNamespace(genome=genome))
+        elif kind == 'qc':
+            if set(resource) != {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}: _fail('Exact QC reference required.')
+            from agent.tools.data import scatac_qc_reference as owner
+            # Existing QC owner supplies its content closure and scientific identity.
+            bundle, pins, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
+            qualifier = lambda: owner.reinspect_scatac_qc_reference_bundle_sources(bundle)
+        elif kind == 'epizoo':
+            from .local_resources import QualifiedEpiZooResource
+            from agent.tools.analysis.epizoo_embedding import _pinned_resource_paths, _check_resource_files
+            model = QualifiedEpiZooResource(**resource)
+            paths = _pinned_resource_paths(model.checkpoint_path, model.species)
+            expected = model.inputs()['expected_resource_identity']
+            pins = {str(path): expected[key] for key, path in paths.items()}
+            def qualifier():
+                import torch
+                from agent.tools.models import epizoo
+                _check_resource_files(paths, expected)
+                state = epizoo._unwrap_state_dict(torch.load(model.checkpoint_path,
+                    map_location='cpu', weights_only=True, mmap=True))
+                epizoo._validate_checkpoint_state_dict(state)
+                epizoo._load_resources(epizoo._normalize_species(model.species), epizoo.DEFAULT_RESOURCES_DIR)
+        else:
+            _fail('Only explicit common scientific reference roles can enter the library.')
+        files = VerificationContext().files(pins)
+        if any(f['sha256'] != pins[f['path']] for f in files): _fail('Resource checksum differs from its declared identity.')
+        entry = dict(kind=kind, label=label, version=version, provenance=provenance, usage=usage, resource=resource, files=files)
+        entry = dict(id=digest(entry)[:56], **entry)
+        with (self.root / '.index.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            rows = self.entries()
+            existing = [r for r in rows if r['kind'] == kind and r['resource'] == resource]
+            if existing:
+                if len(existing) != 1: _fail('Duplicate scientific resources in the library.')
+                self.check(existing[0])
+                return existing[0]
+            qualifier()
+            if VerificationContext().files(pins) != files: _fail('Resource changed during scientific validation.')
+            content = canonical(dict(version=1, resources=[*rows, entry]))
+            fd, name = tempfile.mkstemp(dir=self.root, prefix='.index-')
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(content); stream.flush(); os.fsync(stream.fileno())
+                os.replace(name, self.path)
+                fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                try: os.fsync(fd)
+                finally: os.close(fd)
+            finally:
+                Path(name).unlink(missing_ok=True)
+        return entry
+
+    @staticmethod
+    def _publish(path, content):
+        """Atomically publish an immutable scientific specification."""
+        import os, tempfile
+        fd, name = tempfile.mkstemp(dir=path.parent, prefix='.reference-')
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(content); stream.flush(); os.fsync(stream.fileno())
+            try: os.link(name, path)
+            except FileExistsError:
+                if path.is_symlink() or path.read_bytes() != content: _fail('Installed reference specification changed.')
+            fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def _copy_file(self, path, sha):
+        """Own exact bytes independently of the upload inode and its lifetime."""
+        import hashlib, os, shutil, tempfile
+        from agent.tools.data.scatac_reference import _sha
+        _sha(sha)
+        source = Path(path)
+        directory = self.root / 'files' / sha
+        directory.mkdir(parents=True, exist_ok=True)
+        if directory.resolve() != directory: _fail('Library file directory changed.')
+        target = directory / source.name
+        size = source.stat().st_size
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or target.stat().st_size != size:
+                _fail('Installed scientific file changed.')
+            with target.open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != sha:
+                    _fail('Installed scientific file changed.')
+            return str(target)
+        if shutil.disk_usage(directory).free < size:
+            _fail('Insufficient library space for the shared reference.')
+        fd, temporary = tempfile.mkstemp(dir=directory, prefix='.copy-')
+        try:
+            checksum = hashlib.sha256(); copied = 0
+            with os.fdopen(fd, 'wb') as writer, source.open('rb') as reader:
+                while block := reader.read(1024 * 1024):
+                    copied += len(block)
+                    if copied > size: _fail('Scientific source changed during copying.')
+                    writer.write(block); checksum.update(block)
+                writer.flush(); os.fsync(writer.fileno())
+            if copied != size or checksum.hexdigest() != sha:
+                _fail('Scientific source changed during copying.')
+            try: os.link(temporary, target)
+            except FileExistsError:
+                # Another importer may have published this exact content.
+                return self._copy_file(path, sha)
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            return str(target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    def _own_files(self, kind, resource):
+        """Relocate only each supported owner's explicit reference closure."""
+        from dataclasses import asdict, replace
+        from agent.tools.data import scatac_reference as parent, scatac_qc_reference as qc
+        def copy(row):
+            return dict(row, path=self._copy_file(row['path'], row['sha256']))
+        def manifest(raw):
+            import hashlib
+            sha = hashlib.sha256(raw).hexdigest()
+            path = self.root / 'manifests' / (sha + '.json')
+            path.parent.mkdir(exist_ok=True)
+            if path.parent.resolve() != path.parent: _fail('Library manifest directory changed.')
+            self._publish(path, raw)
+            return dict(path=str(path), sha256=sha, size_bytes=len(raw))
+        if kind == 'annotation':
+            result = dict(resource, gene_resource=copy(resource['gene_resource']),
+                          signature_resource=copy(resource['signature_resource']))
+            if 'contig_scope' in resource:
+                scope = resource['contig_scope']
+                relocated = self._own_files('qc', dict(qc_reference_manifest_path=scope['path'],
+                    qc_reference_manifest_sha256=scope['sha256']))
+                result['contig_scope'] = dict(path=relocated['qc_reference_manifest_path'],
+                    sha256=relocated['qc_reference_manifest_sha256'])
+            return result
+        if kind == 'genome':
+            genome = dict(resource['genome'])
+            return dict(resource, genome=dict(genome, fasta=copy(genome['fasta']), fai=copy(genome['fai'])))
+        if kind == 'qc':
+            bundle, _, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
+            _, original, _ = parent.load_scatac_reference_bundle(bundle.parent_manifest.path,
+                expected_sha256=bundle.parent_manifest.sha256)
+            values = original.to_dict()
+            for key in ('fasta', 'fai'): values['genome'][key] = copy(values['genome'][key])
+            values['ccre']['bed'] = copy(values['ccre']['bed'])
+            if values['annotation'] is not None:
+                values['annotation']['resource'] = copy(values['annotation']['resource'])
+            # The native parent identity excludes locators; the QC identity binds
+            # the newly published parent bytes. Neither original is rewritten.
+            relocated = parent.validate_scatac_reference_bundle(values)
+            parent_file = manifest(parent.canonical_reference_bundle_bytes(relocated))
+            result = replace(bundle, parent_manifest=qc.QCResource(**parent_file),
+                annotation=replace(bundle.annotation, resource=qc.QCResource(**copy(asdict(bundle.annotation.resource)))),
+                tss=qc.QCResource(**copy(asdict(bundle.tss))), lineage=qc.QCResource(**copy(asdict(bundle.lineage))))
+            result = replace(result, resource_identity_sha256=qc._identity(result))
+            output = manifest(qc.canonical_qc_reference_bundle_bytes(result))
+            return dict(qc_reference_manifest_path=output['path'], qc_reference_manifest_sha256=output['sha256'])
+        _fail('Only uploaded annotation, genome and QC references support library-owned copying.')
+
+    def install_genome(self, fasta_path, fai_path, *, species, assembly, label, version, provenance, usage):
+        """Install external FASTA/FAI directly, without an experimental dataset or Run."""
+        from dataclasses import asdict
+        from agent.tools.data import scatac_reference as r
+        fasta, fai = (r._source_path(p) for p in (fasta_path, fai_path))
+        fasta_sha = r._file_hash(fasta, fasta=True)
+        contigs, fai_sha, ordered = r._inspect_fai(fai, fasta.stat().st_size)
+        source = r.SourceProvenance(basis='caller_supplied', source=provenance)
+        genome = r.GenomeReference(r.ResourceIdentity(str(fasta), fasta_sha, source),
+            r.ResourceIdentity(str(fai), fai_sha, source), len(contigs), ordered)
+        return self.install('genome', dict(species=species, assembly=assembly, genome=asdict(genome)),
+            label=label, version=version, provenance=provenance, usage=usage)
+
+    def input_set(self, entry):
+        from .input_sets import ScientificInputSet
+        kind, resource = entry['kind'], entry['resource']
+        if kind == 'annotation':
+            inputs = dict(annotation_spec_path=str(self.root / 'annotations' / (digest(resource) + '.json')),
+                          annotation_spec_sha256=digest(resource))
+        elif kind == 'qc': inputs = resource
+        elif kind == 'genome': inputs = dict(library_genome=entry)
+        else: _fail('Models use the existing native model selection interface.')
+        return ScientificInputSet('library-' + entry['id'], entry['label'], inputs, h5ad_companion=kind == 'genome')
+
+    def choices(self):
+        return tuple(self.input_set(r) for r in self.entries() if r['kind'] != 'epizoo')
+
+    def models(self):
+        from .local_resources import QualifiedEpiZooResource
+        return tuple(QualifiedEpiZooResource(**r['resource']) for r in self.entries() if r['kind'] == 'epizoo')
+
+
+def install_private(resources, session_id, resource_id, *, shared_use):
+    """Explicit shared-future-use action over a Session-owned scientific reference.
+
+    Ordinary uploads never call this action. Required reference components become
+    library-owned copies; genomes share only FASTA/FAI, never task feature axes.
+    """
+    if shared_use is not True or resources.library is None:
+        _fail('Explicit shared use and a configured scientific library are required.')
     record = resources.load(resource_id)
-    if record.input_type != 'scientific_reference': _fail('Choose a qualified scientific reference.')
-    check_record(resources, record)
-    q = _serialize(record.reference_qualification)
-    q.update(scope='deployment', review=review(operator, provenance, reuse_basis, redistribution, q['files']))
-    return resources.register('deployment-reference:' + digest(dict(source=record.record_sha256, review=q['review'])),
-        record.source_path, input_type=record.input_type, label=record.label,
-        attribution='Explicit operator-reviewed shared scientific reference.', reference_qualification=q)
+    if record.input_type not in ('scientific_reference', 'genome_reference', 'regulatory_reference'):
+        _fail('Experimental uploads cannot be installed as common references.')
+    if (record.session_id or record.reference_qualification.get('session_id')) != session_id:
+        _fail('Only this Session\'s private reference may be installed for shared use.')
+    from . import reference_supplementation as refs
+    value = refs.check_record(resources, record)
+    if record.input_type == 'scientific_reference':
+        if 'annotation_spec_path' in value:
+            from agent.tools.analysis.annotation_contract import specification
+            kind, resource = 'annotation', specification(value['annotation_spec_path'], value['annotation_spec_sha256'])
+        else: kind, resource = 'qc', value
+    elif record.input_type in ('regulatory_reference', 'genome_reference'):
+        from dataclasses import asdict
+        kind = 'genome'
+        if record.input_type == 'regulatory_reference':
+            resource = dict(species=asdict(value.species), assembly=value.target_assembly, genome=asdict(value.genome))
+        else:
+            resource = dict(**_serialize(record.reference_qualification['requirement']), genome=value)
+    else:
+        _fail('Experimental uploads cannot be installed as common references.')
+    return resources.library.install(kind, resource, label=record.label, version=record.source_sha256,
+        provenance=record.attribution, usage='Explicit user designation for shared future laboratory computation; reference bytes are not offered for download.',
+        own_files=True)

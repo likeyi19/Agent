@@ -125,11 +125,13 @@ def validate_record(record):
               'session_id', 'origin_turn_id', 'source_record_sha256', 'scope', 'review'}
     if (record.input_type != 'regulatory_reference' or not isinstance(q, dict) or set(q) not in (fields, fields | {'genome_resource_id'})
             or q['scope'] not in ('session', 'deployment') or not isinstance(q['files'], list)
-            or not 4 <= len(q['files']) <= 12):
+            or not 3 <= len(q['files']) <= 12):
         _fail('Invalid qualified reference registration.')
     if 'genome_resource_id' in q:
         from .local_resources import _identifier
-        _identifier(q['genome_resource_id'])
+        import re
+        if re.fullmatch(r'library-[0-9a-f]{56}', q['genome_resource_id']) is None:
+            _identifier(q['genome_resource_id'])
     r = q['requirement']
     if not isinstance(r, dict) or set(r) != {'species', 'assembly', 'feature_category'}:
         _fail('Invalid reference declarations.')
@@ -153,8 +155,10 @@ def validate_record(record):
 
 
 def input_set(record):
+    if isinstance(record, dict):
+        return ScientificInputSet('library-' + record['id'], record['label'], dict(library_genome=record), h5ad_companion=True)
     identity = (record.reference_qualification or {}).get('genome_resource_id', record.resource_id)
-    return ScientificInputSet('reference-' + identity[6:46], record.label,
+    return ScientificInputSet(identity if identity.startswith('library-') else 'reference-' + identity[6:46], record.label,
         dict(reference_manifest_path=record.source_path, reference_manifest_sha256=record.source_sha256),
         h5ad_companion=True)
 
@@ -170,7 +174,8 @@ def _records(resources):
 
 
 def choices(resources, session_id, required, *, origin_turn_id=None):
-    rows = []
+    rows = [r for r in resources.library.entries() if r['kind'] == 'genome'
+            and {k: r['resource'][k] for k in ('species', 'assembly')} == {k: _serialize(required[k]) for k in ('species', 'assembly')}] if resources.library else []
     for record in _records(resources):
         if record.input_type == 'scientific_reference':
             continue
@@ -178,18 +183,18 @@ def choices(resources, session_id, required, *, origin_turn_id=None):
         if 'genome_resource_id' in q:
             continue  # The genome offers the choice; this is its private resolved binding.
         if record.input_type == 'genome_reference':
-            if (record.session_id in (None, session_id)
+            if (record.session_id == session_id
                     and _serialize(q['requirement']) == {k: _serialize(required[k]) for k in ('species', 'assembly')}):
                 rows.append(record)
             continue
-        if (_serialize(q['requirement']) == _serialize(required) and (q['scope'] == 'deployment'
-                or q['session_id'] == session_id and q['origin_turn_id'] == origin_turn_id)):
+        if (_serialize(q['requirement']) == _serialize(required) and q['scope'] == 'session'
+                and q['session_id'] == session_id and q['origin_turn_id'] == origin_turn_id):
             rows.append(record)
     return tuple(rows)
 
 
 def check_record(resources, record):
-    """Exact byte/code integrity; never repeat FASTA sequence qualification."""
+    """Pinned resource integrity; never repeat FASTA sequence qualification."""
     if record.input_type == 'scientific_reference':
         from .shared_resources import check_record as check_scientific
         return check_scientific(resources, record)
@@ -202,16 +207,14 @@ def check_record(resources, record):
     _, sha, size = resources._source(record.source_path)
     if (sha, size) != (record.source_sha256, record.size_bytes):
         _fail('The qualified reference manifest changed.')
-    expected = _serialize(record.reference_qualification['files'])
+    from .shared_resources import redistribution_files
+    expected = redistribution_files(_serialize(record.reference_qualification['files']))
     if VerificationContext().files(row['path'] for row in expected) != expected:
-        _fail('The qualified reference files or qualification implementation changed. Provision a new immutable version.')
+        _fail('The qualified reference files changed. Install a new immutable version.')
     from agent.tools.data.regulatory_feature_reference import load_regulatory_feature_reference
     _, reference, _ = load_regulatory_feature_reference(record.source_path, expected_sha256=record.source_sha256)
     _check_owner_files(reference, expected)
     q = record.reference_qualification
-    if q['review'] is not None:
-        from .shared_resources import check_review
-        check_review(_serialize(q['review']))
     if (dict(species=asdict(reference.species), assembly=reference.target_assembly,
              feature_category=reference.features.category) != _serialize(q['requirement'])
             or reference.reference_identity_sha256 != q['reference_identity_sha256']
@@ -252,7 +255,7 @@ def public_pending(service, session_id):
         return None
     return dict(expected_generation=state.generation, origin_turn_id=origin.turn_id,
         species=required['species']['scientific_name'], assembly=required['assembly'],
-        choices=[dict(handle='resource.' + input_set(r).input_set_id, label=r.label)
+        choices=[dict(handle='resource.' + input_set(r).input_set_id, label=input_set(r).label)
                  for r in choices(service.resources, session_id, required, origin_turn_id=origin.turn_id)])
 
 
@@ -336,7 +339,7 @@ def qualify(service, uploads, session_id, *, resource_id, expected_generation, o
                 _fail('Previously published reference changed.')
         else:
             owner.publish_regulatory_feature_reference(reference, manifest)
-        files = VerificationContext().files([path, index, bed, owner.__file__, scatac_reference.__file__, chromap_reference_index.__file__])
+        files = VerificationContext().files([path, index, bed])
         _check_owner_files(reference, files)
         # Recheck source/task after the potentially long, streaming qualification.
         if service._load(session_id) != state:
@@ -355,30 +358,6 @@ def qualify(service, uploads, session_id, *, resource_id, expected_generation, o
         os.close(lease)
 
 
-def promote(resources, resource_id, *, operator, provenance, reuse_basis, redistribution=None):
-    """Operator-only deployment provisioning; deliberately no public HTTP route.
-
-    Review is an explicit authorization record, not proof produced by FASTA parsing.
-    Existing private registrations/files are never changed or duplicated.
-    """
-    record = resources.load(resource_id)
-    if record.input_type == 'scientific_reference':
-        from .shared_resources import promote as promote_scientific
-        return promote_scientific(resources, resource_id, operator=operator, provenance=provenance,
-                                  reuse_basis=reuse_basis, redistribution=redistribution)
-    if record.input_type != 'regulatory_reference':
-        _fail('Choose a qualified reference.')
-    check_record(resources, record)
-    from .shared_resources import review as sharing_review
-    q = _serialize(record.reference_qualification)
-    review = sharing_review(operator, provenance, reuse_basis, redistribution, q['files'])
-    q.update(scope='deployment', review=review)
-    return resources.register('deployment-reference:' + digest(dict(source=record.record_sha256, review=review)),
-        record.source_path, input_type='regulatory_reference', label=record.label,
-        attribution='Operator-reviewed reference for reuse within this deployment; not global publication.',
-        reference_qualification=q)
-
-
 def pending_choices(public, interaction, state, resources):
     ref = interaction.snapshot.get('prerequisite')
     if ref is None or ref['field'] != 'resources':
@@ -386,7 +365,7 @@ def pending_choices(public, interaction, state, resources):
     origin = next(i for i in state.interactions if i.turn_id == ref['origin_turn_id'])
     required = origin.admitted.get('reference_requirement')
     if required is not None:
-        public['choices'] = [dict(handle='resource.' + input_set(r).input_set_id, label=r.label)
+        public['choices'] = [dict(handle='resource.' + input_set(r).input_set_id, label=input_set(r).label)
             for r in choices(resources, state.session_id, required, origin_turn_id=origin.turn_id)]
         public['reference_requirement'] = _serialize(required)
 
@@ -414,7 +393,7 @@ def select(resources, session_id, origin, handle):
     binding = resources._submission_binding(origin.submission)
     resources.validate_binding(binding)
     source = resources.load(binding.resource_id)
-    if record.input_type == 'genome_reference':
+    if isinstance(record, dict) or record.input_type == 'genome_reference':
         from .shared_genome import bind
         record = bind(resources, record, source, session_id, origin)
     validate_completion(record, source, origin, binding)

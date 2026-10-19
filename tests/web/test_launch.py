@@ -8,7 +8,7 @@ from agent.web import __main__ as launch
 from agent.web.config import WebConfigurationError
 
 
-def launch_fakes(monkeypatch, *, attachments=False, scientific_resources=False):
+def launch_fakes(monkeypatch, *, attachments=False):
     calls = {}
     class Facade:
         resources = object()
@@ -16,7 +16,6 @@ def launch_fakes(monkeypatch, *, attachments=False, scientific_resources=False):
     app = object()
     class Configuration:
         input_sets = ("operator-input-set",)
-        epizoo_resources = ('qualified-resource',) if scientific_resources else ()
         upload_root = '/workspace/uploads' if attachments else None
         upload_max_bytes = 8192
         upload_max_concurrent = 1
@@ -77,12 +76,6 @@ def test_enabled_uploads_use_configured_application_resource_owner(monkeypatch):
     assert calls['create']['uploads'] == 'upload-owner'
     assert calls['run'] == {'host': '127.0.0.1', 'port': 8000, 'workers': 1}
 
-
-def test_qualified_resources_are_forwarded_separately_from_llm_and_input_sets(monkeypatch):
-    calls = launch_fakes(monkeypatch, scientific_resources=True)
-    assert launch.main(['--config', 'operator.json']) == 0
-    assert calls['create'] == {'input_sets': ('operator-input-set',), 'max_workers': 2,
-                               'epizoo_resources': ('qualified-resource',)}
 
 
 @pytest.mark.parametrize("arguments", [

@@ -6,6 +6,11 @@ tests claim resource/continuation admission, never compatible-input qualificatio
 or a completed foundation-model execution.
 """
 import json
+from agent.application.shared_resources import ScientificResourceLibrary
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parents[1] / "web"))
+from helpers import model_library
 
 import pytest
 
@@ -49,33 +54,33 @@ def configuration(tmp_path, *, explicit_species=None):
             provider_id='scripted', model_id='mapping-witness')],
         input_sets=[dict(input_set_id='settings', label='Explicit device setting',
             h5ad_companion=True, execution_inputs=dict(device='cuda:0'))],
-        epizoo_resources=rows)), encoding='utf-8')
+        scientific_resource_root=str(model_library(tmp_path / 'model-library', rows).root))), encoding='utf-8')
     return load_web_configuration(path)
 
 
 @pytest.mark.parametrize('species', ['human', 'mouse'])
 def test_loaded_shared_checkpoint_catalog_selects_species_pins_and_explicit_precedence(tmp_path, species):
     config = configuration(tmp_path)
-    resources = {row.species: row for row in config.epizoo_resources}
+    resources = {row.species: row for row in ScientificResourceLibrary(config.scientific_resource_root).models()}
     assert resources['human'].checkpoint_sha256 == resources['mouse'].checkpoint_sha256 == CHECKPOINT_SHA
     assert resources['human'].checkpoint_path == resources['mouse'].checkpoint_path
     assert resources['human'].frequencies_sha256 != resources['mouse'].frequencies_sha256
     assert resources['human'].filter_indices_sha256 != resources['mouse'].filter_indices_sha256
     original = dict(species=species, device='cuda:0')
-    values, error = select_epizoo_resource(original, None, config.epizoo_resources)
+    values, error = select_epizoo_resource(original, None, ScientificResourceLibrary(config.scientific_resource_root).models())
     assert error is None and values == original | resources[species].inputs()
     assert original == dict(species=species, device='cuda:0')
 
     explicit = configuration(tmp_path, explicit_species=species)
-    values, error = select_epizoo_resource(original, None, explicit.epizoo_resources)
+    values, error = select_epizoo_resource(original, None, ScientificResourceLibrary(explicit.scientific_resource_root).models())
     assert values == original and error == 'EPIZOO_RESOURCE_AMBIGUOUS'
     selected_id = f'{species}-explicit'
-    selected = next(row for row in explicit.epizoo_resources if row.resource_id == selected_id)
-    values, error = select_epizoo_resource(original, selected_id, explicit.epizoo_resources)
+    selected = next(row for row in ScientificResourceLibrary(explicit.scientific_resource_root).models() if row.resource_id == selected_id)
+    values, error = select_epizoo_resource(original, selected_id, ScientificResourceLibrary(explicit.scientific_resource_root).models())
     assert error is None and values == original | selected.inputs()
     other_species = 'mouse' if species == 'human' else 'human'
     with pytest.raises(ResourceAdmissionError) as mismatch:
-        select_epizoo_resource(dict(species=other_species), selected_id, explicit.epizoo_resources)
+        select_epizoo_resource(dict(species=other_species), selected_id, ScientificResourceLibrary(explicit.scientific_resource_root).models())
     assert mismatch.value.code == 'EPIZOO_RESOURCE_SELECTION_INVALID'
 
 
@@ -175,7 +180,7 @@ def test_species_answer_resumes_original_registered_request_with_exact_default_a
 
     plan = executor.plans[0]
     assert tuple(step.tool_name for step in plan.steps) == TOOLS
-    expected = next(row for row in config.epizoo_resources if row.species == species)
+    expected = next(row for row in ScientificResourceLibrary(config.scientific_resource_root).models() if row.species == species)
     embedded, neighbors, clustered, umap = plan.steps
     for key, value in original_inputs.items():
         assert embedded.arguments[key] == value
@@ -241,7 +246,7 @@ def test_exact_human_species_variant_resumes_single_embedding_request_without_sc
     assert len(executor.plans) == 1
     embedded, = executor.plans[0].steps
     assert embedded.tool_name == 'epizoo_embed_cells' and not embedded.depends_on
-    expected = next(row for row in config.epizoo_resources if row.species == 'human')
+    expected = next(row for row in ScientificResourceLibrary(config.scientific_resource_root).models() if row.species == 'human')
     for key, value in original_inputs.items():
         assert embedded.arguments[key] == value
     assert embedded.arguments['species'] == 'human'

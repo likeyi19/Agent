@@ -13,22 +13,25 @@ FIRST = 'local-' + '1' * 64
 SECOND = 'local-' + '2' * 64
 
 
-@pytest.mark.parametrize('changes', [
-    {'resource_ids': []},
-    {'resource_ids': [FIRST]},
-    {'resource_ids': ['local-' + str(value) * 64 for value in range(9)]},
-    {'resource_ids': [FIRST, FIRST]},
-    {'resource_ids': [FIRST, '/private/path.h5ad']},
-    {'resource_ids': [FIRST, 'local-' + 'A' * 64]},
-    {'resource_ids': [FIRST, 2]},
-    {'resource_ids': [FIRST, SECOND], 'resource_id': FIRST},
+@pytest.mark.parametrize('changes,status', [
+    ({'resource_ids': []}, 422),
+    ({'resource_ids': [FIRST]}, 404),
+    ({'resource_ids': ['local-' + str(value) * 64 for value in range(9)]}, 422),
+    ({'resource_ids': [FIRST, FIRST]}, 422),
+    ({'resource_ids': [FIRST, '/private/path.h5ad']}, 422),
+    ({'resource_ids': [FIRST, 'local-' + 'A' * 64]}, 422),
+    ({'resource_ids': [FIRST, 2]}, 422),
+    ({'resource_ids': [FIRST, SECOND], 'resource_id': FIRST}, 422),
 ])
-def test_selection_transport_rejects_unbounded_ambiguous_or_path_inputs(uploaded_web, changes):
+def test_selection_transport_rejects_invalid_or_unregistered_inputs(uploaded_web, changes, status):
     client, backend, _, _ = uploaded_web
     client.post('/api/v1/sessions', json={'session_id': 'session'})
     response = client.post('/api/v1/sessions/session/turns',
         json=submission(input_set_id=None, **changes))
-    assert response.status_code == 422, response.text
+    assert response.status_code == status, response.text
+    if status == 404:
+        # One-item selections are valid transport; identity lookup still fails closed.
+        assert response.json()['error']['code'] == 'LOCAL_RESOURCE_UNAVAILABLE'
     assert not backend.models and not backend.science_calls
     assert not backend.service._application.sessions.load('session').interactions
 
@@ -98,6 +101,8 @@ def test_transport_retains_submitted_order_without_assigning_scientific_roles():
     value = SubmitTurn(turn_id='turn', expected_generation=0, utterance='Compare selected inputs.',
         resource_ids=[SECOND, FIRST])
     assert value.resource_ids == [SECOND, FIRST]
+    assert SubmitTurn(turn_id='single', expected_generation=0, utterance='Inspect selected input.',
+                      resource_ids=[FIRST]).resource_ids == [FIRST]
     assert 'roles' not in SubmitTurn.model_fields
 
 

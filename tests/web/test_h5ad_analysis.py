@@ -26,7 +26,7 @@ from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError
 from agent.tools.analysis import epizoo_embedding
 from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY
-from agent.web.app import create_app
+from helpers import model_web as create_app
 from agent.web.config import QualifiedEpiZooResource, ScientificInputSet
 from helpers import wait_turn
 from test_uploaded_multiturn import assert_private, body, reopened_service, snapshot, upload

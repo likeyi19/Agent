@@ -18,8 +18,19 @@ primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,
 counts and names stay exact; native zero-weight and unmatched-contig participation
 is recorded in annotation details and exported H5AD provenance. Complete annotation
 references no longer require a QC catalog. This does not change primary-nuclear
-preprocessing or establish biological annotation accuracy. Common deployment of
-the retained marker signature still awaits an applicable permission basis.
+preprocessing or establish biological annotation accuracy. R4 below supplies the
+subsequent normal laboratory resource deployment.
+
+[UA3.6.5-R4](docs/ua3.6.5-r4-unified-scientific-resource-library.md) uses one
+persistent scientific library, configured with `scientific_resource_root` outside
+task storage. Installed references are discovered automatically; unchanged entries
+reuse their initial scientific validation. Uploads stay private unless the user
+explicitly shares a qualified reference for future laboratory analyses. Shared
+uploads receive independently owned component copies inside the library; stable
+operator-installed references may remain indexed in place. Common
+reference installation has no private-registration/promotion or redistribution-proof
+workflow. Provisioning owns the applicable usage basis; scientific execution retains
+method compatibility and exact file integrity checks.
 
 [M14.10 generic QC integration](docs/m14.10-generic-qc.md) admits independently
 qualified normalized transcript-TSS resources through the existing QC and
@@ -1063,8 +1074,9 @@ old request. The selected reviewed EpiZoo resource or its uniquely applicable
 approved default must still exist. The original
 joint human/mouse EpiZoo checkpoint is the approved foundation; reviewed original
 human and mouse auxiliary tuples use those same weights without training. Each
-deployment must explicitly admit the exact species resource tuple through
-`epizoo_resources` and designate its unique applicable default. Files on disk
+deployment must install the exact species resource in `ScientificResourceLibrary`,
+configure `scientific_resource_root`, and designate its unique applicable default.
+Inline `epizoo_resources` configuration is retired. Files on disk
 alone do not activate that mapping. The ordinary Interpreter/Planner can select
 embedding directly or the existing inspection, embedding, neighbors, Leiden and
 UMAP chain. Actual source consumption and checkpoint/auxiliary resource pins

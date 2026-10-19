@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.interactive_schemas import ClientError, TurnView
 from agent.application.local_resources import (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup, ResourceAdmissionError,
-    select_epizoo_resource, qualified_epizoo_resources)
+    select_epizoo_resource)
 from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
@@ -34,6 +34,11 @@ STATIC_ROOT = Path(__file__).with_name('static')
 
 class _Body(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
+
+
+class ShareReference(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    shared_use: bool
 
 
 class QualifyReference(BaseModel):
@@ -144,11 +149,10 @@ class _LocalWorkers:
     all scientific checkpoints remain exclusively application-owned.
     """
 
-    def __init__(self, application, max_workers, epizoo_resources=(), input_sets=()):
+    def __init__(self, application, max_workers, input_sets=()):
         self.application = application
         self.max_workers = max_workers
         self.input_sets = input_sets
-        self.epizoo_resources = qualified_epizoo_resources(epizoo_resources)
         self.pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='agent-turn')
         self.lock = Lock()
         self.receipts = OrderedDict()
@@ -158,7 +162,7 @@ class _LocalWorkers:
         try:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-                epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
+                input_sets=self.input_sets,
                 predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
@@ -180,7 +184,7 @@ class _LocalWorkers:
         # Domain validation and normalization belong to M18.2, not HTTP models.
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
-            epizoo_resources=self.epizoo_resources, input_sets=self.input_sets,
+            input_sets=self.input_sets,
             predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
@@ -315,7 +319,7 @@ def _input_set_choice(selected, input_sets, family=None):
 
 
 def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_workers=2,
-               uploads=None, epizoo_resources=()):
+               uploads=None):
     """Compose a single lab-host server around one configured domain facade."""
     if not isinstance(application, InteractiveAgentApplication):
         raise TypeError('A configured InteractiveAgentApplication is required.')
@@ -330,11 +334,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     inputs_by_id = {s.input_set_id: s for s in input_sets}
     if len(inputs_by_id) != len(input_sets):
         raise ValueError('Duplicate scientific input-set identifier.')
-    if (type(epizoo_resources) is not tuple or len(epizoo_resources) > 64
-            or any(not isinstance(r, QualifiedEpiZooResource) for r in epizoo_resources)
-            or len({r.resource_id for r in epizoo_resources}) != len(epizoo_resources)):
-        raise ValueError('EpiZoo resources must be a bounded unique configured tuple.')
-    workers = _LocalWorkers(application, max_workers, epizoo_resources, input_sets)
+    workers = _LocalWorkers(application, max_workers, input_sets)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -440,7 +440,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
 
     @app.get('/api/v1/epizoo-resources')
     def scientific_model_resources():
-        return {'choices': [r.choice() for r in epizoo_resources]}
+        return {'choices': [r.choice() for r in application._epizoo_resources]}
 
     @app.get('/api/v1/resources')
     def uploaded_resources():
@@ -534,6 +534,14 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         if uploads is None:
             return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
         return application.qualify_reference(uploads, session_id, **body.model_dump())
+
+    @app.get('/api/v1/sessions/{session_id}/references')
+    def private_references(session_id: str):
+        return application.private_references(session_id)
+
+    @app.post('/api/v1/sessions/{session_id}/references/{resource_id}/share')
+    def share_reference(session_id: str, resource_id: str, body: ShareReference):
+        return application.share_reference(session_id, resource_id, shared_use=body.shared_use)
 
     @app.post('/api/v1/sessions', status_code=201)
     def create_session(body: CreateSession):
@@ -650,7 +658,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if input_set is not None or body.epizoo_resource_id is not None:
                 companion_inputs, selection_error = _epizoo_selection(
                     {} if input_set is None else input_set.inputs(), body.epizoo_resource_id,
-                    epizoo_resources)
+                    application._epizoo_resources)
             # Completed retries remain readable even after source bytes disappear.
             # The facade validates bytes itself before each new consumption.
             # Changed operator inputs/pins retain the facade's exact retry

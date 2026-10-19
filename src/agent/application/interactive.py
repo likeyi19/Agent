@@ -197,8 +197,7 @@ class InteractiveAgentApplication:
                  planning_model_factory_registry=None, display_labels=None,
                  registry=None, executor=None, planning_wire_mode=None,
                  recovery_planning_profile=None, planning_recovery_policy=None,
-                 approved_source_roots=(), epizoo_resources=()):
-        self._epizoo_resources = qualified_epizoo_resources(epizoo_resources)
+                 approved_source_roots=(), scientific_resource_root=None):
         self._factory = (build_default_planning_model_factory_registry()
                          if planning_model_factory_registry is None else planning_model_factory_registry)
         if (not isinstance(self._factory, PlanningModelFactoryRegistry)
@@ -224,9 +223,14 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
         self._config = dict(registry=self._application.registry, executor=self._application.runtime.executor)
         self.resources = LocalResourceAdmission(self._application._workspace,
-            approved_source_roots=approved_source_roots, registry=self._application.registry)
+            approved_source_roots=approved_source_roots, registry=self._application.registry,
+            scientific_resource_root=scientific_resource_root)
         from .matrix_delivery import MatrixDownloadPreparer
         self._matrix_downloads = MatrixDownloadPreparer()
+
+    @property
+    def _epizoo_resources(self):
+        return () if self.resources.library is None else qualified_epizoo_resources(self.resources.library.models())
 
     def _profile(self, profile_id):
         profile = self._profiles.get(profile_id) if type(profile_id) is str else None
@@ -262,6 +266,22 @@ class InteractiveAgentApplication:
             raise
         except (ValueError, OSError) as exc:
             raise ReferenceSupplementError("Reference qualification failed. Check the FASTA, optional FAI, and exact feature contigs and coordinates.") from exc
+
+    def private_references(self, session_id):
+        self._load(session_id)
+        from .reference_supplementation import _records
+        return dict(enabled=self.resources.library is not None, choices=[
+            dict(resource_id=r.resource_id, label=r.label) for r in _records(self.resources)
+            if r.input_type in ('scientific_reference', 'genome_reference', 'regulatory_reference')
+            and (r.session_id == session_id or (
+                r.reference_qualification.get('scope') == 'session'
+                and r.reference_qualification.get('session_id') == session_id))])
+
+    def share_reference(self, session_id, resource_id, *, shared_use):
+        self._load(session_id)
+        from .shared_resources import install_private
+        entry = install_private(self.resources, session_id, resource_id, shared_use=shared_use)
+        return dict(resource_id=entry['id'], label=entry['label'], sharing_scope='shared_library')
 
     def create_session(self, session_id):
         _identifier(session_id)
@@ -545,14 +565,14 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, epizoo_resources=None, input_sets=(), attachment_ids=()):
+                            registered_input=None, input_sets=(), attachment_ids=()):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
         requests. It reserves no identity and grants no execution authority;
         ``submit_turn`` repeats admission under the existing processing lease.
         """
-        resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
+        resources = self._epizoo_resources
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
             predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
@@ -563,8 +583,8 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, epizoo_resources=None, input_sets=(), attachment_ids=()):
-        resources = self._epizoo_resources if epizoo_resources is None else qualified_epizoo_resources(epizoo_resources)
+                    registered_input=None, input_sets=(), attachment_ids=()):
+        resources = self._epizoo_resources
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,

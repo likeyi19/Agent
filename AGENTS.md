@@ -339,9 +339,20 @@ and zero native transcript weights. No aliases are repaired and no counts are
 discarded. A QC chromosome reference is optional for annotation; when supplied,
 known exact contig bounds still apply. Missing bounds are not independently
 qualified. Fragment/QC/matrix production retains the primary-nuclear scope below.
-Reference reuse checks scientific bytes and permission, not incidental annotation
-implementation hashes; scientific result authority remains unchanged. Common
-marker-reference deployment remains blocked by unverified signature permission.
+Reference reuse checks scientific bytes; provisioning owns applicable source-use
+conditions. Incidental annotation implementation hashes do not determine reference
+usability; scientific result authority remains unchanged.
+
+[UA3.6.5-R4](docs/ua3.6.5-r4-unified-scientific-resource-library.md) supersedes
+the application resource-promotion workflow with one configured filesystem library.
+Operator installation or explicit user sharing admits common references once;
+ordinary discovery uses immutable identities and selected-file integrity checks.
+Shared uploaded reference components become durable library-owned copies. Legacy
+deployment records are read-only and excluded from current discovery; inline model
+catalogs are retired. Task uploads and experimental feature bindings remain private. Source-use assessment
+belongs to provisioning, with internal laboratory computation distinguished from
+reference-file redistribution or unrestricted hosted/commercial use. Historical
+resource records remain readable; retired promotion writers are not restored.
 
 The project default target is the declared species/assembly's canonical primary
 nuclear chromosomes, including primary sex chromosomes where present. Mitochondrial,

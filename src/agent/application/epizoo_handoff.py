@@ -60,16 +60,7 @@ def sources(declared):
 
 def resources(input_sets):
     return tuple(s for s in input_sets if any(k in s.inputs() for k in
-        ('target_model_manifest_path', 'adaptation_spec_path', 'qualified_genome')))
-
-
-def genomes(owner, session_id):
-    """Project existing approved genome records, without a new registry."""
-    from .reference_supplementation import _records
-    from .input_sets import ScientificInputSet
-    return tuple(ScientificInputSet('genome-' + r.resource_id[6:46], r.label,
-        dict(qualified_genome=r.to_dict())) for r in _records(owner)
-        if r.input_type == 'genome_reference' and r.session_id in (None, session_id))
+        ('target_model_manifest_path', 'adaptation_spec_path', 'qualified_genome', 'library_genome')))
 
 
 def captured_models(sessions, state):
@@ -115,7 +106,10 @@ def evidence(input_sets):
     for choice in resources(input_sets):
         try:
             values = choice.inputs()
-            if 'qualified_genome' in values:
+            if 'library_genome' in values:
+                resource = values['library_genome']['resource']
+                result[choice.input_set_id] = dict(operation='genome', species=resource['species'], assembly=resource['assembly'])
+            elif 'qualified_genome' in values:
                 record = LocalResourceRecord(**values['qualified_genome'])
                 check_content(record)
                 result[choice.input_set_id] = dict(operation='genome', **_serialize(record.reference_qualification['requirement']))
@@ -265,7 +259,8 @@ def prepare(owner, session_id, candidates, declared, selected, arguments, *, inp
             from .shared_genome import bind
             choices = [s for s in input_sets if 'resource.' + s.input_set_id == declared.genome_resource]
             if len(choices) != 1: raise ValueError('Captured genome choice unavailable.')
-            record = LocalResourceRecord(**choices[0].inputs()['qualified_genome'])
+            values = choices[0].inputs()
+            record = values['library_genome'] if 'library_genome' in values else LocalResourceRecord(**values['qualified_genome'])
             bound = bind(resource_owner, record, source, session_id,
                 SimpleNamespace(turn_id=origin_turn_id, admitted={'reference_requirement': required}))
             reference = dict(manifest_path=bound.source_path, manifest_sha256=bound.source_sha256)
@@ -292,8 +287,7 @@ def prepare(owner, session_id, candidates, declared, selected, arguments, *, inp
             from agent.tools.data import chromap_reference_index
             from agent.tools.data.authority_context import VerificationContext
             from .shared_genome import persist_private
-            files = VerificationContext().files([value.genome.fasta.path, value.genome.fai.path,
-                value.features.bed.path, scientific.__file__, r.__file__, chromap_reference_index.__file__])
+            files = VerificationContext().files([value.genome.fasta.path, value.genome.fai.path, value.features.bed.path])
             record = resource_owner.register('epizoo-reference:' + identity, path, input_type='regulatory_reference',
                 label='Private EpiZoo feature reference', attribution='Owner-qualified exact H5AD regions and declared genome.',
                 session_id=session_id, reference_qualification=dict(requirement=required,

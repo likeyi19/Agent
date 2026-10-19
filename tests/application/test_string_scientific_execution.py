@@ -111,10 +111,11 @@ def string_harness(workspace, *, decisions=None, tool=CLUSTER_TOOL, plan_variant
         constructions.append(model)
         return model
 
+    from test_human_epizoo_mapping import model_library
     service = InteractiveAgentApplication(workspace,
         model_profiles=(STRING_PROFILE,), default_profile_id=STRING_PROFILE.profile_id,
         planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': factory}),
-        epizoo_resources=resources)
+        scientific_resource_root=model_library(Path(workspace).parent / 'model-library', resources).root)
     return StringHarness(service, choices, calls, constructions)
 
 

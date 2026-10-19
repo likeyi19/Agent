@@ -15,7 +15,7 @@ from agent.application import InteractiveAgentApplication
 from agent.application.session_state import SessionError, digest
 from agent.application.uploads import H5ADUploadAdmission
 from agent.schemas.orchestration import _serialize
-from agent.web.app import create_app
+from helpers import model_web as create_app
 from agent.web.config import ScientificInputSet
 
 from helpers import wait_turn
@@ -332,7 +332,7 @@ def test_explicit_resource_pins_captured_before_species_are_preserved_or_rejecte
             binding = harness.service.resources.compose_h5ad(resource['resource_id'],
                 dict(device='cpu') | pinned.inputs())
             pending = harness.service.submit_turn('session', 'first', 'Embed the selected H5AD.',
-                expected_generation=0, registered_input=binding, epizoo_resources=resources).to_dict()
+                expected_generation=0, registered_input=binding).to_dict()
         assert pending['response']['clarification']['reason'] == 'missing_species'
         original = harness.service._application.sessions.load('session').interactions[0]
         assert 'species' not in original.submission['execution_inputs']

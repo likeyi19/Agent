@@ -36,7 +36,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "Adopt an external exact canonical cell-by-cCRE matrix; ordinary cell-by-peak projection is unsupported."
     ),
     "marker_annotation": (
-        "Primary marker annotation of independently supplied groups on an already accepted canonical matrix, with explicit biological context and pinned resources. Does not cluster."
+        "MAESTRO cell-type annotation of independently supplied groups from human hg38 raw Cell Ranger ATAC cut-site peak-count H5AD, using compatible gene and marker-signature references and explicit tissue context. Accepts an obs grouping column or exact ordered groups TSV. Historical accepted canonical matrices remain supported. Does not cluster or require a labelled reference-cell dataset."
     ),
 })
 

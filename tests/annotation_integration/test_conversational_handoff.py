@@ -354,3 +354,80 @@ def test_unoffered_source_fails_before_observation(external_case,tmp_path,monkey
         assert result['status']=='clarification',result
         assert result['response']['clarification']['reason']=='invalid_decision'
         assert not calls and not app._application.sessions.load('upload').revisions
+
+
+def test_pending_annotation_correction_preserves_source_and_history(external_case, tmp_path, monkeypatch):
+    """A prose measurement/context can be corrected without replacing the upload."""
+    args, calls = external_case
+    a = ad.read_h5ad(args['source_path'])
+    for key in ('species', 'assembly', 'measurement', 'context'):
+        a.uns.pop(key, None)
+    a.write_h5ad(args['source_path'])
+
+    class CorrectingModel(HandoffModel):
+        def complete(self, *, prompt, response_schema):
+            p = json.loads(prompt)
+            value = json.loads(super().complete(prompt=prompt, response_schema=response_schema))
+            if 'turn_schema_version' in p:
+                declaration = value['decision']['annotation']
+                declaration.update(species='human', assembly='hg38')
+                if p['dialogue'].get('pending_prerequisite'):
+                    declaration.update(measurement=c.EXTERNAL_SEMANTICS, context='synthetic context')
+                else:
+                    declaration.update(measurement='Cell Ranger cut-site counts', context='test tissue')
+            return json.dumps(value)
+
+    monkeypatch.setitem(HandoffModel.complete.__globals__, 'HandoffModel', CorrectingModel)
+    root = tmp_path/'correction'; app, web = setup(args, root, [])
+    with TestClient(web) as client:
+        resource = stage(client, args)
+        pending = send(client, 'first', 'Annotate using "X".', [resource])
+        assert pending['status'] == 'clarification' and not calls
+        before = app._application.sessions.load('upload').interactions
+    # A fresh application must replay the original uncorrected question exactly.
+    app, web = setup(args, root, [])
+    with TestClient(web) as client:
+        done = send(client, 'reply', 'These are raw Cell Ranger ATAC cut-site counts in the synthetic context; use "supplied_groups".')
+        assert done['status'] == 'succeeded', done
+        assert len(calls) == 2
+        state = app._application.sessions.load('upload')
+        assert state.interactions[:len(before)] == before
+        run = app._application.run_store.load(done['run_id'])
+        resolved = run.steps[0].resolved_arguments
+        assert resolved['source_sha256'] == app.resources.load(resource).source_sha256
+        spec = json.loads(Path(resolved['annotation_spec_path']).read_text())
+        assert spec['measurement'] == c.EXTERNAL_SEMANTICS
+        assert spec['context'] == 'synthetic context'
+    app, web = setup(args, root, [])
+    with TestClient(web) as client:
+        assert client.get('/api/v1/sessions/upload').status_code == 200
+        assert len(calls) == 2
+
+
+def test_annotation_corrections_cannot_replace_sources_or_source_metadata():
+    previous = handoff.AnnotationDeclaration(source='source.0', groups_source='source.1',
+        species='human', assembly='hg38', measurement='tfidf', context='blood')
+    corrected = handoff.merge(previous, handoff.AnnotationDeclaration(measurement=c.EXTERNAL_SEMANTICS),
+        annotation_corrections=True)
+    assert corrected.source == previous.source and corrected.groups_source == previous.groups_source
+    for key in ('source', 'groups_source'):
+        with pytest.raises(ValueError, match='cannot be replaced'):
+            handoff.merge(previous, handoff.AnnotationDeclaration(**{key: 'source.2'}),
+                annotation_corrections=True)
+    # Metadata merging remains strict even after a typed correction.
+    from types import SimpleNamespace
+    observation = dict(source_sha256='a'*64, declarations={'measurement': 'tfidf'},
+        grouping_columns=['clusters'], qualified_groupings=[])
+    with pytest.raises(ValueError, match='cannot be replaced'):
+        handoff._annotation_requirements(SimpleNamespace(members=[{'source_sha256': 'a'*64}]),
+            replace(corrected, groups_source=None), {'count_slot':'X', 'group_column':'clusters'}, observation)
+
+
+def test_annotation_schema_exposes_measurement_contract_without_relabelling():
+    schema = handoff.schema([{'source':'source.0'}], [], 'annotation')
+    assert c.EXTERNAL_SEMANTICS in schema['properties']['measurement']['description']
+    assert schema['properties']['measurement']['anyOf'] == [
+        {'type': 'string', 'maxLength': 128}, {'type': 'null'}]
+    for measurement in (c.EXTERNAL_SEMANTICS, 'binary accessibility', 'fragment overlap counts', 'tfidf', None):
+        value = asdict(handoff.AnnotationDeclaration(source='source.0', measurement=measurement))
+        assert handoff.declaration(value, 'annotation').measurement == measurement

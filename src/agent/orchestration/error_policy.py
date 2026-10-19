@@ -395,6 +395,10 @@ for _code in ('CHROMAP_UNAVAILABLE', 'CHROMAP_VERSION_UNSUPPORTED', 'CHROMAP_IND
         'The qualified fragment runtime configuration or index is unavailable or incompatible.', _USER)
 
 _ERROR_POLICY_CATALOG.update({
+    "ANNOTATION_PEAK_SCOPE_UNSUPPORTED": ErrorPolicyEntry(
+        "The peak matrix contains features outside the qualified primary nuclear chromosome scope. "
+        "Annotation requires an explicitly prepared compatible peak matrix with its processing provenance; "
+        "Agent does not silently remove or relabel these features.", _USER),
     "EPIZOO_RESOURCE_IDENTITY_INVALID": ErrorPolicyEntry(
         "The approved EpiZoo resource selection is invalid.", _USER),
     "EPIZOO_RESOURCE_IDENTITY_MISMATCH": ErrorPolicyEntry(

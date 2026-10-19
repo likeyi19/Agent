@@ -250,7 +250,7 @@ def declaration(value, field='fastq'):
     return FastqDeclaration(**dict(value, members=tuple(FastqMember(**m) for m in value['members'])))
 
 
-def merge(previous, additions):
+def merge(previous, additions, *, annotation_corrections=False):
     if type(previous) is not type(additions):
         raise ValueError('Raw declaration kind cannot change.')
     values = asdict(previous)
@@ -277,7 +277,10 @@ def merge(previous, additions):
                         old[name] = supplied
                 values[key] = AnnotationUploads(**old)
                 continue
-            if (key not in ('resource', 'genome_resource') and not (isinstance(previous, AnnotationDeclaration) and key == 'grouping_provenance')
+            annotation_edit = isinstance(previous, AnnotationDeclaration) and (
+                key == 'grouping_provenance' or annotation_corrections and
+                key in ('species', 'assembly', 'measurement', 'context'))
+            if (key not in ('resource', 'genome_resource') and not annotation_edit
                     and values[key] is not None and values[key] != value):
                 raise ValueError('Captured FASTQ declarations cannot be replaced.')
             values[key] = value
@@ -308,13 +311,19 @@ def schema(sources, resources, field='fastq'):
     def optional(choices):
         return {'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
     if field == 'annotation':
+        from agent.tools.analysis.annotation_contract import EXTERNAL_SEMANTICS
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
         uploaded = _object({k: optional([s['source'] for s in sources]) if k.endswith('_source') else
             {'anyOf': [{'type': 'string', 'maxLength': 512}, {'type': 'null'}]}
             for k in AnnotationUploads.__dataclass_fields__})
         return _object(dict(source=optional([s['source'] for s in sources]),
             groups_source=optional([s['source'] for s in sources]),
-            **{k: text for k in ('species', 'assembly', 'measurement', 'context', 'grouping_provenance')},
+            **{k: text for k in ('species', 'assembly', 'context', 'grouping_provenance')},
+            measurement=dict(text, description=(
+                f'Use {EXTERNAL_SEMANTICS} for explicitly declared raw Cell Ranger ATAC '
+                'cut-site counts. Preserve other declared measurement types as text for '
+                'compatibility checking; unknown history is null. Integer values, filenames '
+                'and resource availability do not establish counting history.')),
             resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
             uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
     if field == 'fragments':
@@ -640,7 +649,10 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
     if not binding.attachment_candidates or binding.roles or binding.execution_inputs:
         raise ValueError('FASTQ declarations require unbound captured attachments.')
     previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
-    declared = merge(previous, addition)
+    # Pending task declarations are correctable typed user intent, not accepted
+    # scientific evidence. Source handles stay fixed; metadata conflicts are
+    # checked separately below with the strict merge.
+    declared = merge(previous, addition, annotation_corrections=field == 'annotation')
     values = _bind_arguments(registry, interaction.utterance,
         {} if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
         replace_existing=field in ('annotation', 'epizoo'))
@@ -720,7 +732,8 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if field in ('annotation', 'epizoo'):
         candidate = source_binding(origin, source, interaction, field)
         previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
-        declared_source = merge(previous, getattr(decision, field) or empty(field)).source
+        declared_source = merge(previous, getattr(decision, field) or empty(field),
+                                annotation_corrections=field == 'annotation').source
         if ((origin.submission or {}).get('candidate_input') is not None
                 and declared_source not in (None, 'source.0')):
             raise IntentError('invalid_prerequisite')

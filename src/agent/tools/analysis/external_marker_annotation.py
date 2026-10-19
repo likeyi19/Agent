@@ -19,6 +19,10 @@ BINDING_FIELDS = ('method','source_path','source_sha256','count_slot','species',
 _REGION = re.compile(r'([^:\s]+):(0|[1-9][0-9]*)-([1-9][0-9]*)\Z')
 
 
+class PeakScopeError(ValueError):
+    """The declared peak axis extends outside the qualified analysis scope."""
+
+
 def counts(a, slot):
     if slot == 'X': x = a.X
     elif slot.startswith('layers/') and slot[7:] in a.layers: x = a.layers[slot[7:]]
@@ -87,7 +91,9 @@ def coordinates(features, spec):
         match=_REGION.fullmatch(value)
         if match is None: raise ValueError('Peak var_names require exact chrom:start-end zero-based intervals')
         chrom,start,end=match.groups(); start,end=int(start),int(end)
-        if chrom not in primary or not 0<=start<end<=primary[chrom]: raise ValueError('Peak outside qualified primary nuclear scope')
+        if chrom not in primary:
+            raise PeakScopeError('Peak outside qualified primary nuclear scope')
+        if not 0<=start<end<=primary[chrom]: raise ValueError('Peak outside qualified primary nuclear scope')
         encoded.append(f'{chrom}_{start}_{end}'.encode())
     return encoded
 

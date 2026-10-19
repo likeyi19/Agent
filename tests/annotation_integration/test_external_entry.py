@@ -352,3 +352,25 @@ def test_selected_resources_empty_offer_does_not_assert_missing_reference(extern
         assert client.post('/api/v1/sessions/upload/turns',json=body).status_code==202
         assert wait_turn(client,'resources')==view
         assert len(prompts)==1 and not calls
+
+
+def test_out_of_scope_peaks_have_safe_actionable_error(external_case, tmp_path):
+    from agent.orchestration.error_policy import safe_message_for, recovery_disposition_for
+    from agent.schemas import RecoveryDisposition
+    args, calls = external_case
+    a = ad.read_h5ad(args['source_path'])
+    features = a.var_names.tolist(); features[0] = 'unqualified_contig:0-10'
+    a.var_names = features; a.write_h5ad(args['source_path'])
+    args['source_sha256'] = science.sha256(args['source_path'])
+    before = Path(args['source_path']).read_bytes()
+    app = ResearchAgentApplication(tmp_path/'scope', planner=Planner(args))
+    result = app.run(AgentRequest('outside-scope', 'Annotate declared cut-site counts.', {}))
+    assert result.status.value == 'FAILED' and not calls
+    error = result.run_result.steps[0].error
+    assert error.code == 'ANNOTATION_PEAK_SCOPE_UNSUPPORTED'
+    message = safe_message_for(error.code)
+    assert 'primary nuclear chromosome scope' in message
+    assert args['source_path'] not in message and 'unqualified_contig' not in message
+    assert recovery_disposition_for(error.code) == RecoveryDisposition.USER_ACTION_REQUIRED
+    assert Path(args['source_path']).read_bytes() == before
+    assert not list((tmp_path/'scope').rglob('annotated.h5ad'))

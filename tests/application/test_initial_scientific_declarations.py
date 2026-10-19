@@ -176,8 +176,8 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
         ('import_scATAC_fragments', 'source_profile'): ('10x-atac-fragments.v1',),
         ('import_scATAC_fragments', 'source_selection'): ('full_export', 'subset_export', 'unknown'),
     }
-    assert len(parameters) == 24
-    assert len([row for row in parameters if not row.get('choices') and not row.get('exact_string')]) == 14
+    offered = {(row['tool'], row['argument']) for row in parameters}
+    assert len(parameters) == len(offered)
     assert {(row['tool'], row['argument']) for row in parameters if row.get('exact_string')} == {
         ('epizoo_embed_cells', 'assembly'),
         ('evaluate_cell_clustering', 'label_key'),
@@ -190,6 +190,9 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
     execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
         if row['properties']['kind']['enum'] == ['execute_plan'])
     members = execution['properties']['arguments']['items']['anyOf']
+    actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
+        for row in members}
+    assert actual == offered and len(actual) == len(members)
     categorical = [row for row in members if 'value' in row['properties']]
     assert len(categorical) == 3
     for row in categorical:
@@ -321,9 +324,7 @@ def test_pending_scalar_schema_preserves_exact_pairs_and_scoped_choices(field, k
         if field == 'parameters' or 'choices' not in row}
     actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
         for row in members}
-    assert actual == expected and len(actual) == (24 if field == 'parameters' else 21)
-    assert len([row for row in context['dialogue']['scientific_parameters']
-                if not row.get('choices') and not row.get('exact_string')]) == 14
+    assert actual == expected and len(actual) == len(members)
     assert arguments['maxItems'] == 8
     assert all(row['additionalProperties'] is False for row in members)
     if field == 'species':

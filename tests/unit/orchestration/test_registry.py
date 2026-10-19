@@ -28,6 +28,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
     assert registry.names() == (
         "inspect_scATAC",
         "epizoo_embed_cells",
+        "pca_embed_cells",
         "build_cell_neighbors",
         "cluster_cells",
         "compute_cell_umap",
@@ -308,6 +309,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "adapt_epizoo_species": "adapt-epizoo-species-v1",
         "build_scATAC_cell_by_features": "build-scatac-cell-by-features-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
+        "pca_embed_cells": "pca-embed-cells-v1",
         "build_cell_neighbors": "build-cell-neighbors-v1",
         "cluster_cells": "cluster-cells-v1",
         "compute_cell_umap": "compute-cell-umap-v1",

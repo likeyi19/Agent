@@ -348,14 +348,14 @@ class MatrixDownloadPreparer:
     def prepare(self, artifact):
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
-        from agent.tools.analysis import neighbors_delivery
+        from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery
         model_role = getattr(artifact, 'role', None)
         model = artifact.contract == model_delivery.CONTRACT and model_role in model_delivery.FILES
         model_metadata = model and model_role == model_delivery.METADATA
         annotation = (artifact.contract == annotation_delivery.CONTRACT
                       and getattr(artifact, 'role', None) == annotation_delivery.ROLE)
-        processed = (artifact.contract == neighbors_delivery.CONTRACT
+        processed = (artifact.contract in neighbors_publication.PROFILES
                      and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
         compact = (artifact.contract == analysis_delivery.CONTRACT
                    and getattr(artifact, 'role', None) == analysis_delivery.ROLE)

@@ -1,4 +1,4 @@
-"""Copy-on-write Scanpy analysis tools for EpiZoo cell embeddings."""
+"""Copy-on-write Scanpy analysis tools for verified cell embeddings."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from scipy import sparse
 
 EPIZOO_EMBEDDING_DIM = 512
 EPIZOO_REPRESENTATION_KEY = "X_epizoo"
+EPIZOO_REPRESENTATION = dict(method='EpiZoo', representation=EPIZOO_REPRESENTATION_KEY,
+                             embedding_dim=EPIZOO_EMBEDDING_DIM, embedding_dtype='float32')
 LEIDEN_KEY = "leiden"
 UMAP_KEY = "X_umap"
 PROVENANCE_KEY = "agent_milestone6"
@@ -286,13 +288,7 @@ def _validate_neighbors_artifact(
         raise ValueError("Analysis artifact has an unexpected Milestone 6 stage.")
     if provenance.get("cell_order_sha256") != _cell_order_digest(cell_ids):
         raise ValueError("Analysis artifact cell-order provenance is inconsistent.")
-    if EPIZOO_REPRESENTATION_KEY not in adata.obsm:
-        raise ValueError("Analysis artifact lacks the EpiZoo representation.")
-    embeddings = np.asarray(adata.obsm[EPIZOO_REPRESENTATION_KEY])
-    if embeddings.shape != (adata.n_obs, EPIZOO_EMBEDDING_DIM):
-        raise ValueError("Analysis artifact has an invalid EpiZoo representation shape.")
-    if embeddings.dtype != np.dtype(np.float32) or not _all_finite(embeddings):
-        raise ValueError("Analysis artifact has an invalid EpiZoo representation.")
+    representation(adata)
     neighbors = adata.uns.get("neighbors")
     if not isinstance(neighbors, Mapping):
         raise ValueError("Analysis artifact lacks Scanpy neighbors metadata.")
@@ -303,6 +299,45 @@ def _validate_neighbors_artifact(
     distances = _validate_sparse_graph(adata, "distances")
     connectivities = _validate_sparse_graph(adata, "connectivities")
     return cell_ids, distances, connectivities
+
+
+def representation(adata):
+    """Read the producer-bound representation; legacy artifacts retain EpiZoo rules."""
+    provenance = adata.uns.get(PROVENANCE_KEY, {})
+    metadata = provenance.get('embedding')
+    if metadata is None or metadata == EPIZOO_REPRESENTATION:
+        key, dimensions, dtype = EPIZOO_REPRESENTATION_KEY, EPIZOO_EMBEDDING_DIM, 'float32'
+    else:
+        from .pca_embedding import KEY, descriptor
+        # Apply the producer's closed metadata check without exposing fit state to graphs.
+        view = ad.AnnData(obs=adata.obs[[]].copy(), obsm={'X_pca': adata.obsm['X_pca']})
+        view.uns[KEY] = metadata
+        checked = descriptor(view)
+        key, dimensions, dtype = checked['representation'], checked['embedding_dim'], checked['embedding_dtype']
+    values = np.asarray(adata.obsm[key])
+    if values.shape != (adata.n_obs, dimensions) or values.dtype != np.dtype(dtype) or not _all_finite(values):
+        raise ValueError('Invalid accepted cell representation.')
+    return key, values
+
+
+def load_embedding_source(path):
+    """Existing EpiZoo NPY or a self-describing producer publication."""
+    if Path(path).suffix.casefold() == '.npy':
+        return _load_embeddings(Path(path)), EPIZOO_REPRESENTATION_KEY, dict(EPIZOO_REPRESENTATION), None
+    if Path(path).suffix.casefold() != '.h5ad':
+        raise ValueError('Unsupported embedding artifact format.')
+    from .pca_embedding import descriptor, KEY
+    import h5py
+    from anndata.io import read_elem
+    with h5py.File(path, 'r') as h:
+        data = ad.AnnData(obs=read_elem(h['obs']), obsm=read_elem(h['obsm']))
+        data.uns[KEY] = read_elem(h['uns'][KEY])
+    metadata = descriptor(data)
+    from .pca_publication import verify_publication
+    verified = verify_publication(metadata['publication_path'])
+    if Path(verified['embedding_path']) != Path(path).resolve():
+        raise ValueError('Embedding publication points to a different artifact.')
+    return np.asarray(data.obsm[metadata['representation']]), metadata['representation'], metadata, _cell_ids_from_adata(data)
 
 
 def _validate_cluster_labels(adata: ad.AnnData) -> int:
@@ -387,7 +422,7 @@ def build_cell_neighbors(
     random_seed: int = 0,
     overwrite: bool = False,
 ) -> CellNeighborsToolResult:
-    """Build and persist a sparse Scanpy neighbor graph from EpiZoo embeddings."""
+    """Build a sparse Scanpy graph from the exact upstream cell representation."""
 
     _validate_overwrite(overwrite)
     _validate_seed(random_seed)
@@ -397,7 +432,7 @@ def build_cell_neighbors(
         raise ValueError("`metric` must be 'euclidean' or 'cosine'.")
 
     resolved_embedding = _resolve_existing_file(
-        embedding_path, "embedding_path", suffix=".npy"
+        embedding_path, "embedding_path", suffix=Path(embedding_path).suffix.casefold()
     )
     resolved_cell_ids = _resolve_existing_file(
         cell_ids_path, "cell_ids_path", suffix=".txt"
@@ -406,8 +441,10 @@ def build_cell_neighbors(
     sources, source_snapshots = neighbors_publication.capture_inputs(
         resolved_embedding, resolved_cell_ids
     )
-    embeddings = _load_embeddings(resolved_embedding)
+    embeddings, representation_key, embedding_metadata, source_ids = load_embedding_source(resolved_embedding)
     cell_ids = _load_cell_ids(resolved_cell_ids)
+    if source_ids is not None and source_ids != cell_ids:
+        raise ValueError("Embedding publication and sidecar have different ordered cells.")
     if len(cell_ids) != embeddings.shape[0]:
         raise ValueError(
             "Cell-ID count must exactly equal the number of embedding rows."
@@ -424,7 +461,7 @@ def build_cell_neighbors(
         )
 
     adata = ad.AnnData(obs=pd.DataFrame(index=pd.Index(cell_ids, dtype="object")))
-    adata.obsm[EPIZOO_REPRESENTATION_KEY] = np.asarray(embeddings)
+    adata.obsm[representation_key] = np.asarray(embeddings)
     versions = _software_versions()
     adata.uns[PROVENANCE_KEY] = {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
@@ -439,11 +476,13 @@ def build_cell_neighbors(
                 "method": "umap",
                 "transformer": "none",
                 "random_seed": random_seed,
-                "use_rep": EPIZOO_REPRESENTATION_KEY,
+                "use_rep": representation_key,
             }
         },
         "software_versions": versions,
     }
+
+    adata.uns[PROVENANCE_KEY]["embedding"] = embedding_metadata
 
     with _preserve_loaded_torch_threads():
         import scanpy as sc
@@ -451,7 +490,7 @@ def build_cell_neighbors(
         sc.pp.neighbors(
             adata,
             n_neighbors=n_neighbors,
-            use_rep=EPIZOO_REPRESENTATION_KEY,
+            use_rep=representation_key,
             metric=metric,
             method="umap",
             transformer=None,
@@ -477,7 +516,7 @@ def build_cell_neighbors(
         "cell_ids_path": str(resolved_cell_ids),
         "analysis_path": str(output_path),
         "n_cells": int(adata.n_obs),
-        "embedding_dim": EPIZOO_EMBEDDING_DIM,
+        "embedding_dim": int(embeddings.shape[1]),
         "n_neighbors": n_neighbors,
         "metric": metric,
         "neighbors_method": "umap",
@@ -494,7 +533,7 @@ def build_cell_neighbors(
         dict(embedding_path=embedding_path, cell_ids_path=cell_ids_path,
              output_dir=str(resolved_output_dir), n_neighbors=n_neighbors, metric=metric,
              random_seed=random_seed, overwrite=overwrite),
-        result, sources, source_snapshots,
+        result, sources, source_snapshots, embedding=embedding_metadata,
     )
 
 

@@ -28,12 +28,17 @@ from . import embedding_analysis as science
 
 KIND = 'cell_neighbors'
 ARTIFACT = 'agent.cell-neighbors'
-CONTRACT = 'cell-neighbors-publication.v1'
+CONTRACT = 'cell-neighbors-publication.v2'
+LEGACY_CONTRACT = 'cell-neighbors-publication.v1'
 MAX_BYTES = 65536
-PROFILE = dict(representation='X_epizoo', embedding_dim=512, embedding_dtype='float32',
+LEGACY_PROFILE = dict(representation='X_epizoo', embedding_dim=512, embedding_dtype='float32',
                storage='compact-embedding-only-anndata', backend='Scanpy', method='umap',
                transformer='none', verification='structure-exact-source-alignment.v1')
-PROFILE_SHA256 = digest(PROFILE)
+PROFILE_SHA256 = digest(dict(storage='compact-embedding-only-anndata', representation='producer-bound',
+    backend='Scanpy', method='umap', transformer='none', verification='structure-exact-source-alignment.v1'))
+
+PROFILES = {CONTRACT: PROFILE_SHA256, LEGACY_CONTRACT: digest(LEGACY_PROFILE)}
+
 VERIFIER = dict(id='agent.cell-neighbors-source-alignment', compatibility_version='1')
 ARGUMENTS = ('embedding_path', 'cell_ids_path', 'output_dir', 'n_neighbors',
              'metric', 'random_seed', 'overwrite')
@@ -71,7 +76,7 @@ def arguments(value):
         args[name] = (str(Path(args[name]).expanduser().resolve()) if name == 'output_dir'
                       else os.path.abspath(Path(args[name]).expanduser()))
         _path(args[name], current=name == 'output_dir')
-    if Path(args['embedding_path']).suffix.casefold() != '.npy' or Path(args['cell_ids_path']).suffix.casefold() != '.txt':
+    if Path(args['embedding_path']).suffix.casefold() not in ('.npy', '.h5ad') or Path(args['cell_ids_path']).suffix.casefold() != '.txt':
         raise AuthorityError('Neighbor publication source types are incompatible.')
     science._validate_seed(args['random_seed'])
     science._validate_overwrite(args['overwrite'])
@@ -82,14 +87,14 @@ def arguments(value):
     return args
 
 
-def _publication(value, execution_identity, *, sources):
+def _publication(value, execution_identity, *, sources, contract_version=CONTRACT):
     args = arguments(value)
     if execution_identity is not None:
         _sha(execution_identity)
     root = Path(args['output_dir'])
     stem = Path(sources['embedding']['path']).stem + '.neighbors'
     token = digest(dict(arguments=args, execution_identity=execution_identity,
-                        contract=CONTRACT, profile=PROFILE_SHA256))
+                        contract=contract_version, profile=PROFILES[contract_version]))
     return args, root, stem, token
 
 
@@ -143,11 +148,15 @@ def load_manifest_bytes(raw, path, sha=None):
 
 
 def _validate_manifest(value, actual, path):
+    extra = ('embedding',) if value.get('contract_version') == CONTRACT else ()
     _shape(value, ('artifact_type', 'schema_version', 'contract_version', 'profile_sha256',
                    'arguments', 'execution_identity', 'sources', 'analysis',
-                   'cell_order_sha256', 'summary'))
-    if (value['artifact_type'], value['schema_version'], value['contract_version'],
-            value['profile_sha256']) != (ARTIFACT, 1, CONTRACT, PROFILE_SHA256):
+                   'cell_order_sha256', 'summary') + extra)
+    if (value['artifact_type'] != ARTIFACT or value['schema_version'] != 1
+            or value['contract_version'] not in PROFILES
+            or value['profile_sha256'] != PROFILES[value['contract_version']]
+            or value['contract_version'] == LEGACY_CONTRACT
+               and Path(value['arguments']['embedding_path']).suffix.casefold() != '.npy'):
         raise AuthorityError('Unsupported neighbor publication contract.')
     if type(value['schema_version']) is not int:
         raise AuthorityError('Unsupported neighbor publication contract.')
@@ -198,13 +207,13 @@ def _write_json(path, value, *, overwrite):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _receipt_value(args, identity, token, sha):
+def _receipt_value(args, identity, token, sha, *, contract_version=CONTRACT):
     return dict(artifact_type=ARTIFACT + '-receipt', schema_version=1,
-                contract_version=CONTRACT, execution_identity=identity, publication_token=token,
+                contract_version=contract_version, execution_identity=identity, publication_token=token,
                 arguments_sha256=digest(args), manifest_sha256=sha)
 
 
-def publish(value, result, sources, before):
+def publish(value, result, sources, before, *, embedding):
     context = current()
     execution = None if context is None else context.execution
     identity = None
@@ -218,7 +227,7 @@ def publish(value, result, sources, before):
     manifest = dict(artifact_type=ARTIFACT, schema_version=1, contract_version=CONTRACT,
                     profile_sha256=PROFILE_SHA256, arguments=args, execution_identity=identity,
                     sources=sources, analysis=artifact, cell_order_sha256=science._cell_order_digest(cell_ids),
-                    summary=dict(result))
+                    summary=dict(result), embedding=embedding)
     path = root / (stem + '.manifest.json')
     sha = _write_json(path, manifest, overwrite=args['overwrite'])
     _write_json(root / (stem + '.receipt.json'), _receipt_value(args, identity, token, sha),
@@ -234,7 +243,7 @@ def publish(value, result, sources, before):
 
 
 def _summary(value, path, sha):
-    return deepcopy(value['summary']) | dict(artifact_type=ARTIFACT, contract_version=CONTRACT,
+    return deepcopy(value['summary']) | dict(artifact_type=ARTIFACT, contract_version=value['contract_version'],
                                            manifest_path=str(path), manifest_sha256=sha)
 
 
@@ -270,17 +279,22 @@ def _verify(path, *, expected_sha256=None):
     cell_ids, distances, connectivities = science._validate_neighbors_artifact(
         artifact, expected_stages=frozenset({'neighbors'}))
     source_ids = science._load_cell_ids(Path(value['sources']['cell_ids']['path']))
-    embeddings = science._load_embeddings(Path(value['sources']['embedding']['path']))
+    embeddings, representation, metadata, embedded_ids = science.load_embedding_source(Path(value['sources']['embedding']['path']))
+    expected_metadata = value.get('embedding', science.EPIZOO_REPRESENTATION)
+    if metadata != expected_metadata or (embedded_ids is not None and embedded_ids != cell_ids):
+        raise AuthorityError('Neighbor source producer provenance differs.')
     if cell_ids != source_ids or value['cell_order_sha256'] != science._cell_order_digest(cell_ids):
         raise AuthorityError('Neighbor published ordered cell identity differs from its source.')
-    stored = np.asarray(artifact.obsm[science.EPIZOO_REPRESENTATION_KEY])
+    stored = np.asarray(artifact.obsm[representation])
     if embeddings.shape != stored.shape or any(
             not np.array_equal(embeddings[start:start + 8192], stored[start:start + 8192])
             for start in range(0, len(cell_ids), 8192)):
         raise AuthorityError('Neighbor published representation differs from its aligned source.')
     parameters = dict(n_neighbors=args['n_neighbors'], metric=args['metric'], method='umap',
-                      transformer='none', random_seed=args['random_seed'], use_rep='X_epizoo')
+                      transformer='none', random_seed=args['random_seed'], use_rep=representation)
     provenance = science._provenance(artifact)
+    if provenance.get('embedding') != value.get('embedding'):
+        raise AuthorityError('Neighbor producer provenance changed.')
     if (provenance.get('source_embedding_path') != value['sources']['embedding']['path'] or
             provenance.get('source_cell_ids_path') != value['sources']['cell_ids']['path'] or
             not isinstance(provenance.get('parameters'), Mapping) or
@@ -292,10 +306,10 @@ def _verify(path, *, expected_sha256=None):
     if (not isinstance(scanpy_parameters, Mapping) or
             any(scanpy_parameters.get(name) != expected for name, expected in
                 (('n_neighbors', args['n_neighbors']), ('metric', args['metric']), ('method', 'umap'),
-                 ('random_state', args['random_seed']), ('use_rep', 'X_epizoo')))):
+                 ('random_state', args['random_seed']), ('use_rep', representation)))):
         raise AuthorityError('Neighbor graph parameters disagree with its production provenance.')
     expected_summary = dict(status='success', embedding_path=value['sources']['embedding']['path'], cell_ids_path=value['sources']['cell_ids']['path'],
-        analysis_path=str(analysis_path), n_cells=len(cell_ids), embedding_dim=512, n_neighbors=args['n_neighbors'],
+        analysis_path=str(analysis_path), n_cells=len(cell_ids), embedding_dim=int(embeddings.shape[1]), n_neighbors=args['n_neighbors'],
         metric=args['metric'], neighbors_method='umap', transformer='none', random_seed=args['random_seed'],
         connectivities_nnz=int(connectivities.nnz), distances_nnz=int(distances.nnz), finite=True,
         cell_order_preserved=True, backend='Scanpy', software_versions=dict(provenance.get('software_versions', {})))
@@ -337,15 +351,16 @@ def describe(path, sha, context):
     identity = dict(kind=KIND, manifest=value,
         files=[dict(entry, path='@owned/' + Path(entry['path']).name) for entry in files if entry['path'] != str(path)],
         execution_identity=context.execution_for(KIND, path), upstream={}, historical_sources=historical,
-        profile=PROFILE_SHA256, verifier=VERIFIER, qualification={}, policy='historical_verified_sources.v1')
+        profile=value['profile_sha256'], verifier=VERIFIER, qualification={}, policy='historical_verified_sources.v1')
     return dict(kind=KIND, manifest_path=str(path), manifest_sha256=actual, manifest=value,
                 proof_identity=identity, files=files, historical_sources=historical, upstream={},
-                profile=PROFILE_SHA256, verifier=VERIFIER, qualification={})
+                profile=value['profile_sha256'], verifier=VERIFIER, qualification={})
 
 
 def publication_record(context, tool_name, arguments_value, result, execution_identity, result_metadata):
     value, sha = load_manifest(result['manifest_path'], result['manifest_sha256'])
-    args, root, stem, token = _publication(arguments_value, execution_identity, sources=value['sources'])
+    args, root, stem, token = _publication(arguments_value, execution_identity, sources=value['sources'],
+                                         contract_version=value['contract_version'])
     path = root / (stem + '.manifest.json')
     receipt_path = root / (stem + '.receipt.json')
     if tool_name != 'build_cell_neighbors' or result['manifest_path'] != str(path):
@@ -356,16 +371,16 @@ def publication_record(context, tool_name, arguments_value, result, execution_id
     if _serialize(result_metadata) != dict(result):
         raise AuthorityError('Neighbor proof metadata differs from its owner-qualified result.')
     receipt, _ = read_json(receipt_path)
-    if receipt != _receipt_value(args, execution_identity, token, sha):
+    if receipt != _receipt_value(args, execution_identity, token, sha, contract_version=value['contract_version']):
         raise AuthorityError('Neighbor publication receipt identity changed.')
     description, key = context.describe(KIND, path, sha)
     files = context.files([*(entry['path'] for entry in description['files']), receipt_path])
-    return VerifiedArtifactAuthority(dict(schema_version=2, artifact_type=ARTIFACT, artifact_contract=CONTRACT,
+    return VerifiedArtifactAuthority(dict(schema_version=2, artifact_type=ARTIFACT, artifact_contract=value['contract_version'],
         publication_path=str(path), manifest_sha256=sha, files=files, execution_identity=execution_identity,
         arguments_sha256=digest(args), receipt_sha256=next(entry['sha256'] for entry in files if entry['path'] == str(receipt_path)),
         upstream={'producer_inputs': digest(description['proof_identity'])},
         resources=dict(scientific_proof_sha256=key, manifest_identity=value, result_metadata=_serialize(result_metadata)),
-        science_profile=PROFILE_SHA256, producer_qualification={}, verifier=VERIFIER,
+        science_profile=value['profile_sha256'], producer_qualification={}, verifier=VERIFIER,
         scope='scientific_correctness.v1', completion='succeeded',
         integrity_scope='artifact_integrity_lineage_historical_sources.v1',
         source_policy='historical_verified_sources.v1', historical_sources=description['historical_sources']))

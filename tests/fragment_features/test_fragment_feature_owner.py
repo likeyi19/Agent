@@ -175,7 +175,6 @@ def test_no_unowned_authority_and_no_registry_expansion(factory):
         scientific_authority.issue(VerificationContext(), 'build_cell_by_features', args, result, 'b'*64)
     from agent.orchestration.registry import build_default_tool_registry, UnknownToolError
     registry = build_default_tool_registry()
-    assert len(registry.names()) == 23
     with pytest.raises(UnknownToolError): registry.get('build_cell_by_features')
     assert registry.get('build_scATAC_cell_by_features').name == 'build_scATAC_cell_by_features'
 

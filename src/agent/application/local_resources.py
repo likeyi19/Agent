@@ -34,6 +34,7 @@ _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 _GROUP_PORTS = (
     ('inspect_scATAC', 'dataset'),
     ('epizoo_embed_cells', 'dataset'),
+    ('pca_embed_cells', 'dataset'),
     ('adopt_scATAC_cell_by_features', 'source'),
     ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
@@ -81,7 +82,7 @@ _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_pat
     'source_index_sha256', 'output_dir', 'fragments_manifest_path', 'fragments_manifest_sha256',
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
-_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors',
+_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'pca_embed_cells', 'build_cell_neighbors',
                          'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
@@ -1975,7 +1976,7 @@ class LocalResourceAdmission:
         source_path = values['input_path']
         channels = None
         for step in plan.steps:
-            if step.tool_name not in ('inspect_scATAC', 'epizoo_embed_cells'):
+            if step.tool_name not in ('inspect_scATAC', 'epizoo_embed_cells', 'pca_embed_cells'):
                 continue
             argument = 'path' if step.tool_name == 'inspect_scATAC' else 'input_path'
             source = step.arguments.get(argument)
@@ -2057,7 +2058,7 @@ class LocalResourceAdmission:
                 self.validate_binding(binding, verify_source=inspections and not prepared)
                 return
         inspections = any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'} for step in steps)
-        h5ad_steps = ([step for step in steps if step.tool_name in {'inspect_scATAC', 'epizoo_embed_cells'}]
+        h5ad_steps = ([step for step in steps if step.tool_name in {'inspect_scATAC', 'epizoo_embed_cells', 'pca_embed_cells'}]
                      if type(binding) is RegisteredInput and binding.tool_name == 'inspect_scATAC' else [])
         producers = [step for step in steps if step.tool_name == 'prepare_scATAC_fragments']
         imports = ([step for step in steps if step.tool_name == 'import_scATAC_fragments']

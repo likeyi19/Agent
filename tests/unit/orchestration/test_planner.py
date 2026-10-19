@@ -451,7 +451,10 @@ def test_downstream_request_produces_exact_five_step_reference_chain(registry) -
         "cluster",
         "umap",
     )
-    assert tuple(step.tool_name for step in plan.steps) == registry.names()[:5]
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "inspect_scATAC", "epizoo_embed_cells", "build_cell_neighbors",
+        "cluster_cells", "compute_cell_umap",
+    )
     assert plan.steps[1].arguments["input_path"] == StepOutputRef(
         "inspect", "input_path"
     )

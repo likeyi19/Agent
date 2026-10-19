@@ -449,7 +449,10 @@ def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None
         }
     )
     plan = planner.plan(request, registry)
-    assert tuple(step.tool_name for step in plan.steps) == registry.names()[:5]
+    assert tuple(step.tool_name for step in plan.steps) == (
+        "inspect_scATAC", "epizoo_embed_cells", "build_cell_neighbors",
+        "cluster_cells", "compute_cell_umap",
+    )
     assert plan.steps[2].arguments["embedding_path"] == StepOutputRef(
         "embed", "embedding_path"
     )
@@ -653,6 +656,12 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
         "species",
         "checkpoint_path",
         "expected_resource_identity",
+        "assembly",
+        "matrix_semantics",
+        "target_model_manifest_path",
+        "target_model_manifest_sha256",
+        "target_model_source_run_id",
+        "target_model_source_step_id",
         "device",
         "overwrite",
     }
@@ -804,13 +813,14 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # M14.7 adds the public fragment-derived matrix tool; retain full semantic guidance and record
-    # the bounded full-v3 audit growth separately from scoped v4 payloads.
-    assert len(serialized_schema.encode("utf-8")) <= 15_500
-    assert len(prompt.encode("utf-8")) <= 25_000
+    # R2A: 24 registered tools, including existing qualified target-model fields.
+    # Full v3 measures 16,769 schema + 27,607 prompt bytes; keep bounded headroom
+    # separately from the scoped v4 payload contract.
+    assert len(serialized_schema.encode("utf-8")) <= 17_000
+    assert len(prompt.encode("utf-8")) <= 28_000
     assert len(serialized_schema.encode("utf-8")) + len(
         prompt.encode("utf-8")
-    ) <= 40_500
+    ) <= 45_000
     assert count_key(schema, "anyOf") <= 5
     assert count_objects(schema) <= 2 * len(registry.names()) + 3
     assert count_key(schema, "$ref") >= 80

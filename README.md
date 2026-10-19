@@ -7,6 +7,12 @@ Existing foundation models such as EpiZoo and EpiAgent are scientific backends
 to reuse; the Agent does not reimplement them. EpiZoo is the currently validated
 embedding backend.
 
+[UA3.6.5-R2A](docs/ua3.6.5-r2a-generic-cell-embedding.md) adds centered, sparse-safe
+Scanpy PCA for ordinary H5AD X measurements. PCA and EpiZoo use the same neighbor,
+Leiden and UMAP tools with their actual representation and dimensions. Explicit
+EpiZoo requests retain exact model-vocabulary requirements and never silently
+switch methods. PCA applies no normalization or feature/cell filtering.
+
 [M14.10 generic QC integration](docs/m14.10-generic-qc.md) admits independently
 qualified normalized transcript-TSS resources through the existing QC and
 explicit cell-selection tools. QC-selected neutral matrices use the existing

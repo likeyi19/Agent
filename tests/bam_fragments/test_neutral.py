@@ -256,7 +256,6 @@ def test_public_matrix_ports_application_and_fresh_recovery(neutral_factory,monk
         explicit_cells_manifest_path=cells['manifest_path'],explicit_cells_manifest_sha256=cells['manifest_sha256'],
         reference_manifest_path=spec['source_reference']['path'],reference_manifest_sha256=spec['source_reference']['sha256'])
     monkeypatch.setenv('AGENT_MATRIX_BEDTOOLS','/usr/bin/bedtools')
-    assert len(build_default_tool_registry().names())==23
     run=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(Model(wire()))).run(AgentRequest('neutral-bam','Build the exact fragment matrix.',inputs))
     assert run.status.value=='SUCCEEDED',run.error
     built=run.run_result.steps[0].result

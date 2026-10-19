@@ -216,3 +216,52 @@ def test_payload_mutation_during_owner_review_is_rejected(publication, monkeypat
     monkeypatch.setattr(science, '_read_analysis', mutate)
     with pytest.raises(ValueError, match='SOURCE_CHANGED'):
         owner.verify_neighbors_publication(publication['manifest_path'])
+
+
+def test_uppercase_npy_retains_exact_source_in_current_publication(tmp_path):
+    embedding = tmp_path / 'embeddings.NPY'
+    cells = tmp_path / 'cells.txt'
+    values = np.random.default_rng(17).normal(size=(20, 512)).astype(np.float32)
+    with embedding.open('wb') as stream:
+        np.save(stream, values)
+    cells.write_text(''.join(f'cell-{i}\n' for i in range(20)))
+    result = science.build_cell_neighbors(embedding, cells, tmp_path / 'output', n_neighbors=5)
+    manifest, _ = owner.load_manifest(result['manifest_path'])
+    assert manifest['contract_version'] == owner.CONTRACT
+    assert manifest['profile_sha256'] == owner.PROFILE_SHA256
+    np.testing.assert_array_equal(ad.read_h5ad(result['analysis_path']).obsm['X_epizoo'], values)
+    assert owner.verify_result(manifest['arguments'], result) == result
+
+
+def test_legacy_v1_reader_preserves_format_identity_and_safe_export(publication):
+    """Simulated historical layout; real persisted examples are checked externally."""
+    from io import BytesIO
+    from agent.tools.analysis import neighbors_delivery
+    path = Path(publication['analysis_path'])
+    data = ad.read_h5ad(path)
+    del data.uns[science.PROVENANCE_KEY]['embedding']
+    data.write_h5ad(path)
+    manifest_path = Path(publication['manifest_path'])
+    manifest, _ = owner.load_manifest(manifest_path)
+    manifest.pop('embedding')
+    manifest.update(contract_version=owner.LEGACY_CONTRACT,
+                    profile_sha256=owner.PROFILES[owner.LEGACY_CONTRACT])
+    manifest['analysis'] = dict(owner.file_closure([path])[0], path=path.name)
+    sha = _write(manifest_path, manifest)
+    before = {p: p.read_bytes() for p in (path, manifest_path)}
+    result = owner.verify_neighbors_publication(manifest_path, expected_sha256=sha)
+    assert result['contract_version'] == 'cell-neighbors-publication.v1'
+    args = manifest['arguments']
+    _, _, _, token = owner._publication(args, None, sources=manifest['sources'],
+                                        contract_version=owner.LEGACY_CONTRACT)
+    assert token == digest(dict(arguments=args, execution_identity=None,
+        contract='cell-neighbors-publication.v1', profile=manifest['profile_sha256']))
+    output = BytesIO()
+    with path.open('rb') as stream:
+        neighbors_delivery.create_neighbors_export(stream, output, manifest,
+            source_sha256=manifest['analysis']['sha256'], source_size_bytes=path.stat().st_size,
+            manifest_sha256=sha, max_bytes=path.stat().st_size + 65_536)
+    exported = ad.read_h5ad(output)
+    assert exported.uns['agent_scientific_export']['source_contract'] == owner.LEGACY_CONTRACT
+    np.testing.assert_array_equal(exported.obsm['X_epizoo'], data.obsm['X_epizoo'])
+    assert all(p.read_bytes() == raw for p, raw in before.items())

@@ -879,7 +879,7 @@ class InteractiveAgentApplication:
                             None if output.run_id == origin.run_id else output, step_id=output.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                if step.tool_name in ('epizoo_embed_cells', 'cluster_cells', 'compute_cell_umap'):
+                if step.tool_name in ('epizoo_embed_cells', 'pca_embed_cells', 'cluster_cells', 'compute_cell_umap'):
                     from .analysis_delivery import accepted_analysis
                     try:
                         items.append(accepted_analysis(self, session_id, revision, origin, output))
@@ -919,7 +919,7 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                elif planned.tool_name in ('epizoo_embed_cells', 'cluster_cells', 'compute_cell_umap'):
+                elif planned.tool_name in ('epizoo_embed_cells', 'pca_embed_cells', 'cluster_cells', 'compute_cell_umap'):
                     from .analysis_delivery import accepted_analysis
                     try:
                         items.append(accepted_analysis(self, session_id, revision, origin, None,
@@ -1050,7 +1050,8 @@ class InteractiveAgentApplication:
                 or output is not None and accepted_step_digest(step) != output.accepted_step_sha256
                 or record['schema_version'] != 2 or record['scope'] != 'scientific_correctness.v1'
                 or record['completion'] != 'succeeded' or record['artifact_type'] != owner.ARTIFACT
-                or record['artifact_contract'] != owner.CONTRACT or record['science_profile'] != owner.PROFILE_SHA256
+                or record['artifact_contract'] not in owner.PROFILES
+                or record['science_profile'] != owner.PROFILES[record['artifact_contract']]
                 or record['verifier'] != owner.VERIFIER):
             raise ValueError('Unsupported accepted processed authority.')
         spec = self._application.registry.get(step.tool_name)
@@ -1077,7 +1078,8 @@ class InteractiveAgentApplication:
         if sha != result['manifest_sha256']:
             raise ValueError('Changed processed manifest.')
         manifest, _ = owner.load_manifest_bytes(raw, path, sha)
-        args, _, stem, token = owner._publication(step.resolved_arguments, execution, sources=manifest['sources'])
+        args, _, stem, token = owner._publication(step.resolved_arguments, execution, sources=manifest['sources'],
+                                                contract_version=manifest['contract_version'])
         receipt_path = path.parent / (stem + '.receipt.json')
         with _open_matrix_source(receipt_path, root) as stream:
             receipt_bytes = stream.read(owner.MAX_BYTES + 1)
@@ -1090,7 +1092,7 @@ class InteractiveAgentApplication:
                 or record['manifest_sha256'] != sha or manifest['arguments'] != args
                 or manifest['execution_identity'] != execution or record['arguments_sha256'] != owner.digest(args)
                 or record['receipt_sha256'] != receipt_sha
-                or receipt != owner._receipt_value(args, execution, token, sha)
+                or receipt != owner._receipt_value(args, execution, token, sha, contract_version=manifest['contract_version'])
                 or result != expected_result or set(resources) != {'scientific_proof_sha256', 'manifest_identity', 'result_metadata'}
                 or resources['manifest_identity'] != manifest or resources['result_metadata'] != result
                 or record['historical_sources'] != sorted(manifest['sources'].values(), key=lambda entry: entry['path'])):
@@ -1112,7 +1114,7 @@ class InteractiveAgentApplication:
         reference = ScientificArtifactHandle(digest(identity), 'scientific_analysis', manifest['analysis']['sha256'],
             revision.revision_id, origin.turn_id, manifest['analysis']['size_bytes'], delivery.FILENAME, delivery.LABEL)
         return _ScientificMatrixArtifact(reference, payload, root, reference.sha256,
-            reference.size_bytes, owner.CONTRACT, manifest, delivery.ROLE, sha)
+            reference.size_bytes, manifest['contract_version'], manifest, delivery.ROLE, sha)
 
     def _accepted_tables(self, session_id, revision, origin, output, *, step_id=None):
         """Resolve the two closed owner roles from their pinned manifest only."""

@@ -79,7 +79,7 @@ def test_plan_only(case,tmp_path,monkeypatch,text):
 
 def test_registry_scope():
     from agent.orchestration.planning_scope import capability_index
-    r=build_default_tool_registry();assert len(r.names())==23
+    r=build_default_tool_registry()
     index=capability_index(r)
     assert set(index['species_adaptation'])=={'adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features','epizoo_embed_cells'}
     assert 'adapt_epizoo_species' not in index['embedding_analysis']

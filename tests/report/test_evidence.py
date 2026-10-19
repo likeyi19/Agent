@@ -1026,6 +1026,7 @@ def test_production_registry_membership_includes_raw_intake_after_milestone10_4(
     assert build_default_tool_registry().names() == (
         "inspect_scATAC",
         "epizoo_embed_cells",
+        "pca_embed_cells",
         "build_cell_neighbors",
         "cluster_cells",
         "compute_cell_umap",

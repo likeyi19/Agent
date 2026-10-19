@@ -12,6 +12,55 @@ import scipy.sparse as sp
 _NAME_SAMPLE_SIZE = 5
 
 
+def read_feature_names(path: str | Path) -> list[str]:
+    """Read the bounded, ordered feature index, without consuming X or annotations.
+
+    This is a vocabulary observation, not scientific matrix qualification. Legacy
+    AnnData dataframe 0.1.0 indexes and current 0.2.0 indexes have the same meaning.
+    Only consumed HDF5 objects are checked; unrelated annotations impose no gate.
+    """
+    import h5py
+
+    if Path(path).stat().st_size > 1024 ** 3:
+        raise ValueError('H5AD exceeds the supported vocabulary admission size.')
+    with h5py.File(path, 'r') as handle:
+        if not isinstance(handle.get('var', getlink=True), h5py.HardLink):
+            raise ValueError('The feature axis must be stored in the supplied H5AD.')
+        var = handle['var']
+        if (not isinstance(var, h5py.Group) or var.attrs.get('encoding-type') != 'dataframe'
+                or var.attrs.get('encoding-version') not in ('0.1.0', '0.2.0')):
+            raise ValueError('Unsupported H5AD feature axis encoding.')
+        key = var.attrs.get('_index')
+        if (not isinstance(key, str) or not key or '/' in key or key in ('.', '..')
+                or not isinstance(var.get(key, getlink=True), h5py.HardLink)):
+            raise ValueError('The feature index must be a local dataset.')
+        index = var[key]
+        if (not isinstance(index, h5py.Dataset) or index.ndim != 1
+                or not 1 <= len(index) <= 2_000_000
+                or h5py.check_string_dtype(index.dtype) is None
+                or index.is_virtual or bool(index.external)):
+            raise ValueError('Unsupported H5AD feature index storage or size.')
+        creation = index.id.get_create_plist()
+        if any(creation.get_filter(i)[0] not in (1, 2, 3)
+               for i in range(creation.get_nfilters())):
+            raise ValueError('Unsupported H5AD feature index compression.')
+        names, total = [], 0
+        # Fixed-width reads bound variable-length HDF5 strings before allocation.
+        reader = index.astype('S257')
+        for left in range(0, len(index), 1024):
+            for offset, value in enumerate(reader[left:left + 1024]):
+                raw = bytes(value)
+                if len(raw) > 256:
+                    raw = bytes(index.astype('S65537')[left + offset])
+                total += len(raw)
+                if not raw or len(raw) > 65_536 or total > 2 * 1024 ** 3:
+                    raise ValueError('Feature names exceed the supported decoding bound.')
+                names.append(raw.decode('utf-8', errors='strict'))
+    if len(set(names)) != len(names):
+        raise ValueError('The feature vocabulary must be unique.')
+    return names
+
+
 class ScATACInspection(TypedDict):
     """JSON-serializable summary returned by :func:`inspect_scATAC`."""
 

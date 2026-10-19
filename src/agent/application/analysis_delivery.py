@@ -25,7 +25,7 @@ def accepted_analysis(service, session_id, revision, origin, output, *, step_id=
     stored, _, state = _accepted_step(service._application.run_store, run_id, step_id)
     result = stored.result
     anchor = accepted_step_digest(stored)
-    stages = {'epizoo_embed_cells': 'embedding', 'cluster_cells': 'clustering', 'compute_cell_umap': 'umap'}
+    stages = {'epizoo_embed_cells': 'embedding', 'pca_embed_cells': 'embedding', 'cluster_cells': 'clustering', 'compute_cell_umap': 'umap'}
     if (stored.tool_name not in stages or state.lifecycle_status.value != 'SUCCEEDED'
             or output is not None and output.accepted_step_sha256 != anchor
             or 'analysis_sha256' not in result):
@@ -60,7 +60,7 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
     from agent.tools.analysis.neighbors_delivery import _safe_objects, _strings
     from agent.tools.analysis.embedding_analysis import _validate_neighbors_artifact, _validate_umap_labels, _validate_cluster_labels
     with h5py.File(source, 'r') as handle:
-        _safe_objects(handle, max_bytes, numeric_kinds=frozenset({'i', 'f', 'b'}))
+        _safe_objects(handle, max_bytes, numeric_kinds=frozenset({'i', 'f', 'b'}), max_depth=6, max_objects=160)
         def bounded_strings(name, value):
             if isinstance(value, h5py.Dataset) and h5py.check_string_dtype(value.dtype) is not None:
                 for _ in _strings(value, private=True):
@@ -86,12 +86,25 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
         if not text or _PATH.search(text) or any(ord(c) < 32 for c in text):
             raise ValueError('Cell identities or labels are ineligible for public delivery.')
     result = ad.AnnData(obs=data.obs[['leiden'] if clustered else []].copy())
-    for key, dimensions in (('X_epizoo', 512),) + ((('X_umap', 2),) if stage == 'umap' else ()):
+    from agent.tools.analysis.embedding_analysis import representation
+    if stage == 'embedding' and 'agent_cell_embedding' in data.uns:
+        from agent.tools.analysis.pca_embedding import descriptor
+        meta = descriptor(data); key, dimensions = meta['representation'], meta['embedding_dim']
+    elif stage == 'embedding':
+        key, dimensions = 'X_epizoo', 512
+    else:
+        key, values = representation(data); dimensions = values.shape[1]
+    embedding_key = key
+    for key, dimensions in ((key, dimensions),) + ((('X_umap', 2),) if stage == 'umap' else ()):
         values = np.asarray(data.obsm[key])
         if values.shape != (data.n_obs, dimensions) or not np.isfinite(values).all():
             raise ValueError('Invalid compact analysis coordinates.')
         result.obsm[key] = values.copy()
     result.uns['agent_scientific_export'] = dict(contract=CONTRACT, source_sha256=source_sha256)
+    if embedding_key == 'X_pca':
+        metadata = data.uns.get('agent_cell_embedding', data.uns.get('agent_milestone6', {}).get('embedding'))
+        result.uns['agent_scientific_export'].update(method=metadata['method'], representation=embedding_key,
+            embedding_dim=metadata['embedding_dim'], parameters=metadata['parameters'], input_sha256=metadata['source_sha256'])
     if stage != 'umap':
         result.uns['agent_scientific_export']['stage'] = stage
     elif not clustered:

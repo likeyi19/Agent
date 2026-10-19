@@ -484,6 +484,27 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         if context is not None:
             visible['dialogue']['planning_context'] = list(context.public_items())
+        # Project owner observations of the exact offered inputs, never a workflow.
+        # Registered bindings retain source integrity; no observation becomes authority.
+        offered = (submission or {}).get('candidate_input') or (role_submission or {}).get('registered_input', {})
+        members = offered.get('members', ())
+        if members and (context is None or (submission or {}).get('attachments')):
+            from .local_resources import LocalResourceAdmission
+            from agent.tools.analysis.pca_embedding import observe_methods
+            owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
+            suitability = []
+            for index, member in enumerate(members):
+                record = owner.load(member['resource_id'])
+                if record.input_type != 'h5ad':
+                    continue
+                try:
+                    owner._verify_records([record])
+                    observation = observe_methods(record.source_path, epizoo_resources)
+                except (ValueError, OSError):
+                    observation = dict(pca='unavailable', epizoo=[])
+                suitability.append(dict(source=f'source.{index}', **observation))
+            if suitability:
+                visible['dialogue']['embedding_suitability'] = suitability
         decision = interpret(interpreter, utterance, visible)
         if isinstance(decision, Execute) and (decision.argument is not None or decision.arguments) and decision.operation != 'plan':
             raise IntentError('unsupported_intent')

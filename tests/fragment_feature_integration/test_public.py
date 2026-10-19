@@ -79,7 +79,7 @@ def test_plan_only_no_scientific_io(tmp_path,monkeypatch,adapt):
 
 
 def test_registry():
-    registry=build_default_tool_registry();assert len(registry.names())==23
+    registry=build_default_tool_registry()
     spec=registry.get(TOOL)
     cell_fields = {'explicit_cells_manifest_path','explicit_cells_manifest_sha256'}
     assert set(spec.required_arguments)==set(public.ARGUMENTS)-cell_fields

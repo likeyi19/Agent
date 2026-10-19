@@ -481,7 +481,7 @@ def _verify_neighbors(
         "reported_invariants",
         result.get("finite") is True
         and result.get("cell_order_preserved") is True
-        and result.get("embedding_dim") == EPIZOO_EMBEDDING_DIM
+        and _positive_integer(result.get("embedding_dim"))
         and _positive_integer(result.get("n_cells")),
         "Neighbor result reports valid finite ordered dimensions.",
         "Neighbor result reports invalid scientific invariants.",
@@ -635,6 +635,14 @@ def _verify_clustering(
         output_ids, _, _ = _validate_neighbors_artifact(
             artifact, expected_stages=frozenset({"clustering"})
         )
+        from agent.tools.analysis.embedding_analysis import representation
+        key, values = representation(artifact)
+        input_key, input_values = representation(input_artifact)
+        if (key != input_key or not np.array_equal(values,input_values)
+                or _provenance(artifact).get('embedding') != _provenance(input_artifact).get('embedding')
+                or any((artifact.obsp[name] != input_artifact.obsp[name]).nnz for name in ('distances','connectivities'))
+                or _provenance(artifact)['parameters']['neighbors'] != _provenance(input_artifact)['parameters']['neighbors']):
+            raise ValueError('Clustering changed its accepted representation or neighbor graph.')
         n_clusters = _validate_cluster_labels(artifact)
         provenance = _provenance(artifact)
         parameters = provenance.get("parameters")
@@ -768,7 +776,11 @@ def _verify_umap(
             raise ValueError("UMAP clustering variant differs from its source/result.")
         if clustered and not artifact.obs["leiden"].equals(input_artifact.obs["leiden"]):
             raise ValueError("UMAP changed source Leiden labels.")
-        if not np.array_equal(artifact.obsm["X_epizoo"], input_artifact.obsm["X_epizoo"]):
+        from agent.tools.analysis.embedding_analysis import representation
+        key, values = representation(artifact)
+        input_key, input_values = representation(input_artifact)
+        if (key != input_key or not np.array_equal(values, input_values)
+                or _provenance(artifact).get("embedding") != _provenance(input_artifact).get("embedding")):
             raise ValueError("UMAP changed source embeddings.")
         if (artifact.obsp["distances"] != input_artifact.obsp["distances"]).nnz:
             raise ValueError("UMAP changed source distances.")
@@ -2203,6 +2215,15 @@ def verify_step(
                 )
         elif step.tool_name == "inspect_scATAC":
             _verify_inspection(resolved_arguments, plain_result, checks)
+        elif step.tool_name == "pca_embed_cells":
+            try:
+                from agent.tools.analysis.pca_embedding import verify_result
+                verify_result(resolved_arguments, plain_result)
+                passed = True
+            except Exception:
+                passed = False
+            checks.add("pca_source_projection", passed, "Centered PCA source projection and fit verified.",
+                       "PCA source, parameters, projection or fit is invalid.", "PCA_VERIFICATION_FAILED")
         elif step.tool_name == "epizoo_embed_cells":
             _verify_embedding(
                 step,

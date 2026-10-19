@@ -567,6 +567,8 @@ _ADAPTATION_REPORT_FIELDS = (*_ADAPTATION_REPORT_FACTS, "completed_step", "purpo
 from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    'pca_embed_cells': ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
+                       'parameters','software_versions','finite','cell_order_preserved','backend'),
     "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
@@ -777,6 +779,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    'pca_embed_cells': 'Centered PCA representation',
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
     "adopt_scATAC_cell_by_ccre": "External cell-by-cCRE adoption",
@@ -805,6 +808,10 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    'software_versions': 'Scientific software versions',
+    'method': 'Embedding method', 'representation': 'Embedding representation',
+    'parameters': 'Applied PCA parameters', 'embedding_method': 'Embedding method',
+    'embedding_parameters': 'Applied embedding parameters',
     "strategy": "Adaptation strategy",
     "profile_sha256": "Scientific profile SHA-256",
     "source_model_identity_sha256": "Source model bundle identity",
@@ -1017,6 +1024,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
@@ -1072,6 +1080,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    'pca_embed_cells': ('method','representation','parameters','software_versions'),
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "adopt_scATAC_cell_by_features": ("matrix_semantics", "reference_identity_sha256"),
@@ -1270,6 +1279,10 @@ def _project_report(
                 "Verified evidence lacks reportable step facts.",
             )
         step_facts: list[_Fact] = []
+        if tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap') and 'embedding_method' in raw_facts:
+            fields = (*fields, 'embedding_method', 'representation')
+            if 'embedding_parameters' in raw_facts:
+                fields = (*fields, 'embedding_parameters')
         if tool_name == 'compute_cell_umap' and 'clustering_present' in raw_facts:
             fields = (*fields, 'clustering_present')
         if tool_name == 'adapt_epizoo_species' and 'training_method' in raw_facts:
@@ -1675,6 +1688,7 @@ def _render_summary(
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",
         "epizoo_embed_cells": "EpiZoo representation produced",
+        "pca_embed_cells": "Centered PCA representation produced",
         "build_cell_neighbors": "Cell-neighbor graph produced",
         "cluster_cells": "Leiden clustering produced",
         "compute_cell_umap": "UMAP coordinates produced",

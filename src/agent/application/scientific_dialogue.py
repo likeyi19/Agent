@@ -549,6 +549,7 @@ def _descriptive_fields(views):
             or a.source.recovery_identity != b.source.recovery_identity):
         return frozenset()
     fields = {
+        'pca_embed_cells': ('method', 'representation', 'embedding_dim', 'embedding_dtype', 'parameters'),
         'epizoo_embed_cells': ('species', 'embedding_dim', 'embedding_dtype', 'device',
                               'target_model_method', 'target_assembly', 'target_matrix_semantics'),
         'build_cell_neighbors': ('n_neighbors', 'metric', 'neighbors_method', 'transformer',

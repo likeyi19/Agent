@@ -432,10 +432,29 @@ source/test Python files unchanged. Preserved tiny acceptance passes two checks;
 fresh-process public matrix recovery executes zero science and preserves the
 RunStore. This qualifies software/synthetic behavior, not real-BAM biology.
 
+## UA3.6.5-R2A — Generic cell embedding analysis
+
+The [R2A record](docs/ua3.6.5-r2a-generic-cell-embedding.md) documents the new
+`pca_embed_cells` owner and shared downstream contracts. PCA uses centered
+Scanpy ARPACK with default min(50, min(shape)-1) components, supplied X values,
+no normalization/scaling/filtering, and explicit method/parameter/axis provenance.
+Qualified PCA publications use existing operation proofs and schema-2 authority.
+Neighbors, Leiden, UMAP, evaluation and delivery consume the actual verified
+representation; 512 dimensions and `X_epizoo` remain specific to EpiZoo.
+All new graphs use publication v2; a minimal version-aware reader preserves real
+historical v1 profile/receipt identities. Feature-vocabulary observations share
+a bounded feature-axis reader instead of an unrelated whole-file annotation gate.
+EpiZoo native validation and accepted artifact identities are unchanged. The LLM
+uses existing typed planning and scientific-owner suitability observations; no
+runtime-error fallback replaces explicit EpiZoo with PCA. R1 is committed and
+pushed at `d46e132b27fa0ad80c5859bedcf67fd6639dd47d`. R2A and its selective
+architecture cleanup pass bounded scientific/product acceptance; the linked
+record owns final validation, Git closeout and provider-quality limitations.
+
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All twenty-three currently registered tools
+`src/agent/orchestration/registry.py`. All twenty-four currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
@@ -444,7 +463,8 @@ derived from the registry.
 | --- | --- |
 | `inspect_scATAC` | Safe scATAC H5AD inspection and lightweight metadata |
 | `epizoo_embed_cells` | Sparse preprocessing, cached EpiZoo inference, `.npy` embeddings and ordered cell IDs |
-| `build_cell_neighbors` | Compact neighbor-graph H5AD in the 512-dimensional EpiZoo space |
+| `pca_embed_cells` | Centered sparse-safe Scanpy PCA of supplied X; exact ordered cells, fit provenance and independently verified publication |
+| `build_cell_neighbors` | Compact neighbor-graph H5AD from the verified upstream representation and actual dimensions; legacy EpiZoo and PCA |
 | `cluster_cells` | Fixed-seed weighted Leiden clustering in a new compact H5AD |
 | `compute_cell_umap` | Deterministic 2D UMAP in a new compact H5AD |
 | `evaluate_cell_clustering` | Fixed clustering versus evaluation-only labels; NMI, ARI, AMI, Homogeneity JSON |

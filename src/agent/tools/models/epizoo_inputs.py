@@ -9,16 +9,10 @@ from .epizoo_adaptation import contract as c, publication
 
 
 def observe_source(path, sha):
-    import h5py
-    from anndata.io import read_elem
-    from agent.tools.analysis.peak_h5ad import inspect, MAX_BYTES
-    if Path(path).stat().st_size > MAX_BYTES or c.file_record(path)['sha256'] != sha:
+    from agent.tools.data.scatac import read_feature_names
+    if Path(path).stat().st_size > 1024 ** 3 or c.file_record(path)['sha256'] != sha:
         raise ValueError('H5AD identity or supported admission size differs.')
-    inspect(path)
-    with h5py.File(path, 'r') as handle:
-        names = read_elem(handle['var']).index.tolist()
-    if not names or len(set(names)) != len(names):
-        raise ValueError('EpiZoo requires a nonempty unique feature vocabulary.')
+    names = read_feature_names(path)
     return dict(source_sha256=sha, feature_membership_sha256=c.digest(sorted(names)))
 
 

@@ -258,6 +258,7 @@ def test_embedding_and_downstream_catalog_hide_grouped_execution_members(
 
     assert embedding_output == ("epizoo_embedding_bundle.v1", "dataset")
     assert neighbors_input[PORT_UPSTREAM_TYPES] == (
+        "cell_embedding_bundle.v1",
         "epizoo_embedding_bundle.v1",
     )
     for forbidden in (

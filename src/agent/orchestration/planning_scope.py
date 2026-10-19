@@ -21,7 +21,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
     "species_adaptation": "Neutral target-species matrix construction from producer-qualified fragments, explicit barcodes and regulatory features; exact external matrix adoption; EpiZoo species post-training with explicit resources. Qualified target-model embedding inference with exact vocabulary and measurement correspondence. No cell calling.",
     "processed_inspection": "Inspect supplied processed scATAC H5AD datasets.",
     "embedding_analysis": (
-        "EpiZoo cell embeddings, neighbor graphs, clustering, UMAP and fixed clustering evaluation."
+        "EpiZoo and centered PCA cell embeddings, shared neighbor graphs, clustering, UMAP and fixed clustering evaluation. For generic clustering prefer qualified vocabulary-compatible EpiZoo; otherwise suitable X measurements can use PCA. Explicit EpiZoo requests never switch to PCA after failure."
     ),
     "reference_annotation": (
         "EpiZoo embeddings, reference-to-query cell label transfer and fixed annotation evaluation."

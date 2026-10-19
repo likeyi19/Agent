@@ -257,18 +257,8 @@ def public_pending(service, session_id):
 
 
 def _feature_names(path):
-    import h5py
-    from anndata.io import read_elem
-    from agent.tools.analysis.peak_h5ad import inspect, MAX_BYTES
-    from agent.tools.data.regulatory_feature_reference import MAX_FEATURES
-    if Path(path).stat().st_size > MAX_BYTES:
-        _fail('H5AD exceeds the supported feature-vocabulary admission bound.')
-    inspect(path)
-    with h5py.File(path, 'r') as handle:
-        names = read_elem(handle['var']).index.tolist()
-    if not 1 <= len(names) <= MAX_FEATURES or len(set(names)) != len(names):
-        _fail('The regulatory-feature vocabulary must be nonempty and unique.')
-    return names
+    from agent.tools.data.scatac import read_feature_names
+    return read_feature_names(path)
 
 
 def _write_bed(path, names):

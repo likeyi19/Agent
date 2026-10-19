@@ -391,7 +391,15 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 from agent.tools.models.species_adaptation import RESULT_FIELDS as _ADAPT_FIELDS, FACT_FIELDS as _ADAPT_FACTS
 
+_PCA_FACTS = ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
+    'parameters','software_versions','finite','cell_order_preserved','backend')
+_PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path','analysis_path',
+    'analysis_sha256','source_sha256', *_PCA_FACTS))
+
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    'pca_embed_cells': _ToolProjection(_PCA_FIELDS, _PCA_FACTS, 'pca-embed-cells-v1',
+        (_ArtifactProjection('analysis_path','cell_pca_embedding_h5ad',
+            ('centered_source_projection','eigenpair_residual','exact_source_identity'), digest_field='analysis_sha256'),)),
     "build_scATAC_cell_by_features": _ToolProjection(
         _MATRIX_FIELDS, _MATRIX_FACT_FIELDS, "build-scatac-cell-by-features-v1",
         (_ArtifactProjection("manifest_path", "fragment_feature_matrix_manifest_json",
@@ -1289,6 +1297,19 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if (step.tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap')
+                and ('analysis_sha256' in step_result.result
+                     or step_result.result.get('contract_version') == 'cell-neighbors-publication.v2')):
+            # Read only pinned owner metadata, not the representation/graphs again.
+            import h5py
+            from anndata.io import read_elem
+            with h5py.File(step_result.result['analysis_path'], 'r') as handle:
+                key = 'uns/agent_milestone6/embedding'
+                metadata = read_elem(handle[key]) if key in handle else None
+            if metadata is not None:
+                facts.update(embedding_method=metadata['method'], representation=metadata['representation'])
+                if 'parameters' in metadata:
+                    facts['embedding_parameters'] = _plain_json(metadata['parameters'], 'embedding_parameters')
         if step.tool_name == "compute_cell_umap" and "clustering_present" in step_result.result:
             facts["clustering_present"] = step_result.result["clustering_present"]
         if step.tool_name == 'adapt_epizoo_species' and step_result.result['purpose'] == 'native':

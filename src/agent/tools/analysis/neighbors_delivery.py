@@ -16,7 +16,6 @@ import numpy as np
 from . import neighbors_publication as owner
 
 
-CONTRACT = owner.CONTRACT
 EXPORT_CONTRACT = 'cell-neighbors-export.v1'
 ROLE = 'neighbors_export'
 FILENAME = 'neighbors.h5ad'
@@ -88,17 +87,17 @@ def _scalar(item, expected, *, private=False):
                 or item[()] != expected)
 
 
-def _safe_objects(file, max_bytes, *, numeric_kinds=frozenset({'i', 'f'})):
+def _safe_objects(file, max_bytes, *, numeric_kinds=frozenset({'i', 'f'}), max_depth=5, max_objects=96):
     """Reject indirect storage and unreviewed attrs before copying any values."""
     seen = {h5py.h5o.get_info(file.id).addr}
     count, numeric_bytes = 0, 0
 
     def visit(group, depth):
         nonlocal count, numeric_bytes
-        _reject(depth > 5)
+        _reject(depth > max_depth)
         for name in group:
             count += 1
-            _reject(count > 96 or not isinstance(group.get(name, getlink=True), h5py.HardLink))
+            _reject(count > max_objects or not isinstance(group.get(name, getlink=True), h5py.HardLink))
             item = group[name]
             address = h5py.h5o.get_info(item.id).addr
             _reject(address in seen)
@@ -131,7 +130,7 @@ def _axis(group, length):
 
 
 def _identity_metadata(manifest, source_sha256, source_size_bytes, manifest_sha256):
-    _reject(not isinstance(manifest, Mapping) or manifest['contract_version'] != CONTRACT
+    _reject(not isinstance(manifest, Mapping) or manifest['contract_version'] not in owner.PROFILES
             or type(source_size_bytes) is not int or not 0 < source_size_bytes <= MAX_EXPORT_BYTES
             or manifest['analysis']['sha256'] != source_sha256
             or manifest['analysis']['size_bytes'] != source_size_bytes)
@@ -141,7 +140,7 @@ def _identity_metadata(manifest, source_sha256, source_size_bytes, manifest_sha2
                 for value in identities))
     for source in manifest['sources'].values():
         _reject(type(source['size_bytes']) is not int or source['size_bytes'] < 1)
-    return dict(contract_version=EXPORT_CONTRACT, source_contract=CONTRACT,
+    metadata = dict(contract_version=EXPORT_CONTRACT, source_contract=manifest['contract_version'],
         source_sha256=source_sha256, source_size_bytes=source_size_bytes,
         source_manifest_sha256=manifest_sha256, source_cell_order_sha256=manifest['cell_order_sha256'],
         source_embedding_sha256=manifest['sources']['embedding']['sha256'],
@@ -151,23 +150,31 @@ def _identity_metadata(manifest, source_sha256, source_size_bytes, manifest_sha2
         payload_scope='ordered-cells-embedding-neighbor-graphs',
         provenance_policy='historical-source-locators-omitted',
         authority_scope='export-does-not-issue-scientific-authority')
+    if manifest['contract_version'] == 'cell-neighbors-publication.v2':
+        metadata.update(embedding_method=manifest['embedding']['method'], representation=manifest['embedding']['representation'],
+                        embedding_dim=manifest['summary']['embedding_dim'])
+    return metadata
 
 
 def _inspect(file, manifest, metadata, max_bytes, *, exported):
     _reject(file.userblock_size != 0)
-    _safe_objects(file, max_bytes)
+    generic = manifest['contract_version'] == 'cell-neighbors-publication.v2'
+    _safe_objects(file, max_bytes, numeric_kinds=frozenset({'i','f','b'}) if generic else frozenset({'i','f'}),
+                  max_depth=6 if generic else 5, max_objects=160 if generic else 96)
     _reject(set(file) != _TOP_LEVEL)
     _attrs(file, {'encoding-type': 'anndata', 'encoding-version': '0.1.0'})
     summary, args = manifest['summary'], manifest['arguments']
-    n = summary['n_cells']
-    _reject(type(n) is not int or n < 3 or summary['embedding_dim'] != 512)
+    n = summary['n_cells']; dimensions = summary['embedding_dim']
+    representation = manifest['embedding']['representation'] if generic else 'X_epizoo'
+    _reject(type(n) is not int or n < 3 or type(dimensions) is not int or dimensions <= 0
+            or (not generic and dimensions != 512))
     _axis(file['obs'], n)
     _axis(file['var'], 0)
     for name in ('layers', 'varm', 'varp'):
         _group(file[name], ())
-    _group(file['obsm'], ('X_epizoo',))
-    embeddings = file['obsm/X_epizoo']
-    _reject(not isinstance(embeddings, h5py.Dataset) or embeddings.shape != (n, 512)
+    _group(file['obsm'], (representation,))
+    embeddings = file['obsm'][representation]
+    _reject(not isinstance(embeddings, h5py.Dataset) or embeddings.shape != (n, dimensions)
             or embeddings.dtype != np.dtype('float32'))
     _attrs(embeddings, {'encoding-type': 'array', 'encoding-version': '0.2.0'})
     _group(file['obsp'], ('connectivities', 'distances'))
@@ -191,7 +198,19 @@ def _inspect(file, manifest, metadata, max_bytes, *, exported):
     _group(file['uns'], fields)
     provenance = file['uns/agent_milestone6']
     fields = {'schema_version', 'stage', 'cell_order_sha256', 'parameters', 'software_versions'}
-    _group(provenance, fields if exported else fields | _PRIVATE_FIELDS)
+    _group(provenance, fields if exported else fields | _PRIVATE_FIELDS | ({'embedding'} if generic else set()))
+    if generic and not exported:
+        def check_mapping(group, expected):
+            _group(group, expected)
+            for key, value in expected.items():
+                if isinstance(value, Mapping):
+                    check_mapping(group[key], value)
+                elif type(value) is bool:
+                    _attrs(group[key], {'encoding-type':'numeric-scalar','encoding-version':'0.2.0'})
+                    _reject(group[key].shape != () or group[key].dtype.kind != 'b' or bool(group[key][()]) != value)
+                else:
+                    _scalar(group[key], value, private=key in ('source_path','publication_path'))
+        check_mapping(provenance['embedding'], manifest['embedding'])
     _scalar(provenance['schema_version'], 1)
     _scalar(provenance['stage'], 'neighbors')
     _scalar(provenance['cell_order_sha256'], manifest['cell_order_sha256'])
@@ -200,7 +219,7 @@ def _inspect(file, manifest, metadata, max_bytes, *, exported):
             _scalar(provenance[field], manifest['sources'][source]['path'], private=True)
     _group(provenance['parameters'], ('neighbors',))
     parameters = dict(n_neighbors=args['n_neighbors'], metric=args['metric'], method='umap',
-                      transformer='none', random_seed=args['random_seed'], use_rep='X_epizoo')
+                      transformer='none', random_seed=args['random_seed'], use_rep=representation)
     _group(provenance['parameters/neighbors'], parameters)
     for field, value in parameters.items():
         _scalar(provenance['parameters/neighbors'][field], value)
@@ -216,7 +235,7 @@ def _inspect(file, manifest, metadata, max_bytes, *, exported):
     _scalar(neighbors['connectivities_key'], 'connectivities')
     _scalar(neighbors['distances_key'], 'distances')
     parameters = dict(n_neighbors=args['n_neighbors'], metric=args['metric'], method='umap',
-                      random_state=args['random_seed'], use_rep='X_epizoo')
+                      random_state=args['random_seed'], use_rep=representation)
     _group(neighbors['params'], parameters)
     for field, value in parameters.items():
         _scalar(neighbors['params'][field], value)
@@ -261,7 +280,7 @@ def _copy_group(source, destination):
     """Copy only the inspected logical objects, never source-file free space."""
     destination.attrs.update(dict(source.attrs))
     for name, item in source.items():
-        if source.name == '/uns/agent_milestone6' and name in _PRIVATE_FIELDS:
+        if source.name == '/uns/agent_milestone6' and name in _PRIVATE_FIELDS | {'embedding'}:
             continue
         if isinstance(item, h5py.Group):
             _copy_group(item, destination.create_group(name))

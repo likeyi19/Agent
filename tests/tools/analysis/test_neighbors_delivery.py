@@ -75,8 +75,11 @@ def test_actual_owner_export_preserves_all_scientific_values_and_explicit_identi
     assert exported.uns['neighbors'] == source.uns['neighbors']
     assert exported.uns[science.PROVENANCE_KEY] == {
         name: value for name, value in source.uns[science.PROVENANCE_KEY].items()
-        if name not in {'source_embedding_path', 'source_cell_ids_path'}}
+        if name not in {'source_embedding_path', 'source_cell_ids_path', 'embedding'}}
     metadata = exported.uns[delivery.EXPORT_KEY]
+    assert metadata['embedding_method'] == 'EpiZoo'
+    assert metadata['representation'] == 'X_epizoo'
+    assert metadata['embedding_dim'] == 512
     assert metadata['source_sha256'] == hashlib.sha256(original).hexdigest()
     assert metadata['source_size_bytes'] == len(original)
     assert metadata['source_manifest_sha256'] == manifest_sha

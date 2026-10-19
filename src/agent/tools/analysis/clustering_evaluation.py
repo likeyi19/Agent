@@ -261,6 +261,7 @@ def _close_adata(adata: ad.AnnData) -> None:
 def _validate_evaluation_analysis(analysis: ad.AnnData) -> tuple[tuple[str, ...], str]:
     """Validate the Milestone 6.1 structures relevant to evaluation."""
 
+    from .embedding_analysis import representation
     cell_ids, _, _ = _validate_neighbors_artifact(
         analysis, expected_stages=frozenset({"clustering", "umap"})
     )
@@ -284,7 +285,7 @@ def _validate_evaluation_analysis(analysis: ad.AnnData) -> tuple[tuple[str, ...]
         or isinstance(neighbor_seed, bool)
         or not isinstance(neighbor_seed, int)
         or neighbor_seed < 0
-        or neighbors.get("use_rep") != "X_epizoo"
+        or neighbors.get("use_rep") != representation(analysis)[0]
     ):
         raise ValueError("Analysis artifact has invalid upstream neighbors provenance.")
     if not isinstance(clustering, Mapping):

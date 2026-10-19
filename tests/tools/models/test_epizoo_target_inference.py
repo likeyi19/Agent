@@ -101,7 +101,6 @@ def test_registry_target_edge_and_legacy_port():
     assert ports['target_model'].accepted_upstream_types == ('epizoo_target_model.v1',)
     assert ports['dataset'].accepted_upstream_types == ('raw_scatac_dataset.v1',)
     spec.required_arguments['species'].validate('species', {'scientific_name':'Test species','taxonomy_id':123})
-    assert len(registry.names()) == 23
 
 
 @pytest.mark.parametrize('mutation', [None, 'assembly', 'semantics', 'features', 'reordered', 'cells', 'embedding'])

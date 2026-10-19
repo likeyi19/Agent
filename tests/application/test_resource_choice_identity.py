@@ -50,7 +50,10 @@ def fragments_choice(tmp_path, identifier='approved', **changes):
 
 def test_definition_identity_captures_every_operator_field_and_is_detached(tmp_path):
     choice = fragments_choice(tmp_path)
-    expected = {name: _serialize(getattr(choice, name)) for name in choice.__dataclass_fields__}
+    # The absent optional extension must preserve persisted pre-extension digests.
+    expected = {name: _serialize(getattr(choice, name)) for name in choice.__dataclass_fields__
+                if name != "fastq_whitelist"}
+    assert choice.fastq_whitelist is None
     token = choice.resource_choice()
     assert token == dict(input_set_id=choice.input_set_id, definition_sha256=digest(expected))
     assert choice.resource_choice() == token

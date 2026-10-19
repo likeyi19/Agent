@@ -102,7 +102,7 @@ def test_role_answers_allow_partial_associations_or_an_exact_scientific_declarat
 
 @pytest.mark.parametrize('changes', [
     dict(roles=[]), dict(roles=None), dict(pending=''), dict(pending='x'*129),
-    dict(roles=[dict(tool='evaluate_cell_clustering', port='analysis', source='source.8')]),
+    dict(roles=[dict(tool='evaluate_cell_clustering', port='analysis', source='source.16')]),
     dict(roles=roles(), required_roles=requirements()),
     dict(arguments=[dict(tool='epizoo_embed_cells', argument='species', literal='mouse',
                          start=0, end=5, value='mouse')]),

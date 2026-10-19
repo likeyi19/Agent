@@ -439,6 +439,14 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
+        if (submission or {}).get('available_input') is not None:
+            from .local_resources import available_input_view
+            role_submission = available_input_view(interaction).submission
+            visible['dialogue']['session_source_candidates'] = True
+            current = (submission or {}).get('registered_input', {}).get('members', ())
+            visible['dialogue']['current_turn_sources'] = [f'source.{i}' for i in range(len(current))]
+        if (submission or {}).get('available_input_overflow'):
+            visible['dialogue']['session_source_candidates_overflow'] = True
         if pending_public is not None and pending_public['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
             reference = interaction.snapshot['prerequisite']
             from .dialogue_execution import _role_source, _role_binding

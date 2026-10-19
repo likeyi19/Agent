@@ -721,6 +721,9 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         candidate = source_binding(origin, source, interaction, field)
         previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
         declared_source = merge(previous, getattr(decision, field) or empty(field)).source
+        if ((origin.submission or {}).get('candidate_input') is not None
+                and declared_source not in (None, 'source.0')):
+            raise IntentError('invalid_prerequisite')
         if declared_source is not None:
             if field == 'epizoo':
                 from agent.tools.models.epizoo_inputs import observe_source as observe
@@ -1296,15 +1299,16 @@ def _validate_annotation_completion(admitted, candidates, declared, selected, ar
 
 
 def _candidate_view(interaction):
-    """Pure exact view of a captured single H5AD for typed role admission."""
-    from .local_resources import RegisteredInputGroup
+    """Exact selected H5AD plus optional companions for typed role admission."""
+    from .local_resources import RegisteredInputGroup, available_input_view
+    interaction = available_input_view(interaction)
     submission = _serialize(interaction.submission or {})
     if 'candidate_input' not in submission:
         return interaction
     metadata = submission['candidate_input']
     bound = RegisteredInputGroup(metadata['members'], {}, attachment_candidates=True)
     original = submission['registered_input']
-    if (len(bound.members) != 1 or bound.attribution() != metadata
+    if (bound.attribution() != metadata
             or original.get('tool_name') != 'inspect_scATAC' or original.get('resource_choice') is not None
             or submission['execution_inputs'] != {'input_path': bound.members[0]['source_path']}
             or any(original[k] != bound.members[0][k] for k in ('resource_id', 'record_sha256'))):

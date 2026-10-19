@@ -534,6 +534,31 @@ def _group_port(registry, tool_name, port_name):
     return port, choices[0], argument
 
 
+def available_input_view(interaction):
+    """View captured Session file candidates through existing explicit role binding.
+
+    Callers activate this view only for role selection, never for ordinary
+    answers or execution from accepted result context. It grants no authority.
+    """
+    from dataclasses import replace
+    submission = _serialize(interaction.submission or {})
+    metadata = submission.get('available_input')
+    if metadata is None:
+        return interaction
+    if submission.get('execution_inputs'):
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    binding = RegisteredInputGroup(metadata['members'], {}, attachment_candidates=True)
+    if binding.attribution() != metadata:
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    current = submission.get('registered_input')
+    if current is not None:
+        selected = RegisteredInputGroup(current['members'], {}, attachment_candidates=True)
+        if selected.attribution() != current or binding.members[:len(selected.members)] != selected.members:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    submission.pop('available_input')
+    return replace(interaction, submission=dict(submission, registered_input=metadata))
+
+
 def group_choices(binding, registry):
     """Safe conditional Interpreter projection from captured ordered membership."""
     if type(binding) is not RegisteredInputGroup:

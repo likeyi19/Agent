@@ -129,7 +129,7 @@ def channel_for(binding, tool_name, target_port, registry):
     return channel
 
 
-def validate_step_references(step, registry):
+def validate_step_references(step, registry, *, integrity=True):
     refs = {k: a for k, a in step.arguments.items() if isinstance(a, PriorOutputRef)}
     if not refs:
         return
@@ -149,7 +149,7 @@ def validate_step_references(step, registry):
         channel = channel_for(binding, step.tool_name, port.name, registry)
         if any(refs[m.argument_name].output_key != m.output_key for m in channel.members):
             raise AuthorityError('Historical semantic member mapping changed.')
-        validate_binding(binding, registry=registry, integrity=True)
+        validate_binding(binding, registry=registry, integrity=integrity)
         covered.update(names)
     if covered != set(refs):
         raise AuthorityError('Historical reference outside an authorized artifact port.')
@@ -237,6 +237,60 @@ def optional_binding_for_locator(locator, store, registry):
     """Return absence only for a valid accepted, non-reusable output member."""
     return _optional_member_binding(locator.run_id, locator.step_id, locator.output_key,
                                     locator.accepted_step_sha256, store, registry)
+
+
+def qualified_dependencies_for_locator(locator, store, registry):
+    """Exact accepted argument lineage, independent of display selections.
+
+    Stop at reusable publications. Never discover siblings, control dependencies,
+    filesystem paths or absent scientific products. Unqualified results remain
+    unqualified; only their explicitly recorded sources can supply authority.
+    """
+    from agent.schemas import StepOutputRef
+    from .verification_authority import _accepted_step
+    from .executor import PlanExecutor, _TraceRecorder
+    from agent.schemas.verification_authority import digest
+    found, visited, walking = {}, set(), set()
+    executor = PlanExecutor(registry)
+
+    def walk(run_id, step_id, output_key, anchor):
+        key = (run_id, step_id, output_key)
+        if key in walking or len(walking) >= 64:
+            raise AuthorityError('Cyclic or excessive accepted argument lineage.')
+        if key in visited:
+            return
+        binding = _optional_member_binding(run_id, step_id, output_key, anchor, store, registry)
+        if binding is not None:
+            found[binding] = None
+            visited.add(key)
+            return
+        walking.add(key)
+        stored, step, _ = _accepted_step(store, run_id, step_id)
+        references = tuple(argument for argument in step.arguments.values()
+                           if isinstance(argument, (PriorOutputRef, StepOutputRef)))
+        if not references:
+            walking.remove(key)
+            visited.add(key)
+            return
+        validate_step_references(step, registry, integrity=False)
+        state = store.load(run_id)
+        resolved = executor._resolve_arguments(step,
+            {s.step_id: s.result for s in state.steps if s.result is not None}, _TraceRecorder())
+        if digest(resolved) != digest(stored.resolved_arguments):
+            raise AuthorityError('Accepted argument lineage differs from resolved source identity.')
+        for argument in references:
+            if isinstance(argument, PriorOutputRef):
+                validate_binding(argument.binding, store=store, registry=registry)
+                found[argument.binding] = None
+            elif isinstance(argument, StepOutputRef):
+                source, _, _ = _accepted_step(store, run_id, argument.step_id)
+                walk(run_id, argument.step_id, argument.output_key, accepted_step_digest(source))
+        walking.remove(key)
+        visited.add(key)
+
+    with prior_output_store(store):
+        walk(locator.run_id, locator.step_id, locator.output_key, locator.accepted_step_sha256)
+    return tuple(found)
 
 
 def validate_active_outputs(locators, store, registry):

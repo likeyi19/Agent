@@ -439,7 +439,8 @@ class AnalysisSessions:
         science. The captured base is never replaced by the mutable active pointer.
         """
         from agent.orchestration.active_context import ActivePlanningContext, ActiveContextItem
-        from agent.orchestration.prior_outputs import optional_binding_for_locator, validate_binding
+        from agent.orchestration.prior_outputs import (optional_binding_for_locator, validate_binding,
+                                                      qualified_dependencies_for_locator)
         from agent.schemas.orchestration import _serialize
         if type(integrity) is not bool:
             raise TypeError('Planning context integrity policy must be boolean.')
@@ -464,6 +465,15 @@ class AnalysisSessions:
             binding = optional_binding_for_locator(output, self._application.run_store,
                                                    self._application.registry)
             if binding is None:
+                for dependency in qualified_dependencies_for_locator(output,
+                        self._application.run_store, self._application.registry):
+                    if dependency not in bindings:
+                        if integrity:
+                            validate_binding(dependency, store=self._application.run_store,
+                                registry=self._application.registry, integrity=True)
+                        # Available for explicit consumption, never silently added
+                        # to the revision's selected/retained output inventory.
+                        bindings[dependency] = []
                 continue
             if binding not in bindings:
                 if integrity:

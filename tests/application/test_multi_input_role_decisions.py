@@ -56,7 +56,7 @@ def test_exact_role_proposals_are_immutable_and_independent_of_upload_order():
 
 @pytest.mark.parametrize('submitted', [
     'source.0', None, [dict(tool='evaluate_cell_clustering', source='source.0')],
-    [dict(tool='evaluate_cell_clustering', port='analysis', source='source.8')],
+    [dict(tool='evaluate_cell_clustering', port='analysis', source='source.16')],
     [dict(tool='evaluate_cell_clustering', port='analysis', source='/private/analysis.h5ad')],
     [dict(tool='evaluate_cell_clustering', port='analysis', source='source.0', role='query')],
     [dict(tool='evaluate_cell_clustering', port='analysis', source='source.0')]*2,

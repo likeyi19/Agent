@@ -73,7 +73,11 @@ def test_captured_context_never_follows_a_later_navigation_pointer(processed_sou
     interaction = capture(app.sessions, 'analysis')
     app.sessions.switch('analysis', 'back', state.revisions[0].revision_id, expected_generation=2)
     context, locators = app.sessions.planning_context_for_interaction('analysis', 'future')
-    assert context is None and not locators  # Captured clustering is unqualified, despite active neighbors.
+    # The clustering remains unqualified. Its exact recorded graph dependency
+    # is reusable even though the output selector kept only the clustering.
+    assert context.items[0].binding == source.binding
+    assert context.base_revision_id == interaction.base_revision_id
+    assert locators == {'ctx.0': ()}  # No implicit retained output or revision edit.
     assert interaction.base_revision_id == state.revisions[1].revision_id
 
 
@@ -208,19 +212,23 @@ def second_binding(source):
 
 
 @pytest.mark.parametrize('umap', [False, True])
-def test_nonreusable_new_reports_can_retain_their_exact_qualified_source(processed_source, umap):
+@pytest.mark.parametrize('retain', [False, True])
+def test_nonreusable_new_reports_can_retain_their_exact_qualified_source(processed_source, umap, retain):
     source = processed_source
     app = ResearchAgentApplication(source.app.workspace_root, planner=DownstreamPlanner(source.binding, umap=umap))
     step = 'umap' if umap else 'cluster'
     state = app.sessions.run('analysis', 'later', AgentRequest('retained', 'Continue.', {}),
-        (OutputSelection('result', step, 'analysis_path'),), expected_generation=1, retain=('neighbors',))
+        (OutputSelection('result', step, 'analysis_path'),), expected_generation=1, retain=('neighbors',) if retain else ())
     assert state.turn('later').status == 'activated'
-    assert state.revisions[-1].outputs[-1] == source.session.revisions[0].outputs[0]
+    if retain:
+        assert state.revisions[-1].outputs[-1] == source.session.revisions[0].outputs[0]
+    else:
+        assert len(state.revisions[-1].outputs) == 1
     validate_active_outputs(state.revisions[-1].outputs, app.run_store, app.registry)
     capture(app.sessions, 'analysis')
     context, locators = app.sessions.planning_context_for_interaction('analysis', 'future')
     assert len(context.items) == 1 and context.items[0].binding == source.binding
-    assert locators == {'ctx.0': (source.session.revisions[0].outputs[0],)}
+    assert locators == {'ctx.0': (source.session.revisions[0].outputs[0],) if retain else ()}
 
 
 @pytest.mark.parametrize('umap', [False, True])
@@ -244,6 +252,28 @@ def test_control_dependencies_are_not_inferred_as_scientific_lineage(processed_s
     state = app.sessions.run('analysis', 'later', AgentRequest('control', 'Continue.', {}),
         (OutputSelection('result', 'cluster', 'analysis_path'),), expected_generation=1, retain=('neighbors',))
     assert state.turn('later').status == 'activated'
+    capture(app.sessions, 'analysis')
+    context, _ = app.sessions.planning_context_for_interaction('analysis', 'future')
+    assert tuple(item.binding for item in context.items) == (source.binding,)
+
+
+def test_unselected_graph_dependency_preserves_metadata_and_integrity_boundaries(processed_source, monkeypatch):
+    source = processed_source
+    app = ResearchAgentApplication(source.app.workspace_root,
+        planner=DownstreamPlanner(source.binding, umap=True))
+    state = app.sessions.run('analysis', 'later', AgentRequest('lineage', 'Continue.', {}),
+        (OutputSelection('result', 'umap', 'analysis_path'),), expected_generation=1)
+    capture(app.sessions, 'analysis')
+    before = app.sessions.load('analysis').to_dict()
+    with monkeypatch.context() as patch:
+        patch.setattr(VerificationContext, 'files', lambda *a, **kw: pytest.fail('Metadata read source bytes'))
+        context, locators = app.sessions.planning_context_for_interaction('analysis', 'future', integrity=False)
+        assert context.items[0].binding == source.binding and locators == {'ctx.0': ()}
+    path = Path(source.run.steps[0].result['analysis_path'])
+    path.write_bytes(path.read_bytes() + b'changed')
+    with pytest.raises((AuthorityError, ValueError, OSError)):
+        app.sessions.planning_context_for_interaction('analysis', 'future')
+    assert app.sessions.load('analysis').to_dict() == before
 
 
 def test_changed_resolved_prior_identity_is_rejected_without_science(processed_source):

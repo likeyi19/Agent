@@ -116,6 +116,65 @@ def test_explicit_upload_overrides_catalog_marker_resource(resources,tmp_path,mo
         assert spec['signature_resource']['source']=='Explicit simulated signature fixture'
 
 
+@pytest.mark.parametrize('new_matrix,single_wire', [(False, False), (True, False), (True, True)])
+def test_prior_uploads_combine_with_current_scientific_companions(resources, tmp_path, monkeypatch, new_matrix, single_wire):
+    args, calls, genes, signatures, _ = resources
+    selected = decision(uploaded())
+    if not new_matrix:
+        selected['annotation']['source'] = 'source.2'
+        selected['annotation']['uploaded'].update(gene_source='source.0', signature_source='source.1')
+    app, web = app_for(resources, tmp_path, monkeypatch,
+        [dict(kind='clarify', reason='ambiguous_subject'), selected])
+    with TestClient(web) as client:
+        source = h.stage(client, args)
+        g, s = attach(client, genes, 'genes'), attach(client, signatures, 'signatures')
+        historical, current = ([g, s], [source]) if new_matrix else ([source], [g, s])
+        first = h.send(client, 'first', 'Keep these files for my next request.', historical)
+        assert first['status'] == 'clarification' and not calls
+        if single_wire:
+            response = client.post('/api/v1/sessions/upload/turns', json=dict(
+                turn_id='annotate', expected_generation=0, utterance=OBJECTIVE,
+                resource_id=source, attachment_ids=current))
+            assert response.status_code == 202, response.text
+            done = h.wait_turn(client, 'annotate')
+        else:
+            done = h.send(client, 'annotate', OBJECTIVE, current)
+        assert done['status'] == 'succeeded', done
+        assert len(calls) == 2  # Simulated production plus independent verifier.
+        state = app._application.sessions.load('upload')
+        interaction = state.interactions[-1]
+        key = 'candidate_input' if single_wire else 'available_input'
+        assert [m['resource_id'] for m in interaction.submission[key]['members']] == current + historical
+        assert [a['resource_id'] for a in interaction.submission['attachments']] == current
+        step = app._application.run_store.load(done['run_id']).steps[0]
+        assert step.resolved_arguments['source_path'] == app.resources.load(source).source_path
+        spec = json.loads(Path(step.resolved_arguments['annotation_spec_path']).read_text())
+        assert spec['gene_resource']['path'] == app.resources.load(g).source_path
+        assert spec['signature_resource']['path'] == app.resources.load(s).source_path
+
+
+def test_explicit_current_h5ad_cannot_be_replaced_by_historical_candidate(resources, tmp_path, monkeypatch):
+    args, calls, _, _, _ = resources
+    selected = decision(None)
+    selected['annotation']['source'] = 'source.1'
+    app, web = app_for(resources, tmp_path, monkeypatch,
+        [dict(kind='clarify', reason='ambiguous_subject'), selected], choices=(h.choice(args),))
+    with TestClient(web) as client:
+        previous = h.stage(client, args)
+        h.send(client, 'first', 'Keep this file.', [previous])
+        response = client.put('/api/v1/sessions/upload/uploads/current?filename=current.h5ad&input_type=h5ad',
+            content=Path(args['source_path']).read_bytes(), headers={'Content-Type': 'application/octet-stream'})
+        assert response.status_code == 201
+        current = response.json()['resource_id']
+        assert current != previous
+        response = client.post('/api/v1/sessions/upload/turns', json=dict(turn_id='bad',
+            expected_generation=0, utterance=OBJECTIVE, resource_id=current, attachment_ids=[current]))
+        assert response.status_code == 202
+        done = h.wait_turn(client, 'bad')
+        assert done['status'] == 'clarification' and not calls
+        assert app._application.sessions.load('upload').revisions == ()
+
+
 @pytest.mark.parametrize('problem',['species','assembly','context','namespace','invalid_genes','invalid_markers','missing_provenance'])
 def test_invalid_explicit_upload_clarifies_without_catalog_fallback(resources,tmp_path,monkeypatch,problem):
     args,calls,genes,signatures,scope=resources

@@ -480,16 +480,57 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
         existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
-        if (type(registered_input) is RegisteredInput and registered_input.tool_name == 'inspect_scATAC'
-                and set(inputs) == {'input_path'} and registered_input.resource_choice is None):
-            # A second view of the exact selected registration, not another input
-            # or execution path. Legacy completed retries retain their old shape.
+        single_h5ad = (type(registered_input) is RegisteredInput and registered_input.tool_name == 'inspect_scATAC'
+            and set(inputs) == {'input_path'} and registered_input.resource_choice is None)
+        candidate_group = (type(registered_input) is RegisteredInputGroup
+            and registered_input.attachment_candidates and not registered_input.roles and not inputs
+            and registered_input.resource_choice is None)
+        if single_h5ad:
             if existing is None:
-                candidates = self.resources.compose_group([registered_input.resource_id],
-                    attachment_candidates=True, verify_source=False)
-                submission['candidate_input'] = candidates.attribution()
-            elif existing.submission is not None and 'candidate_input' in existing.submission:
+                submission['candidate_input'] = self.resources.compose_group(
+                    [registered_input.resource_id], attachment_candidates=True, verify_source=False).attribution()
+            elif 'candidate_input' in (existing.submission or {}):
                 submission['candidate_input'] = _serialize(existing.submission['candidate_input'])
+        if single_h5ad or candidate_group or (not registered_input and not inputs):
+            if existing is not None:
+                # Retry the original offer, even after later uploads or navigation.
+                for key in ('available_input', 'available_input_overflow'):
+                    if key in (existing.submission or {}):
+                        submission[key] = _serialize(existing.submission[key])
+            elif not state.interactions or state.interactions[-1].prerequisite is None:
+                # Current offers keep their exact positions; history only adds
+                # candidates. A selected H5AD remains the selected primary source.
+                current = ([dict(resource_id=registered_input.resource_id,
+                    record_sha256=registered_input.record_sha256)] if single_h5ad
+                    else list(registered_input.members) if candidate_group else [])
+                current += attachments
+                captured = {item['resource_id']: (item['resource_id'], item['record_sha256']) for item in current}
+                current_ids = set(captured)
+                if len(current_ids) > 16:
+                    raise _fail('INTERACTIVE_INPUT_INVALID')
+                if single_h5ad and len(current_ids) > 1:
+                    submission['candidate_input'] = self.resources.compose_group(tuple(captured),
+                        attachment_candidates=True, verify_source=False).attribution()
+                for prior in state.interactions:
+                    for item in (prior.submission or {}).get('attachments', ()):
+                        identity = (item['resource_id'], item['record_sha256'])
+                        if item['resource_id'] in captured and captured[item['resource_id']] != identity:
+                            raise _fail('INTERACTIVE_REFERENCE_INVALID')
+                        captured[item['resource_id']] = identity
+                if len(captured) > 16:
+                    # Do not silently choose a recent subset or a first match.
+                    submission['available_input_overflow'] = True
+                elif set(captured) - current_ids:
+                    for resource_id, record_sha in captured.values():
+                        record = self.resources.load(resource_id)
+                        if ((resource_id not in current_ids and record.session_id != session_id)
+                                or record.record_sha256 != record_sha):
+                            raise _fail('INTERACTIVE_REFERENCE_INVALID')
+                    candidates = self.resources.compose_group(tuple(captured),
+                        attachment_candidates=True, verify_source=False)
+                    submission['candidate_input' if single_h5ad else 'available_input'] = candidates.attribution()
+        if len(canonical(submission)) > 65536:
+            raise _fail('INTERACTIVE_INPUT_INVALID')
         duplicate = self._duplicate(state, turn_id, utterance, submission)
         if not duplicate and state.generation != expected_generation:
             raise _fail('INTERACTIVE_GENERATION_CONFLICT')

@@ -146,7 +146,8 @@ def clarification_text(clarification):
         return ('This request is not supported by the available scientific or conversational operations. '
                 'Please clarify or revise the request.')
     if clarification.reason == 'unavailable_context': return UNAVAILABLE
-    return 'I could not establish an exact supported change. Please specify the threshold and numerical value, or an explicit version.'
+    return ('I could not interpret or admit this request reliably. '
+            'Please restate the task and identify the data or result you mean.')
 
 
 def answer_outcome(sessions, session_id, request, *, revision_id=None, comparison_id=None):

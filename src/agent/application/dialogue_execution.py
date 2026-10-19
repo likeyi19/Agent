@@ -117,6 +117,9 @@ def _replay_initial_inputs(registry, interaction, declarations):
     """Replay captured application policy; it grants no scientific authority."""
     from .local_resources import (LocalResourceAdmission, QualifiedEpiZooResource, RegisteredInput,
         RegisteredInputGroup, group_role_inputs, qualified_epizoo_resources)
+    if (interaction.admitted or {}).get('roles'):
+        from .local_resources import available_input_view
+        interaction = available_input_view(interaction)
     admitted = _serialize(interaction.admitted)
     received = _serialize(interaction.submission)['execution_inputs']
     original = interaction.submission.get('registered_input', {})
@@ -308,6 +311,9 @@ def _missing_parameters(error, admitted, registry, *, historical=False):
 def _validate_input_role_record(interaction):
     """Replay captured associations without current sources or scientific reads."""
     from .session_state import SessionError
+    if (interaction.admitted or {}).get('roles'):
+        from .local_resources import available_input_view
+        interaction = available_input_view(interaction)
     admitted = interaction.admitted or {}
     received = (interaction.submission or {}).get('registered_input', {})
     grouped = received.get('composition') == 'scientific-role-selection.v1'
@@ -646,7 +652,9 @@ def _role_source(reference, preceding):
 
 def _role_binding(origin, source, interaction):
     """Only explicit append of registered files may fill captured missing roles."""
-    from .local_resources import LocalResourceAdmission
+    from .local_resources import LocalResourceAdmission, available_input_view
+    origin = available_input_view(origin)
+    interaction = available_input_view(interaction)
     captured = origin.submission if source is None else dict(
         execution_inputs=_serialize(source.admitted['inputs']),
         registered_input=_serialize(source.admitted['registered_input']))
@@ -781,6 +789,8 @@ def _validate_role_prerequisite(interaction, preceding):
 
 def admit_role_request(sessions, interaction, decision, resources):
     """Capture a known registered objective without creating a Run or Plan."""
+    from .local_resources import available_input_view
+    interaction = available_input_view(interaction)
     from .local_resources import LocalResourceAdmission
     registry = sessions._application.registry
     if decision.target not in registry.names() or interaction.submission is None:
@@ -1197,6 +1207,9 @@ def _execution_objective(interaction, interactions):
 
 
 def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
+    if decision.roles:
+        from .local_resources import available_input_view
+        interaction = available_input_view(interaction)
     if (decision.base != 'current' or decision.delta is not None
             or decision.target not in sessions._application.registry.names()):
         raise IntentError('unsupported_intent')
@@ -1333,8 +1346,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                     retained_offer.append(dict(handle=handle, context_handle=item.handle,
                         semantic_type=item.binding.semantic_type, producer_tool=item.binding.tool_name,
                         source_port=item.binding.source_port))
-            schema = _object(dict(**schema['properties'], retain={'type':'array','maxItems':32,
-                'items':{'type':'string','enum':list(retention)}}))
+            if retained_offer:
+                schema = _object(dict(**schema['properties'], retain={'type':'array','maxItems':32,
+                    'items':{'type':'string','enum':list(retention)}}))
         selection_prompt = dict(output_selection_schema_version=2 if retained_offer else 1,
             question=intent, steps=offered,
             instructions=(

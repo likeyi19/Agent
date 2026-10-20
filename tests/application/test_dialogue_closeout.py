@@ -48,8 +48,7 @@ def test_new_claim_parts_bind_without_magic_text_or_duplicate_id_lists(app,monke
     def response(prompt):
         claim=next(c for c in prompt['evidence']['claims'] if c['field']=='primary_annotation')
         assert claim['subject']=='7'
-        return dict(support='supported',paragraphs=[dict(parts=[
-            dict(kind='text',text='The accepted assignment is'),dict(kind='claim',id=claim['claim_id'])])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted assignment for group 7 is B cell.', kind='finding', citations=[claim['claim_id']], comparisons=[])])
     result=ask(forbid_work(app,monkeypatch),'parts','Explain cluster 7',Model(question(subject='cluster 7'),response=response))
     assert result.status=='answered' and 'group 7' in result.text and 'B cell' in result.text
     assert result.scientific.claims[0].field=='primary_annotation'
@@ -65,7 +64,7 @@ def test_reviewed_semantics_transported_verbatim_missing_units_not_invented(app)
         assert claims[field]['semantics']['label']==_FIELD_LABELS[field]
         assert claims[field]['semantics']['label_source']=='reviewed_report_field'
         assert 'unit' not in claims[field]['semantics']
-    assert claims['artifact_schema_version']['semantics']=={}
+    assert claims['artifact_schema_version']['semantics']=={'kind':'unclassified_accepted_field'}
     assert 'QC resource qualification' in result.text
 
 
@@ -75,9 +74,9 @@ def test_generation_union_has_distinct_kinds_and_bounded_reference_enums(app):
         def complete(self,*,prompt,response_schema):
             p=json.loads(prompt)
             if 'dialogue_schema_version' in p:
-                variants=response_schema['properties']['paragraphs']['items']['properties']['parts']['items']['anyOf']
-                assert [v['properties']['kind']['enum'] for v in variants]==[['text'],['claim'],['meaning']]
-                assert variants[1]['properties']['id']['enum']==[c['claim_id'] for c in p['evidence']['claims']]
+                fields=response_schema['properties']['paragraphs']['items']['properties']
+                assert fields['kind']['enum']==['finding','limitation','conditional']
+                assert fields['citations']['items']['enum']==[c['claim_id'] for c in p['evidence']['claims']]
             return super().complete(prompt=prompt,response_schema=response_schema)
     assert ask(app,'schema','Explain cluster 7',Check(question(subject='7'),['primary_annotation'])).status=='answered'
 

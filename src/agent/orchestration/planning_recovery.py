@@ -335,15 +335,9 @@ class PlanningRecoveryCoordinator:
         diagnostic_sink: PlanningDiagnosticSink,
         should_cancel: PlanningCancellationCheck | None = None,
         prepare_failover: PlanningFailoverPreparation | None = None,
-        select_scope: Callable[[Callable[[PlanningDiagnosticContext], None]], tuple[PlanningDiagnostic, ...]] | None = None,
     ) -> RecoveredPlanningAttempt:
         """Acquire one Plan with at most one mutually exclusive local action."""
 
-        scoped_policy = self._policy.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION
-        if scoped_policy != (select_scope is not None):
-            raise ValueError("Scoped recovery requires exactly one scope-selection phase.")
-        if select_scope is not None and not callable(select_scope):
-            raise TypeError("Scope selection must be callable.")
         if not callable(attempt) or not callable(validate_candidate):
             raise TypeError("Planning attempt and candidate validator must be callable.")
         if not callable(diagnostic_sink):
@@ -400,24 +394,6 @@ class PlanningRecoveryCoordinator:
                 emit((context.diagnostic(PlanningDiagnosticStage.PROVIDER, "PROVIDER_CALL_STARTED", "started"),))
                 check_cancel()
             provider_calls += 1
-
-        if select_scope is not None:
-            check_cancel()
-            try:
-                scope_diagnostics = select_scope(provider_started)
-            except PlannerError as exc:
-                emit(exc.diagnostics)
-                last_context = _diagnostic_context(exc.diagnostics) or last_context
-                check_cancel()
-                if last_context is not None:
-                    emit((_summary_diagnostic(last_context, provider_calls=provider_calls,
-                        retry_used=False, repair_used=False, failover_used=False,
-                        outcome="scope_selection_failed", policy_fingerprint=self._policy.fingerprint),))
-                raise PlannerError(exc.code, str(exc), category=exc.category,
-                    diagnostics=tuple(diagnostics)) from exc
-            emit(scope_diagnostics)
-            last_context = _diagnostic_context(scope_diagnostics) or last_context
-            check_cancel()
 
         def can_repair(failure: PlanningDiagnostic | None) -> bool:
             return bool(

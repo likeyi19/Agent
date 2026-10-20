@@ -48,7 +48,7 @@ def stop_before_planning(app, monkeypatch):
         forbidden_calls.append(True)
         raise AssertionError('Admission entered planning, compilation or preflight')
 
-    for name in ('plan', 'plan_with_diagnostics', 'plan_with_recovery', '_select_scope', '_plan_detailed'):
+    for name in ('plan', 'plan_with_diagnostics', 'plan_with_recovery', '_plan_detailed'):
         monkeypatch.setattr(LLMPlanner, name, forbidden)
     monkeypatch.setattr(semantic_compiler, 'compile_semantic_plan', forbidden)
     monkeypatch.setattr(PlanExecutor, 'preflight', forbidden)

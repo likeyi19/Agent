@@ -38,7 +38,13 @@
               "checkpoint_path": null,
               "device": null,
               "overwrite": null,
-              "expected_resource_identity": null
+              "expected_resource_identity": null,
+              "target_model_manifest_path": null,
+              "target_model_manifest_sha256": null,
+              "target_model_source_run_id": null,
+              "target_model_source_step_id": null,
+              "assembly": null,
+              "matrix_semantics": null
             },
             "depends_on": [
               "provider-inspection-id"
@@ -92,7 +98,13 @@
               "checkpoint_path": null,
               "device": null,
               "overwrite": null,
-              "expected_resource_identity": null
+              "expected_resource_identity": null,
+              "target_model_manifest_path": null,
+              "target_model_manifest_sha256": null,
+              "target_model_source_run_id": null,
+              "target_model_source_step_id": null,
+              "assembly": null,
+              "matrix_semantics": null
             },
             "depends_on": [],
             "description": "The scorer must ignore this wording."

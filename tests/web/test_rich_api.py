@@ -146,7 +146,7 @@ def test_guidance_uses_normal_planner_and_navigation_creates_sibling_branch(rich
     assert {key: after.get(key, 0) - before.get(key, 0) for key in after if after.get(key, 0) != before.get(key, 0)} == {
         'production.selection': 1, 'owner.selection': 1}
     selected_model = harness.models[-1]
-    assert any('selection_schema_version' in c for c in selected_model.calls)
+    assert not any('selection_schema_version' in c for c in selected_model.calls)
     assert any('active_outputs' in c for c in selected_model.calls)
     assert any('output_selection_schema_version' in c for c in selected_model.calls)
     stale = submit(client, 'stale', 2, 'Run option 1.', predecessor_turn_id='guide', input_set_id='thresholds')

@@ -61,37 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     selected = frozenset(arguments.case_id) if arguments.case_id else None
     if arguments.track == "scoped-v4":
-        from benchmarks.planner.scoped import (
-            DEFAULT_CASES,
-            LIVE_SMOKE,
-            load_scoped_cases,
-            run_scoped_benchmark,
-        )
-
-        if arguments.replays != _DEFAULT_REPLAYS:
-            raise ValueError(
-                "Scoped-v4 replays use the Python replay_outcomes API, not v3 fixtures."
-            )
-        cases = load_scoped_cases(arguments.cases or DEFAULT_CASES)
-        if arguments.live:
-            if selected is None:
-                selected = frozenset(LIVE_SMOKE)
-            profile, model = _live_model(
-                arguments.provider, arguments.model, arguments.timeout
-            )
-        else:
-            if arguments.provider is not None or arguments.model is not None:
-                raise ValueError(
-                    "--provider and --model require the explicit --live flag."
-                )
-            profile = model = None
-        report = run_scoped_benchmark(
-            cases,
-            model=model,
-            model_profile=profile,
-            repetitions=arguments.repeat,
-            selected_case_ids=selected,
-        )
+        raise ValueError("Historical scoped-v4 live/replay runner retired by R5; "
+                         "preserved reports remain readable.")
     else:
         report = _run_v3(arguments, selected)
     rendered = json.dumps(

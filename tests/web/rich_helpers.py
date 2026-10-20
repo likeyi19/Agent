@@ -37,25 +37,27 @@ class ScientificWork:
             'owner.fragments': fv.verify_external_fragments.__wrapped__,
             'owner.generic': generic.verify_fragments_v2.__wrapped__,
         }
-        self.codes = {f.__code__: name for name, f in functions.items()}
+        self.codes = {id(f.__code__): name for name, f in functions.items()}
         self.counts = Counter()
         self.lock = threading.Lock()
-        self.previous_main, self.previous_thread = sys.getprofile(), threading.getprofile()
-        sys.setprofile(self.observe)
-        threading.setprofile(self.observe)
+        self.previous_main, self.previous_thread = sys.gettrace(), threading.gettrace()
+        sys.settrace(self.observe)
+        threading.settrace(self.observe)
 
     def observe(self, frame, event, arg):
-        if event == 'call' and frame.f_code in self.codes:
+        # Only Python entry events are needed. Returning None disables local
+        # line/return tracing; profiling every C call distorted Web deadlines.
+        if event == 'call' and id(frame.f_code) in self.codes:
             with self.lock:
-                self.counts[self.codes[frame.f_code]] += 1
+                self.counts[self.codes[id(frame.f_code)]] += 1
 
     def snapshot(self):
         with self.lock:
             return dict(self.counts)
 
     def close(self):
-        sys.setprofile(self.previous_main)
-        threading.setprofile(self.previous_thread)
+        sys.settrace(self.previous_main)
+        threading.settrace(self.previous_thread)
 
 
 class RichModel:
@@ -65,6 +67,8 @@ class RichModel:
 
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
+        if 'grounding_review_version' in p:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
         self.calls.append(p)
         if 'turn_schema_version' in p:
             utterance = p['utterance']
@@ -85,14 +89,13 @@ class RichModel:
             return json.dumps(dict(turn_schema_version=1, decision=choice))
         if 'guidance_schema_version' in p:
             return json.dumps(dict(candidates=[dict(capability='select_scATAC_cells', explanation=dict(
-                support='insufficient_evidence', paragraphs=[dict(parts=[dict(kind='text', text=t)]) for t in (
+                support='insufficient_evidence', paragraphs=[dict(text=t, kind='conditional', citations=[], comparisons=[]) for t in (
                     'Selection could help address the stated objective.',
                     'The selection criteria require explicit input.',
                     'Further validation is required before execution.')]))]))
         if 'dialogue_schema_version' in p:
             claim = next(c['claim_id'] for c in p['evidence']['claims'] if c['field'] in ('n_observed_barcodes', 'n_selected'))
-            return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                dict(kind='text', text='The accepted evidence records:'), dict(kind='claim', id=claim)])]))
+            return json.dumps(dict(support='supported', paragraphs=[dict(text='The accepted evidence records ' + str(next(c['value'] for c in p['evidence']['claims'] if c['claim_id'] == claim)) + '.', kind='finding', citations=[claim], comparisons=[])]))
         if 'output_selection_schema_version' in p:
             return json.dumps(dict(outputs=[dict(name='selection', step_id='new_selection', output_key='manifest_path')]))
         if 'selection_schema_version' in p:

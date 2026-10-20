@@ -106,7 +106,7 @@ def assert_retained(service, model, executor, view, outputs, steps=1):
     assert len(run.steps) == steps and all(step.verification.passed for step in run.steps)
     assert [step.tool_name for step in run.steps] == ['inspect_scATAC'] * steps
     assert sum('output_selection_schema_version' in call for call in model.calls) == 1
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
 
 
 def assert_rejected(service, model, executor, view, error_code='PLANNER_OUTPUT_INVALID'):
@@ -121,7 +121,7 @@ def assert_rejected(service, model, executor, view, error_code='PLANNER_OUTPUT_I
         assert run.errors[0].recovery_disposition is RecoveryDisposition.NO_AUTOMATIC_RECOVERY
         assert not run.errors[0].recoverable
     assert sum('output_selection_schema_version' in call for call in model.calls) == 1
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
 
 
 def test_valid_single_step_selection_activates_exact_offered_output(tmp_path):

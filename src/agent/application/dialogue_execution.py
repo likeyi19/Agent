@@ -7,6 +7,7 @@ validated against the actual plan before any execution is allowed.
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 import json
+import inspect
 import re
 
 from agent.schemas import AgentRequest
@@ -56,7 +57,7 @@ def _parameter_input(registry, tool_name, argument_name):
 
 
 def scientific_parameters(registry):
-    """Offer registered scalar contracts; never copy defaults or input values."""
+    """Offer registered scientific choices and native defaults, never input values."""
     offered = []
     for tool_name in registry.names():
         tool = registry.get(tool_name)
@@ -67,6 +68,9 @@ def scientific_parameters(registry):
                 continue
             item = dict(tool=tool_name, argument=name, required=name in tool.required_arguments,
                         description=spec.planning.description)
+            if spec.planning.default_when_omitted is not inspect.Parameter.empty:
+                from agent.orchestration.semantic_prompt import _safe_registered_value
+                item['default_when_omitted'] = _safe_registered_value(spec.planning.default_when_omitted)
             if spec.planning.conversational_choice:
                 item['choices'] = list(spec.choices)
             elif is_exact_string_argument(spec):

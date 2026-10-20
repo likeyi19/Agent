@@ -210,7 +210,7 @@ def test_semantic_v4_round_trip_uses_generic_interactions_transport() -> None:
         request, registry
     )
 
-    assert len(client.interactions.scope_calls) == 1
+    assert not getattr(client.interactions, 'scope_calls', ())
     transmitted = client.interactions.calls[0]
     assert transmitted["input"] == build_semantic_planning_prompt(
         request, registry

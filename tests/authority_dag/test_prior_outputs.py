@@ -90,8 +90,10 @@ def test_selection_only_reuses_qc_and_publishes_explicit_state(source):
     revision = state.revisions[-1]
     assert {o.name for o in revision.outputs} == {'fragments', 'qc', 'selection'}
     assert len({o.run_id for o in revision.outputs}) == 2
-    assert len(model.calls) == 2
-    assert len(model.calls[0][2].encode()) < 5000
+    assert len(model.calls) == 1
+    assert 'selection_schema_version' not in model.calls[0][0]
+    from unit.orchestration.catalog_expansion import expand_catalog
+    assert set(expand_catalog(model.calls[0][0]['catalog'])) == set(app.registry.names())
     for payload, schema, prompt in model.calls:
         assert str(app.workspace_root) not in prompt
         assert 'authority-request:run' not in prompt
@@ -221,17 +223,19 @@ def all_work():
         'integrity': integrity.file_closure,
         'presentation': ResearchAgentApplication._complete,
     }
-    codes = {f.__code__: name for name, f in functions.items()}
+    # Entry-only tracing avoids C-call events and structural code hashing.
+    # Returning None disables line/return tracing; body counters are unchanged.
+    codes = {id(f.__code__): name for name, f in functions.items()}
     counts = Counter()
-    previous = sys.getprofile()
+    previous = sys.gettrace()
     def observe(frame, event, arg):
-        if event == 'call' and frame.f_code in codes:
-            counts[codes[frame.f_code]] += 1
-    sys.setprofile(observe)
+        if event == 'call' and id(frame.f_code) in codes:
+            counts[codes[id(frame.f_code)]] += 1
+    sys.settrace(observe)
     try:
         yield counts
     finally:
-        sys.setprofile(previous)
+        sys.settrace(previous)
 
 
 def test_separate_accounting_and_zero_work_navigation(source):

@@ -160,7 +160,7 @@ def test_comparison_pair_is_agent_bound(app):
         pair=next(p for p in evidence['comparison']['pairs'] if by_id[p['left']]['field']=='n_selected')
         assert pair['relationship']=='different'
         assert evidence['comparison']['ranking_available'] is False
-        return dict(support='supported',paragraphs=[dict(parts=[dict(kind='comparison',id=pair['id'])])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted detail operands are different.', kind='finding', citations=[pair['left'],pair['right']], comparisons=[pair['id']])])
     response=ask(app,'a','Compare selected counts with the parent.',Model(question(comparison=dict(output='r1',subject=None)),response=reply))
     assert response.status=='answered',response
     assert {c.value for c in response.scientific.claims}=={5,8}
@@ -186,7 +186,7 @@ def test_changed_detail_during_generation_is_rejected(app):
         c=next(c for c in payload['evidence']['claims'] if c['field']=='detail.candidate.0')
         path=root/'primary/candidate_evidence.json'
         path.write_bytes(path.read_bytes()+b' ')
-        return dict(support='supported',paragraphs=[dict(parts=[dict(kind='claim',id=c['claim_id'])])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted detail is recorded.', kind='finding', citations=[c['claim_id']], comparisons=[])])
     result=ask(app,'a','Why cluster 3?',Model(question(subject='3'),response=reply))
     assert result.status=='unavailable' and result.scientific is None
 

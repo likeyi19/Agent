@@ -42,7 +42,7 @@ from .planning_recovery import (
     RecoveredPlanningAttempt,
 )
 from .registry import ArgumentSpec, ResultFieldPlanningSemantics, ToolRegistry
-from .planning_scope import PlanningScope, capability_index, fingerprint, selection_request, parse_selection
+from .planning_scope import PlanningScope, fingerprint
 
 
 _SCHEMA_VERSION = 3
@@ -1320,14 +1320,10 @@ class LLMPlanner:
         coordinator_kwargs = {}
         if retry_sleeper is not None:
             coordinator_kwargs["sleeper"] = retry_sleeper
-        if wire_mode is PlanningWireMode.V4:
-            policy = recovery_policy or PlanningRecoveryPolicy()
-            if policy.policy_version != SCOPED_PLANNING_RECOVERY_POLICY_VERSION:
-                policy = replace(policy, policy_version=SCOPED_PLANNING_RECOVERY_POLICY_VERSION,
-                    max_total_provider_calls=policy.max_total_provider_calls + 1)
-            recovery_policy = policy
-        elif recovery_policy is not None and recovery_policy.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION:
-            raise ValueError("Scoped recovery policy requires wire v4.")
+        if recovery_policy is not None and recovery_policy.policy_version == SCOPED_PLANNING_RECOVERY_POLICY_VERSION:
+            raise ValueError('Scope-selection recovery is retired for new planning; use PlanningRecoveryPolicy.')
+        # One planning call uses the shared bounded recovery policy. Historical
+        # scoped policy records remain readable but do not add a selection phase.
         self._recovery = PlanningRecoveryCoordinator(
             recovery_policy, **coordinator_kwargs
         )
@@ -1361,66 +1357,11 @@ class LLMPlanner:
 
         return self.plan_with_diagnostics(request, registry).plan
 
-    def _select_scope(
-        self, request: AgentRequest, registry: ToolRegistry,
-        on_provider_call: Callable[[PlanningDiagnosticContext], None] | None = None,
-    ) -> tuple[PlanningScope, tuple[PlanningDiagnostic, ...]]:
-        from .semantic_compiler import build_semantic_compiler_contract
-        # Validate the entire authority before spending a provider call.
-        try:
-            build_semantic_compiler_contract(registry)
-            prompt, schema = selection_request(request, registry)
-        except ValueError as exc:
-            raise PlannerError("PLANNER_CATALOG_INVALID", "Invalid registered planning authority.",
-                category=ErrorCategory.INTERNAL_AGENT_ERROR) from exc
-        context = PlanningDiagnosticContext(
-            profile_id="unprofiled" if self._profile is None else self._profile.profile_id,
-            provider_id="custom" if self._profile is None else self._profile.provider_id,
-            model_identity_digest=hashlib.sha256((self._model_id if self._profile is None else self._profile.model_id).encode()).hexdigest(),
-            catalog_fingerprint=fingerprint(json.loads(prompt)["capabilities"]),
-            offered_tool_names=(), planning_wire_schema_version=1,
-            phase="scope_selection", offered_capability_ids=tuple(capability_index(registry)),
-            session_call_ceiling=self._recovery.policy.max_total_provider_calls,
-            prompt_fingerprint=fingerprint(prompt), schema_fingerprint=fingerprint(schema),
-        )
-        diagnostics: list[PlanningDiagnostic] = []
-        if on_provider_call is not None:
-            on_provider_call(context)
-        else:
-            diagnostics.append(context.diagnostic(PlanningDiagnosticStage.PROVIDER, "PROVIDER_CALL_STARTED", "started"))
-        try:
-            response = self._model.complete(prompt=prompt, response_schema=schema)
-        except Exception as exc:
-            code = exc.code if isinstance(exc, PlanningModelError) and exc.code in _PROVIDER_ERROR_CODES else "PLANNING_PROVIDER_ERROR"
-            diagnostics.append(context.diagnostic(PlanningDiagnosticStage.PROVIDER, code, "failed"))
-            raise PlannerError(code, "Scope selection provider failed.", category=ErrorCategory.ENVIRONMENT_ERROR,
-                diagnostics=tuple(diagnostics)) from exc
-        diagnostics.append(context.diagnostic(PlanningDiagnosticStage.PROVIDER, "PROVIDER_RESPONSE_RECEIVED", "succeeded",
-            response_byte_count=_response_byte_count(response)))
-        try:
-            scope = parse_selection(response, registry)
-        except PlannerError as exc:
-            diagnostics.append(context.diagnostic(PlanningDiagnosticStage.SCOPE, exc.code, "rejected"))
-            raise PlannerError(exc.code, "Scope selection did not produce an accepted scope.",
-                category=exc.category, diagnostics=tuple(diagnostics)) from exc
-        context = replace(context, scope_fingerprint=scope.scope_fingerprint)
-        diagnostics.append(context.diagnostic(PlanningDiagnosticStage.SCOPE, "PLANNING_SCOPE_ACCEPTED", "succeeded"))
-        return scope, tuple(diagnostics)
-
     def plan_with_diagnostics(
         self, request: AgentRequest, registry: ToolRegistry, **kwargs,
     ) -> DiagnosedPlanningAttempt:
-        """One-shot selection and detailed planning; runtime owns recovery/preflight."""
-        if self._wire_mode is PlanningWireMode.V3:
-            return self._plan_detailed(request, registry, **kwargs)
-        scope, diagnostics = self._select_scope(request, registry)
-        try:
-            attempt = self._plan_detailed(request, registry, scope=scope,
-                provider_call_index=2, logical_attempt_index=2, **kwargs)
-        except PlannerError as exc:
-            raise PlannerError(exc.code, str(exc), category=exc.category,
-                diagnostics=diagnostics + exc.diagnostics) from exc
-        return replace(attempt, diagnostics=diagnostics + attempt.diagnostics)
+        """One semantic planning call; compilation and preflight remain deterministic."""
+        return self._plan_detailed(request, registry, **kwargs)
 
     def _plan_detailed(
         self,
@@ -1454,7 +1395,7 @@ class LLMPlanner:
 
         if self._wire_mode is PlanningWireMode.V4:
             if scope is None:
-                raise PlannerError("INVALID_PLANNING_SCOPE", "Detailed v4 planning requires an accepted scope.")
+                scope = PlanningScope(registry)
             scope.validate(registry)
         profile_id = "unprofiled" if self._profile is None else self._profile.profile_id
         provider_id = "custom" if self._profile is None else self._profile.provider_id
@@ -1778,12 +1719,7 @@ class LLMPlanner:
         """Acquire one Plan with bounded primary recovery and configured failover."""
 
         secondary_planner: LLMPlanner | None = None
-        scope: PlanningScope | None = None
-
-        def select_scope(on_provider_call):
-            nonlocal scope
-            scope, diagnostics = self._select_scope(request, registry, on_provider_call)
-            return diagnostics
+        scope = PlanningScope(registry) if self._wire_mode is PlanningWireMode.V4 else None
 
         def configured_secondary(
             logical_index: int,
@@ -1885,7 +1821,6 @@ class LLMPlanner:
 
         return self._recovery.acquire(
             attempt=attempt,
-            select_scope=select_scope if self._wire_mode is PlanningWireMode.V4 else None,
             validate_candidate=validate_candidate,
             diagnostic_sink=diagnostic_sink,
             should_cancel=should_cancel,

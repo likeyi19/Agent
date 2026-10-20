@@ -23,6 +23,8 @@ class ScriptedModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             utterance = value['utterance'].lower()
@@ -41,8 +43,7 @@ class ScriptedModel:
             return json.dumps(dict(outputs=[dict(name='inspection', step_id='inspect', output_key='n_cells')]))
         if 'dialogue_schema_version' in value:
             claim = next(c['claim_id'] for c in value['evidence']['claims'] if c['field'] == 'n_cells')
-            return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                dict(kind='text', text='The accepted evidence records:'), dict(kind='claim', id=claim)])]))
+            return json.dumps(dict(support='supported', paragraphs=[dict(text='The accepted evidence records ' + str(next(c['value'] for c in value['evidence']['claims'] if c['claim_id'] == claim)) + '.', kind='finding', citations=[claim], comparisons=[])]))
         return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=[
             dict(step_id='inspect', tool='inspect_scATAC', sources=[], control_dependencies=[])])))
 

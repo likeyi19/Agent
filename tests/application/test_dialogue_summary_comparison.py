@@ -8,15 +8,17 @@ from agent.application import scientific_dialogue as sd
 from agent.application.dialogue_evidence import EvidenceFact
 from test_dialogue_evidence import app, accepted, forbid_work
 from test_scientific_dialogue import Model, ask, question, annotation
+from test_scientific_explanations import paragraph
 
 
 def both(value):
     evidence = value['evidence']
     assert evidence['comparison']['mode'] == 'independent_accepted_facts'
     assert evidence['comparison']['pairs'] == []
-    return dict(support='supported', paragraphs=[dict(parts=[
-        *[dict(kind='claim', id=c['claim_id']) for c in evidence['claims'] if c['field'] == 'n_cells'],
-        dict(kind='meaning', id='comparison_scope')])])
+    return dict(support='supported', paragraphs=[paragraph(
+        evidence['meanings']['comparison_scope'],
+        [c['claim_id'] for c in evidence['claims'] if c['field']=='n_cells'])])
+
 
 
 @pytest.mark.parametrize('tools', [('inspect_scATAC', 'inspect_scATAC'),
@@ -42,7 +44,7 @@ def test_unoffered_measurement_pair_fails_closed(app, monkeypatch, caplog):
     accepted(app, 'inspect_scATAC', name='next')
     result = ask(forbid_work(app, monkeypatch), 'invalid', 'Compare with the parent.',
         Model(question(comparison=dict(output='r1', subject=None)), response=dict(
-            support='supported', paragraphs=[dict(parts=[dict(kind='comparison', id='p0')])])))
+            support='supported', paragraphs=[paragraph('Compare.', comparisons=['p0'])])))
     assert result.status == 'unavailable'
     assert diagnostic(caplog) == ('evidence_binding', 'invalid_reference')
 
@@ -54,13 +56,9 @@ def diagnostic(caplog):
 
 @pytest.mark.parametrize('response,expected', [
     ({'wrong': 'private /path API_SECRET'}, ('response_schema', 'malformed_provider_output')),
-    (dict(support='supported', paragraphs=[dict(parts=[dict(kind='claim', id='bogus')])]),
+    (dict(support='supported', paragraphs=[paragraph('Recorded.', ['bogus'])]),
      ('evidence_binding', 'invalid_reference')),
-    (dict(support='supported', paragraphs=[dict(parts=[dict(kind='text', text='Count is 99')])]),
-     ('factual_binding', 'unbound_factual_literal')),
-    (dict(support='supported', paragraphs=[dict(parts=[dict(kind='text', text='fixture')])]),
-     ('factual_binding', 'unbound_categorical_value')),
-    (dict(support='supported', paragraphs=[dict(parts=[dict(kind='text', text='Recorded.')])]),
+    (dict(support='supported', paragraphs=[paragraph('Recorded.')]),
      ('evidence_binding', 'missing_evidence')),
 ])
 def test_safe_failure_classification(app, monkeypatch, caplog, response, expected):
@@ -89,7 +87,7 @@ def test_freshness_failure_has_distinct_stage(app, monkeypatch, caplog):
     _, path, _ = accepted(app, 'inspect_scATAC')
     def mutate(value):
         path.write_bytes(path.read_bytes() + b' ')
-        return dict(support='supported', paragraphs=[dict(parts=[dict(kind='claim', id='c0')])])
+        return dict(support='supported', paragraphs=[paragraph('The accepted result is recorded.', ['c0'])])
     result = ask(forbid_work(app, monkeypatch), 'changed', 'Explain.', Model(question(), response=mutate))
     assert result.status == 'unavailable'
     assert diagnostic(caplog) == ('evidence_freshness', 'changed_accepted_evidence')
@@ -148,7 +146,7 @@ def test_provider_exception_is_sanitized(app, monkeypatch, caplog):
     assert 'API_SECRET' not in caplog.text and '/private' not in result.text
 
 
-def test_comparison_binding_diagnostics(app, monkeypatch, caplog):
+def test_unasserted_pair_does_not_license_comparative_prose(app, monkeypatch, caplog):
     for name in ('original', 'new'):
         accepted(app, 'select_scATAC_cells', name=name,
             arguments=dict(min_qc_fragment_records=1, min_tss_enrichment='4'),
@@ -157,11 +155,18 @@ def test_comparison_binding_diagnostics(app, monkeypatch, caplog):
         claims = value['evidence']['claims']
         ids = [c['claim_id'] for c in claims if (c['target'], c['field']) in
                {('t0', 'n_selected'), ('t1', 'n_rejected')}]
-        return dict(support='supported', paragraphs=[dict(parts=[dict(kind='claim', id=i) for i in ids])])
+        return dict(support='supported', paragraphs=[paragraph('The accepted results differ.', ids)])
+    class Unsupported(Model):
+        def complete(self, *, prompt, response_schema):
+            p = json.loads(prompt)
+            if 'grounding_review_version' in p:
+                assert not p['paragraphs'][0]['comparisons']
+                return json.dumps(dict(verdicts={row['id']: 'unsupported' for row in p['paragraphs']}))
+            return super().complete(prompt=prompt, response_schema=response_schema)
     result = ask(forbid_work(app, monkeypatch), 'pairs', 'Compare with the parent.',
-        Model(question(comparison=dict(output='r1', subject=None)), response=different_fields))
+        Unsupported(question(comparison=dict(output='r1', subject=None)), response=different_fields))
     assert result.status == 'unavailable'
-    assert diagnostic(caplog) == ('comparison_binding', 'missing_compatible_pair')
+    assert diagnostic(caplog) == ('semantic_review', 'unsupported_statement')
 
 
 def test_cluster_count_must_match_accepted_owner_result(app, monkeypatch):
@@ -178,19 +183,3 @@ def test_same_literal_graph_path_does_not_establish_qualified_lineage(app, monke
     view = forbid_work(app, monkeypatch).sessions.evidence('session', rid, 'output0')
     assert view.status == 'available'
     assert not any(f.field == 'clustering_neighbors_identity_sha256' for f in view.facts)
-
-
-@pytest.mark.parametrize('tool,method', [('pca_embed_cells', 'pca'), ('epizoo_embed_cells', 'epizoo')])
-def test_embedding_answer_recovery_keeps_accepted_revision_and_values(app, monkeypatch, tool, method):
-    old = accepted(app, tool, overrides={'n_cells': 8})[0]
-    new = accepted(app, tool, name='next', overrides={'n_cells': 12})[0]
-    def prose(value):
-        return dict(support='supported', paragraphs=[dict(parts=[
-            *[dict(kind='claim', id=c['claim_id']) for c in value['evidence']['claims'] if c['field']=='n_cells'],
-            dict(kind='comparison', id=value['evidence']['comparison']['pairs'][0]['id']),
-            dict(kind='text', text=f'These {method} results have 999 identical cells.')])])
-    result = ask(forbid_work(app, monkeypatch), 'recovered', 'Discuss the current result and its parent.',
-        Model(question(comparison=dict(output='r1', subject=None)), response=prose))
-    assert result.status == 'answered' and result.scientific.support == 'insufficient_evidence'
-    assert {(c.source['revision_id'], c.value) for c in result.scientific.claims if c.field == 'n_cells'} == {(old, 8), (new, 12)}
-    assert '999' not in result.text and 'identical cells' not in result.text

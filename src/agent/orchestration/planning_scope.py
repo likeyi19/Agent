@@ -80,20 +80,21 @@ class PlanningScope:
     visible_tool_names: tuple[str, ...]
     scope_fingerprint: str
 
-    def __init__(self, registry: ToolRegistry, capability_ids: tuple[str, ...]) -> None:
-        index = capability_index(registry)
-        if (
-            not isinstance(capability_ids, tuple)
-            or not capability_ids
-            or any(not isinstance(c, str) or c not in index for c in capability_ids)
-            or len(set(capability_ids)) != len(capability_ids)
-        ):
-            raise PlannerError(
-                "INVALID_PLANNING_SCOPE",
-                "Scope must select unique offered capability IDs.",
-            )
-        ids = tuple(sorted(capability_ids))
-        names = tuple(sorted({name for c in ids for name in index[c]}))
+    def __init__(self, registry: ToolRegistry, capability_ids: tuple[str, ...] | None = None) -> None:
+        if capability_ids is None:
+            # Primary planning exposes every registered planner-visible tool.
+            # Family labels are not an execution allowlist or required extension point.
+            from .semantic_wire_v4 import _planner_visible_tool_names
+            ids = ()
+            names = _planner_visible_tool_names(registry)
+        else:
+            index = capability_index(registry)
+            if (not isinstance(capability_ids, tuple) or not capability_ids
+                    or any(not isinstance(c, str) or c not in index for c in capability_ids)
+                    or len(set(capability_ids)) != len(capability_ids)):
+                raise PlannerError('INVALID_PLANNING_SCOPE', 'Scope must select unique offered capability IDs.')
+            ids = tuple(sorted(capability_ids))
+            names = tuple(sorted({name for c in ids for name in index[c]}))
         # Bind selected membership and descriptive/semantic metadata without values.
         from .semantic_prompt import build_semantic_planning_catalog
 
@@ -110,7 +111,7 @@ class PlanningScope:
         object.__setattr__(self, "scope_fingerprint", digest)
 
     def validate(self, registry: ToolRegistry) -> None:
-        if self != PlanningScope(registry, self.capability_ids):
+        if self != PlanningScope(registry, self.capability_ids or None):
             raise PlannerError(
                 "INVALID_PLANNING_SCOPE", "Scope does not match registered metadata.",
             )

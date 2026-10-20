@@ -91,8 +91,7 @@ def test_historical_answer_exposes_actual_target_separately_from_captured_base(a
     guarded = forbid_work(app, monkeypatch)
     models = []
     def factory(profile):
-        response = dict(support='insufficient_evidence', paragraphs=[dict(parts=[
-            dict(kind='text', text='No supported claim is included in this response.')])]) if no_claims else None
+        response = dict(support='insufficient_evidence', paragraphs=[dict(text='No supported claim is included in this response.', kind='limitation', citations=[], comparisons=[])]) if no_claims else None
         model = ScientificModel(question('r1'), ['n_cells'], response=response)
         model.model_id = profile.model_id
         models.append(model)

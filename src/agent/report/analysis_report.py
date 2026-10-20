@@ -971,7 +971,7 @@ _FIELD_LABELS: Mapping[str, str] = {
     "source_sparse_format": "Source sparse format",
     "feature_space_identity_sha256": "Feature-space identity SHA-256",
     "n_pseudobulks": "Pseudobulk units",
-    "n_groups": "Biological groups",
+    "n_groups": "Groups",
     "n_replicates": "Biological replicates",
     "n_conditions": "Conditions",
     "minimum_cells_per_pseudobulk": "Minimum cells per pseudobulk",

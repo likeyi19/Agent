@@ -154,7 +154,7 @@ def test_uploaded_selected_source_imports_exact_bytes_and_publishes_accepted_his
         view = execute(client, body)
         assert view['status'] == 'succeeded' and view['response']['status'] == 'activated', (view, backend.errors)
         assert calls == {'production': 1, 'verification': 1}
-        assert len(backend.models) == 1 and len(backend.models[0].calls) == 4
+        assert len(backend.models) == 1 and len(backend.models[0].calls) == 3
         state = backend.service._application.sessions.load('analysis')
         assert state.generation == 1 and len(state.revisions) == 1
         revision = state.revisions[0]

@@ -61,9 +61,9 @@ def resolution_harness(tmp_path, monkeypatch, *, decisions=None, missing_species
                 self.calls.append(value)
                 fields = ('clustering_parameters.resolution', 'clustering_resolution_origin')
                 offered = {c['field']: c['claim_id'] for c in value['evidence']['claims']}
-                return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                    dict(kind='text', text='The accepted clustering records:'),
-                    *(dict(kind='claim', id=offered[field]) for field in fields)])]))
+                values = {c['field']: c['value'] for c in value['evidence']['claims']}
+                text = f"Leiden resolution = {values[fields[0]]}; origin = {values[fields[1]]}."
+                return json.dumps(dict(support='supported', paragraphs=[dict(text=text, kind='finding', citations=[offered[field] for field in fields], comparisons=[])]))
             result = super().complete(prompt=prompt, response_schema=response_schema)
             parsed = json.loads(result)
             if plan_variant and parsed.get('schema_version') == 4 and self.mode == 'chain':

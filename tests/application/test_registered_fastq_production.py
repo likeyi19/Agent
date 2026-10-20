@@ -242,7 +242,7 @@ def test_registered_fastq_qualified_session_lifecycle(tiny, reads, executables, 
     assert app.submit_turn('session', 'prepare', UTTERANCE, expected_generation=1,
         registered_input=producer_binding) == prepared
     assert calls == dict(intake=1, production=1, verification=1, alignment=1)
-    assert len(models) == 2 and all(len(model.calls) == 4 for model in models)
+    assert len(models) == 2 and all(len(model.calls) == 3 for model in models)
     submission = state.interactions[-1].submission
     # These are deliberately forged application result fixtures, not newly
     # verified scientific artifacts. Their canonical v2 shape and pinned digest

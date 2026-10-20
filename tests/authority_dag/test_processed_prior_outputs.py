@@ -96,17 +96,17 @@ def processed_work():
         'compiler': semantic_compiler.compile_semantic_plan,
         'preflight': PlanExecutor.preflight,
     }
-    codes = {function.__code__: name for name, function in functions.items()}
+    codes = {id(function.__code__): name for name, function in functions.items()}
     counts = Counter()
-    previous = sys.getprofile()
+    previous = sys.gettrace()
     def observe(frame, event, arg):
-        if event == 'call' and frame.f_code in codes:
-            counts[codes[frame.f_code]] += 1
-    sys.setprofile(observe)
+        if event == 'call' and id(frame.f_code) in codes:
+            counts[codes[id(frame.f_code)]] += 1
+    sys.settrace(observe)
     try:
         yield counts
     finally:
-        sys.setprofile(previous)
+        sys.settrace(previous)
 
 
 @pytest.fixture

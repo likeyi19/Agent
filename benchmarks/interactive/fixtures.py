@@ -210,16 +210,17 @@ def scripted_answer(public, field=None, *, support=None):
         public = public["evidence"]
     claims = [c for c in public["claims"] if field is None or c["field"] == field]
     selected = claims[:1]
-    return dict(support=support or ("supported" if selected else "insufficient_evidence"),
-        paragraphs=[dict(parts=[dict(kind="text", text="The accepted summary records:")]
-            + [dict(kind="claim", id=c["claim_id"]) for c in selected])])
+    text = ' '.join(f"{c['field']} = {c['value']}." for c in selected) or 'No accepted fact is supplied.'
+    return dict(support=support or ('supported' if selected else 'insufficient_evidence'),
+        paragraphs=[dict(text=text, kind='finding' if selected else 'limitation',
+                         citations=[c['claim_id'] for c in selected], comparisons=[])])
 
 
 def scripted_guidance(public, capability="inspect_scATAC"):
-    """Three bounded conditional paragraphs using the production claim slots."""
+    """Three bounded conditional statements with exact fact references."""
     evidence = public["context"]["evidence"] if "context" in public else public["evidence"]
     explanation = scripted_answer(evidence)
     explanation["paragraphs"].extend([
-        dict(parts=[dict(kind="text", text="This assumes an appropriate experimental design.")]),
-        dict(parts=[dict(kind="text", text="Further inputs and scientific checks would be required.")])])
+        dict(text="This assumes an appropriate experimental design.", kind="conditional", citations=[], comparisons=[]),
+        dict(text="Further inputs and scientific checks would be required.", kind="conditional", citations=[], comparisons=[])])
     return dict(candidates=[dict(capability=capability, explanation=explanation)])

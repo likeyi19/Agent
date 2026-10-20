@@ -10,6 +10,20 @@ This is the detailed engineering contract and acceptance record. Start with
 [README.md](README.md) for the overview and CLI examples. Current contracts
 below take precedence over historical milestone scope and version statements.
 
+[UA3.6.5-R5](docs/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
+is implemented and has passed bounded acceptance and final engineering review.
+The current interface projects
+accepted facts with reviewed field meanings, generates cited natural prose and
+checks exact references plus factual consistency before presentation. Guidance
+reviews its bounded candidate set in one shared call. Numeric and
+category scanning, whole-claim assembly and evidence-only answer recovery are
+retired on this path. Historical displayed responses remain unchanged. Default
+v4 planning selects tools directly from the Registry in one semantic planning
+call; compilation, source binding, scientific validation and recovery remain
+separate. Native scientific defaults are described without being treated as user
+instructions. The linked record owns validation status and remaining limitations;
+older milestone descriptions of the replaced mechanisms are historical.
+
 ## Architecture and engineering rules
 
 ```text
@@ -1337,66 +1351,36 @@ behavior remain compatible with the accepted v3 path.
 
 ```text
 AgentRequest
-→ LLM scope selection from compact registered capability descriptions
-→ immutable PlanningScope
-→ scoped detailed semantic catalog + scoped semantic-v4 schema
-→ provider-neutral PlanningModel.complete()
-→ strict v4 parser and scope admission
+→ full Registry-derived scientific catalog + semantic-v4 schema
+→ one provider-neutral PlanningModel.complete() planning call
+→ strict v4 parser
 → SemanticPlanCandidate
 → existing full-registry semantic compiler
 → existing strict AgentPlan
 → whole-plan preflight / AgentRuntime / PlanExecutor / verifier
 ```
 
-### Capability-scoped two-stage planning
+### Direct Registry-derived planning
 
-Default v4 uses one-shot LLM scope selection followed by existing semantic
-workflow planning. `ToolPlanningSemantics.capability_ids` provides thin declarative
-membership; the active family index is derived from the actual `ToolRegistry`.
-Compact family descriptions are presentation metadata, not a second scientific
-registry. Every planner-visible v4 tool requires known family coverage before
-any provider call. Future tools normally require registration/metadata and their
-normal scientific contracts, not Planner algorithm changes.
+Default v4 offers every planner-visible registered tool directly. The LLM selects
+exact tools and composes the scientific DAG in one planning call. There is no
+preliminary capability-family model call. `PlanningScope(registry)` freezes exact
+visibility and identity; a new tool needs its normal Registry metadata and
+scientific contracts, not central family prose. Explicit historical family scopes
+remain bounded scoring/reader compatibility, not execution authority.
 
-Current families are `processed_inspection`, `embedding_analysis`,
-`reference_annotation`, `differential_accessibility`, `raw_preprocessing`,
-`exact_matrix_adoption`, `marker_annotation`, and `species_adaptation`. EpiZoo embedding belongs to both
-embedding analysis and reference annotation. Membership contains no workflow
-recipes, step order, dependencies, preferred producers, scientific defaults, or
-canonical DAGs. No keyword/regex routing or deterministic semantic selection
-enters the LLM path.
+The LLM owns language interpretation, scientific choices and unresolved semantic
+ambiguity. Agent owns exact source binding, compatibility, compilation, preflight,
+execution identities, verification and durability. Native defaults are offered
+from the Registry; omission preserves those defaults, while explicit user values
+remain exact. Engineering paths, digests and output roots are owner-bound.
+Required declarations and scientifically ambiguous inputs still fail closed or
+continue through existing typed prerequisites. No workflow completion, keyword
+routing, first-match selection or hidden source fanout is added.
 
-Stage A receives only the original natural-language request, safe structured-input
-names/basic types, compact descriptions and selection instructions. Its closed
-`selection_schema_version=1` response is either `select` with unique known
-`capability_ids` or terminal `unsupported`, without reasoning. Multiple families
-are allowed without an arbitrary small limit. Unknown IDs, duplicates, extra
-fields, malformed or contradictory responses terminate planning. There is no
-selector recovery or full-catalog fallback.
-
-`PlanningScope` has only sorted unique capability IDs, the exact sorted union of
-registered visible tools, and an Agent-computed versioned fingerprint binding
-membership and selected metadata. It controls visibility only. The model never
-supplies expansion, fingerprint, execution order, arguments, or bindings. The
-same visibility set constrains catalog, schema, and parser admission; globally
-registered but unoffered tools are rejected before compilation. Every displayed
-tool retains its complete scientific guidance. Request-selector ambiguity is
-computed against the full registry before filtering, so narrowing cannot create
-new implicit bindings. No producers or dependencies are automatically added.
-
-The LLM owns natural-language intent, capability relevance, exact tool selection,
-scientific DAG composition and ambiguous scientific semantic choices. Agent code
-owns visibility validation, compatibility, executable authority, existing exact
-lowering, preflight, execution, verification and durability.
-`build_semantic_compiler_contract(full_registry)` remains authoritative; the
-compiler, AgentPlan, preflight, scientific tools, verification and durability
-semantics are unchanged. In particular, selecting raw preprocessing and marker
-annotation does not authorize a new matrix-to-annotation channel: M13 still
-requires an already accepted matrix, independent groups and explicit resources.
-
-Both stages use the same configured PlanningModel, with no separate routing or
-provider semantics. Stage B remains semantic wire v4, not a new wire version.
-Explicit v3 retains its complete-catalog single-stage behavior.
+The old scope-selection live experiments and their exact-sequence fixtures are
+retired. Accepted reports and read-only scorers/readers retain original meanings.
+Explicit v3 remains supported; no silent conversion or fallback is introduced.
 
 The semantic catalog/prompt presents tool purpose, consumer/producer ports,
 request-source selectors, accepted upstream semantic types, lineage, scientific
@@ -1526,14 +1510,12 @@ transport retry for explicit transient provider failure or one complete
 same-profile Plan repair for an objectively invalid candidate, and at most one
 configured secondary-profile failover as the final call (three calls maximum).
 
-Scoped v4 uses `planning-recovery-scoped-v4-v1` in the same coordinator. Stage A
-has exactly one provider call after local validation and no recovery. Following
-accepted selection, Stage B preserves the above recovery sequence within the
-same frozen scope. Normal success uses two calls; the global hard ceiling is
-four calls, including selection. An explicitly supplied legacy policy is adapted
-by adding the one mandatory scope call; a scoped policy can lower its session
-ceiling to two or three. Retry and repair remain mutually exclusive; final
-failover cannot recover again. No independent per-stage recovery budgets exist.
+Direct v4 uses the same bounded `planning-recovery-v3` coordinator policy:
+one initial planning call, one eligible mutually exclusive retry or repair, and
+at most one configured final-profile failover. The default total ceiling is three.
+No classification call or extra recovery allowance is inserted. Explicit new use
+of `planning-recovery-scoped-v4-v1` is rejected; historical records remain readable.
+Retry and repair remain mutually exclusive, and final failover cannot recover again.
 Actual provider invocation boundaries advance the counter; local projection or
 model-construction failures do not consume provider calls. Built-in SDK
 retries are disabled; custom models are responsible for hidden internal behavior.
@@ -1548,26 +1530,19 @@ interrupted planning is not automatically replayed, and resume after plan
 persistence is planner-free. This is separate from scientific same-step retry:
 `AgentError.recoverable` retains its M5.3 static eligibility meaning.
 
-Scoped planning diagnostics use schema 5 while Stage B remains wire v4. V3
-diagnostics remain schema 3; historical v4 diagnostics remain readable. Scoped
-records distinguish `scope_selection` (selection schema 1) from
-`detailed_planning` (wire 4), offered capability/tool IDs, accepted scope identity,
-prompt/schema digests, global call indices and session ceiling. Both record
-sanitized profile/provider/model provenance. V4 parser/compiler diagnostics can
-identify safe step, producer step, target/source port, tool, and input names.
-Cancellation is checked before and after Stage A and before each Stage-B call;
-accepted scope and call/recovery intent are checkpointed through the existing
-trace sink before proceeding. Checkpoint failure prevents the next call.
-Accepted scope trace is provenance only: interrupted planning never resumes
-selection or detail calls, and accepted-plan resume remains provider-free.
+V4 planning diagnostics retain schema 5, while v3 retains schema 3. New v4 calls
+use the detailed-planning phase and preserve exact offered tool identities,
+visibility and prompt/schema digests, call indices and policy ceiling. Historical
+selection traces remain readable provenance. Cancellation and trace checkpoints
+precede subsequent calls; checkpoint failure prevents dispatch. Accepted-plan
+resume invokes no provider and does not replay interrupted planning.
 Persisted diagnostics exclude raw prompts, structured input values/paths, provider responses,
 exception prose, HTTP bodies/headers, request IDs, credentials, and tokens.
 Run-state schema remains v3; v3 diagnostic and recovery behavior is unchanged.
 
 The historical `benchmarks/planner/` track remains pinned to wire v3, including
-replay, binding scoring and diagnostics. Its evaluation-only `--track scoped-v4`
-extension separately measures Stage A, Stage B, compiler/preflight, transport and
-recovery with report schema 5; see [benchmark documentation](benchmarks/planner/README.md).
+replay, binding scoring and diagnostics. Its historical `--track scoped-v4` two-stage live/replay runner is retired;
+read-only corpus scoring and original reports remain available; see [benchmark documentation](benchmarks/planner/README.md).
 V4 correctness also remains covered by semantic-v4 acceptance tests.
 The deterministic offline harness uses synthetic requests
 and PLAN_ONLY with zero scientific calls. Historical report schema v4 separates hard

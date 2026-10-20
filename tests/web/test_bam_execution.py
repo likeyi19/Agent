@@ -182,7 +182,7 @@ def test_uploaded_bam_inspection_does_not_require_producer_context(
         _, intake, _ = raw_scatac_manifest.load_raw_intake_manifest(step.result['manifest_path'])
         assert [item.path for item in intake.files] == [record.source_path]
         assert calls == {'intake': 1, 'production': 0, 'verification': 0}
-        assert len(backend.models) == 1 and len(backend.models[0].calls) == 4
+        assert len(backend.models) == 1 and len(backend.models[0].calls) == 3
         path = '/api/v1/sessions/analysis/revisions/' + view['revision_id']
         assert client.get(path + '/evidence', params={'output_name': 'intake'}).json()['status'] == 'available'
         assert client.get(path + '/scientific-artifacts').json() == {'artifacts': []}

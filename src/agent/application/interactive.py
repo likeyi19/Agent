@@ -150,7 +150,7 @@ def _present(outcome, state=None, *, turn_id=None):
         interaction = None if state is None else next((i for i in state.interactions if i.turn_id == turn_id), None)
         admitted = None if interaction is None else interaction.admitted
         if admitted is not None and admitted.get('intent') == 'scientific':
-            # A response can use no claim slots while still addressing an exact
+            # A response can cite no facts while still addressing an exact
             # admitted historical target. Attribution comes from admission,
             # never from prose or the currently active revision.
             targets = tuple(dict.fromkeys((admitted[k]['revision_id'], admitted[k]['output_name'],

@@ -692,3 +692,19 @@ def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None
         return DialogueEvidence(session_id, revision_id, output_name, 'unavailable', str(exc))
     except (ValueError, RuntimeError, OSError, KeyError, TypeError, AttributeError, RecursionError):
         return DialogueEvidence(session_id, revision_id, output_name, 'unavailable', 'invalid_accepted_evidence')
+
+
+def annotation_field_semantics(field):
+    """Reviewed native summary meanings; no values or duplicate result authority."""
+    return {
+        'n_groups': dict(kind='scientific_result', unit='input groups', label='Supplied annotation groups',
+            description='Number of independently supplied groups annotated by the computational method; not proof of distinct biological cell types.'),
+        'groups_omitted': dict(kind='summary_coverage', unit='group records',
+            description='Number of group records omitted from the bounded display summary: max(0, n_groups - 50). This is not a count of unidentified or unsuccessfully annotated groups.'),
+        'assigned_cells': dict(kind='scientific_result', unit='cells',
+            description='Number of cells assigned a label by the computational annotation method; not independently validated biological identities.'),
+        'unassigned_cells': dict(kind='scientific_result', unit='cells',
+            description='Number of cells without a computationally assigned annotation; distinct from omitted display records.'),
+        'validation_state': dict(kind='interpretation_limit', unit=None,
+            description='Independent validation status. not_assessed means computational annotations have not established independently validated biological cell identities.'),
+    }.get(field)

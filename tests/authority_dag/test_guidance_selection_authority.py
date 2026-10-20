@@ -1,4 +1,4 @@
-"""Candidate handoff reuses actual M15.3 authority and scoped-v4 compilation."""
+"""Candidate handoff reuses actual M15.3 authority and direct-v4 compilation."""
 import json
 
 import pytest
@@ -15,6 +15,8 @@ class InteractionModel:
 
     def complete(self, *, prompt, response_schema):
         p=json.loads(prompt)
+        if 'grounding_review_version' in p:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
         if 'turn_schema_version' in p:
             if self.candidate:
                 decision=dict(kind='execute_candidate',candidate=self.candidate,evidence='Run option 1.')
@@ -26,13 +28,13 @@ class InteractionModel:
             return json.dumps(dict(outputs=[dict(name='selection',step_id='new_selection',output_key='manifest_path')]))
         assert 'guidance_schema_version' in p
         return json.dumps(dict(candidates=[dict(capability='select_scATAC_cells',explanation=dict(
-            support='insufficient_evidence',paragraphs=[dict(parts=[dict(kind='text',text=t)]) for t in (
+            support='insufficient_evidence',paragraphs=[dict(text=t, kind='conditional', citations=[], comparisons=[]) for t in (
                 'Selection could help address the stated objective.',
-                'The selection criteria require explicit input.',
+                'Omitted criteria use registered owner defaults; explicit criteria take precedence.',
                 'Further validation is required before execution.')]))]))
 
 
-@pytest.mark.parametrize('failure',[None,'compiler','missing_input'])
+@pytest.mark.parametrize('failure',[None,'compiler','defaults'])
 def test_guidance_handoff_uses_real_authority_and_normal_compiler(source,failure):
     _,_,old=source
     with all_work() as work:
@@ -42,11 +44,11 @@ def test_guidance_handoff_uses_real_authority_and_normal_compiler(source,failure
     cid=offered.guidance.candidates[0].reference['candidate_id']
     planner=ContextModel(handle_override='ctx.999' if failure=='compiler' else None)
     app=ResearchAgentApplication(old.workspace_root,planner=LLMPlanner(planner))
-    inputs={'min_qc_fragment_records':1,'min_tss_enrichment':'0'} if failure!='missing_input' else {}
+    inputs={'min_qc_fragment_records':1,'min_tss_enrichment':'0'} if failure!='defaults' else {}
     with all_work() as work:
         outcome=app.sessions.respond('analysis','select','Run option 1.',interpreter=InteractionModel(cid),execution_inputs=inputs)
     state=app.sessions.load('analysis')
-    if failure:
+    if failure == 'compiler':
         assert outcome.status=='failed',outcome
         assert state.generation==1
         assert not {k:v for k,v in work.items() if k.startswith(('production.','owner.'))}
@@ -58,10 +60,14 @@ def test_guidance_handoff_uses_real_authority_and_normal_compiler(source,failure
         assert refs[0].binding.run_id=='authority-request:run'
         assert {k:v for k,v in work.items() if k.startswith(('production.','owner.'))}=={'production.selection':1,'owner.selection':1}
         assert {o.name for o in state.revisions[-1].outputs}=={'selection'}
-    assert len(planner.calls)>=2
+        if failure == 'defaults':
+            assert 'min_qc_fragment_records' not in run.plan.steps[0].arguments
+            assert 'min_tss_enrichment' not in run.plan.steps[0].arguments
+            assert run.steps[0].verification.passed
+    assert len(planner.calls) == (2 if failure == 'compiler' else 1)
     for payload,_,prompt in planner.calls:
         assert str(app.workspace_root) not in prompt
         assert 'authority-request:run' not in prompt
-    assert planner.calls[1][0]['active_outputs'][0]['handle']=='ctx.0'
-    intent=json.loads(planner.calls[1][0]['user_request'])
+    assert planner.calls[0][0]['active_outputs'][0]['handle']=='ctx.0'
+    intent=json.loads(planner.calls[0][0]['user_request'])
     assert intent['captured_subjects']==[dict(context_handle='ctx.0',output='qc',subject=None)]

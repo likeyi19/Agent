@@ -29,6 +29,8 @@ class Model:
 
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
+        if 'grounding_review_version' in p:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
         self.requests.append((prompt, response_schema))
         if 'guidance_schema_version' in p:
             p['context'] = expand_context(p['context'])
@@ -44,10 +46,9 @@ class Model:
             rows = [c for c in claims if c['target'] == target['handle']]
             if rows: ids.append(rows[0]['claim_id'])
         explanation = dict(support='supported' if ids else 'insufficient_evidence', paragraphs=[
-            dict(parts=[dict(kind='text', text='This could help characterize the stated objective.')]
-                       + [dict(kind='claim', id=i) for i in ids]),
-            dict(parts=[dict(kind='text', text='Assuming the intended experimental design is appropriate.')]),
-            dict(parts=[dict(kind='text', text='This is conditional advice and requires further input.')])])
+            dict(text='This could help characterize the stated objective.', kind='conditional', citations=ids, comparisons=[]),
+            dict(text='Assuming the intended experimental design is appropriate.', kind='conditional', citations=[], comparisons=[]),
+            dict(text='This is conditional advice and requires further input.', kind='conditional', citations=[], comparisons=[])])
         result = dict(candidates=[dict(capability=t, explanation=explanation) for t in self.tools])
         if self.attack: self.attack(result)
         return json.dumps(result)
@@ -169,9 +170,9 @@ def test_invalid_references_fail_closed(app, monkeypatch, choice, text):
     lambda r:r['candidates'][0].update(readiness='runnable_now'),
     lambda r:r['candidates'][0].update(historical_binding_supported=True),
     lambda r:r['candidates'][0].update(compatible=True),
-    lambda r:r['candidates'][0]['explanation']['paragraphs'][0]['parts'].append(dict(kind='claim',id='invented')),
-    lambda r:r['candidates'][0]['explanation']['paragraphs'][0]['parts'].append(dict(kind='meaning',id='preflight_passed')),
-    lambda r:r['candidates'][0]['explanation']['paragraphs'][0]['parts'].append(dict(kind='text',text='There are 999 cells.')),
+    lambda r:r['candidates'][0]['explanation']['paragraphs'][0]['citations'].append('invented'),
+    lambda r:r['candidates'][0]['explanation']['paragraphs'][0]['comparisons'].append('preflight_passed'),
+    lambda r:r['candidates'][0]['explanation']['paragraphs'][0].update(value=999),
     lambda r:r['candidates'].append(r['candidates'][0]),
 ])
 def test_invalid_generation_has_no_candidates_or_science(app, monkeypatch, attack):
@@ -206,7 +207,7 @@ def test_catalog_is_shared_projection_and_no_recommendation_rule(app, monkeypatc
     from agent.schemas import AgentRequest
     assert guidance.catalog(app.registry) == build_semantic_planning_catalog(AgentRequest('g','g',{}),app.registry)
     catalog = guidance.catalog(app.registry)
-    assert len(catalog['tools']) == 23
+    assert set(catalog['tools']) == set(app.registry.names())
     assert 'numerator_condition' in catalog['tools']['run_replicate_differential_accessibility'][1]
 
 

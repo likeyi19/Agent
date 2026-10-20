@@ -47,7 +47,7 @@ def test_invalid_output_selection_has_safe_code_and_no_replay(tmp_path, monkeypa
         assert run.plan is None and not run.steps
         assert run.errors[-1].code == 'PLANNER_OUTPUT_INVALID'
         assert run.errors[-1].exception_type == 'PlannerError'
-        assert len(backend.models) == 1 and len(backend.models[0].calls) == 4
+        assert len(backend.models) == 1 and len(backend.models[0].calls) == 3
         before = state.to_dict()
         calls = [(model, len(model.calls)) for model in backend.models]
         assert client.get('/api/v1/sessions/session/turns/first').json() == view

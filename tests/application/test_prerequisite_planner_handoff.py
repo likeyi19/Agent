@@ -12,7 +12,7 @@ import pytest
 from agent.application import InteractiveAgentApplication
 from agent.orchestration import PlanningModelProfile, PlanningRecoveryPolicy
 from agent.orchestration.executor import PlanExecutor
-from agent.orchestration.planning_recovery import SCOPED_PLANNING_RECOVERY_POLICY_VERSION
+from agent.orchestration.planning_recovery import PLANNING_RECOVERY_POLICY_VERSION
 from agent.orchestration.registry import build_default_tool_registry
 from agent.orchestration.semantic_compiler import (
     build_m92_semantic_compiler_contract, compile_semantic_plan,
@@ -25,7 +25,7 @@ from agent.schemas import AgentRequest
 
 PROFILE = PlanningModelProfile('handoff-test', 'scripted', 'model/handoff')
 POLICY = PlanningRecoveryPolicy(
-    policy_version=SCOPED_PLANNING_RECOVERY_POLICY_VERSION,
+    policy_version=PLANNING_RECOVERY_POLICY_VERSION,
     max_transport_retries=0, max_repairs=0, max_profile_failovers=0,
     max_primary_local_recovery_actions=0, max_total_provider_calls=2,
     max_retry_delay_seconds=0,
@@ -39,10 +39,7 @@ CASES = (
      'epizoo_embed_cells', 'embedding_analysis', ('species',),
      "EpiZoo embedding requires the dataset species ('human' or 'mouse'), but the request does not "
      'specify it and no available tool can determine or supply that required parameter.'),
-    ('C1', 'Select cells from these barcode QC results.',
-     'select_scATAC_cells', 'raw_preprocessing', ('min_qc_fragment_records', 'min_tss_enrichment'),
-     'Cell selection requires explicit min_qc_fragment_records and min_tss_enrichment thresholds, '
-     'but neither was provided and the catalog forbids inferring them.'),
+
 )
 
 
@@ -128,7 +125,7 @@ def test_recorded_failure_and_supported_candidate_have_distinct_authoritative_ou
     state = app._application.sessions.load('session')
     interaction = state.interactions[-1]
     run = app._application.run_store.load(view.run_id)
-    assert len(model.calls) == 3
+    assert len(model.calls) == 2
     assert not run.steps and not state.revisions and state.generation == 0
     assert not state.turns and run.plan is None
     assert dict(interaction.admitted['inputs']) == inputs
@@ -222,3 +219,18 @@ def test_named_backend_instruction_preserves_planner_rejection_even_for_wrong_in
     assert view.status == 'failed' and view.error.code == 'UNSUPPORTED_REQUEST'
     state = app._application.sessions.load('session')
     assert not state.revisions and state.interactions[-1].prerequisite is None
+
+
+def test_selection_omission_uses_native_defaults_without_parameter_clarification(tmp_path):
+    registry = build_default_tool_registry()
+    request = AgentRequest('defaults', 'Select cells from these QC results.', dict(
+        barcode_qc_manifest_path='/explicit/qc.json', barcode_qc_manifest_sha256='a' * 64,
+        output_dir=str(tmp_path)))
+    candidate = parse_semantic_wire_v4(json.dumps(incomplete('select_scATAC_cells')), request, registry)
+    plan = compile_semantic_plan(request, candidate, registry, build_m92_semantic_compiler_contract(registry))
+    arguments = plan.steps[0].arguments
+    import inspect
+    defaults = inspect.signature(registry.get('select_scATAC_cells').function).parameters
+    assert 'min_qc_fragment_records' not in arguments and 'min_tss_enrichment' not in arguments
+    assert defaults['min_qc_fragment_records'].default == 1000
+    assert str(defaults['min_tss_enrichment'].default) == '4'

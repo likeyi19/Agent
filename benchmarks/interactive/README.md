@@ -1,8 +1,21 @@
 # Interactive model qualification
 
-This benchmark-local instrument reuses Agent's interpreter, scoped-v4 Planner,
-compiler, preflight, scientific answer and Guidance contracts. Production code,
-prompts, scientific semantics and Web provider choices are unchanged.
+This benchmark-local instrument reuses Agent's interpreter, direct-v4 Planner,
+compiler, preflight, scientific answer and Guidance contracts. The current harness follows production interfaces; historical experiment results
+are not rerun or silently compared across changed prompts.
+
+R5 retires Q2 breadth/resume/stability and F1/F2 live execution, plus fixtures
+that rebuilt their exact historical call sequences using current owners. The old
+entry points raise an explicit retirement error before providers or writes. Q2
+JSON access, F1 manifest/source-metadata and external-review readers, paid transport
+and spending guards, discovery, structured-output, diagnostics and privacy tests
+remain. Read-only F1 tests construct labelled historical metadata directly; they
+do not regenerate old answers or reinterpret historical source hashes.
+
+R5 current checks use `harness.run_attempt`: direct layer-2 planning, ordinary
+bounded recovery, natural explanations plus semantic review, exact references,
+zero-science guards and source privacy. The accepted Q2/F1/F2 records below are
+historical evidence; their command lines and exact call schedules are archival.
 
 `scenarios.py` defines fourteen immutable scenarios. `fixtures.py` builds fresh
 disposable scripted accepted metadata through real Session/evidence readers.
@@ -12,7 +25,8 @@ qualification remains a separate, explicitly provisioned exercise.
 
 `harness.run_attempt(scenario, candidate, model=...)` requires an explicit model.
 Interpreter, Stage A, fixed-scope Stage B, scientific Answer and Guidance are
-independent. Layer 2 uses actual Session interpretation/admission, intercepts
+independent. Stage A and fixed-scope B are explicit historical contract probes,
+not stages of the current product planning path. Layer 2 uses actual Session interpretation/admission, intercepts
 only the execution handoff, and delegates unchanged planning/recovery to the
 application runtime with `PLAN_ONLY`. It preserves the interpreter target check.
 Actual-plan retained-output selection and scientific Revision activation are

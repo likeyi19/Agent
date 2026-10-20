@@ -128,7 +128,7 @@ def test_transfer_contract_shares_exact_group_role_binding_and_compiler(tmp_path
         (record.resource_id, record.record_sha256) for record in records]
     assert interaction.admitted['inputs']['reference_input_path'] == records[0].source_path
     assert interaction.admitted['inputs']['query_input_path'] == records[1].source_path
-    assert len(calls) == 4
+    assert len(calls) == 3
     for call in calls:
         assert str(tmp_path) not in call['prompt']
         assert not any(record.record_sha256 in call['prompt'] or record.resource_id in call['prompt'] for record in records)

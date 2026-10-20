@@ -291,7 +291,7 @@ def test_multiple_uploads_roles_compile_real_leiden_evaluation_and_restore_exact
             for call in model.calls:
                 assert str(tmp_path) not in call['prompt']
                 assert not any(row.record_sha256 in call['prompt'] or row.resource_id in call['prompt'] for row in pinned)
-        assert len(harness.models) == 1 and len(harness.models[0].calls) == 4
+        assert len(harness.models) == 1 and len(harness.models[0].calls) == 3
         calls_before = len(harness.models[0].calls)
         before_reads = snapshots(harness.service._application.workspace_root)
         path = f"/api/v1/sessions/session/revisions/{result['revision_id']}"

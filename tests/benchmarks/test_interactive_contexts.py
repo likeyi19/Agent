@@ -24,6 +24,8 @@ class Witness:
     def complete(self, *, prompt, response_schema):
         data = json.loads(prompt)
         self.calls.append((data, response_schema))
+        if "grounding_review_version" in data:
+            return json.dumps(dict(verdicts={row['id']: "entailed" for row in data['paragraphs']}))
         return json.dumps(self.response(data))
 
 
@@ -155,7 +157,7 @@ def test_scientific_generation_replays_production_claims_without_science(tmp_pat
     model = Witness(lambda p: scripted_answer(p["evidence"], field))
     response = dialogue.generate(model, context.interaction.utterance, admitted["focus"], public, claims)
     assert response.support == "supported"
-    assert len(model.calls) == 1 and response.claims[0].value == value and guard.count == 0
+    assert len(model.calls) == 2 and response.claims[0].value == value and guard.count == 0
     assert "source" not in model.calls[0][0]["evidence"]["claims"][0]
     assert response.claims[0].source["output_locator"]["accepted_step_sha256"] == admitted["target"]["accepted_step_sha256"]
 
@@ -173,7 +175,7 @@ def test_guidance_uses_disposable_metadata_and_fixed_authoritative_context(tmp_p
     model = Witness(scripted_guidance)
     result = guidance.answer(context.sessions, context.session_id, interaction, model)
     after = context.sessions.load(context.session_id)
-    assert result.status == "answered" and len(model.calls) == 1 and guard.count == 0
+    assert result.status == "answered" and len(model.calls) == 2 and guard.count == 0
     assert result.guidance.candidates[0].reference["capability"] == "inspect_scATAC"
     assert result.guidance.candidates[0].reference["targets"][0]["subject"] == "3"
     assert after.generation == before.generation and after.revisions == before.revisions

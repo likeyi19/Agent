@@ -177,7 +177,7 @@ def test_registered_bam_inspection_then_explicit_qualified_production(bam_factor
     assert_attribution(app, prepared, producer_binding)
     assert submit(app, producer_binding, turn='prepare', generation=1) == prepared
     assert calls == {'intake': 1, 'production': 1, 'verification': 1}
-    assert len(models) == 2 and all(len(model.calls) == 4 for model in models)
+    assert len(models) == 2 and all(len(model.calls) == 3 for model in models)
     script = '''
 import json, sys
 from agent.application import InteractiveAgentApplication

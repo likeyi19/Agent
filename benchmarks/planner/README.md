@@ -1,11 +1,14 @@
 # LLM Planner Quality Benchmarks
 
-The existing runner has two explicit tracks. `--track v3` (the CLI default)
-preserves the historical benchmark below. `--track scoped-v4` evaluates the
-current two-stage Planner using the same registry guards and benchmark-only
-role/semantic-policy scorer. Neither track supplies production routing or repair
-feedback. Production planning, compiler authority, scientific tools, and recovery
-are unchanged.
+R5 retains the explicit `--track v3` compatibility benchmark and its binding
+scorer. The historical two-stage `--track scoped-v4` live/replay runner is retired:
+it fails explicitly before constructing a model. Its corpus, read-only candidate
+scoring and accepted reports retain their original semantics. Current direct-v4
+coverage lives in orchestration/application tests and the existing interactive
+harness; no replacement qualification framework is introduced.
+
+The scoped-v4 sections below record the historical experiment, not current CLI
+instructions or provider-call budgets.
 
 ## Historical v3 track
 
@@ -75,7 +78,7 @@ nondeterminism is reported rather than converted into a normal test failure.
   custom injected model remains responsible for any behavior hidden inside one
   `complete()` call.
 
-## Current scoped-v4 track
+## Historical scoped-v4 track (execution retired by R5)
 
 Stage A capability selection → `PlanningScope` → Stage B semantic-v4 planning
 → compiler / preflight evaluation.

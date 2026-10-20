@@ -155,7 +155,7 @@ def test_registered_fastq_exact_interpreted_inspection_and_permutation_retry(fas
     assert app.evidence('session', view.revision_id, 'intake').status == 'available'
     assert submit(app, reordered) == view
     assert app.recover_turn('session', 'analysis', complete_presentation=True) == view
-    assert calls == {'intake': 1} and len(models) == 1 and len(models[0].calls) == 4
+    assert calls == {'intake': 1} and len(models) == 1 and len(models[0].calls) == 3
 
 
 def test_registered_fastq_first_acceptance_requires_actual_exact_inspection_membership(

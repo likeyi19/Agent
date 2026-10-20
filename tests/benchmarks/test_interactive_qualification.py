@@ -24,6 +24,9 @@ class ScriptedModel:
 
     def complete(self, *, prompt, response_schema):
         self.calls.append((json.loads(prompt), response_schema))
+        data = json.loads(prompt)
+        if "grounding_review_version" in data:
+            return json.dumps(dict(verdicts={row['id']: "entailed" for row in data['paragraphs']}))
         assert self.outcomes, "Qualification made an unexpected model call"
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
@@ -106,7 +109,7 @@ def test_same_contract_runs_through_different_candidate_identities(scenarios, ca
 def test_interpreter_only_never_enters_planning(scenarios, candidate, monkeypatch):
     def forbidden(*a, **k):
         raise AssertionError("Interpreter entered Planner")
-    for name in ("plan", "plan_with_diagnostics", "plan_with_recovery", "_select_scope", "_plan_detailed"):
+    for name in ("plan", "plan_with_diagnostics", "plan_with_recovery", "_plan_detailed"):
         monkeypatch.setattr(LLMPlanner, name, forbidden)
     record, model = result(interpreter_case(scenarios), candidate, execute_response())
     assert len(model.calls) == 1
@@ -129,7 +132,6 @@ def test_stage_a_does_not_enter_stage_b(scenarios, candidate, monkeypatch):
 
 
 def test_stage_b_uses_frozen_scope_without_stage_a(scenarios, candidate, monkeypatch):
-    monkeypatch.setattr(LLMPlanner, "_select_scope", lambda *a, **k: pytest.fail("Isolated B entered A"))
     record, model = result(scenarios["I03"], candidate, inspection())
     assert len(model.calls) == 1
     prompt, schema = model.calls[0]
@@ -280,8 +282,8 @@ def test_preflight_rejection_stays_separate_from_compilation(scenarios, candidat
 
 def test_layer2_uses_actual_admission_and_planonly_preflight(scenarios, candidate):
     case = replace(scenarios["I01"], surface="layer2")
-    record, model = result(case, candidate, execute_response(), selection("processed_inspection"), inspection())
-    assert len(model.calls) == 3
+    record, model = result(case, candidate, execute_response(), inspection())
+    assert len(model.calls) == 2
     assert record["contract_success"] is record["admission_success"] is True
     assert record["compiler_success"] is record["preflight_success"] is True
     assert record["semantic_success"] is True
@@ -293,8 +295,8 @@ def test_layer2_uses_actual_admission_and_planonly_preflight(scenarios, candidat
     (PlanningModelError("sanitized", code="PROVIDER_TIMEOUT"), "transport_retry")])
 def test_layer2_preserves_existing_recovery_without_harness_retries(scenarios, candidate, failure, action):
     case = replace(scenarios["I01"], surface="layer2")
-    record, model = result(case, candidate, execute_response(), selection("processed_inspection"), failure, inspection())
-    assert len(model.calls) == 4
+    record, model = result(case, candidate, execute_response(), failure, inspection())
+    assert len(model.calls) == 3
     assert record["final_outcome"]["status"] == "PLANNED"
     assert record["initial_outcome"] != record["final_outcome"]
     assert any(call.get("recovery_kind") == action for call in record["calls"])
@@ -307,8 +309,8 @@ def test_layer2_records_initial_compiler_failure_before_production_repair(scenar
     request = AgentRequest(case.request.request_id, case.request.prompt,
         dict(case.request.inputs, unrelated="present-but-unauthorized"), case.request.mode)
     record, model = result(replace(case, request=request), candidate,
-        execute_response(), selection("processed_inspection"), inspection(source="unrelated"), inspection())
-    assert len(model.calls) == 4
+        execute_response(), inspection(source="unrelated"), inspection())
+    assert len(model.calls) == 3
     initial = record["initial_outcome"]
     assert initial["contract_success"] is True
     assert initial["compiler_success"] is False
@@ -322,8 +324,8 @@ def test_layer2_records_initial_compiler_failure_before_production_repair(scenar
 
 def test_layer2_does_not_retry_a_valid_false_unsupported(scenarios, candidate):
     record, model = result(replace(scenarios["I01"], surface="layer2"), candidate,
-        execute_response(), selection("processed_inspection"), unsupported())
-    assert len(model.calls) == 3
+        execute_response(), unsupported())
+    assert len(model.calls) == 2
     assert record["contract_success"] is True
     assert record["failure_category"] == "semantic"
     assert record["semantic_success"] is False
@@ -332,8 +334,8 @@ def test_layer2_does_not_retry_a_valid_false_unsupported(scenarios, candidate):
 
 def test_layer2_preserves_interpreter_target_vs_actual_plan_admission(scenarios, candidate):
     record, model = result(replace(scenarios["I01"], surface="layer2"), candidate,
-        turn(target="epizoo_embed_cells"), selection("processed_inspection"), inspection())
-    assert len(model.calls) == 3
+        turn(target="epizoo_embed_cells"), inspection())
+    assert len(model.calls) == 2
     assert record["contract_success"] is True
     assert record["compiler_success"] is record["preflight_success"] is True
     assert record["admission_success"] is False
@@ -362,10 +364,11 @@ def test_layer2_invalid_interpreter_output_records_actual_clarification_fallback
     assert_zero_science(record)
 
 
-def test_layer2_unreached_compiler_after_stage_a_transport_is_unobserved(scenarios, candidate):
+def test_layer2_unreached_compiler_after_planner_transport_is_unobserved(scenarios, candidate):
     record, model = result(scenarios["I01"], candidate, execute_response(),
+        PlanningModelError("sanitized", code="PROVIDER_TIMEOUT"),
         PlanningModelError("sanitized", code="PROVIDER_TIMEOUT"))
-    assert len(model.calls) == 2
+    assert len(model.calls) == 3
     assert record["contract_success"] is None
     assert record["compiler_success"] is record["preflight_success"] is None
     assert record["failure_category"] == "operational"
@@ -415,7 +418,7 @@ def test_answer_and_guidance_are_independent_readonly_contracts(scenarios, candi
     def response(prompt, schema):
         return helper(prompt)
     record, model = result(scenarios[scenario_id], candidate, response)
-    assert len(model.calls) == 1
+    assert len(model.calls) == 2
     assert record["contract_success"] is record["admission_success"] is True
     assert record["human_review_required"] is True
     assert record["semantic_properties_pass"] is True
@@ -441,7 +444,7 @@ def test_answer_and_guidance_reject_invented_claim_references(scenarios, candida
     def bad_reference(prompt, schema):
         response = helper(prompt)
         explanation = response if scenario_id == "I08" else response["candidates"][0]["explanation"]
-        explanation["paragraphs"][0]["parts"] = [{"kind": "claim", "id": "never-offered-claim"}]
+        explanation["paragraphs"][0]["citations"] = ["never-offered-claim"]
         return response
     record, model = result(scenarios[scenario_id], candidate, bad_reference)
     assert len(model.calls) == 1

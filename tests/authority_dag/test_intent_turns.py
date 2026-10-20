@@ -85,7 +85,7 @@ def test_set_matrix_navigation_and_historical_branch(source):
     assert result.status=='activated',result
     assert counts(work)=={'production.selection':1,'owner.selection':1,'production.matrix':1,'owner.matrix':1}
     assert work['integrity']>0 and work['presentation']==1
-    assert len(interpreter.calls)==1 and len(planner.calls)==2
+    assert len(interpreter.calls)==1 and len(planner.calls)==1
     state=app.sessions.load('analysis');r2=state.revisions[-1]
     assert {o.name for o in r2.outputs}=={'fragments','qc','selection','matrix'}
     run=app.run_store.load(r2.run_id)
@@ -96,7 +96,7 @@ def test_set_matrix_navigation_and_historical_branch(source):
     nav=Interpreter(dict(kind='navigate',relation='previous'))
     with all_work() as work:
         assert app.sessions.respond('analysis','back','use the previous version',interpreter=nav).status=='activated'
-    assert not work and len(planner.calls)==2 and len(nav.calls)==1
+    assert not work and len(planner.calls)==1 and len(nav.calls)==1
     assert app.sessions.load('analysis').active_revision_id==r1.revision_id
     app2, planner2=app_for(source)
     with all_work() as work:
@@ -131,7 +131,7 @@ def test_clarification_grounding_and_parameter_contract_before_planning(source):
     # An independently sufficient follow-up uses durable active state, without chat replay.
     result=app.sessions.respond('analysis','answer','Set TSS to 7',interpreter=change('Set TSS to 7'))
     assert result.status=='activated'
-    assert len(planner.calls)==2
+    assert len(planner.calls)==1
 
 
 def test_increment_decrement_and_immutable_parameters(source):
@@ -305,7 +305,7 @@ def test_failures_and_idempotence_preserve_active_state(source,monkeypatch):
     with all_work() as work:
         assert app.sessions.respond('analysis','failed-production','Set TSS to 7',interpreter=Forbidden()).status=='failed'
     assert not work
-    # Fail the scoped Planner without admitting an executable plan.
+    # Fail the direct Planner without admitting an executable plan.
     class BrokenPlan:
         def plan(self,*args,**kwargs): raise ValueError('test planner failure')
     failed=ResearchAgentApplication(app.workspace_root,planner=BrokenPlan())

@@ -68,7 +68,7 @@ def test_model_boundary_retains_authoritative_catalog_context_and_public_readine
     assert model.calls[-1]['context'] == source
     assert payload['question'] == interaction.utterance
     assert payload['objective'] == interaction.admitted['focus']
-    assert len(payload['instructions']) == 8
+    assert all(instruction in payload['instructions'] for instruction in guidance.dialogue.ANSWER_INSTRUCTIONS)
     assert list(payload).index('instructions') < list(payload).index('context')
     assert list(compact)[:3] == ['evidence', 'readiness', 'catalog']
     assert compact['catalog'] == source['catalog']
@@ -81,11 +81,7 @@ def test_model_boundary_retains_authoritative_catalog_context_and_public_readine
     for row in compact['readiness']['by_capability'].values():
         assert set(row) == {'required_ports_without_supplied_request_source',
                             'required_scientific_parameters', 'explicit_request_source_choices'}
-    # Positive descriptions of the unchanged prose contract, not a token blacklist.
     assert 'paragraph order supplies the structure' in payload['instructions'][1]
-    assert 'including conditional passages' in payload['instructions'][2]
-    assert 'standalone spelled-out numbers' in payload['instructions'][2]
-    assert 'complete target, subject, predicate and value' in payload['instructions'][2]
     enum = schema['properties']['candidates']['items']['properties']['capability']['enum']
     assert enum == payload['offered_capabilities'] == sorted(app.registry.names())
 
@@ -177,6 +173,9 @@ def test_fixed_followup_restricts_offers_without_filtering_catalog(app, monkeypa
 def test_representative_payloads_remain_direct_with_full_semantic_reconstruction(fixture, utterance, subject):
     class Witness:
         def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            if 'grounding_review_version' in value:
+                return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
             self.prompt, self.schema = prompt, response_schema
             return json.dumps(scripted_guidance(json.loads(prompt)))
 

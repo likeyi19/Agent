@@ -32,16 +32,17 @@ class ScriptedModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             return json.dumps(dict(turn_schema_version=1,
                 decision=self.decision(value) if callable(self.decision) else self.decision))
-        if 'selection_schema_version' in response_schema.get('properties', {}):
+        if 'semantic_prompt_version' in value:
             if self.started:
                 self.started.set()
                 assert self.release.wait(20)
-            return json.dumps(dict(selection_schema_version=1,
-                decision=dict(kind='select', capability_ids=['processed_inspection'])))
+            return _semantic_planning_response()
         if 'output_selection_schema_version' in value:
             return json.dumps(dict(outputs=[dict(name='inspection', step_id='inspect', output_key='n_cells')]))
         if 'dialogue_schema_version' in value:
@@ -79,7 +80,7 @@ def test_first_real_turn_and_fresh_process_reopen_retry(tmp_path):
     assert view.status == 'succeeded' and view.response.kind == 'execute'
     assert view.response.status == 'activated' and view.revision_id
     assert calls == ['inspect_scATAC']
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     assert service.status('session', 'first') == view
     assert first(service, source) == view and len(models) == 1 and calls == ['inspect_scATAC']
     encoded = json.dumps(view.to_dict())
@@ -178,7 +179,7 @@ def test_concurrent_profiles_bind_all_roles_and_duplicate_pending(tmp_path):
     assert av.status == bv.status == 'succeeded' and calls == ['inspect_scATAC'] * 2
     assert {m.model_id for m in models} == {'model/alpha','model/beta'}
     for model in models:
-        assert len(model.calls) == 4
+        assert len(model.calls) == 3
         assert sum('turn_schema_version' in p for p in model.calls) == 1
         assert sum('output_selection_schema_version' in p for p in model.calls) == 1
     assert service.reopen_session('one').generation == service.reopen_session('two').generation == 1
@@ -499,7 +500,7 @@ result=first(app,Path(sys.argv[2]),session='accept')
 assert result.status=='succeeded' and result.revision_id
 assert app.status('accept','first')==result
 assert first(app,Path(sys.argv[2]),session='accept')==result
-assert calls==['inspect_scATAC'] and len(models)==1 and len(models[0].calls)==4
+assert calls==['inspect_scATAC'] and len(models)==1 and len(models[0].calls)==3
 print(json.dumps(result.to_dict()))
 '''
     consumer='''

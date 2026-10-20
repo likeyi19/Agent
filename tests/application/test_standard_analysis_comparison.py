@@ -25,9 +25,10 @@ def test_descriptive_parameters_need_no_population_correspondence(app, monkeypat
         assert not any(claims[p['left']]['field'] in ('n_cells', 'n_clusters') for p in pairs)
         pair = next(p for p in pairs if claims[p['left']]['field'] == field)
         assert pair['relationship'] == 'different'
-        return dict(support='supported', paragraphs=[dict(parts=[
-            dict(kind='comparison', id=pair['id']), dict(kind='meaning', id='comparison_scope'),
-            *[dict(kind='meaning', id=k) for k in evidence['meanings'] if k.startswith('m')]])])
+        return dict(support='supported', paragraphs=[dict(
+            text=' '.join(evidence['meanings'].values()), kind='finding',
+            citations=[pair['left'],pair['right']], comparisons=[pair['id']])])
+
     guarded = forbid_work(app, monkeypatch)
     before = guarded.sessions.load('session')
     result = ask(guarded, 'compare', 'Compare the current settings with the previous accepted result.',
@@ -67,9 +68,11 @@ def test_model_and_feature_mismatches_allow_only_descriptive_settings(app, monke
                  if claims[p['left']]['field'] in ('species', 'embedding_dim')]
         assert len(pairs) == 2 and all(p['relationship'] == 'different' for p in pairs)
         assert not any(claims[p['left']]['field'] == 'n_cells' for p in evidence['comparison']['pairs'])
-        return dict(support='supported', paragraphs=[dict(parts=[
-            *[dict(kind='comparison', id=p['id']) for p in pairs],
-            dict(kind='meaning', id='comparison_scope')])])
+        return dict(support='supported', paragraphs=[dict(
+            text=evidence['meanings']['comparison_scope'], kind='finding',
+            citations=list(dict.fromkeys(k for p in pairs for k in (p['left'],p['right']))),
+            comparisons=[p['id'] for p in pairs])])
+
     result = ask(forbid_work(app, monkeypatch), 'models', 'Compare the two model outputs.',
         Model(question('g0', comparison=dict(output='g1', subject=None)), response=response))
     assert result.status == 'answered', result
@@ -81,15 +84,14 @@ def test_descriptive_comparison_keeps_binding_and_integrity_guards(app, monkeypa
     _, path, _ = accepted(app, 'compute_cell_umap', name='first')
     accepted(app, 'compute_cell_umap', name='second')
     def response(value):
-        if failure == 'metric':
-            return dict(support='supported', paragraphs=[dict(parts=[dict(kind='comparison', id='silhouette')])])
-        if failure == 'one_operand':
-            claim = next(c for c in value['evidence']['claims'] if c['target'] == 't0' and c['field'] == 'min_dist')
-            parts = [dict(kind='claim', id=claim['claim_id'])]
-        else:
-            path.write_bytes(path.read_bytes() + b' ')
-            parts = [dict(kind='comparison', id=value['evidence']['comparison']['pairs'][0]['id'])]
-        return dict(support='supported', paragraphs=[dict(parts=parts)])
+        pair = value['evidence']['comparison']['pairs'][0]
+        refs, comparisons = [pair['left'],pair['right']], [pair['id']]
+        if failure == 'metric': comparisons = ['silhouette']
+        elif failure == 'one_operand': refs = [pair['left']]
+        else: path.write_bytes(path.read_bytes() + b' ')
+        return dict(support='supported', paragraphs=[dict(text='The accepted settings differ.',
+            kind='finding', citations=refs, comparisons=comparisons)])
+
     guarded = forbid_work(app, monkeypatch)
     result = ask(guarded, failure, 'Compare the layouts.',
         Model(question('g0', comparison=dict(output='g1', subject=None)), response=response))

@@ -229,7 +229,7 @@ def test_uploaded_fastq_layouts_exact_typed_roles_inspect_without_producer_conte
         assert str(tiny['root']) not in json.dumps(view)
         assert execute(client, body) == view
         assert calls == dict(intake=1, production=0, verification=0, alignment=0)
-        assert len(web.models) == 1 and len(web.models[0].calls) == 4
+        assert len(web.models) == 1 and len(web.models[0].calls) == 3
 
 
 @pytest.mark.parametrize('layout', [chromap.FastqLayout.A, chromap.FastqLayout.B])

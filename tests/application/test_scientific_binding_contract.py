@@ -241,6 +241,10 @@ def test_registry_metadata_offers_only_reviewed_free_text_declarations(registry)
     offered = {(item['tool'], item['argument']) for item in scientific_parameters(registry)}
     reviewed = {(tool, name) for tool, name, _ in STRING_DECLARATIONS}
     reviewed.add(('import_scATAC_fragments', 'namespace'))
+    reviewed.update((tool_name, name) for tool_name in registry.names()
+        for name, spec in {**registry.get(tool_name).required_arguments,
+                           **registry.get(tool_name).optional_arguments}.items()
+        if spec.planning is not None and spec.planning.conversational_exact_string)
     eligible = set()
     unreviewed = set()
     for tool_name in registry.names():

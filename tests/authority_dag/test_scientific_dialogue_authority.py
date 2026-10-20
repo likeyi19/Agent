@@ -9,6 +9,8 @@ class Dialogue:
     def __init__(self, comparison=False): self.comparison = comparison
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         if 'turn_schema_version' in value:
             outputs = value['dialogue']['outputs']
             def target(relation):
@@ -19,7 +21,7 @@ class Dialogue:
                 target=target('current'), comparison=target('parent') if self.comparison else None,focus='question')))
         ids = [c['claim_id'] for c in value['evidence']['claims'] if c['field']=='n_selected']
         return json.dumps(dict(support='supported',paragraphs=[dict(
-            parts=[dict(kind='text',text='The accepted selection records:')]+[dict(kind='claim',id=c) for c in ids])]))
+            text='The accepted selection counts are recorded.', kind='finding', citations=ids, comparisons=[p['id'] for p in value['evidence'].get('comparison', {}).get('pairs', ()) if {p['left'],p['right']} <= set(ids)])]))
 
 
 def test_dialogue_execution_navigation_and_reuse_stay_separate(source):

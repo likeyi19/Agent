@@ -81,6 +81,7 @@ class RecordingModel:
             ('turn_schema_version', 'interpreter'),
             ('selection_schema_version', 'stage_a'),
             ('dialogue_schema_version', 'answer'),
+            ('grounding_review_version', 'grounding_review'),
             ('guidance_schema_version', 'guidance'),
             ('output_selection_schema_version', 'output_selection'),
         ) if key in payload), 'stage_b')
@@ -144,7 +145,7 @@ def zero_science(registry_guard, *, read_only=False):
             from agent.tools.data.authority_context import VerificationContext
             owners = (
                 (AgentRuntime, ('run', 'resume')),
-                (LLMPlanner, ('plan', 'plan_with_recovery', 'plan_with_diagnostics', '_plan_detailed', '_select_scope')),
+                (LLMPlanner, ('plan', 'plan_with_recovery', 'plan_with_diagnostics', '_plan_detailed')),
                 (PlanExecutor, ('preflight',)),
                 (ResearchAgentApplication, ('run', 'resume', '_complete')),
                 (VerificationContext, ('verify',)),
@@ -255,7 +256,7 @@ def _planner_observations(recorder, request, registry, diagnostics=()):
                            capability_ids=list(scope.capability_ids))
             else:
                 visible = scope.visible_tool_names if scope is not None else (
-                    PlanningScope(registry, recorder.scenario.fixed_capability_ids).visible_tool_names)
+                    PlanningScope(registry, recorder.scenario.fixed_capability_ids or None).visible_tool_names)
                 candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible)
                 bindings = {}
                 rules = build_semantic_compiler_contract(registry).request_bindings
@@ -492,7 +493,7 @@ def run_attempt(scenario, candidate, *, model, attempt_id='attempt-1', registry=
                 recorder.calls[0]['semantic_success'] = result['semantic_success']
                 recorder.calls[0]['failure_category'] = result['failure_category']
             result['initial_outcome'] = dict(planner_calls[1] if len(planner_calls) > 1 and planner_calls[0]['surface'] == 'stage_a'
-                                             else recorder.calls[0]) if recorder.calls else None
+                                             else planner_calls[0] if planner_calls else recorder.calls[0]) if recorder.calls else None
             result['final_outcome'] = dict(decision_kind=result['decision_kind'], contract_success=result['contract_success'],
                 semantic_success=result['semantic_success'], compiler_success=result['compiler_success'],
                 preflight_success=result['preflight_success'], failure_category=result['failure_category'],

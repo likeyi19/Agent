@@ -26,13 +26,15 @@ class Model:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             choice = self.decision(value) if callable(self.decision) else self.decision
             return json.dumps(dict(turn_schema_version=1, decision=choice))
         if 'output_selection_schema_version' in value:
             return json.dumps(dict(outputs=[dict(name='inspection',step_id='inspect',output_key='n_cells')]))
-        assert value['dialogue_schema_version'] == 2
+        assert value['dialogue_schema_version'] == 3
         if self.started: self.started.set()
         if self.release: assert self.release.wait(10)
         if self.response is not None:
@@ -41,10 +43,14 @@ class Model:
         ids = [c['claim_id'] for c in value['evidence']['claims'] if not self.fields or c['field'] in self.fields]
         ids = ids[:6]
         meanings = list(value['evidence']['meanings'])
-        parts = [dict(kind='text', text='The accepted evidence records:')]
-        parts += [dict(kind='claim', id=i) for i in ids]
-        parts += [dict(kind='meaning', id=m) for m in meanings]
-        return json.dumps(dict(support=self.support, paragraphs=[dict(parts=parts)]))
+        rows = {c['claim_id']: c for c in value['evidence']['claims']}
+        labels = {t['handle']: t['label'] for t in value['evidence']['targets']}
+        text = ' '.join(f"{labels[rows[i]['target']]}, group {rows[i]['subject']}: "
+                        f"{rows[i].get('semantics', {}).get('label', rows[i]['field'])} = {rows[i]['value']}." for i in ids)
+        text += ' ' + ' '.join(value['evidence']['meanings'].values())
+        return json.dumps(dict(support=self.support, paragraphs=[dict(text=text,
+            kind='finding' if ids else 'limitation', citations=ids, comparisons=[p['id'] for p in value['evidence'].get('comparison', {}).get('pairs', ()) if {p['left'], p['right']} <= set(ids)])]))
+
 
 
 def annotation(app, *, omitted=0):
@@ -152,35 +158,10 @@ def test_no_implicit_cross_revision_cluster_correspondence(app, monkeypatch):
     assert result.status == 'unavailable' and 'correspondence' in result.text
 
 
-@pytest.mark.parametrize('attack', ['number','number_word','category','new_value','unknown_claim','wrong_subject','legacy_slot'])
-def test_provider_cannot_replace_claim_values_or_subjects(app, monkeypatch, attack):
-    annotation(app)
-    def forged(value):
-        c = next(c['claim_id'] for c in value['evidence']['claims'] if c['field']=='primary_annotation')
-        part = dict(kind='claim',id=c)
-        item = dict(parts=[part])
-        if attack == 'number': item['parts'].append(dict(kind='text',text='contains 999 cells'))
-        if attack == 'number_word': item['parts'].append(dict(kind='text',text='contains ninety nine cells'))
-        if attack == 'category': item['parts'].append(dict(kind='text',text='is CD8 T'))
-        if attack == 'new_value': part['value'] = 'invented label'
-        if attack == 'unknown_claim': part['id'] = 'c999'
-        if attack == 'wrong_subject': part['subject'] = '7'
-        if attack == 'legacy_slot': item['parts'] = [dict(kind='text',text='{{'+c+'}}')]
-        return dict(support='supported', paragraphs=[item])
-    response = ask(forbid_work(app,monkeypatch), 'attack', 'Explain cluster 3', Model(question(subject='3'), response=forged))
-    if attack in ('number', 'number_word', 'category'):
-        assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
-        claim, = response.scientific.claims
-        assert (claim.subject, claim.field, claim.value) == ('3', 'primary_annotation', 'CD8 T')
-        assert not any(v in response.text for v in ('999', 'ninety nine', 'is CD8 T'))
-    else:
-        assert response.status == 'unavailable' and response.scientific is None
-
 
 def nnz_response(value, text):
     claim = next(c['claim_id'] for c in value['evidence']['claims'] if c['field'] == 'nnz')
-    return dict(support='supported', paragraphs=[dict(parts=[
-        dict(kind='claim', id=claim), dict(kind='text', text=text)])])
+    return dict(support='supported', paragraphs=[dict(text=text, kind='finding', citations=[claim], comparisons=[])])
 
 
 @pytest.mark.parametrize('term', ['nonzero', 'non-zero', 'non\u2010zero', 'non\u2011zero', 'NON-ZERO'])
@@ -196,53 +177,6 @@ def test_nonzero_metric_term_preserves_bound_value_and_prose(app, monkeypatch, t
     assert claim.source['pointer'] == '/steps/0/facts/nnz'
     assert response.scientific.explanation.endswith(phrase)
 
-
-@pytest.mark.parametrize('unbound', [
-    'the matrix contains zero cells',
-    'the matrix contains ZERO cells',
-    'there are ninety nine cells',
-    'there are 999 cells',
-    'there are twenty-one cells',
-    'there are twenty\u2011one cells',
-    'non-one',
-    'xnon-zero',
-    '_non-zero',
-    'non-zero123',
-    'non zero',
-    'non\u2014zero',
-    '/private/input',
-    'https://example.org/data',
-    'csr',
-])
-def test_nonzero_metric_term_keeps_unbound_literals_rejected(app, monkeypatch, unbound):
-    accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823, x_storage_type='csr'))
-    model = Model(question(), response=lambda value: nnz_response(value, f'non-zero entries; {unbound}'))
-    response = ask(forbid_work(app, monkeypatch), 'invalid', 'Explain the nonzero entry count.', model)
-    assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
-    claim, = response.scientific.claims
-    assert (claim.field, claim.value) == ('nnz', 11535823)
-    assert f'non-zero entries; {unbound}' not in response.text
-
-
-@pytest.mark.parametrize('hyphen', ['-', '\u2010', '\u2011'])
-@pytest.mark.parametrize('separator', ['adjacent_text', 'claim', 'meaning'])
-def test_nonzero_metric_term_cannot_span_parts(app, monkeypatch, hyphen, separator):
-    accepted(app, 'inspect_scATAC', overrides=dict(nnz=11535823))
-    def split(value):
-        result = nnz_response(value, f'non{hyphen}')
-        parts = result['paragraphs'][0]['parts']
-        if separator == 'claim':
-            parts.append(dict(parts[0]))
-        elif separator == 'meaning':
-            parts.append(dict(kind='meaning', id=next(iter(value['evidence']['meanings']))))
-        parts.append(dict(kind='text', text='zero cells'))
-        return result
-    response = ask(forbid_work(app, monkeypatch), 'split', 'Explain the nonzero entry count.',
-                   Model(question(), response=split))
-    assert response.status == 'answered' and response.scientific.support == 'insufficient_evidence'
-    claim, = response.scientific.claims
-    assert (claim.field, claim.value) == ('nnz', 11535823)
-    assert 'zero cells' not in response.text
 
 
 def test_reordered_completions_require_explicit_predecessor(app, monkeypatch):
@@ -281,8 +215,10 @@ class Model:
   p=json.loads(prompt)
   if 'turn_schema_version' in p:
    return json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer',intent='scientific',target=dict(output='@focus',subject=None),comparison=None,focus='question')))
+  if 'grounding_review_version' in p:
+   return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
   c=next(c['claim_id'] for c in p['evidence']['claims'] if c['field']=='primary_annotation')
-  return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(parts=[dict(kind='text',text='The recorded assignment follows.'),dict(kind='claim',id=c)])]))
+  return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(text='The recorded assignment follows.', kind='finding', citations=[c], comparisons=[])]))
 app=ResearchAgentApplication(sys.argv[1])
 result=app.sessions.respond('session','b','Why?',interpreter=Model())
 assert result.status=='answered',result
@@ -415,14 +351,18 @@ def test_retry_reuses_admitted_references_without_reinterpreting(app, monkeypatc
     assert len(model.calls)==1 and 'dialogue_schema_version' in model.calls[0]
 
 
-def test_comparison_generation_cannot_drop_an_operand(app, monkeypatch):
+def test_comparison_context_allows_exact_partial_fact_without_comparison(app, monkeypatch):
     accepted(app,'inspect_scATAC',overrides={'n_cells':2})
     accepted(app,'inspect_scATAC',name='next',overrides={'n_cells':4})
     def omit(value):
         c=next(c['claim_id'] for c in value['evidence']['claims'] if c['field']=='n_cells' and c['target']=='t0')
-        return dict(support='supported',paragraphs=[dict(parts=[dict(kind='claim',id=c)])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted cell count is recorded.', kind='finding', citations=[c], comparisons=[])])
     model=Model(question('r0',comparison=dict(output='r1',subject=None)),response=omit)
-    assert ask(forbid_work(app,monkeypatch),'bad','Compare with the parent.',model).status=='unavailable'
+    result = ask(forbid_work(app,monkeypatch),'partial','Compare with the parent.',model)
+    assert result.status == 'answered'
+    assert len(result.scientific.claims) == 1
+    assert result.scientific.claims[0].target == 't0'
+    assert result.scientific.claims[0].value == 4
 
 
 def test_reviewed_metric_meaning_requires_exact_profile(app, monkeypatch):
@@ -442,7 +382,7 @@ def test_evidence_changed_during_generation_is_rejected(app, monkeypatch):
     def response(value):
         path.write_bytes(path.read_bytes()+b' ')
         c=next(c['claim_id'] for c in value['evidence']['claims'] if c['field']=='n_cells')
-        return dict(support='supported',paragraphs=[dict(parts=[dict(kind='claim',id=c)])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted cell count is recorded.', kind='finding', citations=[c], comparisons=[])])
     result=ask(forbid_work(app,monkeypatch),'a','Explain this result.',Model(question(),response=response))
     assert result.status=='unavailable' and result.scientific is None
 
@@ -454,7 +394,7 @@ def test_navigation_during_generation_marks_captured_result_historical(app, monk
     def response(value):
         app.sessions.switch('session','back',original,expected_generation=2)
         c=next(c['claim_id'] for c in value['evidence']['claims'] if c['field']=='n_cells')
-        return dict(support='supported',paragraphs=[dict(parts=[dict(kind='claim',id=c)])])
+        return dict(support='supported',paragraphs=[dict(text='The accepted cell count is recorded.', kind='finding', citations=[c], comparisons=[])])
     result=ask(app,'a','Explain this result.',Model(question(),response=response))
     assert result.status=='answered' and 'historical' in result.text
     assert result.scientific.claims[0].value==4

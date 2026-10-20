@@ -35,7 +35,7 @@ def test_empty_first_request_uses_interpreter_planner_compiler_and_runtime(tmp_p
         interpreter=model, expected_generation=0, execution_inputs={'input_path': str(source)},
         submission=submission)
     assert (outcome.kind, outcome.status) == ('execute', 'activated')
-    assert calls == ['inspect_scATAC'] and model.calls == 3 and len(model.scope_calls) == 1
+    assert calls == ['inspect_scATAC'] and model.calls == 3 and not getattr(model, 'scope_calls', ())
     state = application.sessions.load('empty')
     interaction, = state.interactions
     revision, = state.revisions

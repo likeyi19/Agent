@@ -34,15 +34,15 @@ def response_work():
         # bodies remain counted separately by all_work as owner.<kind>.
         'owner.verification_entry': verify_barcode_qc,
     }
-    codes = {f.__code__: name for name, f in functions.items()}
+    codes = {id(f.__code__): name for name, f in functions.items()}
     with all_work() as calls:
-        previous = sys.getprofile()
+        previous = sys.gettrace()
         def profile(frame, event, arg):
             previous(frame, event, arg)
-            if event == 'call' and frame.f_code in codes: calls[codes[frame.f_code]] += 1
-        sys.setprofile(profile)
+            if event == 'call' and id(frame.f_code) in codes: calls[codes[id(frame.f_code)]] += 1
+        sys.settrace(profile)
         try: yield calls
-        finally: sys.setprofile(previous)
+        finally: sys.settrace(previous)
 
 
 def ask(app, turn, utterance, intent, relation='current'):
@@ -274,7 +274,7 @@ def test_matrix_only_summary_and_navigation_accounting(source):
         outcome = app.sessions.respond('analysis','matrix-only','Keep this selection and rebuild the matrix',
             interpreter=Interpreter(dict(kind='execute',base='current',operation='op.0',target='matrix',delta=None)))
     assert {k:v for k,v in counts(calls).items() if k != 'owner.verification_entry'} == {'production.matrix':1,'owner.matrix':1}
-    assert len(planner.calls) == 2 and calls['response.execution'] == 1
+    assert len(planner.calls) == 1 and calls['response.execution'] == 1
     assert outcome.facts and 'tool execution for matrix.' in outcome.text
     assert {r.output.role for r in outcome.facts.reuse} == {'fragments','cell selection'}
     assert {o.role for o in outcome.facts.retained_outputs} == {'fragments','cell selection','QC'}

@@ -67,6 +67,8 @@ class SelectionModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             return json.dumps(dict(turn_schema_version=1,
@@ -79,9 +81,7 @@ class SelectionModel:
                 output_key='manifest_path')]))
         if 'dialogue_schema_version' in value:
             claims = {claim['field']: claim['claim_id'] for claim in value['evidence']['claims']}
-            return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                dict(kind='text', text='The accepted selection records:'),
-                *(dict(kind='claim', id=claims[field]) for field in QUESTION_FIELDS)])]))
+            return json.dumps(dict(support='supported', paragraphs=[dict(text='The accepted selection parameters are recorded.', kind='finding', citations=[claims[field] for field in QUESTION_FIELDS], comparisons=[])]))
         steps = [dict(step_id='selection', tool=TOOL,
             sources=[dict(target='barcode_qc', source=dict(kind='input',
                 input='barcode_qc_manifest_path'))], control_dependencies=[])]

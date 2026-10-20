@@ -6,7 +6,7 @@ import pytest
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
 from agent.application.session_state import digest
 from agent.orchestration import PlanningModelProfile, PlanningRecoveryPolicy
-from agent.orchestration.planning_recovery import SCOPED_PLANNING_RECOVERY_POLICY_VERSION
+from agent.orchestration.planning_recovery import PLANNING_RECOVERY_POLICY_VERSION
 from agent.providers import PlanningModelFactoryRegistry
 from test_interactive_boundary import ScriptedModel
 from test_service import _counting_registry, _tiny_h5ad
@@ -19,7 +19,7 @@ NONE_POLICY_DIGEST = '30e7ee9655c99086f814876d44d33733135b592be8d18e5e172029ad41
 
 def explicit_policy(*, codes=None):
     arguments = dict(
-        policy_version=SCOPED_PLANNING_RECOVERY_POLICY_VERSION,
+        policy_version=PLANNING_RECOVERY_POLICY_VERSION,
         max_transport_retries=0, max_repairs=0, max_profile_failovers=0,
         max_primary_local_recovery_actions=0, max_total_provider_calls=2,
         max_retry_delay_seconds=0,
@@ -63,7 +63,7 @@ def test_explicit_policy_validates_then_executes_and_duplicate_replays_without_m
     view = service.submit_turn('session', 'inspect', 'Inspect the supplied matrix.', **arguments)
     assert view.status == 'succeeded' and view.response.status == 'activated'
     assert scientific_calls == ['inspect_scATAC']
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     assert service._planning['planning_recovery_policy'] is policy
     submission = service._application.sessions.load('session').interactions[-1].submission
     assert submission['configuration_sha256'] == digest(dict(
@@ -71,7 +71,7 @@ def test_explicit_policy_validates_then_executes_and_duplicate_replays_without_m
         recovery_policy=policy.to_dict(),
     ))
     assert service.submit_turn('session', 'inspect', 'Inspect the supplied matrix.', **arguments) == view
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     assert scientific_calls == ['inspect_scATAC']
 
 

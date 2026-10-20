@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.orchestration.planning_model import PlanningModelError
-from benchmarks.interactive import harness, run_breadth
+from benchmarks.interactive import harness
 from benchmarks.interactive.candidates import Availability, Candidate
 from benchmarks.interactive.openrouter import (
     OPENROUTER_CANDIDATES, OpenRouterPolicyViolation, _candidates,
@@ -33,89 +33,6 @@ SCHEMA = {
 }
 EXECUTE = json.dumps({"turn_schema_version": 1,
     "decision": {"kind": "execute_plan", "target": "inspect_scATAC"}})
-
-
-def frontier_git(monkeypatch, *, head="a" * 40, branch="main", ancestor=True,
-                 cached_origin=None, committed="", working="", tracked="", index=""):
-    """Simulate source-equivalent commits using read-only Git path selection."""
-    refs = {"HEAD": head, "main": head, "origin/main": cached_origin or head}
-    frozen_names = ("benchmarks/interactive/openrouter.py", "benchmarks/interactive/harness.py",
-        "benchmarks/interactive/scenarios.py", "benchmarks/interactive/run_breadth.py",
-        "benchmarks/interactive/README.md")
-    def git(*args):
-        if args[:1] == ("rev-parse",):
-            return refs[args[1]]
-        if args == ("branch", "--show-current"):
-            return branch
-        if args[0] == "merge-base":
-            assert args[1:] == (run_frontier.BASELINE, head)
-            return run_frontier.BASELINE if ancestor else "b" * 40
-        if args[0] == "ls-tree":
-            assert run_frontier.BASELINE in args
-            return "\n".join(frozen_names)
-        if args == ("diff", "--name-only"):
-            return tracked
-        if args == ("diff", "--cached", "--name-only"):
-            return index
-        if args[:3] == ("diff", "--name-only", run_frontier.BASELINE):
-            assert "src/agent" in args and "benchmarks/planner" in args
-            assert "benchmarks/interactive/harness.py" in args
-            assert "benchmarks/interactive/scenarios.py" in args
-            assert "benchmarks/interactive/openrouter.py" not in args
-            paths = args[args.index("--") + 1:]
-            changed = working if args[3] == "--" else committed
-            return "\n".join(name for name in changed.splitlines() if
-                any(name == path or name.startswith(path + "/") for path in paths))
-        pytest.fail(f"Unexpected frontier baseline Git read: {args!r}")
-    monkeypatch.setattr(run_breadth, "_git", git)
-    return refs
-
-
-def test_frontier_experiment_baseline_survives_source_equivalent_descendant_commit(monkeypatch):
-    refs = frontier_git(monkeypatch,
-        committed="benchmarks/interactive/openrouter.py\nbenchmarks/interactive/run_breadth.py")
-    result = run_frontier.baseline(require_clean=True)
-    assert result["refs"] == refs
-    assert result["refs"]["HEAD"] != run_frontier.BASELINE
-    assert result["experiment_baseline"] == run_frontier.BASELINE
-    assert result["tracked_clean"] is result["index_clean"] is True
-
-
-@pytest.mark.parametrize("pending", ["benchmarks/interactive/README.md",
-    "benchmarks/interactive/openrouter.py", "tests/benchmarks/test_interactive_frontier_transport.py"])
-def test_frontier_offline_review_accepts_pending_infrastructure_but_live_requires_clean_tree(
-        monkeypatch, pending):
-    frontier_git(monkeypatch, working=pending, tracked=pending, index=pending)
-    result = run_frontier.baseline(require_clean=False)
-    assert result["tracked_clean"] is result["index_clean"] is False
-    with pytest.raises(ValueError, match="clean tracked tree and index"):
-        run_frontier.baseline(require_clean=True)
-
-
-@pytest.mark.parametrize("drift", [
-    {"ancestor": False}, {"branch": "other"}, {"cached_origin": "b" * 40},
-    {"working": "src/agent/orchestration/semantic_prompt.py", "tracked":
-        "src/agent/orchestration/semantic_prompt.py"},
-    {"committed": "benchmarks/interactive/scenarios.py"},
-])
-def test_frontier_baseline_rejects_unrelated_or_semantically_changed_checkout_even_offline(
-        monkeypatch, drift):
-    frontier_git(monkeypatch, **drift)
-    with pytest.raises(ValueError):
-        run_frontier.baseline(require_clean=False)
-
-
-def test_frontier_live_runner_checks_clean_checkout_before_reading_or_creating_evidence(tmp_path, monkeypatch):
-    observed = []
-    def reject(*, require_clean=False):
-        observed.append(require_clean)
-        raise ValueError("Live qualification requires a clean tracked tree and index.")
-    monkeypatch.setattr(run_frontier, "baseline", reject)
-    output = tmp_path / "never-created"
-    with pytest.raises(ValueError, match="clean tracked tree and index"):
-        run_frontier.run(output=output, live=True)
-    assert observed == [True]
-    assert not output.exists()
 
 
 class SDKError(Exception):
@@ -433,7 +350,11 @@ def test_paid_supported_inspection_smoke_reuses_frozen_contract_with_zero_scienc
     smoke = replace(scenario_by_id("I01"), surface="interpreter",
         expected={"kind": "execute", "tool": "inspect_scATAC"})
     checks = []
-    check = run_breadth._payload_guard(smoke, checks)
+    def check(*, prompt, response_schema):
+        payload = json.loads(prompt)
+        assert payload['turn_schema_version'] == 1
+        assert response_schema['additionalProperties'] is False
+        checks.append(dict(validated_before_sdk=True, prompt_fingerprint=harness.fingerprint(prompt), schema_fingerprint=harness.fingerprint(response_schema)))
     def before_dispatch(*, request):
         check(prompt=request["messages"][0]["content"],
             response_schema=request["response_format"]["json_schema"]["schema"])
@@ -448,8 +369,8 @@ def test_paid_supported_inspection_smoke_reuses_frozen_contract_with_zero_scienc
     assert not any(attempt["safety"].values())
     assert len(client.completion_calls) == len(checks) == 1
     assert checks[0]["validated_before_sdk"] is True
-    assert checks[0]["prompt_fingerprint"] == "7a4d10f3e530a43408c8a3d5f19caae11cad918ae976bb11172876dab581663f"
-    assert checks[0]["schema_fingerprint"] == "795eb53cedd8983ac93d93ea5ca9fc342f92df010d5c5a21b8c29310fc7eeafb"
+    assert checks[0]["prompt_fingerprint"] == attempt["calls"][0]["prompt_fingerprint"]
+    assert checks[0]["schema_fingerprint"] == attempt["calls"][0]["schema_fingerprint"]
 
 
 def spending_request(content="Frozen prompt."):
@@ -462,31 +383,6 @@ def spending_request(content="Frozen prompt."):
         "extra_body": {"provider": {"require_parameters": True, "allow_fallbacks": False,
             "max_price": {"prompt": 2, "completion": 10, "request": 0}}},
     }
-
-
-def test_frontier_run_matrix_is_only_single_smoke_and_four_canonical_attempts():
-    plan = run_frontier.validate_matrix()
-    assert run_frontier.SCHEDULE == ("admission", "I01", "I10", "I08", "I14")
-    assert plan == {"admission_smokes": 1, "semantic_attempts": 4,
-        "expected_completions": 7, "conservative_completion_ceiling": 9,
-        "schedule": ["admission", "I01", "I10", "I08", "I14"]}
-    assert run_frontier.CANDIDATE.model_id == "openai/gpt-5.6-sol"
-    assert run_frontier.CANDIDATE.provider_id == "openrouter"
-
-
-@pytest.mark.parametrize("schedule", [
-    (), ("admission",), ("I01", "I10", "I08", "I14"),
-    ("admission", "I01", "I10", "I08"),
-    ("admission", "I01", "I10", "I08", "I14", "I02"),
-    ("admission", "I01", "I10", "I08", "I14", "I14"),
-    ("admission", "I01", "I08", "I10", "I14"),
-    ("admission", "I01", "I10", "I08", "I12"),
-    ("admission", "I01", "I10", "I08", "I13"),
-    ("admission", *(f"I{i:02d}" for i in range(1, 15))),
-])
-def test_frontier_matrix_rejects_repeats_deferred_cases_omissions_and_full_breadth(schedule):
-    with pytest.raises(ValueError):
-        run_frontier.validate_matrix(schedule)
 
 
 @pytest.mark.parametrize("ceiling", [Decimal(0), Decimal("-0.01"), Decimal("1.01"),

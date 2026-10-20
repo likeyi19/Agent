@@ -207,7 +207,7 @@ def test_interpreted_adoption_revision_and_fresh_process_retry(local_source, tmp
     view = submit(service, binding)
     assert view.status == 'succeeded' and view.response.status == 'activated', view
     assert calls == {'production': 1, 'verification': 1}
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     state = service._application.sessions.load('analysis')
     revision, = state.revisions
     assert revision.revision_id == view.revision_id and revision.parent_revision_id is None
@@ -783,7 +783,7 @@ def test_registered_fragments_interpreted_science_and_authority(
     view = submit_fragments(service, binding)
     assert view.status == 'succeeded' and view.response.status == 'activated', view
     assert calls == {'production': 1, 'verification': 1}
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     state = service._application.sessions.load('analysis')
     revision, = state.revisions
     assert revision.parent_revision_id is None and revision.revision_id == view.revision_id

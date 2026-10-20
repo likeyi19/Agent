@@ -47,6 +47,8 @@ class ScientificPlanModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             utterance = value['utterance']
@@ -72,8 +74,7 @@ class ScientificPlanModel:
             return json.dumps(dict(outputs=[dict(name='result', step_id=step, output_key=key)]))
         if 'dialogue_schema_version' in value:
             claim = next(c['claim_id'] for c in value['evidence']['claims'] if c['field'] == 'n_cells')
-            return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                dict(kind='text', text='The accepted result records:'), dict(kind='claim', id=claim)])]))
+            return json.dumps(dict(support='supported', paragraphs=[dict(text='The accepted cell count is recorded.', kind='finding', citations=[claim], comparisons=[])]))
 
         def step(name, tool, target=None, upstream=None):
             sources = [] if target is None else [dict(kind='step', target=target, step=upstream)]

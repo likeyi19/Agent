@@ -95,7 +95,7 @@ def test_qualified_synthetic_owner_chain_captures_exact_explicit_or_default_choi
                     json=body | {'input_set_id': 'another-choice'})
                 assert retry.status_code == 409
             assert work.snapshot() == before
-            assert len(backend.models) == 1 and len(backend.models[0].calls) == 4
+            assert len(backend.models) == 1 and len(backend.models[0].calls) == 3
         Path(source.source_path).unlink()
         def forbidden(profile):
             raise AssertionError('Completed resource handoff reconstructed a provider.')

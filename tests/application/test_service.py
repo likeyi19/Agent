@@ -176,7 +176,7 @@ def test_application_configured_new_run_is_llm_first_with_recovery_and_plan_only
     assert isinstance(application.runtime.planner, LLMPlanner)
     assert application.runtime.planner.wire_mode is PlanningWireMode.V4
     assert application.runtime.planner.recovery_policy.policy_version == (
-        "planning-recovery-scoped-v4-v1"
+        "planning-recovery-v3"
     )
     assert result.status is ApplicationStatus.PLANNED
     assert result.run_status is RunStatus.PLANNED

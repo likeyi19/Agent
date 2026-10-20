@@ -336,6 +336,8 @@ def build_semantic_planning_prompt(
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
+            'Select registered scientific tools directly for the complete request; no preliminary capability classification. Preserve explicit method and parameter choices.',
+            'Scientific parameters with default_when_omitted use that native default when omitted. Ask only for genuinely unresolved required scientific decisions, never internal paths, digests, output directories or run identities; Agent binds engineering values from exact sources.',
             'Offered tools/compatible sources; no invention; valid DAG, lineage, explicit sources.',
             'deterministic_scoped: compiler-bound from explicit scope; do not emit source. optional_explicit: per-step scope, no fanout, defaults on omission.',
             'Required: unique input or fitting producer; sources add dependencies; controls order.',

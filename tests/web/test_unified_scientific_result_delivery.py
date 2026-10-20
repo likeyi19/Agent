@@ -147,7 +147,7 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
     assert production['production.epizoo'] == 0
     assert production['interpreter'] == production['planner'] == 1
     assert not {name: value for name, value in production.items() if name.startswith('source.')}
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     model_calls = len(models[0].calls)
     child_revision = turn['revision_id']
     state = service._application.sessions.load('analysis')
@@ -187,9 +187,16 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
             rendered = client.get(path + '/artifacts/' + report['handle'])
             assert rendered.status_code == 200 and str(tmp_path) not in rendered.text
             inventory = client.get(path + '/scientific-artifacts').json()['artifacts']
-            assert {item['filename'] for item in inventory} == {'analysis.h5ad', 'neighbors.h5ad'}
+            assert {item['filename'] for item in inventory} == {'analysis.h5ad', 'neighbors.h5ad', 'clusters.h5ad'}
             graph = next(item for item in inventory if item['filename'] == 'neighbors.h5ad')
             analysis = next(item for item in inventory if item['filename'] == 'analysis.h5ad')
+            clusters = next(item for item in inventory if item['filename'] == 'clusters.h5ad')
+            assert clusters['revision_id'] == child_revision and clusters['turn_id'] == 'modify'
+            cluster_download = client.get(path + '/scientific-artifacts/' + clusters['handle'])
+            assert cluster_download.status_code == 200
+            assert cluster_download.headers['x-artifact-source-sha256'] == clusters['sha256']
+            assert hashlib.sha256(cluster_download.content).hexdigest() == cluster_download.headers['x-artifact-content-sha256']
+            assert client.get(revision_path(original_revision) + '/scientific-artifacts/' + clusters['handle']).status_code == 404
             compact = client.get(path + '/scientific-artifacts/' + analysis['handle'])
             assert compact.status_code == 200
             assert compact.headers['x-artifact-source-sha256'] == analysis['sha256']
@@ -200,7 +207,7 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
             assert graph['revision_id'] == child_revision and graph['turn_id'] == 'modify'
             assert len(evidence['source']['prior_outputs']) == 1
             assert evidence['source']['prior_outputs'][0]['run_id'] == source.run.run_id
-            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
+            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad', 'clusters.h5ad'}
             downloaded = client.get(path + '/scientific-artifacts/' + graph['handle'])
             assert_graph_export(downloaded, graph, source)
             historical_path = revision_path(original_revision)
@@ -393,9 +400,9 @@ def test_historical_dependency_alone_does_not_authorize_child_download_attachmen
             parent = revision_path(parent_revision)
             child = revision_path(child_revision)
             graph = client.get(parent + '/scientific-artifacts').json()['artifacts'][0]
-            # The child's own new UMAP is downloadable; its unretained upstream graph is not.
-            assert {item['filename'] for item in client.get(child + '/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
-            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad'}
+            # The child's own clustering and UMAP are downloadable; its unretained upstream graph is not.
+            assert {item['filename'] for item in client.get(child + '/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad', 'clusters.h5ad'}
+            assert {item['filename'] for item in client.get('/api/v1/sessions/analysis/turns/modify/scientific-artifacts').json()['artifacts']} == {'analysis.h5ad', 'clusters.h5ad'}
             rejected = client.get(child + '/scientific-artifacts/' + graph['handle'])
             assert rejected.status_code == 404 and 'content-disposition' not in rejected.headers
             assert_graph_export(client.get(parent + '/scientific-artifacts/' + graph['handle']), graph, source)

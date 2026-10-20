@@ -31,19 +31,19 @@ def conversational_work():
     """Extend the existing actual-body accounting to the real UMAP owner."""
     import scanpy as sc
     from agent.orchestration import verifier
-    codes = {inspect.unwrap(sc.tl.umap).__code__: 'production.umap',
-             verifier._verify_umap.__code__: 'verification.umap'}
+    codes = {id(inspect.unwrap(sc.tl.umap).__code__): 'production.umap',
+             id(verifier._verify_umap.__code__): 'verification.umap'}
     with processed_work() as counts:
-        inherited = sys.getprofile()
+        inherited = sys.gettrace()
         def observe(frame, event, arg):
             inherited(frame, event, arg)
-            if event == 'call' and frame.f_code in codes:
-                counts[codes[frame.f_code]] += 1
-        sys.setprofile(observe)
+            if event == 'call' and id(frame.f_code) in codes:
+                counts[codes[id(frame.f_code)]] += 1
+        sys.settrace(observe)
         try:
             yield counts
         finally:
-            sys.setprofile(inherited)
+            sys.settrace(inherited)
 
 
 def tiny_other_input(path):
@@ -66,6 +66,8 @@ class ConversationalModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
         self.calls.append((value, response_schema, prompt))
         if 'turn_schema_version' in value:
             if self.before_interpret:
@@ -121,8 +123,7 @@ class ConversationalModel:
         if 'dialogue_schema_version' in value:
             claims = [claim['claim_id'] for claim in value['evidence']['claims'] if claim['field'] == 'n_cells']
             assert len(claims) == 1
-            return json.dumps(dict(support='supported', paragraphs=[dict(parts=[
-                dict(kind='text', text='The accepted result records'), dict(kind='claim', id=claims[0])])]))
+            return json.dumps(dict(support='supported', paragraphs=[dict(text=f"The accepted cell count is {next(c['value'] for c in value['evidence']['claims'] if c['claim_id'] == claims[0])}.", kind='finding', citations=[claims[0]], comparisons=[])]))
         assert value['semantic_prompt_version']
         if self.action == 'new':
             assert not value.get('active_outputs')
@@ -249,7 +250,7 @@ def test_ordinary_resolution_change_reuses_neighbors_and_runs_real_leiden_umap(p
     assert visualized.obs['leiden'].tolist() == clustered.obs['leiden'].tolist()
     assert visualized.obsm['X_umap'].shape == (32, 2) and np.isfinite(visualized.obsm['X_umap']).all()
     assert_preserved(before)
-    assert len(models) == 1 and len(models[0].calls) == 4
+    assert len(models) == 1 and len(models[0].calls) == 3
     for value, schema, prompt in models[0].calls:
         assert str(source.app.workspace_root) not in prompt
         assert source.run.run_id not in prompt

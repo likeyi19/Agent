@@ -122,8 +122,8 @@ def test_exact_authorized_compiled_consumers_are_required(selection, variant):
     elif variant == 'substitute':
         first.arguments['analysis_path'] = records[1].source_path
     elif variant == 'foreign_consumer':
-        compiled.steps += (SimpleNamespace(tool_name='inspect_scATAC',
-            arguments=dict(path=records[1].source_path)),)
+        compiled.steps += (SimpleNamespace(tool_name='pca_embed_cells',
+            arguments=dict(input_path=records[1].source_path)),)
     elif variant == 'literal':
         second.arguments['analysis_path'] = '/unregistered/clustered.h5ad'
     else:
@@ -136,6 +136,29 @@ def test_unbound_selection_cannot_authorize_a_plan(selection):
     owner, _, group = selection
     with pytest.raises(ResourceAdmissionError):
         owner.validate_plan(submission(group), SimpleNamespace(steps=()))
+
+
+def test_selected_dataset_may_flow_through_exact_inspection_output(selection):
+    from agent.orchestration import PlanStep
+    owner, records, _ = selection
+    group = owner.compose_group([records[0].resource_id])
+    bound = owner.bind_group(group, [dict(tool='pca_embed_cells', port='dataset', source='source.0')])
+    inspection = PlanStep('inspect', 'inspect_scATAC', dict(path=records[0].source_path))
+    pca = PlanStep('pca', 'pca_embed_cells',
+                  dict(input_path=StepOutputRef('inspect', 'input_path')), depends_on=('inspect',))
+    owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, pca)))
+    resolved = [SimpleNamespace(tool_name='inspect_scATAC',
+                               resolved_arguments=dict(path=records[0].source_path)),
+                SimpleNamespace(tool_name='pca_embed_cells',
+                                resolved_arguments=dict(input_path=records[0].source_path))]
+    owner.validate_result(submission(bound), resolved)
+    for wrong in (StepOutputRef('inspect', 'n_cells'), StepOutputRef('unknown', 'input_path')):
+        bad = PlanStep('pca', 'pca_embed_cells', dict(input_path=wrong))
+        with pytest.raises(ResourceAdmissionError):
+            owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, bad)))
+    other = PlanStep('inspect', 'inspect_scATAC', dict(path=records[1].source_path))
+    with pytest.raises(ResourceAdmissionError):
+        owner.validate_plan(submission(bound), SimpleNamespace(steps=(other, pca)))
 
 
 def test_completed_fastq_library_is_rejected_as_independent_h5ad_group(selection):

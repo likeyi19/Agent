@@ -87,7 +87,7 @@ def test_group_question_restart_continues_source_and_unique_resource(external_ca
     with TestClient(web) as client:
         done=send(client,'reply','Use the independent simulated obs clustering "supplied_groups".')
         assert done['status']=='succeeded',done
-        assert len(calls)==2
+        assert len(calls)==1
         run=app._application.run_store.load(done['run_id'])
         assert run.request.prompt==OBJECTIVE.replace('Use X','Use "X"')
         assert run.steps[0].resolved_arguments['group_column']=='supplied_groups'
@@ -98,7 +98,7 @@ def test_group_question_restart_continues_source_and_unique_resource(external_ca
     with TestClient(web) as client:
         before=len(prompts)
         assert client.get('/api/v1/sessions/upload').status_code==200
-        assert len(prompts)==before and len(calls)==2
+        assert len(prompts)==before and len(calls)==1
 
 
 def test_owner_observation_never_classifies_categorical_by_name(external_case):
@@ -122,7 +122,7 @@ def test_qualified_unique_group_is_automatic(external_case,tmp_path):
         source=stage(client,args)
         done=send(client,'first',OBJECTIVE.replace('Use X','Use "X"'),[source])
         assert done['status']=='succeeded',done
-        assert len(calls)==2
+        assert len(calls)==1
 
 
 def test_resource_resolution_checks_owner_context_and_pins(external_case):
@@ -150,7 +150,7 @@ def test_single_h5ad_browser_wire_uses_same_handoff(external_case,tmp_path):
         assert prompts[0]['dialogue']['annotation_sources'][0]['source']=='source.0'
         done=send(client,'reply','Use the independent simulated clustering "supplied_groups".')
         assert done['status']=='succeeded',done
-        assert len(calls)==2
+        assert len(calls)==1
 
 
 def alternative(args, root):
@@ -189,7 +189,7 @@ def test_resource_question_additive_supplement_and_explicit_selection(external_c
     with TestClient(web) as client:
         done=send(client,'reply','Use the alternative marker resource and "layers/raw_counts".')
         assert done['status']=='succeeded',done
-        assert len(calls)==2
+        assert len(calls)==1
         interaction=app._application.sessions.load('upload').interactions[-1]
         assert interaction.admitted['raw_resource_choice']=='resource.alternative'
         assert interaction.admitted['annotation_arguments']['count_slot']=='layers/raw_counts'
@@ -276,7 +276,7 @@ def test_reannotation_parameter_change_navigation_and_old_revision_integrity(ext
         assert new.steps[0].resolved_arguments['count_slot']=='layers/raw_counts'
         assert new.steps[0].resolved_arguments['source_sha256']==run.steps[0].resolved_arguments['source_sha256']
         assert app._application.run_store.load(first['run_id']).to_dict()==before
-        assert science.sha256(published)==original_digest and len(calls)==4
+        assert science.sha256(published)==original_digest and len(calls)==2
         state=app._application.sessions.load('upload')
         assert len(state.revisions)==2 and state.revisions[1].parent_revision_id==first['revision_id']
         response=client.post('/api/v1/sessions/upload/activate',json=dict(turn_id='back',revision_id=first['revision_id'],expected_generation=2))
@@ -285,11 +285,11 @@ def test_reannotation_parameter_change_navigation_and_old_revision_integrity(ext
         assert response.status_code==200,response.text
         artifact,=response.json()['artifacts']
         downloaded=client.get('/api/v1/sessions/upload/revisions/'+second['revision_id']+'/scientific-artifacts/'+artifact['handle'])
-        assert downloaded.status_code==200 and len(calls)==4
+        assert downloaded.status_code==200 and len(calls)==2
     app,web=setup(args,root,prompts)
     with TestClient(web) as client:
         n=len(prompts);assert client.get('/api/v1/sessions/upload').status_code==200
-        assert len(prompts)==n and len(calls)==4
+        assert len(prompts)==n and len(calls)==2
         assert app._application.sessions.load('upload').active_revision_id==first['revision_id']
 
 
@@ -318,7 +318,7 @@ def test_group_file_supplement_uses_same_pending_task(external_case,tmp_path,mon
         assert response.status_code==201,response.text
         done=send(client,'reply','The new attachment supplies the independent ordered cell groups.',[response.json()['resource_id']])
         assert done['status']=='succeeded',done
-        assert len(calls)==2
+        assert len(calls)==1
         run=app._application.run_store.load(done['run_id'])
         assert run.request.prompt=='Annotate independent simulated groups using "X".'
         assert 'groups_path' in run.steps[0].resolved_arguments and 'group_column' not in run.steps[0].resolved_arguments
@@ -389,7 +389,7 @@ def test_pending_annotation_correction_preserves_source_and_history(external_cas
     with TestClient(web) as client:
         done = send(client, 'reply', 'These are raw Cell Ranger ATAC cut-site counts in the synthetic context; use "supplied_groups".')
         assert done['status'] == 'succeeded', done
-        assert len(calls) == 2
+        assert len(calls) == 1
         state = app._application.sessions.load('upload')
         assert state.interactions[:len(before)] == before
         run = app._application.run_store.load(done['run_id'])
@@ -401,7 +401,7 @@ def test_pending_annotation_correction_preserves_source_and_history(external_cas
     app, web = setup(args, root, [])
     with TestClient(web) as client:
         assert client.get('/api/v1/sessions/upload').status_code == 200
-        assert len(calls) == 2
+        assert len(calls) == 1
 
 
 def test_annotation_corrections_cannot_replace_sources_or_source_metadata():

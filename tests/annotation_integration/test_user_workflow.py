@@ -90,7 +90,7 @@ def test_resource_continuation_annotation_download_and_reopen(case,tmp_path):
         run=facade._application.run_store.load(result['run_id'])
         assert run.request.prompt==OBJECTIVE
         assert run.steps[0].verification.artifact_authority['schema_version']==2
-        assert len(case[1])==2
+        assert len(case[1])==1
         base='/api/v1/sessions/analysis/revisions/'+result['revision_id']
         evidence=client.get(base+'/evidence?output_name=annotation').json()
         assert evidence['field_labels']['contract_version']=='Annotation contract'
@@ -109,14 +109,14 @@ def test_resource_continuation_annotation_download_and_reopen(case,tmp_path):
         original=ad.read_h5ad(run.steps[0].result['annotated_h5ad_path']);exported=ad.read_h5ad(saved)
         assert original.obs.equals(exported.obs) and original.var.equals(exported.var)
         assert (original.X!=exported.X).nnz==0
-        assert len(case[1])==2
+        assert len(case[1])==1
         before=len(prompts)
         assert submit(client,'answer',ANSWER,selection=None)==result
         assert len(prompts)==before
         stored=state.to_dict()
     fresh,_,fresh_prompts=harness(case,tmp_path)
     assert fresh._application.sessions.load('analysis').to_dict()==stored
-    assert not fresh_prompts and len(case[1])==2
+    assert not fresh_prompts and len(case[1])==1
 
 
 @pytest.mark.parametrize('problem',['source','spec','catalog','stale','invented'])

@@ -109,7 +109,7 @@ def test_application_and_terminal_reuse(case,tmp_path,monkeypatch):
         result=app.run(request)
     assert result.status.value=='SUCCEEDED',result
     assert not upstream
-    assert len(calls)==2  # one production call, one owner replay; no presentation replay
+    assert len(calls)==1  # one native invocation; completion, presentation and recovery do not replay
     assert result.evidence and result.report and result.visualization is None
     out=result.run_result.steps[0].result
     from agent.schemas.orchestration import _serialize
@@ -203,7 +203,7 @@ def test_recovery_without_production(case,monkeypatch):
     monkeypatch.setattr(public,'_build',lambda *a:pytest.fail('Recovery reran publication production'))
     with owner_calls() as upstream:
         assert public.recover_annotation(args,'execution')==result
-    assert not upstream and len(calls)==3  # strict recovery verifies M13; never M11
+    assert not upstream and len(calls)==1  # recovery checks completion and integrity without native science
     with pytest.raises(ValueError):public.recover_annotation(args,'different-execution')
 
 
@@ -219,12 +219,12 @@ def test_crash_recovery_issues_and_preserves_authority(case,tmp_path,monkeypatch
             return store.update(state,expected_revision=expected_revision)
     with pytest.raises(Crash):
         AgentRuntime(planner=Planner(args),run_store=StopStore()).run(AgentRequest('recover','Annotate.',{}))
-    assert len(calls)==2
+    assert len(calls)==1
     monkeypatch.setattr(public,'_build',lambda *a:pytest.fail('Recovery republished annotation'))
     with owner_calls() as upstream:
         result=AgentRuntime(run_store=store).resume('recover:run')
     assert result.status.value=='SUCCEEDED',result
-    assert len(calls)==3 and not upstream
+    assert len(calls)==1 and not upstream
     assert result.steps[0].verification.artifact_authority['schema_version']==2
     from agent.orchestration.verification_authority import accepted_authorities
     monkeypatch.setattr(science,'annotate_cell_groups',lambda **kw:pytest.fail('Recovered authority was lost'))

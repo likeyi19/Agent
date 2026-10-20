@@ -93,7 +93,7 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
                     n_components: int | None = None, random_seed: int = 0,
                     overwrite: bool = False):
     common._validate_overwrite(overwrite); common._validate_seed(random_seed)
-    path = common._resolve_existing_file(input_path, 'input_path', suffix='.h5ad')
+    path = common._resolve_existing_file(input_path, 'input_path')
     root = common._resolve_output_dir(output_dir)
     output = root / (path.stem + '.pca.h5ad')
     sidecar = root / (path.stem + '.pca_obs_names.txt')

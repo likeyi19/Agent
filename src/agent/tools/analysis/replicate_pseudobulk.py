@@ -22,7 +22,7 @@ from .annotation_evaluation import _read_annotation_predictions
 
 
 FEATURE_SPACE_ARTIFACT_TYPE = "agent.regulatory-feature-space"
-FEATURE_SPACE_SCHEMA_VERSION = 1
+FEATURE_SPACE_SCHEMA_VERSION = 2
 PSEUDOBULK_ARTIFACT_TYPE = "agent.replicate-pseudobulk"
 PSEUDOBULK_SCHEMA_VERSION = 1
 PSEUDOBULK_PROVENANCE_KEY = "agent_milestone8_pseudobulk"
@@ -30,7 +30,6 @@ FEATURE_SPACE_IDENTITY_DOMAIN = "agent.regulatory-feature-space-identity.v1"
 PSEUDOBULK_UNIT_DOMAIN = "agent.replicate-pseudobulk-unit.v1"
 MATRIX_DIGEST_DOMAIN = "agent.regulatory-sparse-matrix.v1"
 _ROW_CHUNK_SIZE = 4096
-_SUPPORTED_SPECIES_ASSEMBLIES = {"human": "hg38", "mouse": "mm10"}
 _MATRIX_SEMANTICS = {
     "fragment_counts",
     "insertion_counts",
@@ -240,10 +239,6 @@ def _resolve_h5ad(value: str | Path) -> Path:
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Required input H5AD does not exist: {path}")
-    if path.suffix.casefold() != ".h5ad":
-        raise M81ScientificError(
-            "FEATURE_SPACE_SOURCE_INVALID", "The feature-space source must be an H5AD file."
-        )
     return path
 
 
@@ -253,10 +248,6 @@ def _resolve_existing_json(value: str | Path) -> Path:
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Required feature-space manifest does not exist: {path}")
-    if path.suffix.casefold() != ".json":
-        raise M81ScientificError(
-            "FEATURE_SPACE_ARTIFACT_INVALID", "Feature-space manifest must be JSON."
-        )
     return path
 
 
@@ -296,9 +287,21 @@ def _sparse_format(matrix: object) -> str:
         return "csr"
     if sparse.isspmatrix_csc(matrix) or isinstance(matrix, ad.abc.CSCDataset):
         return "csc"
-    raise M81ScientificError(
-        "MATRIX_STORAGE_UNSUPPORTED", "M8.1 requires a CSR or CSC sparse matrix."
-    )
+    return "dense"
+
+
+def _matrix_chunks(matrix: object):
+    """Bound dense source slices; sparse sources are never densified."""
+    rows = _ROW_CHUNK_SIZE
+    if not _is_sparse_source(matrix):
+        # Input slice, CSR values/indices and integer conversion working copies.
+        per_row = matrix.shape[1] * (np.dtype(matrix.dtype).itemsize + 24)
+        if per_row > 64 * 1024**2:
+            raise M81ScientificError("MATRIX_STORAGE_UNSUPPORTED",
+                                     "One dense source row exceeds the 64 MiB working bound.")
+        rows = min(rows, max(1, 64 * 1024**2 // max(1, per_row)))
+    for start in range(0, matrix.shape[0], rows):
+        yield start, min(start + rows, matrix.shape[0])
 
 
 def _source_matrix(
@@ -326,9 +329,9 @@ def _source_matrix(
         )
     if matrix is None:
         raise M81ScientificError("MATRIX_SOURCE_INVALID", "Source matrix is absent.")
-    if not _is_sparse_source(matrix):
+    if len(matrix.shape) != 2 or np.dtype(matrix.dtype).kind not in "biuf":
         raise M81ScientificError(
-            "MATRIX_STORAGE_UNSUPPORTED", "M8.1 v1 accepts sparse source matrices only."
+            "MATRIX_STORAGE_UNSUPPORTED", "Counts require a two-dimensional real numeric matrix."
         )
     return matrix
 
@@ -340,11 +343,7 @@ def _canonical_integer_chunk(matrix: object, start: int, stop: int, semantics: s
         raise M81ScientificError(
             "FEATURE_SPACE_SOURCE_INVALID", "Unable to read a source matrix chunk."
         ) from exc
-    if not sparse.issparse(chunk):
-        raise M81ScientificError(
-            "MATRIX_STORAGE_UNSUPPORTED", "Sparse source slicing produced a dense value."
-        )
-    canonical = chunk.tocsr(copy=True)
+    canonical = chunk.tocsr(copy=True) if sparse.issparse(chunk) else sparse.csr_matrix(chunk)
     canonical.sum_duplicates()
     canonical.sort_indices()
     canonical.eliminate_zeros()
@@ -362,7 +361,9 @@ def _canonical_integer_chunk(matrix: object, start: int, stop: int, semantics: s
             raise M81ScientificError(
                 "MATRIX_VALUES_INVALID", "Source count values must be exactly integer-valued."
             )
-        if np.any(data > np.iinfo(np.int64).max):
+        out_of_range = (np.any(data >= 2**63) if data.dtype.kind == "f"
+                        else np.any(data > np.iinfo(np.int64).max))
+        if out_of_range:
             raise M81ScientificError(
                 "INTEGER_SUM_OVERFLOW", "Source values exceed the supported int64 range."
             )
@@ -387,9 +388,9 @@ def _matrix_digest_and_nnz(matrix: object, n_rows: int, n_cols: int, semantics: 
     )
     digest.update(b"\n")
     nnz = 0
-    for start in range(0, n_rows, _ROW_CHUNK_SIZE):
+    for start, stop in _matrix_chunks(matrix):
         chunk = _canonical_integer_chunk(
-            matrix, start, min(start + _ROW_CHUNK_SIZE, n_rows), semantics
+            matrix, start, stop, semantics
         )
         nnz += int(chunk.nnz)
         for local_row in range(chunk.shape[0]):
@@ -456,7 +457,6 @@ def _coordinates(
     chromosomes: list[str] = []
     starts: list[int] = []
     ends: list[int] = []
-    seen: set[tuple[str, int, int]] = set()
     for chrom_value, start_value, end_value in zip(
         adata.var[normalized_keys[0]].tolist(),
         adata.var[normalized_keys[1]].tolist(),
@@ -467,16 +467,11 @@ def _coordinates(
         start = _strict_coordinate_integer(start_value, "start")
         end = _strict_coordinate_integer(end_value, "end")
         minimum_start = 0 if coordinate_system == "zero_based_half_open" else 1
-        if start < minimum_start or end <= start:
+        invalid_end = end <= start if coordinate_system == "zero_based_half_open" else end < start
+        if start < minimum_start or invalid_end:
             raise M81ScientificError(
                 "FEATURE_COORDINATES_INVALID", "Feature coordinates have invalid interval bounds."
             )
-        coordinate = (chrom, start, end)
-        if coordinate in seen:
-            raise M81ScientificError(
-                "FEATURE_COORDINATES_INVALID", "Feature coordinate triples must be unique."
-            )
-        seen.add(coordinate)
         chromosomes.append(chrom)
         starts.append(start)
         ends.append(end)
@@ -488,17 +483,6 @@ def _coordinates(
         },
     )
     return tuple(chromosomes), tuple(starts), tuple(ends), digest
-
-
-def _validate_species_assembly(species: object, genome_assembly: object) -> tuple[str, str]:
-    normalized_species = _strict_name(species, "species")
-    normalized_assembly = _strict_name(genome_assembly, "genome_assembly")
-    if _SUPPORTED_SPECIES_ASSEMBLIES.get(normalized_species) != normalized_assembly:
-        raise M81ScientificError(
-            "SPECIES_ASSEMBLY_INVALID",
-            "M8.1 v1 supports only human/hg38 and mouse/mm10 compatibility pairs.",
-        )
-    return normalized_species, normalized_assembly
 
 
 def _snapshot_feature_space(
@@ -528,9 +512,10 @@ def _snapshot_feature_space(
         raise M81ScientificError(
             "MATRIX_SEMANTICS_UNSUPPORTED", "Normalized/continuous matrices are not pseudobulk count inputs."
         )
-    normalized_species, normalized_assembly = _validate_species_assembly(
-        species, genome_assembly
-    )
+    # Aggregation uses no genome reference. Preserve declarations without
+    # pretending a two-entry name table qualifies biological compatibility.
+    normalized_species = _strict_name(species, "species")
+    normalized_assembly = _strict_name(genome_assembly, "genome_assembly")
     coordinate_name = _strict_name(coordinate_source, "coordinate_source")
     normalized_layer = None if layer_key is None else _strict_name(layer_key, "layer_key")
     normalized_semantics_key = (
@@ -656,7 +641,17 @@ def _snapshot_feature_space(
     )
 
 
-def _feature_manifest(snapshot: _FeatureSpaceSnapshot) -> dict[str, object]:
+def _feature_manifest(snapshot: _FeatureSpaceSnapshot, *, version: int = FEATURE_SPACE_SCHEMA_VERSION) -> dict[str, object]:
+    if type(version) is not int or version not in (1, 2):
+        raise M81ScientificError("FEATURE_SPACE_ARTIFACT_INVALID", "Unsupported feature-space version.")
+    if version == 1:
+        # Bounded historical reader: old qualification claims keep their meaning.
+        coordinates = list(zip(snapshot.chromosomes or (), snapshot.starts or (), snapshot.ends or ()))
+        if ({"human": "hg38", "mouse": "mm10"}.get(snapshot.species) != snapshot.genome_assembly
+                or snapshot.source_sparse_format not in ("csr", "csc")
+                or len(set(coordinates)) != len(coordinates)
+                or any(end <= start for _, start, end in coordinates)):
+            raise M81ScientificError("FEATURE_SPACE_ARTIFACT_INVALID", "Invalid historical feature-space claims.")
     coordinates: dict[str, object] = {
         "source": snapshot.coordinate_source,
         "available": snapshot.coordinate_source == "var_columns",
@@ -672,7 +667,7 @@ def _feature_manifest(snapshot: _FeatureSpaceSnapshot) -> dict[str, object]:
             }
         )
     return {
-        "schema_version": FEATURE_SPACE_SCHEMA_VERSION,
+        "schema_version": version,
         "artifact_type": FEATURE_SPACE_ARTIFACT_TYPE,
         "status": "success",
         "source": {
@@ -695,7 +690,8 @@ def _feature_manifest(snapshot: _FeatureSpaceSnapshot) -> dict[str, object]:
         "biology": {
             "species": snapshot.species,
             "genome_assembly": snapshot.genome_assembly,
-            "compatibility_allowlist_version": 1,
+            **({"compatibility_allowlist_version": 1} if version == 1 else
+               {"qualification": "supplied_declarations", "reference_compatibility_assessed": False}),
         },
         "dimensions": {"n_cells": snapshot.n_cells, "n_features": snapshot.n_features},
         "identities": {
@@ -705,7 +701,7 @@ def _feature_manifest(snapshot: _FeatureSpaceSnapshot) -> dict[str, object]:
         },
         "coordinates": coordinates,
         "validation": {
-            "source_sparse": True,
+            "source_sparse": snapshot.source_sparse_format in ("csr", "csc"),
             "finite_nonnegative_integer_values": True,
             "binary_content_validated": snapshot.matrix_semantics == "binary_accessibility",
             "feature_order_preserved": True,
@@ -746,7 +742,7 @@ def _strict_json_load(path: Path) -> dict[str, object]:
 def _load_feature_manifest(path: str | Path) -> tuple[Path, dict[str, object], str]:
     resolved = _resolve_existing_json(path)
     manifest = _strict_json_load(resolved)
-    if manifest.get("schema_version") != FEATURE_SPACE_SCHEMA_VERSION or manifest.get(
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] not in (1, 2) or manifest.get(
         "artifact_type"
     ) != FEATURE_SPACE_ARTIFACT_TYPE:
         raise M81ScientificError(
@@ -1085,8 +1081,7 @@ def _production_aggregate(source: _FeatureSpaceSnapshot, metadata: _MetadataSnap
         aggregate = sparse.csr_matrix(
             (len(metadata.unit_keys), source.n_features), dtype=np.int64
         )
-        for start in range(0, source.n_cells, _ROW_CHUNK_SIZE):
-            stop = min(start + _ROW_CHUNK_SIZE, source.n_cells)
+        for start, stop in _matrix_chunks(matrix):
             chunk = _canonical_integer_chunk(matrix, start, stop, source.matrix_semantics)
             row_indices = np.asarray(metadata.cell_to_unit[start:stop], dtype=np.int64)
             membership = sparse.csr_matrix(
@@ -1385,7 +1380,7 @@ def build_replicate_pseudobulk(
         raise M81ScientificError("INVALID_ARGUMENT", "Metadata keys must be unique and conceptually distinct.")
     manifest_path, manifest, manifest_sha256 = _load_feature_manifest(feature_space_path)
     source = _snapshot_from_manifest(manifest)
-    if manifest != _feature_manifest(source):
+    if manifest != _feature_manifest(source, version=manifest["schema_version"]):
         raise M81ScientificError(
             "FEATURE_SPACE_SOURCE_MISMATCH", "Feature-space manifest no longer matches its source."
         )

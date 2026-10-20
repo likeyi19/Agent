@@ -9,7 +9,7 @@ def validate_result(value):
     try:
         c.matrix.shape(value, public.CellTypeAnnotationResult.__annotations__)
         if (value['status'] != 'success' or value['artifact_type'] != c.ARTIFACT or
-                type(value['artifact_schema_version']) is not int or value['artifact_schema_version'] != 1 or
+                type(value['artifact_schema_version']) is not int or value['artifact_schema_version'] not in (1, 2) or
                 value['contract_version'] != c.CONTRACT or value['annotation_profile'] not in (c.science.PROFILE, c.EXTERNAL_PRIMARY) or
                 value['validation_state'] != 'not_assessed' or
                 (value['species'],value['assembly']) not in (('human','hg38'),('mouse','mm10'))):
@@ -59,7 +59,7 @@ def annotation_tool_spec():
     for key in dict.fromkeys(keys):
         scalar = key in ('annotation_method','count_slot','group_column')
         spec = _planning_argument((str,) if scalar or key.endswith('_sha256') else (str,Path),
-            'Explicit annotation input. Select X or layers/name for counts; select the exact obs grouping column.',
+            'Explicit annotation input. Counts default to supplied X; select layers/name explicitly for another count slot. Select the exact obs grouping column.',
             source=S.REQUEST_INPUT_ONLY, artifacts=(A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
             scientific_parameter=key in ('count_slot','group_column'),
             conversational_exact_string=key in ('count_slot','group_column'))

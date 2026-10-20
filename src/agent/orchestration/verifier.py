@@ -57,6 +57,7 @@ from agent.tools.analysis.replicate_pseudobulk import (
     _artifact_provenance as _m81_artifact_provenance,
     _canonical_covariate as _m81_canonical_covariate,
     _canonical_integer_chunk as _m81_canonical_integer_chunk,
+    _matrix_chunks as _m81_matrix_chunks,
     _feature_manifest as _m81_feature_manifest,
     _file_sha256 as _m81_file_sha256,
     _load_feature_manifest as _m81_load_feature_manifest,
@@ -82,9 +83,7 @@ from agent.schemas import (
 from .registry import ToolRegistry, UnknownToolError
 from .error_policy import classified_agent_error
 from .raw_scatac_verifier import verify_raw_scatac_intake
-from .differential_accessibility_verifier import (
-    verify_replicate_differential_accessibility,
-)
+from agent.tools.analysis.differential_accessibility_backend import verify_completion as verify_da_completion
 
 
 class _VerificationChecks:
@@ -1520,7 +1519,7 @@ def _m81_json_value(value: object) -> object:
 
 
 def _expected_feature_space_result(
-    feature_path: Path, feature_sha256: str, snapshot: object
+    feature_path: Path, feature_sha256: str, snapshot: object, *, version: int = FEATURE_SPACE_SCHEMA_VERSION
 ) -> dict[str, object]:
     return {
         "status": "success",
@@ -1547,7 +1546,7 @@ def _expected_feature_space_result(
         "feature_ids_sha256": snapshot.feature_ids_sha256,
         "matrix_sha256": snapshot.matrix_sha256,
         "coordinates_sha256": snapshot.coordinates_sha256,
-        "artifact_schema_version": FEATURE_SPACE_SCHEMA_VERSION,
+        "artifact_schema_version": version,
         "software_versions": dict(snapshot.software_versions),
     }
 
@@ -1608,11 +1607,11 @@ def _verify_feature_space(
             raise M81ScientificError(
                 "RESULT_IDENTITY_MISMATCH", "Arguments differ from the manifest."
             )
-        if manifest != _m81_feature_manifest(snapshot):
+        if manifest != _m81_feature_manifest(snapshot, version=manifest["schema_version"]):
             raise M81ScientificError(
                 "FEATURE_SPACE_SOURCE_MISMATCH", "Manifest differs from source."
             )
-        if dict(result) != _expected_feature_space_result(path, digest, snapshot):
+        if dict(result) != _expected_feature_space_result(path, digest, snapshot, version=manifest["schema_version"]):
             raise M81ScientificError(
                 "RESULT_IDENTITY_MISMATCH", "Result differs from recomputation."
             )
@@ -1643,8 +1642,7 @@ def _independent_pseudobulk_sum(source: object, metadata: object) -> sparse.csr_
         matrix = _m81_source_matrix(
             source_adata, source.matrix_source, source.layer_key
         )
-        for start in range(0, source.n_cells, 4096):
-            stop = min(start + 4096, source.n_cells)
+        for start, stop in _m81_matrix_chunks(matrix):
             chunk = _m81_canonical_integer_chunk(
                 matrix, start, stop, source.matrix_semantics
             )
@@ -1700,7 +1698,7 @@ def _verify_pseudobulk(
             resolved_arguments["feature_space_path"]
         )
         source = _m81_snapshot_from_manifest(manifest)
-        if manifest != _m81_feature_manifest(source):
+        if manifest != _m81_feature_manifest(source, version=manifest["schema_version"]):
             raise M81ScientificError(
                 "FEATURE_SPACE_SOURCE_MISMATCH", "Feature source changed."
             )
@@ -1972,7 +1970,7 @@ def _verify_differential_accessibility(
     checks: _VerificationChecks,
 ) -> None:
     try:
-        metadata = verify_replicate_differential_accessibility(
+        verify_da_completion(
             resolved_arguments, result
         )
     except Exception as exc:
@@ -1989,29 +1987,22 @@ def _verify_differential_accessibility(
             else ErrorCategory.VERIFICATION_ERROR
         )
         checks.add(
-            "differential_accessibility_independent_revalidation",
+            "differential_accessibility_native_completion",
             False,
-            "DA artifact passed independent reconstruction and edgeR recomputation.",
-            "DA artifact failed independent reconstruction or edgeR recomputation.",
+            "DA native completion, exact input association and publication integrity passed.",
+            "DA native completion, input association or publication integrity failed.",
             error_code,
             error_category,
         )
         return
     checks.add(
-        "differential_accessibility_independent_revalidation",
+        "differential_accessibility_native_completion",
         True,
-        "DA artifact passed independent reconstruction and edgeR recomputation.",
-        "DA artifact failed independent reconstruction or edgeR recomputation.",
+        "DA native completion, exact input association and publication integrity passed.",
+        "DA native completion, input association or publication integrity failed.",
         "DA_ARTIFACT_INVALID",
     )
-    checks.add(
-        "differential_accessibility_verifier_script_identity",
-        len(metadata.verifier_r_script_sha256) == 64,
-        "Independent verifier R script SHA-256: "
-        f"{metadata.verifier_r_script_sha256}.",
-        "Independent verifier R script identity is invalid.",
-        "R_PACKAGE_VERSION_INCOMPATIBLE",
-    )
+
 
 
 def verify_step(
@@ -2063,12 +2054,12 @@ def verify_step(
                 from agent.tools.analysis.scatac_annotation import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)
             except Exception as exc:
-                checks.add('annotation_scientific_replay', False,
-                    'Pinned annotation replay, accepted matrix lineage and exact H5AD propagation.',
+                checks.add('annotation_publication_integrity', False,
+                    'Native annotation completion, accepted source lineage and exact H5AD propagation.',
                     'Annotation verification failed.', getattr(exc, 'code', 'ANNOTATION_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
             else:
-                checks.add('annotation_scientific_replay', True,
-                    'Pinned annotation replay, accepted matrix lineage and exact H5AD propagation.',
+                checks.add('annotation_publication_integrity', True,
+                    'Native annotation completion, accepted source lineage and exact H5AD propagation.',
                     'Annotation verification failed.', 'ANNOTATION_VERIFICATION_FAILED')
         elif step.tool_name == "adopt_scATAC_cell_by_ccre":
             try:

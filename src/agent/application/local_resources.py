@@ -1789,9 +1789,27 @@ class LocalResourceAdmission:
             raise _fail('FASTQ_SOURCE_MISMATCH')
 
     def _validate_group_consumption(self, binding, steps, *, resolved=False):
+        from agent.schemas.orchestration import StepOutputRef
+
         if not binding.roles:
             raise _fail('MULTI_INPUT_ROLE_INVALID')
         registry = self._group_registry()
+        by_id = {getattr(s, 'step_id', None): s for s in steps}
+
+        def source_path(value):
+            # Inspection returns the same dataset path. Follow only that exact
+            # registered identity output, never transformed artifacts or order.
+            seen = set()
+            while not resolved and isinstance(value, StepOutputRef):
+                producer = by_id.get(value.step_id)
+                if (value.step_id in seen or producer is None
+                        or producer.tool_name != 'inspect_scATAC'
+                        or value.output_key != 'input_path'):
+                    return None
+                seen.add(value.step_id)
+                value = producer.arguments.get('path')
+            return value
+
         authorized = {}
         for role in binding.roles:
             port, _, _ = _group_port(registry, role['tool'], role['port'])
@@ -1801,7 +1819,7 @@ class LocalResourceAdmission:
             if len(consumers) != 1:
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
             arguments = consumers[0].resolved_arguments if resolved else consumers[0].arguments
-            if arguments.get(port.members[0].field_name) != path:
+            if source_path(arguments.get(port.members[0].field_name)) != path:
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
             for member in port.members[1:]:
                 if arguments.get(member.field_name) != binding.members[int(role['source'].split('.')[1])]['source_sha256']:
@@ -1828,7 +1846,8 @@ class LocalResourceAdmission:
                 for member in port.members:
                     actual = arguments.get(member.field_name)
                     if type(actual) is str and actual in selected_paths:
-                        if authorized.get((step.tool_name, port.name)) != actual:
+                        inspection = step.tool_name == 'inspect_scATAC' and port.name == 'dataset'
+                        if not inspection and authorized.get((step.tool_name, port.name)) != actual:
                             raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
                     elif (not resolved and (step.tool_name, port.name) in _GROUP_PORTS and member == port.members[0]
                             and type(actual) is str):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 import errno
 import hashlib
@@ -18,7 +19,6 @@ from typing import Literal, TypedDict
 import anndata as ad
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from .differential_accessibility import (
     DAWarning,
@@ -28,13 +28,14 @@ from .differential_accessibility import (
     prepare_replicate_differential_accessibility,
 )
 from .replicate_pseudobulk import (
+    _canonical_integer_chunk,
     _file_sha256 as _m81_file_sha256,
     _software_versions as _m81_software_versions,
 )
 
 
 DA_ARTIFACT_TYPE = "agent.replicate-differential-accessibility"
-DA_ARTIFACT_SCHEMA_VERSION = 1
+DA_ARTIFACT_SCHEMA_VERSION = 2
 DA_PROVENANCE_KEY = "agent_milestone8_differential_accessibility"
 EDGER_PROTOCOL_VERSION = 1
 EDGER_PIPELINE_ID = "agent.edger-ql-native-v4.v1"
@@ -511,7 +512,7 @@ def _write_binary(path: Path, values: np.ndarray, dtype: str) -> bytes:
 
 
 def _stage_inputs(
-    directory: Path,
+    directory: Path | None,
     preparation: DifferentialAccessibilityPreparation,
 ) -> str:
     """Stage exact prepared samples without densifying the raw cell matrix."""
@@ -522,7 +523,7 @@ def _stage_inputs(
             "SOURCE_CHANGED_DURING_READ", "Pseudobulk changed before edgeR staging."
         )
     artifact: ad.AnnData | None = None
-    counts_path = directory / "counts.bin"
+    counts_path = directory / "counts.bin" if directory is not None else None
     digest = hashlib.sha256()
     digest.update(b"agent.replicate-da-selected-counts.v1\0")
     digest.update(
@@ -543,7 +544,6 @@ def _stage_inputs(
         artifact = ad.read_h5ad(source_path, backed="r")
         if (
             artifact.X is None
-            or not isinstance(artifact.X, ad.abc.CSRDataset)
             or tuple(str(value) for value in artifact.obs_names)
             != preparation.source_row_ids
             or tuple(str(value) for value in artifact.var_names)
@@ -552,17 +552,10 @@ def _stage_inputs(
             raise _error(
                 "SOURCE_CHANGED_DURING_READ", "Pseudobulk changed before edgeR staging."
             )
-        with counts_path.open("wb") as handle:
+        with counts_path.open("wb") if counts_path is not None else nullcontext(None) as handle:
             for position in preparation.included_source_positions:
-                row = artifact.X[position : position + 1]
-                if not sparse.issparse(row):
-                    raise _error(
-                        "SOURCE_CHANGED_DURING_READ", "Pseudobulk storage changed."
-                    )
-                canonical = row.tocsr(copy=True)
-                canonical.sum_duplicates()
-                canonical.sort_indices()
-                canonical.eliminate_zeros()
+                canonical = _canonical_integer_chunk(artifact.X, position, position+1,
+                                                     preparation.output_value_semantics)
                 if canonical.data.size and (
                     np.any(canonical.data < 0)
                     or np.any(canonical.data > _MAX_EXACT_FLOAT64_INTEGER)
@@ -575,7 +568,8 @@ def _stage_inputs(
                     canonical.toarray(), dtype="<f8", order="C"
                 ).reshape(-1)
                 payload = dense_row.tobytes(order="C")
-                handle.write(payload)
+                if handle is not None:
+                    handle.write(payload)
                 digest.update(payload)
     except M82ScientificError:
         raise
@@ -590,6 +584,10 @@ def _stage_inputs(
         if artifact is not None:
             artifact.file.close()
 
+    if directory is None:
+        if _m81_file_sha256(source_path) != preparation.pseudobulk_sha256:
+            raise _error("SOURCE_CHANGED_DURING_READ", "Pseudobulk changed during count checks.")
+        return digest.hexdigest()
     design = np.asarray(preparation.design_matrix, dtype="<f8", order="C")
     contrast = np.asarray(preparation.contrast, dtype="<f8", order="C")
     conditions = np.asarray(
@@ -737,6 +735,28 @@ def _read_backend_result(
     statistics = _read_binary(
         directory / "statistics.bin", dtype="<f8", count=n_tested * 5
     ).reshape(n_tested, 5)
+    _validate_native_values(post_filter_library_sizes, normalization_factors, effective_library_sizes, statistics)
+    for values in (
+        filter_mask,
+        tested_indices,
+        post_filter_library_sizes,
+        normalization_factors,
+        effective_library_sizes,
+        statistics,
+    ):
+        values.setflags(write=False)
+    return _BackendResult(
+        filter_mask,
+        tested_indices,
+        post_filter_library_sizes,
+        normalization_factors,
+        effective_library_sizes,
+        statistics,
+        versions,
+    )
+
+
+def _validate_native_values(post_filter_library_sizes, normalization_factors, effective_library_sizes, statistics):
     if (
         not np.isfinite(post_filter_library_sizes).all()
         or np.any(post_filter_library_sizes <= 0)
@@ -776,24 +796,6 @@ def _read_backend_result(
         raise _error(
             "DA_NUMERICAL_RESULT_INVALID", "BH-adjusted values are invalid."
         )
-    for values in (
-        filter_mask,
-        tested_indices,
-        post_filter_library_sizes,
-        normalization_factors,
-        effective_library_sizes,
-        statistics,
-    ):
-        values.setflags(write=False)
-    return _BackendResult(
-        filter_mask,
-        tested_indices,
-        post_filter_library_sizes,
-        normalization_factors,
-        effective_library_sizes,
-        statistics,
-        versions,
-    )
 
 
 def _warning_summary(warning: DAWarning) -> dict[str, object]:
@@ -908,9 +910,10 @@ def _artifact_provenance(
     production_script_sha256: str,
     analysis_sha256: str,
     digests: Mapping[str, str],
+    version: int = DA_ARTIFACT_SCHEMA_VERSION,
 ) -> dict[str, object]:
     return {
-        "schema_version": DA_ARTIFACT_SCHEMA_VERSION,
+        "schema_version": version,
         "artifact_type": DA_ARTIFACT_TYPE,
         "stage": "replicate_differential_accessibility",
         "analysis_sha256": analysis_sha256,
@@ -1025,6 +1028,8 @@ def _artifact_provenance(
             "usable_bytes": memory.usable_bytes,
         },
         "validation": {
+            **({"completion_contract": "native-result-integrity.v2",
+                "upstream_aggregation_reconstructed": False} if version == 2 else {}),
             "all_source_pseudobulk_rows_preserved": True,
             "source_feature_order_preserved": True,
             "source_count_matrix_copied_to_artifact": False,
@@ -1164,48 +1169,12 @@ def _validate_temporary_artifact(
             raise _error(
                 "ARTIFACT_WRITE_FAILED", "Temporary DA artifact structure changed."
             )
-        for column in (
-            "da_group_match",
-            "da_condition_match",
-            "da_analysis_included",
-            "da_design_row_index",
-            "da_postfilter_library_size",
-            "da_tmm_normalization_factor",
-            "da_effective_library_size",
-        ):
-            left = np.asarray(observed.obs[column])
-            right = np.asarray(expected.obs[column])
-            if not np.array_equal(left, right, equal_nan=True):
-                raise _error(
-                    "ARTIFACT_WRITE_FAILED", "Temporary DA sample metadata changed."
-                )
-        if (
-            observed.obs["da_exclusion_reason"].astype(str).tolist()
-            != expected.obs["da_exclusion_reason"].astype(str).tolist()
-        ):
-            raise _error(
-                "ARTIFACT_WRITE_FAILED", "Temporary DA exclusion states changed."
-            )
-        for column in ("logFC", "logCPM", "F", "PValue", "FDR"):
-            if not np.array_equal(
-                np.asarray(observed.var[column]),
-                np.asarray(expected.var[column]),
-                equal_nan=True,
-            ):
-                raise _error(
-                    "ARTIFACT_WRITE_FAILED", "Temporary DA statistics changed."
-                )
-        if (
-            observed.var["da_status"].astype(str).tolist()
-            != expected.var["da_status"].astype(str).tolist()
-            or observed.var["effect_direction"].astype(str).tolist()
-            != expected.var["effect_direction"].astype(str).tolist()
-            or _json_value(observed.uns[DA_PROVENANCE_KEY])
-            != _json_value(expected.uns[DA_PROVENANCE_KEY])
-        ):
-            raise _error(
-                "ARTIFACT_WRITE_FAILED", "Temporary DA result metadata changed."
-            )
+        pd.testing.assert_frame_equal(observed.obs, expected.obs,
+            check_dtype=False, check_categorical=False, check_exact=True)
+        pd.testing.assert_frame_equal(observed.var, expected.var,
+            check_dtype=False, check_categorical=False, check_exact=True)
+        if _json_value(observed.uns[DA_PROVENANCE_KEY]) != _json_value(expected.uns[DA_PROVENANCE_KEY]):
+            raise _error("ARTIFACT_WRITE_FAILED", "DA provenance changed during publication.")
     finally:
         manager = getattr(observed, "file", None)
         if manager is not None:
@@ -1344,13 +1313,19 @@ def run_replicate_differential_accessibility(
             "SOURCE_CHANGED_DURING_READ", "Pseudobulk changed during DA publication."
         )
     artifact_sha256 = _m81_file_sha256(output_path)
+    return _compact_result(preparation, backend, output_path, artifact_sha256,
+                           production_script_sha256, analysis_sha256)
+
+
+def _compact_result(preparation, backend, output_path, artifact_sha256,
+                    production_script_sha256, analysis_sha256, *, version=DA_ARTIFACT_SCHEMA_VERSION):
     warning_codes = [warning.code for warning in preparation.warnings]
     return {
         "status": "success",
         "da_path": str(output_path),
         "da_sha256": artifact_sha256,
         "artifact_type": DA_ARTIFACT_TYPE,
-        "artifact_schema_version": DA_ARTIFACT_SCHEMA_VERSION,
+        "artifact_schema_version": version,
         "pseudobulk_path": preparation.pseudobulk_path,
         "pseudobulk_sha256": preparation.pseudobulk_sha256,
         "preparation_sha256": preparation.preparation_sha256,
@@ -1383,6 +1358,66 @@ def run_replicate_differential_accessibility(
         "edger_version": backend.versions["edger"],
         "package_versions": dict(backend.versions),
     }
+
+
+def verify_completion(arguments: Mapping[str, object], result: Mapping[str, object]) -> None:
+    """Check native publication and exact input association, without running R.
+
+    The independent scientific oracle remains an explicit qualification tool.
+    This boundary never rebuilds the cell-level pseudobulk aggregation.
+    """
+    version = result["artifact_schema_version"]
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("Unsupported DA publication version.")
+    preparation = prepare_replicate_differential_accessibility(
+        arguments["pseudobulk_path"], arguments["group_value"], arguments["condition_key"],
+        arguments["numerator_condition"], arguments["denominator_condition"],
+        arguments["design_type"], covariates=arguments.get("covariates", ()),
+    )
+    script_sha = _production_r_script_sha256()
+    identity = _analysis_identity(preparation, production_script_sha256=script_sha)
+    path = Path(arguments["output_dir"]).expanduser().resolve() / (
+        f"{Path(preparation.pseudobulk_path).stem}.da.{identity}.h5ad")
+    if str(path) != result["da_path"] or _m81_file_sha256(path) != result["da_sha256"]:
+        raise ValueError("DA output path or content identity changed.")
+    artifact = ad.read_h5ad(path)
+    provenance = _json_value(artifact.uns[DA_PROVENANCE_KEY])
+    selected = np.asarray(preparation.included_source_positions, dtype=np.int64)
+    states = artifact.var["da_status"].astype(str).to_numpy()
+    if not np.isin(states, ("tested", "filtered_by_expression")).all():
+        raise ValueError("Unknown native feature completion status.")
+    mask = states == "tested"
+    indices = np.flatnonzero(mask)
+    if not indices.size:
+        raise ValueError("DA publication has no tested features.")
+    backend = _BackendResult(
+        mask, indices,
+        np.asarray(artifact.obs["da_postfilter_library_size"], dtype=float)[selected],
+        np.asarray(artifact.obs["da_tmm_normalization_factor"], dtype=float)[selected],
+        np.asarray(artifact.obs["da_effective_library_size"], dtype=float)[selected],
+        artifact.var.loc[mask, ["logFC", "logCPM", "F", "PValue", "FDR"]].to_numpy(dtype=float),
+        dict(provenance["backend"]["versions"]),
+    )
+    if backend.versions != dict(EXPECTED_BACKEND_VERSIONS):
+        raise ValueError("Native backend identity changed.")
+    _validate_native_values(backend.post_filter_library_sizes, backend.normalization_factors,
+                            backend.effective_library_sizes, backend.statistics)
+    memory = assess_host_memory(len(preparation.feature_ids), len(selected),
+        len(preparation.design_columns), available_bytes=provenance["memory_preflight"]["available_bytes"])
+    digests = _result_digests(preparation, backend)
+    expected_provenance = _artifact_provenance(preparation, backend, memory,
+        selected_counts_sha256=_stage_inputs(None, preparation),
+        production_script_sha256=script_sha, analysis_sha256=identity, digests=digests,
+        version=version)
+    expected = _build_artifact(preparation, backend, expected_provenance)
+    _validate_temporary_artifact(path, expected, preparation)
+    compact = _compact_result(preparation, backend, path, result["da_sha256"],
+                              script_sha, identity, version=version)
+    if _json_value(result) != _json_value(compact):
+        raise ValueError("DA compact result differs from its publication.")
+    if (_m81_file_sha256(path) != result["da_sha256"]
+            or _m81_file_sha256(Path(preparation.pseudobulk_path)) != preparation.pseudobulk_sha256):
+        raise ValueError("Scientific input or output changed during completion checks.")
 
 
 __all__ = [

@@ -25,6 +25,7 @@ from agent.tools.analysis.replicate_pseudobulk import (
     _artifact_provenance as _m81_artifact_provenance,
     _canonical_covariate as _m81_canonical_covariate,
     _canonical_integer_chunk as _m81_canonical_integer_chunk,
+    _matrix_chunks as _m81_matrix_chunks,
     _feature_manifest as _m81_feature_manifest,
     _file_sha256 as _file_sha256,
     _load_feature_manifest as _m81_load_feature_manifest,
@@ -300,8 +301,7 @@ def _independent_pseudobulk_sum(source: object, metadata: object) -> sparse.csr_
     raw = _m81_read_backed(source.input_path)
     try:
         matrix = _m81_source_matrix(raw, source.matrix_source, source.layer_key)
-        for start in range(0, source.n_cells, 4096):
-            stop = min(start + 4096, source.n_cells)
+        for start, stop in _m81_matrix_chunks(matrix):
             chunk = _m81_canonical_integer_chunk(
                 matrix, start, stop, source.matrix_semantics
             )
@@ -373,7 +373,7 @@ def _verify_pseudobulk(path_value: object) -> _VerifiedPseudobulk:
             source_record["feature_space_path"]
         )
         source = _m81_snapshot_from_manifest(manifest)
-        if manifest != _m81_feature_manifest(source):
+        if manifest != _m81_feature_manifest(source, version=manifest["schema_version"]):
             raise _error(
                 "FEATURE_SPACE_SOURCE_MISMATCH", "Feature-space source changed."
             )
@@ -1536,10 +1536,11 @@ def _expected_provenance(
     analysis_sha256: str,
     digests: Mapping[str, str],
     memory_record: Mapping[str, object],
+    version: int = 1,
 ) -> dict[str, object]:
     source = preparation.pseudobulk
     return {
-        "schema_version": DA_ARTIFACT_SCHEMA_VERSION,
+        "schema_version": version,
         "artifact_type": DA_ARTIFACT_TYPE,
         "stage": "replicate_differential_accessibility",
         "analysis_sha256": analysis_sha256,
@@ -1615,6 +1616,8 @@ def _expected_provenance(
         },
         "memory_preflight": dict(memory_record),
         "validation": {
+            **({"completion_contract": "native-result-integrity.v2",
+                "upstream_aggregation_reconstructed": False} if version == 2 else {}),
             "all_source_pseudobulk_rows_preserved": True,
             "source_feature_order_preserved": True,
             "source_count_matrix_copied_to_artifact": False,
@@ -1846,6 +1849,8 @@ def verify_replicate_differential_accessibility(
 
     if not isinstance(resolved_arguments, Mapping) or not isinstance(result, Mapping):
         raise TypeError("DA verification requires argument and result mappings.")
+    if type(result.get("artifact_schema_version")) is not int or result["artifact_schema_version"] not in (1, 2):
+        raise ValueError("Unsupported DA publication version.")
     source = _verify_pseudobulk(resolved_arguments.get("pseudobulk_path"))
     preparation = _reconstruct_preparation(source, resolved_arguments)
     if not VERIFICATION_R_SCRIPT.is_file():
@@ -1903,6 +1908,7 @@ def verify_replicate_differential_accessibility(
             analysis_sha256=analysis_sha256,
             digests=digests,
             memory_record=memory_record,
+            version=result["artifact_schema_version"],
         )
         _validate_da_artifact(
             artifact, preparation, r_result, expected_provenance
@@ -1924,6 +1930,7 @@ def verify_replicate_differential_accessibility(
         production_sha256=production_sha256,
         analysis_sha256=analysis_sha256,
     )
+    expected_result["artifact_schema_version"] = result["artifact_schema_version"]
     if _json_value(result) != _json_value(expected_result):
         raise _error("RESULT_IDENTITY_MISMATCH", "DA compact result changed.")
     if _file_sha256(source.path) != source.sha256:

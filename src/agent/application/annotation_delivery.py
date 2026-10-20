@@ -59,12 +59,12 @@ def _feature_axis(group, length):
 
 
 def _inspect(file, manifest, *, exported=False):
-    if manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256:
+    if owner.external(manifest):
         from agent.tools.analysis import peak_h5ad
         from agent.tools.analysis.scatac_annotation import _provenance
-        peak_h5ad.inspect(file, privacy=True,
+        peak_h5ad.inspect(file, privacy=exported or manifest['schema_version'] == 1,
             private_paths=() if exported else ('/uns/cell_type_annotation/source_path',))
-        provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'], manifest.get('feature_participation'))
+        provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'], manifest.get('feature_participation'), version=manifest['schema_version'])
         if exported: provenance.pop('source_path')
         io._group(file['uns/cell_type_annotation'],provenance)
         for name,value in provenance.items():
@@ -133,19 +133,60 @@ def _inspect(file, manifest, *, exported=False):
                     'ordered_feature_sha256': manifest['matrix_binding']['ordered_features_sha256']}
         reject(name in expected and value != expected[name])
     from agent.tools.analysis.scatac_annotation import _provenance
-    provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'])
+    provenance = _provenance(manifest['arguments'], manifest['source_authority_sha256'], version=manifest['schema_version'])
     if exported: provenance.pop('matrix_manifest_path')
     io._group(file['uns/cell_type_annotation'], provenance)
     for name, value in provenance.items():
         io._scalar(file['uns/cell_type_annotation'][name], value, private=name == 'matrix_manifest_path')
 
 
-def _copy(source, destination):
-    destination.attrs.update(dict(source.attrs))
+def _private_metadata(item):
+    """Inspect metadata only; scientific arrays are never interpreted as text."""
+    from agent.tools.analysis.peak_h5ad import _PATH, strings
+    def private(text):
+        return _PATH.search(text) or any(ord(c) < 32 for c in text)
+    if private(item.name.rsplit('/', 1)[-1]):
+        return True
+    for value in item.attrs.values():
+        if np.asarray(value).dtype.kind in 'OSU' and any(private(str(v)) for v in np.asarray(value).ravel()):
+            return True
+    if isinstance(item, h5py.Group):
+        return any(_private_metadata(child) for child in item.values())
+    if h5py.check_string_dtype(item.dtype) is not None:
+        selections = [()] if item.ndim == 0 else (
+            slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
+        return any(private(text) for selection in selections for text in strings(item, selection))
+    return False
+
+
+def _redactions(source):
+    omitted = set()
+    for name in ('obs', 'var', 'raw/var'):
+        if name not in source:
+            continue
+        frame = source[name]
+        for column in frame.attrs.get('column-order', ()):
+            if _private_metadata(frame[column]):
+                omitted.add(frame[column].name)
+    if 'uns' in source:
+        for name, item in source['uns'].items():
+            if name != 'cell_type_annotation' and _private_metadata(item):
+                omitted.add(item.name)
+    return omitted
+
+
+def _copy(source, destination, omitted=()):
+    attributes = dict(source.attrs)
+    if 'column-order' in attributes:
+        attributes['column-order'] = np.array([v for v in attributes['column-order']
+            if source[v].name not in omitted], dtype=h5py.string_dtype())
+    destination.attrs.update(attributes)
     for name, item in source.items():
+        if item.name in omitted:
+            continue
         if item.name in ('/uns/cell_type_annotation/matrix_manifest_path','/uns/cell_type_annotation/source_path'): continue
         if isinstance(item, h5py.Group):
-            _copy(item, destination.create_group(name))
+            _copy(item, destination.create_group(name), omitted)
             continue
         target = destination.create_dataset(name, shape=item.shape, dtype=item.dtype)
         target.attrs.update(dict(item.attrs))
@@ -169,18 +210,21 @@ def create_annotation_export(source_stream, destination_stream, manifest, *, sou
     metadata = dict(contract_version=EXPORT_CONTRACT, source_contract=CONTRACT,
         source_sha256=source_sha256, source_size_bytes=source_size_bytes,
         source_manifest_sha256=manifest_sha256,
-        provenance_policy='private-source-locator-omitted' if manifest['profile_sha256']==owner.EXTERNAL_PROFILE_SHA256 else 'historical-matrix-locator-omitted',
+        provenance_policy='private-source-locator-omitted' if owner.external(manifest) else 'historical-matrix-locator-omitted',
         authority_scope='export-does-not-issue-scientific-authority')
     with h5py.File(source_stream, 'r') as source:
         _inspect(source, manifest)
-        if manifest['profile_sha256'] == owner.EXTERNAL_PROFILE_SHA256:
+        if owner.external(manifest):
             from agent.tools.analysis.peak_h5ad import inspect
             numeric = inspect(source)
         else:
             numeric = sum(source[n].size * source[n].dtype.itemsize for n in ('X/data', 'X/indices', 'X/indptr'))
         matrix._reject(numeric > max_bytes)
+        omitted = _redactions(source) if owner.external(manifest) and manifest['schema_version'] == 2 else set()
+        if manifest['schema_version'] == 2:
+            metadata['omitted_private_metadata_fields'] = len(omitted)
         with h5py.File(io._BoundedDestination(destination_stream, max_bytes), 'w') as destination:
-            _copy(source, destination)
+            _copy(source, destination, omitted)
             io._write_metadata(destination['uns'].create_group(io.EXPORT_KEY), metadata)
     destination_stream.flush(); destination_stream.seek(0)
     with h5py.File(destination_stream, 'r') as exported:
@@ -212,8 +256,8 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
             or record['schema_version'] != 2 or record['completion'] != 'succeeded'
             or record['scope'] != 'scientific_correctness.v1'
             or record['artifact_contract'] != CONTRACT or record['artifact_type'] != owner.ARTIFACT
-            or record['science_profile'] != owner.profile_sha(step.resolved_arguments)
-            or record['verifier'] != dict(id='agent.cell-type-annotation-replay', compatibility_version='1')):
+            or record['science_profile'] != owner.profile_sha(step.resolved_arguments, result['artifact_schema_version'])
+            or record['verifier'] != owner.verifier(result['artifact_schema_version'])):
         raise ValueError('Unsupported annotation authority.')
     spec = app._application.registry.get(step.tool_name)
     spec.result_contract.validate(result)
@@ -222,7 +266,7 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
         raise ValueError('Unreviewed annotation output.')
     workspace = app._application._workspace
     root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
-    args, destination, token = science._publication(step.resolved_arguments, execution)
+    args, destination, token = science._publication(step.resolved_arguments, execution, version=result['artifact_schema_version'])
     path = Path(result['manifest_path'])
     if path != destination / 'artifact/manifest.json' or path != path.resolve():
         raise ValueError('Unmanaged annotation publication.')
@@ -234,7 +278,7 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
     manifest = owner.load_manifest(path, result['manifest_sha256'])
     receipt_path = destination / 'receipt.json'
     with matrix._open_matrix_source(receipt_path, root) as stream: receipt = stream.read(16385)
-    expected_receipt = science._make_receipt(args, token, result['manifest_sha256'])
+    expected_receipt = science._make_receipt(args, token, result['manifest_sha256'], version=manifest['schema_version'])
     import json
     payload = path.parent / FILENAME
     pin = manifest['sidecars'][FILENAME]

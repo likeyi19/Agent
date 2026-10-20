@@ -87,10 +87,6 @@ def _resolve_h5ad_path(path: str | Path) -> Path:
         raise FileNotFoundError(f"scATAC AnnData file not found: {resolved}")
     if not resolved.is_file():
         raise ValueError(f"scATAC AnnData path is not a file: {resolved}")
-    if resolved.suffix.lower() != ".h5ad":
-        raise ValueError(
-            f"Expected a .h5ad AnnData file, but received: {resolved}"
-        )
     return resolved
 
 

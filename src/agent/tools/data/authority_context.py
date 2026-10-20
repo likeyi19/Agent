@@ -1,8 +1,8 @@
 """Operation-local scientific proofs and accepted artifact authorities.
 
-Only orchestration opens this scope. Standalone verification remains deep;
-explicit accepted recovery may import persisted proofs. Proofs are created only
-after the real verifier returns and its complete required closure remains stable.
+Standalone verification uses the scientific owner's contract; accepted recovery
+may import persisted proofs. Proofs are created only after that verifier returns
+and its complete required closure remains stable.
 """
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -91,7 +91,11 @@ class VerificationContext:
         accepted = self.accepted.get((str(path), description['manifest_sha256']))
         if accepted is not None:
             expected = _serialize(accepted['record']['files'])
-            if self.files(f['path'] for f in expected) != expected:
+            described = {f['path']: f for f in description['files']}
+            # Reuse the owner's checked closure; only the outer receipt is absent.
+            described.update({f['path']: f for f in self.files(
+                f['path'] for f in expected if f['path'] not in described)})
+            if sorted(described.values(), key=lambda f: f['path']) != expected:
                 raise AuthorityError('Accepted publication/receipt integrity changed.')
         key = digest(description['proof_identity'])
         location = (kind, str(path))

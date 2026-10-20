@@ -166,6 +166,7 @@ class AnnotationDeclaration:
     grouping_provenance: str | None = None
     resource: str | None = None
     uploaded: AnnotationUploads | None = None
+    groups_result: str | None = None
 
     def __post_init__(self):
         from agent.tools.analysis.marker_annotation import identifier
@@ -177,6 +178,10 @@ class AnnotationDeclaration:
                 raise ValueError('Invalid annotation source handle.')
         if self.source is not None and self.source == self.groups_source:
             raise ValueError('Counts and group TSV require distinct sources.')
+        if self.groups_result is not None and (
+                type(self.groups_result) is not str or re.fullmatch(r'groups\.[0-9a-f]{64}', self.groups_result) is None
+                or self.groups_source is not None):
+            raise ValueError('Select an accepted clustering result or an uploaded grouping file.')
         handles = source_handles(self)
         if len(handles) != len(set(handles)):
             raise ValueError('Annotation scientific file roles require distinct sources.')
@@ -233,7 +238,7 @@ def declaration(value, field='fastq'):
             raise ValueError('Invalid EpiZoo declaration shape.')
         return EpiZooDeclaration(**value)
     if field == 'annotation':
-        if type(value) is not dict or set(value) - {'uploaded'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded'}:
+        if type(value) is not dict or set(value) - {'uploaded', 'groups_result'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded', 'groups_result'}:
             raise ValueError('Invalid annotation declaration shape.')
         value = dict(value)
         if value.get('uploaded') is not None:
@@ -264,6 +269,11 @@ def merge(previous, additions, *, annotation_corrections=False):
         values['genome_resource'] = additions.genome_resource
     if isinstance(previous, AnnotationDeclaration):
         values['uploaded'] = previous.uploaded
+        if annotation_corrections and additions.groups_source is not None and previous.groups_result is not None:
+            # A newly attached grouping can replace an unusable result choice;
+            # the captured count source and original registrations stay intact.
+            values['groups_result'] = None
+            values['grouping_provenance'] = None
     for key in values.keys() - {'members'}:
         value = getattr(additions, key)
         if value is not None:
@@ -283,7 +293,7 @@ def merge(previous, additions, *, annotation_corrections=False):
                 continue
             annotation_edit = isinstance(previous, AnnotationDeclaration) and (
                 key == 'grouping_provenance' or annotation_corrections and
-                key in ('species', 'assembly', 'measurement', 'context'))
+                key in ('species', 'assembly', 'measurement', 'context', 'groups_result'))
             if (key not in ('resource', 'genome_resource') and not annotation_edit
                     and values[key] is not None and values[key] != value):
                 raise ValueError('Captured FASTQ declarations cannot be replaced.')
@@ -303,10 +313,12 @@ def declaration_dict(value):
     result = asdict(value)
     if isinstance(value, AnnotationDeclaration) and value.uploaded is None:
         result.pop('uploaded')
+    if isinstance(value, AnnotationDeclaration) and value.groups_result is None:
+        result.pop('groups_result')
     return result
 
 
-def schema(sources, resources, field='fastq'):
+def schema(sources, resources, field='fastq', *, groups=()):
     if field == 'epizoo':
         from .epizoo_handoff import schema as epizoo_schema
         return epizoo_schema(sources, resources)
@@ -322,6 +334,7 @@ def schema(sources, resources, field='fastq'):
             for k in AnnotationUploads.__dataclass_fields__})
         return _object(dict(source=optional([s['source'] for s in sources]),
             groups_source=optional([s['source'] for s in sources]),
+            groups_result=optional([g['handle'] for g in groups]) if groups else {'type': 'null'},
             **{k: text for k in ('species', 'assembly', 'context', 'grouping_provenance')},
             measurement=dict(text, description=(
                 f'Use {EXTERNAL_SEMANTICS} for explicitly declared raw Cell Ranger ATAC '
@@ -761,6 +774,11 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 raise IntentError('invalid_prerequisite')
             owner._verify_records([record])
             source_evidence = observe(record.source_path, record.source_sha256)
+            if field == 'annotation':
+                from .annotation_groups import choices
+                group_choices = choices(sessions, interaction)
+                if group_choices:
+                    source_evidence['accepted_groups'] = group_choices
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
         getattr(decision, field) or empty(field), _arguments(decision), rows, sessions._application.registry, field, evidence, source_evidence)
     owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
@@ -788,6 +806,15 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 detail = 'The supplied resource cannot be qualified; check its content and declared compatibility.'
             resource_observation['problem'] = 'Uploaded annotation reference: ' + detail
             missing.append(resource_observation['problem'])
+    projection = None
+    if field == 'annotation' and declared.groups_result is not None and not missing:
+        from .annotation_groups import project, GroupAssociationError
+        try:
+            projection = project(sessions, interaction, declared.groups_result,
+                binding.members[int(declared.source.split('.')[1])])
+        except GroupAssociationError as exc:
+            source_evidence['group_projection_problem'] = str(exc)
+            missing.append(str(exc))
     admitted = dict(kind='clarify' if missing else 'execute', tool=target(field, declared),
         revision_id=interaction.base_revision_id, resource_catalog=rows, raw_resource_evidence=evidence,
         raw_resource_choice=(declared.resource or ('resource.' + selected.input_set_id if selected is not None
@@ -816,6 +843,9 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
             with prior_output_store(sessions._application.run_store):
                 binding, receipt = prepare_epizoo(owner, state.session_id, binding, declared, selected, values,
                     input_sets=input_sets, resource_owner=reference_resources, origin_turn_id=origin.turn_id)
+        elif field == 'annotation' and declared.groups_result is not None:
+            binding, receipt = _prepare_annotation(owner, binding, declared, selected, values,
+                                                   projection=projection)
         else:
             binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
                 accepted_contexts=tuple(i.admitted[field + '_context'] for i in state.interactions[:-1]
@@ -1193,7 +1223,8 @@ def _annotation_requirements(binding, declared, arguments, observation):
             raise ValueError('Unexpected annotation source observation.')
         return declared, values, ['Identify the uploaded peak-count H5AD.']
     member = binding.members[int(declared.source.split('.')[1])]
-    if (not isinstance(observation, dict) or set(observation) != {
+    if (not isinstance(observation, dict) or set(observation) - {
+            'accepted_groups', 'interface_version', 'group_projection_problem'} != {
             'source_sha256', 'declarations', 'grouping_columns', 'qualified_groupings'}
             or observation['source_sha256'] != member['source_sha256']):
         raise ValueError('Annotation observation is not bound to the captured source.')
@@ -1210,9 +1241,20 @@ def _annotation_requirements(binding, declared, arguments, observation):
         missing.append('This annotation method requires human hg38 raw Cell Ranger ATAC cut-site counts; the captured declarations are incompatible.')
     if 'count_slot' not in values and 'count_slot' in observation['declarations']:
         values['count_slot'] = observation['declarations']['count_slot']
-    if 'count_slot' not in values:
+    # Historical clarification text is immutable. Only old captured observations
+    # retain the retired mandatory-slot question; new owner defaults use X.
+    if 'count_slot' not in values and 'interface_version' not in observation:
         missing.append('Identify the raw-count slot: X or layers/name.')
-    if declared.groups_source is not None:
+    if observation.get('interface_version', 2) != 2:
+        raise ValueError('Unsupported annotation handoff version.')
+    if declared.groups_result is not None:
+        offered = [r for r in observation.get('accepted_groups', ()) if r['handle'] == declared.groups_result]
+        if len(offered) != 1 or 'group_column' in values:
+            raise ValueError('Select one offered accepted clustering result without an obs-column override.')
+        declared = replace(declared, grouping_provenance='Accepted independent Leiden result ' + declared.groups_result)
+        if observation.get('group_projection_problem'):
+            missing.append(observation['group_projection_problem'])
+    elif declared.groups_source is not None:
         if 'group_column' in values:
             raise ValueError('Select an obs grouping column or an ordered group TSV, not both.')
     elif 'group_column' not in values:
@@ -1237,21 +1279,27 @@ def _annotation_requirements(binding, declared, arguments, observation):
     return declared, values, missing
 
 
-def _annotation_binding(candidates, declared, selected, arguments, pointer):
+def _annotation_binding(candidates, declared, selected, arguments, pointer, projection=None):
     from .local_resources import RegisteredInputGroup, group_role_inputs
     from agent.orchestration.registry import build_default_tool_registry
     from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY
     roles = [dict(tool='annotate_scATAC_cell_types', port='source', source=declared.source)]
     if declared.groups_source is not None:
         roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=declared.groups_source))
+    members = list(candidates.members)
+    if projection is not None:
+        if declared.groups_result != projection['selection']['handle']:
+            raise ValueError('Grouping projection differs from the explicit selection')
+        roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=f'source.{len(members)}'))
+        members.append(projection['member'])
     values = dict(arguments, annotation_method=EXTERNAL_PRIMARY,
                   annotation_spec_path=pointer['path'], annotation_spec_sha256=pointer['sha256'])
-    bound = RegisteredInputGroup(candidates.members, values, roles,
+    bound = RegisteredInputGroup(members, values, roles,
         resource_choice=None if selected is None else selected.resource_choice(), attachment_candidates=True)
     return replace(bound, execution_inputs=group_role_inputs(bound, roles, build_default_tool_registry()))
 
 
-def _prepare_annotation(owner, candidates, declared, selected, arguments):
+def _prepare_annotation(owner, candidates, declared, selected, arguments, *, projection=None):
     """Bind a reviewed resource to declared grouping through its existing owner."""
     from agent.tools.analysis import annotation_contract as c
     from agent.tools.analysis.marker_annotation import sha256
@@ -1287,9 +1335,10 @@ def _prepare_annotation(owner, candidates, declared, selected, arguments):
         finally:
             Path(temporary).unlink(missing_ok=True)
     pointer = dict(path=str(path), sha256=sha256(path))
-    bound = _annotation_binding(candidates, declared, selected, arguments, pointer)
+    bound = _annotation_binding(candidates, declared, selected, arguments, pointer, projection)
     owner.validate_binding(bound)
-    return bound, dict(identity=identity, specification=specification, resource=pointer)
+    return bound, dict(identity=identity, specification=specification, resource=pointer,
+                       **({'group_projection': projection} if projection is not None else {}))
 
 
 def _validate_annotation_completion(admitted, candidates, declared, selected, arguments):
@@ -1297,7 +1346,8 @@ def _validate_annotation_completion(admitted, candidates, declared, selected, ar
     from .session_state import sha
     from agent.tools.analysis import annotation_contract as c
     receipt = admitted['annotation_context']
-    if (set(receipt) != {'identity', 'specification', 'resource'}
+    if (set(receipt) != {'identity', 'specification', 'resource',
+                        *(['group_projection'] if declared.groups_result is not None else [])}
             or receipt['identity'] != _context_identity(candidates, declared, selected)
             or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'):
         raise ValueError('Invalid annotation handoff receipt.')
@@ -1316,7 +1366,10 @@ def _validate_annotation_completion(admitted, candidates, declared, selected, ar
     import hashlib
     if hashlib.sha256(c.matrix.canonical(spec)).hexdigest() != pointer['sha256']:
         raise ValueError('Derived annotation resource digest changed.')
-    bound = _annotation_binding(candidates, declared, selected, arguments, pointer)
+    projection = receipt.get('group_projection')
+    if projection is not None and projection['selection'] not in admitted['annotation_source_evidence'].get('accepted_groups', ()):
+        raise ValueError('Grouping projection is outside captured accepted results')
+    bound = _annotation_binding(candidates, declared, selected, arguments, pointer, projection)
     if _serialize(admitted['inputs']) != _serialize(bound.execution_inputs) or admitted['registered_input'] != bound.attribution():
         raise ValueError('Annotation binding changed.')
 

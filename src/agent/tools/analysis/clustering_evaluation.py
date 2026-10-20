@@ -114,8 +114,6 @@ def _resolve_h5ad(value: str | Path, name: str) -> Path:
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Required input h5ad file does not exist: {path}")
-    if path.suffix.casefold() != ".h5ad":
-        raise ValueError(f"`{name}` must identify a .h5ad file: {path}")
     return path
 
 

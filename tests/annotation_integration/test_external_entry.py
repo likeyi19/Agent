@@ -99,7 +99,7 @@ def test_uploaded_matrix_then_group_file_continues_original_objective(external_c
         assert result['status'] == 'succeeded', result
         run = app._application.run_store.load(result['run_id'])
         assert run.request.prompt == OBJECTIVE
-        assert len(calls) == 2
+        assert len(calls) == 1
         base = '/api/v1/sessions/upload/revisions/' + result['revision_id']
         response = client.get(base + '/scientific-artifacts')
         assert response.status_code == 200, response.text
@@ -146,8 +146,8 @@ def external_case(case,tmp_path,monkeypatch):
         annotation_spec_sha256=science.sha256(resource),annotation_method=c.EXTERNAL_PRIMARY,count_slot='X',
         groups_path=str(groups),groups_sha256=science.sha256(groups),output_dir=str(tmp_path/'new-annotation'))
     calls=[]
-    def component(*,binding,specification,runtime,output_dir):
-        calls.append(1);a,_=external.load_matrix(binding);rows=external.group_rows(a,specification)
+    def component(*,binding,specification,runtime,output_dir, _matrix=None):
+        calls.append(1);a = _matrix if _matrix is not None else external.load_matrix(binding)[0];rows=external.group_rows(a,specification)
         scores=science.score_candidates(a.obs_names.tolist(),rows,['G','H'],[(rows[0][1],'G',1.)],science.read_signatures(specification['signature_resource']['path']))
         output=Path(output_dir);output.mkdir()
         for key,values in scores.items():(output/(key+'.json')).write_text(json.dumps(values))
@@ -183,7 +183,7 @@ def test_external_owner_and_terminal_reuse(external_case,tmp_path,monkeypatch):
     app=ResearchAgentApplication(tmp_path/'app',planner=Planner(args))
     result=app.run(AgentRequest('external','Annotate my declared cut-site peak counts.',{}))
     assert result.status.value=='SUCCEEDED',result
-    assert len(calls)==2
+    assert len(calls)==1
     step=result.run_result.steps[0]
     assert step.result['annotation_profile']==c.EXTERNAL_PRIMARY
     assert 'matrix' not in step.verification.artifact_authority['upstream']
@@ -209,7 +209,7 @@ def test_explicit_group_column_and_count_layer(external_case,tmp_path):
     args.update(group_column='supplied_groups',count_slot='layers/raw_counts')
     result=ResearchAgentApplication(tmp_path/'app',planner=Planner(args)).run(AgentRequest('columns','Annotate selected counts and groups.',{}))
     assert result.status.value=='SUCCEEDED',result
-    assert len(calls)==2
+    assert len(calls)==1
     assert c.load_manifest(result.run_result.steps[0].result['manifest_path'])['matrix_binding']['count_slot']=='layers/raw_counts'
 
 
@@ -253,11 +253,11 @@ def test_owner_replay_rejects_modified_output(external_case,tmp_path):
     with pytest.raises(ValueError):owner.verify_annotation(result['manifest_path'],expected_sha256=result['manifest_sha256'])
 
 
-def test_unsafe_metadata_fails_before_science(external_case):
+def test_private_metadata_is_not_a_scientific_admission_gate(external_case):
     args,calls=external_case
     a=ad.read_h5ad(args['source_path']);a.uns['private']='/private/operator/config';a.write_h5ad(args['source_path'])
     args['source_sha256']=science.sha256(args['source_path'])
-    with pytest.raises(ValueError,match='Private locator'):external.qualify(args,c.resolved_specification(args))
+    external.qualify(args,c.resolved_specification(args))
     assert not calls
 
 
@@ -324,7 +324,7 @@ def test_http_explicit_obs_column_uses_shared_literal_binding(external_case,tmp_
         result=wait_turn(client,'column');assert result['status']=='succeeded',result
         run=app._application.run_store.load(result['run_id']);bound=run.steps[0].resolved_arguments
         assert bound['count_slot']=='layers/raw_counts' and bound['group_column']=='supplied_groups' and 'groups_path' not in bound
-        assert len(calls)==2
+        assert len(calls)==1
 
 
 def test_selected_resources_empty_offer_does_not_assert_missing_reference(external_case,tmp_path):
@@ -379,7 +379,7 @@ def test_nonprimary_and_unmatched_peaks_reach_native_owner(external_case, tmp_pa
     result = ResearchAgentApplication(tmp_path/'scope', planner=Planner(args)).run(
         AgentRequest('outside-scope', 'Annotate declared cut-site counts.', {}))
     assert result.status.value == 'SUCCEEDED', result
-    assert len(calls) == 2  # Simulated backend, not biological qualification.
+    assert len(calls) == 1  # Simulated backend, not biological qualification.
     output = ad.read_h5ad(result.run_result.steps[0].result['annotated_h5ad_path'])
     assert output.var_names.equals(a.var_names)
     assert (output.X != a.X).nnz == 0

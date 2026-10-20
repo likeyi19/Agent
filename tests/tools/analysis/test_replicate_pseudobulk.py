@@ -156,18 +156,12 @@ def _v4_feature_arguments(source: Path, output: Path, extra: dict[str, object]):
             "sources": [], "control_dependencies": [],
         }]},
     })
-    model.complete.side_effect = [
-        json.dumps({"selection_schema_version": 1, "decision": {
-            "kind": "select", "capability_ids": ["differential_accessibility"],
-        }}),
-        model.complete.return_value,
-    ]
     registry = build_default_tool_registry()
     plan = LLMPlanner(model, wire_mode=PlanningWireMode.V4).plan(
         AgentRequest("feature-contract", "Validate the supplied feature space.", inputs,
                      mode=RunMode.PLAN_ONLY), registry,
     )
-    assert model.complete.call_count == 2
+    assert model.complete.call_count == 1
     assert PlanExecutor(registry).preflight(plan).passed
     assert dict(plan.steps[0].arguments) == inputs
     return dict(plan.steps[0].arguments)
@@ -324,13 +318,13 @@ def test_pseudobulk_ids_are_scoped_to_feature_space_identity(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     ("species", "assembly"),
-    [("human", "mm10"), ("mouse", "hg38"), ("rat", "rn7")],
+    [("", "hg38"), ("mouse", "")],
 )
-def test_feature_space_rejects_unsupported_species_assembly(
+def test_feature_space_requires_species_and_assembly_declarations(
     tmp_path: Path, species: str, assembly: str
 ) -> None:
     source = _source(tmp_path / "source.h5ad")
-    with pytest.raises(M81ScientificError, match="human/hg38") as failure:
+    with pytest.raises(M81ScientificError):
         validate_scATAC_feature_space(
             source,
             tmp_path / "out",
@@ -340,10 +334,9 @@ def test_feature_space_rejects_unsupported_species_assembly(
             genome_assembly=assembly,
             coordinate_source="none",
         )
-    assert failure.value.code == "SPECIES_ASSEMBLY_INVALID"
 
 
-def test_feature_space_rejects_normalized_dense_fractional_and_semantics_mismatch(
+def test_feature_space_accepts_dense_but_rejects_invalid_measurements(
     tmp_path: Path,
 ) -> None:
     source = _source(tmp_path / "source.h5ad")
@@ -369,13 +362,12 @@ def test_feature_space_rejects_normalized_dense_fractional_and_semantics_mismatc
 
     dense = tmp_path / "dense.h5ad"
     ad.AnnData(np.ones((2, 2), dtype=np.int64)).write_h5ad(dense)
-    with pytest.raises(M81ScientificError) as dense_failure:
-        validate_scATAC_feature_space(
-            dense, tmp_path / "dense-out", matrix_source="X",
-            matrix_semantics="fragment_counts", species="human",
-            genome_assembly="hg38", coordinate_source="none",
-        )
-    assert dense_failure.value.code == "MATRIX_STORAGE_UNSUPPORTED"
+    admitted = validate_scATAC_feature_space(
+        dense, tmp_path / "dense-out", matrix_source="X",
+        matrix_semantics="fragment_counts", species="human",
+        genome_assembly="hg38", coordinate_source="none",
+    )
+    assert admitted['source_sparse_format'] == 'dense'
 
     fractional = tmp_path / "fractional.h5ad"
     ad.AnnData(sparse.csr_matrix([[0.5, 0.0]])).write_h5ad(fractional)

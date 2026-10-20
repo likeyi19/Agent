@@ -541,14 +541,16 @@ def test_binary_accessibility_pseudobulk_is_ineligible(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mutation", ["source", "artifact"])
-def test_m81_source_or_pseudobulk_tampering_fails_before_design(
+def test_da_consumes_pseudobulk_without_requalifying_historical_cells(
     tmp_path: Path, mutation: str
 ) -> None:
     source, path = _pseudobulk(tmp_path, _independent_units())
     if mutation == "source":
-        raw = ad.read_h5ad(source)
-        raw.uns["changed"] = True
-        raw.write_h5ad(source)
+        before = _prepare(path)
+        source.unlink()
+        after = _prepare(path)
+        assert after.preparation_sha256 == before.preparation_sha256
+        return
     else:
         artifact = ad.read_h5ad(path)
         artifact.X[0, 0] += 1
@@ -559,6 +561,7 @@ def test_m81_source_or_pseudobulk_tampering_fails_before_design(
         "FEATURE_SPACE_SOURCE_MISMATCH",
         "PSEUDOBULK_AGGREGATION_MISMATCH",
         "PSEUDOBULK_PROVENANCE_MISMATCH",
+        "PSEUDOBULK_ARTIFACT_INVALID",
     }
 
 

@@ -131,15 +131,13 @@ def _software_versions() -> dict[str, str]:
 
 
 def _resolve_existing_file(
-    value: str | Path, argument_name: str, *, suffix: str
+    value: str | Path, argument_name: str
 ) -> Path:
     if not isinstance(value, (str, Path)):
         raise TypeError(f"`{argument_name}` must be a string or pathlib.Path.")
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Required input file does not exist: {path}")
-    if path.suffix.casefold() != suffix:
-        raise ValueError(f"`{argument_name}` must identify a {suffix} file: {path}")
     return path
 
 
@@ -322,12 +320,10 @@ def representation(adata):
 
 def load_embedding_source(path):
     """Existing EpiZoo NPY or a self-describing producer publication."""
-    if Path(path).suffix.casefold() == '.npy':
-        return _load_embeddings(Path(path)), EPIZOO_REPRESENTATION_KEY, dict(EPIZOO_REPRESENTATION), None
-    if Path(path).suffix.casefold() != '.h5ad':
-        raise ValueError('Unsupported embedding artifact format.')
-    from .pca_embedding import descriptor, KEY
     import h5py
+    if not h5py.is_hdf5(path):
+        return _load_embeddings(Path(path)), EPIZOO_REPRESENTATION_KEY, dict(EPIZOO_REPRESENTATION), None
+    from .pca_embedding import descriptor, KEY
     from anndata.io import read_elem
     with h5py.File(path, 'r') as h:
         data = ad.AnnData(obs=read_elem(h['obs']), obsm=read_elem(h['obsm']))
@@ -432,10 +428,10 @@ def build_cell_neighbors(
         raise ValueError("`metric` must be 'euclidean' or 'cosine'.")
 
     resolved_embedding = _resolve_existing_file(
-        embedding_path, "embedding_path", suffix=Path(embedding_path).suffix.casefold()
+        embedding_path, "embedding_path"
     )
     resolved_cell_ids = _resolve_existing_file(
-        cell_ids_path, "cell_ids_path", suffix=".txt"
+        cell_ids_path, "cell_ids_path"
     )
     from . import neighbors_publication
     sources, source_snapshots = neighbors_publication.capture_inputs(
@@ -551,7 +547,7 @@ def cluster_cells(
     _validate_seed(random_seed)
     normalized_resolution = validate_clustering_resolution(resolution)
     resolved_input = _resolve_existing_file(
-        analysis_path, "analysis_path", suffix=".h5ad"
+        analysis_path, "analysis_path"
     )
     resolved_output_dir = _resolve_output_dir(output_dir)
     output_path = resolved_output_dir / f"{resolved_input.stem}.clustered.h5ad"
@@ -653,7 +649,7 @@ def compute_cell_umap(
     if normalized_min_dist > normalized_spread:
         raise ValueError("`min_dist` must not exceed `spread`.")
     resolved_input = _resolve_existing_file(
-        analysis_path, "analysis_path", suffix=".h5ad"
+        analysis_path, "analysis_path"
     )
     resolved_output_dir = _resolve_output_dir(output_dir)
     output_path = resolved_output_dir / f"{resolved_input.stem}.umap.h5ad"

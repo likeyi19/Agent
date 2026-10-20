@@ -155,7 +155,9 @@ def describe(kind, path, sha, context):
             raise AuthorityError('Annotation source authority or specification changed.')
         if spec['schema'] == annotation.EXTERNAL_SPEC:
             from agent.tools.analysis import peak_h5ad
-            resources.extend([args['source_path'],peak_h5ad.__file__])
+            resources.append(args['source_path'])
+            if value['schema_version'] == 1:
+                resources.append(peak_h5ad.__file__)
             if 'contig_scope' in spec:
                 resources.append(spec['contig_scope']['path'])
                 if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
@@ -169,13 +171,13 @@ def describe(kind, path, sha, context):
         runtime = annotation.backend_runtime()
         resources.extend([runtime.rscript, marker_annotation.__file__,
                           str(Path(marker_annotation.__file__).parent / 'r/maestro_markers_v1.R')])
-        if spec['schema'] == annotation.EXTERNAL_SPEC:
+        if spec['schema'] == annotation.EXTERNAL_SPEC and value['schema_version'] == 1:
             resources.append(annotation.backend(value['matrix_binding']).__file__)
         resources.extend(str(Path(runtime.upstream_dir) / name) for name in marker_annotation.SOURCES)
         for package in ('presto', 'Matrix', 'dplyr'):
             resources.extend(str(p.resolve()) for p in (Path(runtime.r_library)/package).rglob('*') if p.is_file())
-        profile = annotation.profile_sha(args)
-        verifier = dict(id='agent.cell-type-annotation-replay', compatibility_version='1')
+        profile = value['profile_sha256']
+        verifier = annotation.verifier(value['schema_version'])
     elif kind in CONTRACTS or kind == 'generic_fragments':
         kinds = {e['provenance']['kind'] for e in value['libraries']}
         if len(kinds) != 1 or not kinds <= CONTRACTS.keys():
@@ -310,7 +312,9 @@ def describe(kind, path, sha, context):
     if kind == 'matrix' and is_fragment_features(value):
         resources.extend(historical)
         historical = {}  # current required inputs here; historical record remains in the producer dependency
-    files = context.files([*owned, *resources])
+    files = (annotation.publication_files(context, [*owned, *resources],
+                context.accepted.get((str(path), actual))) if kind == 'annotation'
+             else context.files([*owned, *resources]))
     relative = []
     for entry in files:
         if entry['path'] == str(path):
@@ -418,7 +422,9 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     module = _module(adoption_modules.get(tool_name, MODULES[kind]))
     if tool_name == 'adapt_epizoo_species' and 'adaptation_spec_path' in arguments:
         from agent.tools.models import species_adaptation as module
-    publication = module._publication(arguments, execution_identity)
+    publication = (module._publication(arguments, execution_identity,
+        version=result['artifact_schema_version']) if kind == 'annotation'
+        else module._publication(arguments, execution_identity))
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]
     directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'annotation', 'epizoo_adaptation') else ''
@@ -429,7 +435,9 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     if receipt['manifest_sha256'] != result['manifest_sha256']:
         raise AuthorityError('Publication receipt identity mismatch.')
     description, key = context.describe(kind, path, result['manifest_sha256'])
-    files = context.files([*(f['path'] for f in description['files']), destination / 'receipt.json'])
+    # The owner has already checked its complete closure. Only the receipt is new.
+    files = sorted([*description['files'], *context.files([destination/'receipt.json'])],
+                   key=lambda f: f['path'])
     record = dict(schema_version=2, artifact_type=result['artifact_type'], artifact_contract=result['contract_version'],
         publication_path=str(path), manifest_sha256=result['manifest_sha256'], files=files,
         execution_identity=execution_identity, arguments_sha256=receipt['arguments_sha256'],

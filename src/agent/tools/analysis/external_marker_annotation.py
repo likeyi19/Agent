@@ -107,10 +107,11 @@ def coordinates(features, spec):
     return encoded
 
 
-def qualify(args,spec):
+def prepare(args,spec):
+    """Load and qualify once for an owner invocation; no persistent input cache."""
     path=legacy.checked_file(args['source_path'],args['source_sha256'])
     if path.stat().st_size>peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB limit')
-    peak_h5ad.inspect(path,privacy=True)
+    peak_h5ad.inspect(path)
     a=ad.read_h5ad(path); _validate_matrix(a); x=counts(a,args['count_slot'])
     for key,expected in (('species',spec['species']),('assembly',spec['assembly']),
                          ('measurement',spec['measurement']),('matrix_semantics',spec['measurement'])):
@@ -123,7 +124,11 @@ def qualify(args,spec):
     coordinates(a.var_names.tolist(),spec); group_rows(a,spec)
     qualification=dict(contract='external-peak-annotation-input.v1',binding=binding,declarations=spec,
                        upstream_counting_history='declared_not_reconstructed')
-    return c.digest(qualification),dict(shape=list(a.shape),logical_matrix_sha256=binding['logical_matrix_sha256']),binding
+    return a, (c.digest(qualification),dict(shape=list(a.shape),logical_matrix_sha256=binding['logical_matrix_sha256']),binding)
+
+
+def qualify(args, spec):
+    return prepare(args, spec)[1]
 
 
 def weighted_rp(x,features,cells,gene_path,source, *, participation=None):
@@ -172,10 +177,11 @@ def write_participation(x,features,gene_path,participation,root):
         interpretation='Exact supplied contig names and all counts retained. Unmatched names have zero native RP weight; this is not biological absence. No alias correction or genome-length validation for names absent from the declared reference. Nonzero transcript weights precede native representative-transcript selection, not proof of final gene or label influence. Biological validation not assessed.')
 
 
-def annotate_cell_groups(*,binding,specification,runtime,output_dir):
-    """One native invocation; shared outer owner owns atomic publication and replay."""
+def annotate_cell_groups(*,binding,specification,runtime,output_dir, _matrix=None):
+    """One native invocation; outer owner checks completion and publishes atomically."""
     root=Path(output_dir);root.mkdir()
-    a,path=load_matrix(binding);cells=a.obs_names.tolist();groups=group_rows(a,specification)
+    a,path=load_matrix(binding) if _matrix is None else (_matrix,Path(binding['source_path']))
+    cells=a.obs_names.tolist();groups=group_rows(a,specification)
     features=coordinates(a.var_names.tolist(),specification);upstream=Path(runtime.upstream_dir)
     for name,sha in legacy.SOURCES.items():legacy.checked_file(upstream/name,sha)
     gene=specification['gene_resource'];signature=specification['signature_resource']
@@ -206,7 +212,7 @@ def annotate_cell_groups(*,binding,specification,runtime,output_dir):
     result=legacy.score_candidates(cells,groups,genes,list(f[['cluster','gene','avg_logFC']].itertuples(index=False,name=None)),legacy.read_signatures(signature['path']))
     for key,rows in result.items():(root/f'{key}.json').write_text(json.dumps(rows,sort_keys=True,allow_nan=False)+'\n')
     (root/'rp-genes-by-cells.mtx').unlink();legacy.checked_file(path,binding['source_sha256']);cancellation_checkpoint()
-    value=dict(schema='agent.peak-marker-annotation.v1',profile=c.EXTERNAL_PROFILE,binding=binding,inputs=specification,
+    value=dict(schema='agent.peak-marker-annotation.v1',profile=c.profile({'annotation_method': c.EXTERNAL_PRIMARY}),binding=binding,inputs=specification,
         upstream_revision=legacy.REVISION,upstream_sources=legacy.SOURCES,adapter_sha256=legacy.sha256(__file__),
         r_adapter_sha256=legacy.sha256(script),inherited_policy_adapter_sha256=legacy.sha256(legacy.__file__),
         feature_participation=participation,

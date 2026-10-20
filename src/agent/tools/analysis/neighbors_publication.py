@@ -76,8 +76,6 @@ def arguments(value):
         args[name] = (str(Path(args[name]).expanduser().resolve()) if name == 'output_dir'
                       else os.path.abspath(Path(args[name]).expanduser()))
         _path(args[name], current=name == 'output_dir')
-    if Path(args['embedding_path']).suffix.casefold() not in ('.npy', '.h5ad') or Path(args['cell_ids_path']).suffix.casefold() != '.txt':
-        raise AuthorityError('Neighbor publication source types are incompatible.')
     science._validate_seed(args['random_seed'])
     science._validate_overwrite(args['overwrite'])
     if type(args['n_neighbors']) is not int or args['n_neighbors'] < 2:

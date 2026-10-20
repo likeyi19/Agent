@@ -26,6 +26,7 @@ EXTERNAL_PROFILE = dict(PROFILE, primary_profile=EXTERNAL_PRIMARY,
     signature_scoring='signed_marker_sum_with_duplicate_signature_weighting',
     primary_policy='unique_positive_maximum;zero_unresolved;exact_positive_tie_ambiguous')
 EXTERNAL_PROFILE_SHA256 = digest(EXTERNAL_PROFILE)
+COMPLETION = 'native_completion_exact_propagation_and_integrity.v2'
 ARGUMENTS = ('matrix_manifest_path', 'matrix_manifest_sha256', 'annotation_spec_path',
              'annotation_spec_sha256', 'output_dir')
 GROUP_ARGUMENTS = ('groups_path', 'groups_sha256')
@@ -58,6 +59,7 @@ def arguments(value):
     args = dict(value)
     direct = args.get('annotation_method') == EXTERNAL_PRIMARY
     if direct:
+        args.setdefault('count_slot', 'X')
         expected = ('annotation_spec_path', 'annotation_spec_sha256', 'output_dir',
                     'source_path', 'source_sha256', 'annotation_method', 'count_slot')
         matrix.shape(args, (*expected, *(GROUP_ARGUMENTS if 'groups_path' in args else ('group_column',))))
@@ -127,15 +129,46 @@ def resolved_specification(args):
     return value
 
 
-def profile(args):
+def profile(args, version=2):
     method = args.get('annotation_method', science.PROFILE)
     if method not in (science.PROFILE, EXTERNAL_PRIMARY):
         raise ValueError('Unknown annotation method')
-    return EXTERNAL_PROFILE if method == EXTERNAL_PRIMARY else PROFILE
+    value = EXTERNAL_PROFILE if method == EXTERNAL_PRIMARY else PROFILE
+    if version not in (1, 2):
+        raise ValueError('Unsupported annotation verification version')
+    return value if version == 1 else dict(value, verification=COMPLETION)
 
 
-def profile_sha(args):
-    return digest(profile(args))
+def profile_sha(args, version=2):
+    return digest(profile(args, version))
+
+
+def verifier(version):
+    if version not in (1, 2):
+        raise ValueError('Unsupported annotation verification version')
+    return dict(id='agent.cell-type-annotation-replay' if version == 1 else
+                'agent.cell-type-annotation-completion', compatibility_version=str(version))
+
+
+def external(value):
+    return value['arguments'].get('annotation_method') == EXTERNAL_PRIMARY
+
+
+def publication_files(context, paths, accepted=None):
+    """Read old accepted adapter pins as history, not installed-code requirements.
+
+    Only these two retired implementation dependencies may differ. Scientific
+    sources, native runtime, resources and published artifacts are still checked.
+    No unaccepted manifest can grant this historical exception.
+    """
+    from . import external_marker_annotation, peak_h5ad
+    retired = {str(Path(m.__file__).resolve()) for m in (external_marker_annotation, peak_h5ad)}
+    historical = accepted is not None and accepted['record']['resources']['manifest_identity']['schema_version'] == 1
+    recorded = {} if not historical else {
+        f['path']: dict(f) for f in accepted['record']['files'] if f['path'] in retired}
+    paths = set(map(str, paths))
+    return sorted([*context.files(paths - recorded.keys()),
+                   *(v for k, v in recorded.items() if k in paths)], key=lambda f: f['path'])
 
 
 def backend(binding):
@@ -152,11 +185,12 @@ def load_manifest(path, sha=None):
                         'matrix_binding', 'sidecars', 'summary',
                         *(['feature_participation'] if 'feature_participation' in value else [])))
     if (value['artifact_type'] != ARTIFACT or type(value['schema_version']) is not int or
-        value['schema_version'] != 1 or value['contract_version'] != CONTRACT or
-        value['profile'] != profile(value['arguments']) or value['profile_sha256'] != profile_sha(value['arguments'])):
+        value['schema_version'] not in (1, 2) or value['contract_version'] != CONTRACT or
+        value['profile'] != profile(value['arguments'], value['schema_version']) or
+        value['profile_sha256'] != profile_sha(value['arguments'], value['schema_version'])):
         raise ValueError('Unsupported annotation publication contract')
     arguments(value['arguments']); matrix.sha(value['source_authority_sha256'])
-    if value['profile'] == PROFILE:
+    if not external(value):
         matrix.shape(value['matrix_binding'], science.MatrixInput.__dataclass_fields__)
     else:
         from .external_marker_annotation import BINDING_FIELDS
@@ -167,7 +201,7 @@ def load_manifest(path, sha=None):
                 'primary/markers-signature-input.tsv', 'primary/group-sizes.tsv',
                 *(f'primary/{key}.json' for key in ('groups','cells','candidate_evidence','signature_coverage'))}
     # Existing publications predate native feature-participation observations.
-    if value['profile'] == EXTERNAL_PROFILE and 'primary/feature-participation.tsv' in value['sidecars']:
+    if external(value) and 'primary/feature-participation.tsv' in value['sidecars']:
         expected.add('primary/feature-participation.tsv')
     if ('feature_participation' in value) != ('primary/feature-participation.tsv' in expected):
         raise ValueError('Native feature participation metadata and sidecar must be published together')

@@ -89,7 +89,7 @@ def test_uploaded_components_without_annotation_inputset(resources,tmp_path,monk
             'Use the supplied human hg38 gene-symbol references with the stated synthetic provenance and release.' if supplement else OBJECTIVE,
             [g,s] if supplement else [source,g,s])
         assert result['status']=='succeeded',result
-        assert len(calls)==2
+        assert len(calls)==1
         run=app._application.run_store.load(result['run_id'])
         assert run.request.prompt==OBJECTIVE
         spec=json.loads(Path(run.steps[0].resolved_arguments['annotation_spec_path']).read_text())
@@ -140,7 +140,7 @@ def test_prior_uploads_combine_with_current_scientific_companions(resources, tmp
         else:
             done = h.send(client, 'annotate', OBJECTIVE, current)
         assert done['status'] == 'succeeded', done
-        assert len(calls) == 2  # Simulated production plus independent verifier.
+        assert len(calls) == 1  # Simulated native production; completion does not replay.
         state = app._application.sessions.load('upload')
         interaction = state.interactions[-1]
         key = 'candidate_input' if single_wire else 'available_input'
@@ -234,7 +234,7 @@ def test_missing_provenance_survives_restart_and_requires_no_reupload(resources,
     with TestClient(web) as client:
         result=h.send(client,'reply','The signatures come from the explicit simulated signature fixture.')
         assert result['status']=='succeeded',result
-        assert len(calls)==2
+        assert len(calls)==1
         run=app._application.run_store.load(result['run_id'])
         assert run.request.prompt==OBJECTIVE
 
@@ -275,7 +275,7 @@ def test_complete_uploaded_references_need_no_qc_catalog(resources, tmp_path, mo
         g = attach(client, genes, 'genes'); s = attach(client, signatures, 'signatures')
         done = h.send(client, 'first', OBJECTIVE, [source, g, s])
         assert done['status'] == 'succeeded', done
-        assert len(calls) == 2
+        assert len(calls) == 1
         step = app._application.run_store.load(done['run_id']).steps[0]
         spec = json.loads(Path(step.resolved_arguments['annotation_spec_path']).read_text())
         assert 'contig_scope' not in spec

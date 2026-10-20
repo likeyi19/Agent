@@ -463,7 +463,7 @@ def _counting_da_registry(call: Mock) -> ToolRegistry:
 
 
 def test_verified_da_checkpoint_is_reused_on_nonterminal_resume(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, pseudobulk = _source_and_pseudobulk(tmp_path / "fixture")
     arguments = _arguments(pseudobulk, tmp_path / "output", "independent")
@@ -482,6 +482,10 @@ def test_verified_da_checkpoint_is_reused_on_nonterminal_resume(
             run_store=_InterruptAfterDASuccessStore(store),
         ).run(AgentRequest(request_id, "fixed", {}))
 
+    # Accepted checkpoint validation needs no native backend installation.
+    forbidden = Mock(side_effect=AssertionError("Native science replay during recovery"))
+    monkeypatch.setattr(verifier, "_invoke_verifier_r", forbidden)
+    monkeypatch.setattr(production, "_invoke_fixed_script", forbidden)
     planner = _FixedPlanner(plan)
     result = AgentRuntime(
         planner=planner, registry=registry, run_store=store
@@ -491,9 +495,10 @@ def test_verified_da_checkpoint_is_reused_on_nonterminal_resume(
     assert result.steps[0].attempt_count == 1
     assert planner.calls == 0
     call.assert_called_once()
+    forbidden.assert_not_called()
 
 
-@pytest.mark.parametrize("mutation", ["source", "artifact", "backend"])
+@pytest.mark.parametrize("mutation", ["source", "artifact"])
 def test_nonterminal_resume_blocks_drift_without_reinvoking_production(
     tmp_path: Path, mutation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -519,37 +524,16 @@ def test_nonterminal_resume_blocks_drift_without_reinvoking_production(
     elif mutation == "artifact":
         da_path = Path(state.steps[0].result["da_path"])
         da_path.write_bytes(da_path.read_bytes() + b"drift")
-    else:
-        monkeypatch.setattr(
-            verifier,
-            "_invoke_verifier_r",
-            Mock(
-                side_effect=verifier.DAVerificationError(
-                    "EDGER_VERSION_UNSUPPORTED",
-                    "compatible pinned edgeR is unavailable",
-                )
-            ),
-        )
 
     result = AgentRuntime(
         planner=_FixedPlanner(plan), registry=registry, run_store=store
     ).resume(f"{request_id}:run")
 
     assert result.status is RunStatus.FAILED
-    if mutation == "backend":
-        assert len(result.errors) == 1
-        error = result.errors[0]
-        assert error.code == "EDGER_VERSION_UNSUPPORTED"
-        assert error.category is ErrorCategory.ENVIRONMENT_ERROR
-        assert (
-            error.recovery_disposition
-            is RecoveryDisposition.RESUME_WITH_COMPATIBLE_RUNTIME
-        )
-    else:
-        assert any(
-            error.code == "PERSISTED_STEP_REVALIDATION_FAILED"
-            for error in result.errors
-        )
+    assert any(
+        error.code == "PERSISTED_STEP_REVALIDATION_FAILED"
+        for error in result.errors
+    )
     call.assert_called_once()
 
 

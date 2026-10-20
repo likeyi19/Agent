@@ -24,6 +24,43 @@ separate. Native scientific defaults are described without being treated as user
 instructions. The linked record owns validation status and remaining limitations;
 older milestone descriptions of the replaced mechanisms are historical.
 
+[UA3.6.5-R6](docs/ua3.6.5-r6-agent-scientific-tools-integration-redesign.md)
+implements the scientific integration simplification and has passed final
+engineering review. AnnData owns input encodings; the annotation owner keeps
+bounded storage safety and actual measurement/group/resource requirements.
+Privacy sanitization belongs to downloads. MAESTRO executes once; new annotation
+manifest schema 2 records native completion, exact source/group association,
+label propagation and integrity, without runtime scientific replay. Accepted
+schema-1 replay records remain read-only history; their old profiles, receipts
+and downloads retain their identities. Unaccepted old publications cannot acquire
+replay authority through the new verifier.
+
+An explicitly selected accepted PCA-derived Leiden result can supply ordered
+groups for annotation of the exact original count-file bytes. The small private
+TSV projection follows recorded dependencies and checks ordered cells; equal
+cell counts or filenames never establish correspondence. Historical EpiZoo
+results without exact source-file identity cannot use this projection.
+Direct annotation defaults to `X` at the owner when `count_slot` is omitted.
+No default becomes a synthetic user instruction. ScientificResourceLibrary,
+native algorithms, the Registry inventory, EpiZoo and the R5 planning/answer
+architecture remain unchanged. The linked R6 record owns validation scope,
+historical compatibility and remaining limitations.
+
+The R6 cross-tool follow-up removes suffix-only admission from ordinary
+H5AD/embedding/label consumers, and accepts bounded dense, CSR and CSC count
+sources for pseudobulk. Feature manifests v2 describe actual storage and supplied
+species/assembly declarations; they do not claim reference qualification.
+Unique feature IDs remain required; equal coordinate intervals need not collapse
+distinct features. Exact inspection-path outputs may carry a registered input
+to its selected consumer without a new workflow or data transformation.
+DA validates the supplied aggregate and experimental units without reopening
+cell-level ancestry. New DA v2 publication checks verify native completion and
+integrity without a second edgeR execution. Explicit independent edgeR tests and
+version-aware feature/DA v1 readers remain. QC, selection, matrix and raw-source
+conservation checks remain once per new publication, with accepted-authority
+reuse preventing repeated upstream reconstruction. The linked record separates
+the full boundary audit, changed workflows, measured calls and remaining limits.
+
 ## Architecture and engineering rules
 
 ```text
@@ -83,7 +120,9 @@ multi-turn continuation. Missing resolvable declarations, resources, roles or fi
 should preserve the supported objective through existing typed prerequisites.
 New registrations must bind explicitly without replacing captured inputs. The LLM
 owns language interpretation; Agent owns typed admission, identity, compilation
-and lineage; scientific owners own qualification and independent verification.
+and lineage; scientific owners own qualification and method-appropriate result
+checks. Independent reconstruction is retained where scientifically necessary;
+it is not a universal requirement to replay a completed native algorithm.
 Internal authority records should not become manual user prerequisites where
 existing owners can establish them. Validation must be necessary and proportionate.
 
@@ -517,7 +556,7 @@ derived from the registry.
 | `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
 | `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
 | `adopt_scATAC_cell_by_ccre` | Exact external canonical int64 CSR H5AD adoption; declared value semantics, source/output conservation, matrix-owner authority, truthful external provenance |
-| `annotate_scATAC_cell_types` | Primary MAESTRO marker annotation of exact canonical groups; explicit resources/context, annotation authority and immutable-source annotated H5AD |
+| `annotate_scATAC_cell_types` | Primary MAESTRO annotation of canonical or declared peak counts and exact groups; pinned resources/context, completion authority and immutable-source annotated H5AD |
 | `adopt_scATAC_cell_by_features` | Exact neutral external regulatory-feature matrix adoption with declared species/assembly/reference and value semantics |
 | `adapt_epizoo_species` | Qualified EpiZoo species post-training with explicit strategy and pinned resource/profile specification |
 | `build_scATAC_cell_by_features` | Exact QC-selected or explicitly caller-ordered neutral fragment-derived regulatory-feature counts with independent reconstruction and authority |
@@ -800,7 +839,13 @@ fractional weighting, count copying or binary OR. Exact adoption, matrix-owner
 authority, scientific contracts and the nineteen-tool registry remain unchanged.
 Durable evidence and the bounded findings are linked from the M12 closeout.
 
-## Current Milestone 13 primary annotation contract
+## Historical Milestone 13 primary annotation contract
+
+This section records the original M13 contract and acceptance. Current direct
+peak admission is extended by R3; R6 above replaces ordinary native replay with
+versioned completion checks and adds accepted Leiden grouping handoff. The
+canonical-only restrictions and replay counts below describe historical M13,
+not current requirements for direct annotation.
 
 [M13.5](docs/m13.5-agent-annotation-integration.md) exposes
 `annotate_scATAC_cell_types`. Canonical `scatac-cell-by-ccre.v1` with the accepted

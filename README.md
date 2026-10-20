@@ -21,6 +21,29 @@ separate. Native scientific defaults are described without being treated as user
 instructions. The linked record owns validation status and remaining limitations;
 older milestone descriptions of the replaced mechanisms are historical.
 
+[UA3.6.5-R6](docs/ua3.6.5-r6-agent-scientific-tools-integration-redesign.md)
+simplifies the scientific handoff while retaining R5 planning and answers.
+AnnData owns peak-H5AD parsing; bounded HDF5 storage safety remains, while
+download privacy is handled at delivery. MAESTRO runs once and publishes a
+versioned completion contract with exact input association, group-to-cell
+propagation, source preservation and artifact integrity checks. Ordinary
+execution and recovery no longer replay MAESTRO. Explicitly selected accepted
+PCA-derived Leiden groups can feed annotation of the exact original counts
+without download/re-upload. Omitted direct-annotation `count_slot` uses `X`;
+effective defaults are recorded by the owner. Existing accepted v1 annotation
+records retain their historical profiles and downloads. R6 has passed final
+engineering review; its record distinguishes live Web/native acceptance,
+simulated tests, remaining limits and Git closeout evidence.
+
+The cross-tool R6 review also removes filename-extension gates from generic
+H5AD/embedding consumers and admits bounded dense count aggregation. Feature
+manifests v2 record storage truthfully and preserve species/assembly as supplied
+declarations. Registration follows the exact inspection output into a selected
+consumer. DA consumes the supplied pseudobulk without rebuilding its cell-level
+history; new DA v2 completion checks no longer replay edgeR. Historical v1
+readers remain, and independent scientific qualification tests are retained.
+EpiZoo vocabulary requirements and raw-data/QC/matrix scientific contracts remain.
+
 [UA3.6.5-R2A](docs/ua3.6.5-r2a-generic-cell-embedding.md) adds centered, sparse-safe
 Scanpy PCA for ordinary H5AD X measurements. PCA and EpiZoo use the same neighbor,
 Leiden and UMAP tools with their actual representation and dimensions. Explicit
@@ -163,11 +186,15 @@ statistical cell calling and model inference from raw sequencing remain deferred
 
 Direct marker-based cell-type annotation is available through
 [`annotate_scATAC_cell_types`](docs/m13.5-agent-annotation-integration.md).
-It consumes an accepted canonical fragment-count matrix, exact independent groups,
-and explicit pinned tissue/context resources, and publishes primary labels in a
-new annotated H5AD while preserving the source matrix. Unresolved cells remain
-present. CellMarker and EpiAgent remain optional private validators; neither gates
-or changes primary annotation.
+It consumes an accepted canonical fragment-count matrix or declared human hg38
+Cell Ranger ATAC cut-site peak counts, exact independent groups, and pinned
+tissue/context resources. It publishes primary labels in a new annotated H5AD
+while preserving source values and axes. Unresolved cells remain present.
+Groups may be supplied in `obs`, an ordered TSV, or an explicitly selected
+compatible accepted Leiden result. CellMarker corroboration is a reusable private
+component. EpiAgent-NT has qualified private scripts and preserved native results,
+but no registered Agent execution tool. Both comparisons remain optional and
+neither gates or changes primary annotation.
 
 ## Milestone 11 status
 

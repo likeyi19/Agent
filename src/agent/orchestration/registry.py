@@ -1494,7 +1494,7 @@ def _valid_sha256(value: object) -> bool:
 def _validate_feature_space_result(result: Mapping[str, object]) -> None:
     if (
         result["status"] != "success"
-        or result["artifact_schema_version"] != 1
+        or result["artifact_schema_version"] not in (1, 2)
         or result["pseudobulk_eligible"] is not True
         or result["matrix_semantics"]
         not in {"fragment_counts", "insertion_counts", "binary_accessibility"}
@@ -1566,7 +1566,7 @@ def _validate_differential_accessibility_result(
     if (
         result["status"] != "success"
         or result["artifact_type"] != DA_ARTIFACT_TYPE
-        or result["artifact_schema_version"] != DA_ARTIFACT_SCHEMA_VERSION
+        or result["artifact_schema_version"] not in (1, DA_ARTIFACT_SCHEMA_VERSION)
         or result["backend_pipeline"] != EDGER_PIPELINE_ID
         or result["filtering_method"] != "edgeR::filterByExpr"
         or result["normalization_method"] != "TMM"
@@ -3044,7 +3044,7 @@ def build_default_tool_registry() -> ToolRegistry:
         required_arguments={
             "input_path": _planning_argument(
                 path_types,
-                "Raw sparse scATAC regulatory matrix to validate.",
+                "scATAC regulatory count matrix to validate; dense X and sparse CSR/CSC storage are supported.",
                 source=composable,
                 artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
             ),
@@ -3075,14 +3075,12 @@ def build_default_tool_registry() -> ToolRegistry:
             "species": _planning_argument(
                 (str,),
                 "Species of the raw scATAC feature space.",
-                choices=("human", "mouse"),
                 source=direct,
                 scientific_parameter=True,
             ),
             "genome_assembly": _planning_argument(
                 (str,),
                 "Genome assembly matching the declared species.",
-                choices=("hg38", "mm10"),
                 source=direct,
                 scientific_parameter=True,
             ),
@@ -3189,7 +3187,7 @@ def build_default_tool_registry() -> ToolRegistry:
         planning=_tool_planning(
             PlanningToolRole.VALIDATION,
             "Validate raw regulatory feature space and persist its provenance manifest.",
-            "Species and genome assembly must be compatible: human with hg38 or mouse with mm10.",
+            "Species and assembly are retained declarations; count aggregation does not qualify genome-reference compatibility.",
             "Only fragment_counts, insertion_counts, or binary_accessibility are "
             "eligible for replicate pseudobulk.",
             capability_ids=('differential_accessibility',),

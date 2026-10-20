@@ -126,14 +126,12 @@ def _software_versions() -> dict[str, str]:
     return versions
 
 
-def _resolve_file(value: str | Path, name: str, *, suffix: str | None = None) -> Path:
+def _resolve_file(value: str | Path, name: str) -> Path:
     if not isinstance(value, (str, Path)):
         raise TypeError(f"`{name}` must be a string or pathlib.Path.")
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Required input file does not exist: {path}")
-    if suffix is not None and path.suffix.casefold() != suffix:
-        raise ValueError(f"`{name}` must identify a {suffix} file: {path}")
     return path
 
 
@@ -303,21 +301,21 @@ def _prepare_sources(
         raise ValueError("Reference and query species must match exactly.")
 
     reference_embedding = _resolve_file(
-        reference_embedding_path, "reference_embedding_path", suffix=".npy"
+        reference_embedding_path, "reference_embedding_path"
     )
     query_embedding = _resolve_file(
-        query_embedding_path, "query_embedding_path", suffix=".npy"
+        query_embedding_path, "query_embedding_path"
     )
     reference_ids_path = _resolve_file(
-        reference_cell_ids_path, "reference_cell_ids_path", suffix=".txt"
+        reference_cell_ids_path, "reference_cell_ids_path"
     )
     query_ids_path = _resolve_file(
-        query_cell_ids_path, "query_cell_ids_path", suffix=".txt"
+        query_cell_ids_path, "query_cell_ids_path"
     )
     reference_h5ad = _resolve_file(
-        reference_h5ad_path, "reference_h5ad_path", suffix=".h5ad"
+        reference_h5ad_path, "reference_h5ad_path"
     )
-    query_h5ad = _resolve_file(query_h5ad_path, "query_h5ad_path", suffix=".h5ad")
+    query_h5ad = _resolve_file(query_h5ad_path, "query_h5ad_path")
     reference_checkpoint = _resolve_file(
         reference_checkpoint_path, "reference_checkpoint_path"
     )
@@ -652,7 +650,7 @@ def transfer_cell_labels(
 
     _validate_parameters(n_neighbors, metric, min_confidence, overwrite)
     resolved_query_h5ad = _resolve_file(
-        query_h5ad_path, "query_h5ad_path", suffix=".h5ad"
+        query_h5ad_path, "query_h5ad_path"
     )
     resolved_output_dir = _resolve_output_dir(output_dir)
     output_path = resolved_output_dir / f"{resolved_query_h5ad.stem}.label_transfer.h5ad"

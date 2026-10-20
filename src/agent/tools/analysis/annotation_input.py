@@ -14,7 +14,7 @@ def observe(path, sha256):
     path = science.checked_file(path, sha256)
     if path.stat().st_size > peak_h5ad.MAX_BYTES:
         raise ValueError('Peak H5AD exceeds its supported size bound')
-    peak_h5ad.inspect(path, privacy=True)
+    peak_h5ad.inspect(path)
     a = ad.read_h5ad(path, backed='r')
     try:
         declarations = {}
@@ -22,8 +22,6 @@ def observe(path, sha256):
             if name in a.uns:
                 science.identifier(a.uns[name])
                 declarations[name] = a.uns[name]
-        if len(a.obs.columns) > 64:
-            raise ValueError('Annotation handoff supports at most 64 observation columns')
         columns = []
         for name in a.obs.columns:
             try:
@@ -47,7 +45,7 @@ def observe(path, sha256):
                     raise ValueError('Declared grouping does not identify a valid obs grouping column')
                 science.identifier(provenance)
                 qualified.append(dict(column=column, provenance=provenance))
-        return dict(source_sha256=sha256, declarations=declarations,
+        return dict(interface_version=2, source_sha256=sha256, declarations=declarations,
                     grouping_columns=columns, qualified_groupings=qualified)
     finally:
         a.file.close()
@@ -120,7 +118,7 @@ def qualify_resources(spec):
 
     This validates the supported refgenes table, signed-list inputs and their
     correspondence. It neither assigns labels nor certifies biological accuracy.
-    The computation and independent result replay retain their existing owners.
+    The native computation and publication checks remain with the annotation owner.
     """
     from .external_marker_annotation import contig_lengths
     contigs = contig_lengths(spec)

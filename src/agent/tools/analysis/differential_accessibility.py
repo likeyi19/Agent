@@ -23,17 +23,10 @@ from .replicate_pseudobulk import (
     PSEUDOBULK_ARTIFACT_TYPE,
     PSEUDOBULK_PROVENANCE_KEY,
     PSEUDOBULK_SCHEMA_VERSION,
-    _artifact_provenance as _m81_artifact_provenance,
     _canonical_covariate as _m81_canonical_covariate,
     _canonical_integer_chunk as _m81_canonical_integer_chunk,
-    _checked_library_sizes as _m81_checked_library_sizes,
-    _feature_manifest as _m81_feature_manifest,
     _file_sha256 as _m81_file_sha256,
-    _load_feature_manifest as _m81_load_feature_manifest,
-    _metadata_snapshot as _m81_metadata_snapshot,
     _output_value_semantics as _m81_output_value_semantics,
-    _production_aggregate as _m81_production_aggregate,
-    _snapshot_from_manifest as _m81_snapshot_from_manifest,
 )
 
 
@@ -255,7 +248,7 @@ def _resolve_pseudobulk_path(value: str | Path) -> Path:
             "PSEUDOBULK_ARTIFACT_INVALID", "Pseudobulk path must be path-like."
         )
     path = Path(value).expanduser().resolve()
-    if not path.is_file() or path.suffix.casefold() != ".h5ad":
+    if not path.is_file():
         raise M81ScientificError(
             "PSEUDOBULK_ARTIFACT_INVALID", "Required pseudobulk H5AD is invalid."
         )
@@ -263,232 +256,85 @@ def _resolve_pseudobulk_path(value: str | Path) -> Path:
 
 
 def _verified_pseudobulk(path_value: str | Path) -> _VerifiedPseudobulk:
-    """Revalidate an M8.1 artifact and its immutable raw-source provenance."""
+    """Validate the supplied aggregate, without reconstructing its cell-level history.
 
+    Accepted-output binding owns historical identity. This owner needs exact count
+    values, ordered features, experimental units and the declared measurement.
+    """
+    from .replicate_pseudobulk import (
+        _strict_ids, _ordered_strings_digest, _matrix_digest_and_nnz,
+        _matrix_chunks, _source_matrix, _domain_digest, PSEUDOBULK_UNIT_DOMAIN,
+    )
     path = _resolve_pseudobulk_path(path_value)
     digest_before = _m81_file_sha256(path)
-    artifact: ad.AnnData | None = None
+    artifact = ad.read_h5ad(path, backed="r")
     try:
-        try:
-            artifact = ad.read_h5ad(path, backed="r")
-        except Exception as exc:
-            raise M81ScientificError(
-                "PSEUDOBULK_ARTIFACT_INVALID", "Unable to read pseudobulk artifact."
-            ) from exc
-        if set(artifact.uns) != {PSEUDOBULK_PROVENANCE_KEY}:
-            raise M81ScientificError(
-                "PSEUDOBULK_ARTIFACT_INVALID", "Pseudobulk provenance schema is invalid."
-            )
-        try:
-            provenance = _json_value(artifact.uns[PSEUDOBULK_PROVENANCE_KEY])
-            if not isinstance(provenance, dict):
-                raise TypeError
-            source_record = provenance["source"]
-            biology = provenance["biology"]
-            metadata = provenance["metadata"]
-            if not all(
-                isinstance(value, dict)
-                for value in (source_record, biology, metadata)
-            ):
-                raise TypeError
-            if (
-                provenance.get("schema_version") != PSEUDOBULK_SCHEMA_VERSION
-                or provenance.get("artifact_type") != PSEUDOBULK_ARTIFACT_TYPE
-                or provenance.get("stage") != "replicate_pseudobulk"
-            ):
-                raise TypeError
-        except Exception as exc:
-            raise M81ScientificError(
-                "PSEUDOBULK_PROVENANCE_MISMATCH", "Pseudobulk provenance is invalid."
-            ) from exc
-
-        feature_path, manifest, feature_sha256 = _m81_load_feature_manifest(
-            source_record["feature_space_path"]
-        )
-        source = _m81_snapshot_from_manifest(manifest)
-        if manifest != _m81_feature_manifest(source):
-            raise M81ScientificError(
-                "FEATURE_SPACE_SOURCE_MISMATCH", "Feature-space source changed."
-            )
-        raw_covariate_keys = metadata.get("covariate_keys")
-        raw_covariate_columns = metadata.get("covariate_columns")
-        if not isinstance(raw_covariate_keys, list) or not isinstance(
-            raw_covariate_columns, list
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_PROVENANCE_MISMATCH", "Pseudobulk covariate schema is invalid."
-            )
-        covariate_keys = tuple(str(value) for value in raw_covariate_keys)
-        covariate_columns = tuple(str(value) for value in raw_covariate_columns)
-        if covariate_columns != tuple(
-            f"covariate_{index:03d}" for index in range(len(covariate_keys))
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_PROVENANCE_MISMATCH", "Pseudobulk covariate schema is invalid."
-            )
-        metadata_snapshot = _m81_metadata_snapshot(
-            source,
-            replicate_key=str(metadata["replicate_key"]),
-            group_key=str(metadata["group_key"]),
-            condition_key=str(metadata["condition_key"]),
-            group_source=str(metadata["group_source"]),
-            group_annotation_path=metadata.get("group_annotation_path"),
-            covariate_keys=covariate_keys,
-        )
-        expected = _m81_production_aggregate(source, metadata_snapshot)
-        library_sizes = _m81_checked_library_sizes(expected)
-        expected_provenance = _m81_artifact_provenance(
-            source,
-            feature_path,
-            feature_sha256,
-            metadata_snapshot,
-            expected,
-            group_source=str(metadata["group_source"]),
-            group_key=str(metadata["group_key"]),
-            replicate_key=str(metadata["replicate_key"]),
-            condition_key=str(metadata["condition_key"]),
-            covariate_keys=covariate_keys,
-            library_sizes=library_sizes,
-        )
-        if provenance != _json_value(expected_provenance):
-            raise M81ScientificError(
-                "PSEUDOBULK_PROVENANCE_MISMATCH", "Pseudobulk provenance changed."
-            )
-        expected_obs = (
-            "group",
-            "replicate",
-            "condition",
-            "n_cells",
-            "first_cell_index",
-            "library_size",
-            *covariate_columns,
-        )
-        expected_var = (
-            ("chrom", "start", "end") if source.chromosomes is not None else ()
-        )
-        if (
-            artifact.n_obs != len(metadata_snapshot.unit_ids)
-            or artifact.n_vars != source.n_features
-            or artifact.raw is not None
-            or any(
-                len(container)
-                for container in (
-                    artifact.layers,
-                    artifact.obsm,
-                    artifact.obsp,
-                    artifact.varm,
-                    artifact.varp,
-                )
-            )
-            or tuple(artifact.obs.columns) != expected_obs
-            or tuple(artifact.var.columns) != expected_var
-            or tuple(str(value) for value in artifact.obs_names)
-            != metadata_snapshot.unit_ids
-            or tuple(str(value) for value in artifact.var_names) != source.feature_ids
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_ARTIFACT_INVALID", "Pseudobulk structure or ordering changed."
-            )
-        observed_units = tuple(
-            zip(
-                (str(value) for value in artifact.obs["group"]),
-                (str(value) for value in artifact.obs["replicate"]),
-                (str(value) for value in artifact.obs["condition"]),
-                strict=True,
-            )
-        )
-        if observed_units != metadata_snapshot.unit_keys:
-            raise M81ScientificError(
-                "PSEUDOBULK_METADATA_MISMATCH", "Pseudobulk unit metadata changed."
-            )
-        if (
-            tuple(int(value) for value in artifact.obs["n_cells"])
-            != metadata_snapshot.cell_counts
-            or tuple(int(value) for value in artifact.obs["first_cell_index"])
-            != metadata_snapshot.first_cell_indices
-            or tuple(int(value) for value in artifact.obs["library_size"])
-            != library_sizes
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_METADATA_MISMATCH", "Pseudobulk row metadata changed."
-            )
-        for index, key in enumerate(covariate_keys):
-            observed = tuple(
-                _m81_canonical_covariate(value, key)
-                for value in artifact.obs[covariate_columns[index]].tolist()
-            )
-            expected_values = tuple(
-                row[index] for row in metadata_snapshot.unit_covariates
-            )
-            if observed != expected_values:
-                raise M81ScientificError(
-                    "PSEUDOBULK_METADATA_MISMATCH", "Pseudobulk covariates changed."
-                )
-        if source.chromosomes is not None and (
-            tuple(str(value) for value in artifact.var["chrom"]) != source.chromosomes
-            or tuple(int(value) for value in artifact.var["start"]) != source.starts
-            or tuple(int(value) for value in artifact.var["end"]) != source.ends
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_FEATURE_MISMATCH", "Pseudobulk feature metadata changed."
-            )
-        observed_matrix = artifact.X
-        if (
-            observed_matrix is None
-            or not isinstance(observed_matrix, ad.abc.CSRDataset)
-            or np.dtype(observed_matrix.dtype) != np.dtype(np.int64)
-        ):
-            raise M81ScientificError(
-                "PSEUDOBULK_ARTIFACT_INVALID", "Pseudobulk X must be backed CSR int64."
-            )
-        for row in range(expected.shape[0]):
-            observed_row = _m81_canonical_integer_chunk(
-                observed_matrix,
-                row,
-                row + 1,
-                _m81_output_value_semantics(source.matrix_semantics),
-            )
-            expected_row = expected[row : row + 1]
-            if not (
-                np.array_equal(observed_row.indptr, expected_row.indptr)
-                and np.array_equal(observed_row.indices, expected_row.indices)
-                and np.array_equal(observed_row.data, expected_row.data)
-            ):
-                raise M81ScientificError(
-                    "PSEUDOBULK_AGGREGATION_MISMATCH", "Pseudobulk exact SUM changed."
-                )
-        digests = provenance.get("digests")
-        if not isinstance(digests, dict):
-            raise M81ScientificError(
-                "PSEUDOBULK_PROVENANCE_MISMATCH", "Pseudobulk digests are invalid."
-            )
-        result = _VerifiedPseudobulk(
-            path=path,
-            sha256=digest_before,
-            feature_space_identity_sha256=source.feature_space_identity_sha256,
-            feature_ids_sha256=source.feature_ids_sha256,
-            pseudobulk_matrix_sha256=str(digests["pseudobulk_matrix_sha256"]),
-            matrix_semantics=source.matrix_semantics,
-            output_value_semantics=_m81_output_value_semantics(source.matrix_semantics),
-            condition_key=str(metadata["condition_key"]),
-            source_covariate_keys=covariate_keys,
-            source_covariate_columns=covariate_columns,
-            row_ids=metadata_snapshot.unit_ids,
-            feature_ids=source.feature_ids,
-            groups=tuple(value[0] for value in metadata_snapshot.unit_keys),
-            replicates=tuple(value[1] for value in metadata_snapshot.unit_keys),
-            conditions=tuple(value[2] for value in metadata_snapshot.unit_keys),
-            n_cells=metadata_snapshot.cell_counts,
-            library_sizes=library_sizes,
-            covariate_values=metadata_snapshot.unit_covariates,
-        )
+        provenance = _json_value(artifact.uns[PSEUDOBULK_PROVENANCE_KEY])
+        if (provenance['schema_version'] != PSEUDOBULK_SCHEMA_VERSION
+                or provenance['artifact_type'] != PSEUDOBULK_ARTIFACT_TYPE
+                or provenance['stage'] != 'replicate_pseudobulk'):
+            raise ValueError('Unsupported pseudobulk publication')
+        biology, metadata = provenance['biology'], provenance['metadata']
+        semantics = biology['matrix_semantics']
+        if semantics not in _ELIGIBLE_MATRIX_SEMANTICS:
+            raise _error('DA_MATRIX_SEMANTICS_INELIGIBLE', 'DA requires fragment or insertion counts.')
+        output_semantics = _m81_output_value_semantics(semantics)
+        if biology['output_value_semantics'] != output_semantics:
+            raise ValueError('Pseudobulk measurement declaration changed')
+        rows = _strict_ids(artifact.obs_names, 'pseudobulk')
+        features = _strict_ids(artifact.var_names, 'feature')
+        keys = tuple(metadata['covariate_keys']); columns = tuple(metadata['covariate_columns'])
+        if (len(set(keys)) != len(keys) or columns != tuple(f'covariate_{i:03d}' for i in range(len(keys)))):
+            raise ValueError('Pseudobulk covariate declarations changed')
+        units = tuple(tuple(_strict_text(v, code='DA_METADATA_INVALID', subject='Experimental unit')
+                            for v in values) for values in
+                      artifact.obs[['group','replicate','condition']].itertuples(index=False, name=None))
+        expected_ids = tuple('pb-' + _domain_digest(PSEUDOBULK_UNIT_DOMAIN,
+            dict(feature_space_identity_sha256=provenance['source']['feature_space_identity_sha256'],
+                 group=g, replicate=r, condition=c)) for g,r,c in units)
+        if len(set(units)) != len(units) or rows != expected_ids:
+            raise ValueError('Pseudobulk unit identity changed')
+        n_cells = tuple(int(v) for v in artifact.obs['n_cells'])
+        if any(v <= 0 or v != raw for v,raw in zip(n_cells, artifact.obs['n_cells'])):
+            raise ValueError('Invalid pseudobulk cell counts')
+        matrix = _source_matrix(artifact, 'X', None)
+        logical, nnz = _matrix_digest_and_nnz(matrix, len(rows), len(features), output_semantics)
+        libraries = []
+        for first,last in _matrix_chunks(matrix):
+            chunk = _m81_canonical_integer_chunk(matrix, first, last, output_semantics)
+            for i in range(chunk.shape[0]):
+                left,right = chunk.indptr[i:i+2]
+                total = sum(int(v) for v in chunk.data[left:right])
+                if total > np.iinfo(np.int64).max:
+                    raise ValueError('Pseudobulk library size overflow')
+                libraries.append(total)
+        feature_digest = _ordered_strings_digest(features, domain='agent.regulatory-feature-identities.v1')
+        digests = provenance['digests']; aggregation = provenance['aggregation']
+        if (logical != digests['pseudobulk_matrix_sha256'] or feature_digest != digests['feature_ids_sha256']
+                or tuple(libraries) != tuple(artifact.obs['library_size'])
+                or any(aggregation[k] != v for k,v in dict(n_cells=sum(n_cells),n_features=len(features),
+                    n_pseudobulks=len(rows),matrix_nnz=nnz,total_sum=sum(libraries)).items())):
+            raise ValueError('Pseudobulk counts, features or summary changed')
+        covariates = tuple(tuple(_m81_canonical_covariate(artifact.obs[col].iloc[i], key)
+                          for key,col in zip(keys,columns)) for i in range(len(rows)))
+        result = _VerifiedPseudobulk(path=path, sha256=digest_before,
+            feature_space_identity_sha256=provenance['source']['feature_space_identity_sha256'],
+            feature_ids_sha256=feature_digest, pseudobulk_matrix_sha256=logical,
+            matrix_semantics=semantics, output_value_semantics=output_semantics,
+            condition_key=metadata['condition_key'], source_covariate_keys=keys,
+            source_covariate_columns=columns, row_ids=rows, feature_ids=features,
+            groups=tuple(v[0] for v in units), replicates=tuple(v[1] for v in units),
+            conditions=tuple(v[2] for v in units), n_cells=n_cells,
+            library_sizes=tuple(libraries), covariate_values=covariates)
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, (M81ScientificError, M82ScientificError)):
+            raise
+        raise M81ScientificError('PSEUDOBULK_ARTIFACT_INVALID',
+                                 'Pseudobulk counts or experimental-unit metadata are invalid.') from exc
     finally:
-        if artifact is not None:
-            artifact.file.close()
+        artifact.file.close()
     if _m81_file_sha256(path) != digest_before:
-        raise M81ScientificError(
-            "SOURCE_CHANGED_DURING_READ", "Pseudobulk artifact changed during preparation."
-        )
+        raise M81ScientificError('SOURCE_CHANGED_DURING_READ', 'Pseudobulk changed during preparation.')
     return result
 
 

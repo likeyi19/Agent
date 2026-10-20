@@ -1,7 +1,6 @@
-"""Bounded ordinary AnnData encodings admitted by the peak annotation owner.
+"""HDF5 storage safety; AnnData owns encoding and scientific-format parsing.
 
-No semantic conversion or omission: unsupported encodings fail before execution.
-The same structural walk supports source admission and path-safe delivery.
+The optional privacy walk belongs to delivery, not scientific admission.
 """
 import re
 from contextlib import nullcontext
@@ -28,12 +27,12 @@ def strings(item, selection):
 
 
 def inspect(source, *, private_paths=(), privacy=False):
-    """Reject indirect HDF5, unsupported encodings and unbounded allocations."""
+    """Reject indirect storage, unsafe filters and excessive allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
         if not {'X','obs','var'} <= set(f):
             raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
-        if f.userblock_size or set(f) - {'X','obs','var','uns','layers','obsm','obsp','varm','varp','raw'}:
-            raise ValueError('Unsupported H5AD top-level layout')
+        if privacy and f.userblock_size:
+            raise ValueError('Unreviewed HDF5 user block cannot be delivered')
         seen = set(); objects = 0; size = 0
         def visit(item, depth):
             nonlocal objects, size
@@ -44,9 +43,11 @@ def inspect(source, *, private_paths=(), privacy=False):
             if address in seen:
                 raise ValueError('Repeated HDF5 object is unsupported')
             seen.add(address)
-            for key, value in item.attrs.items():
-                if key not in {'encoding-type','encoding-version','shape','_index','column-order','ordered'}:
-                    raise ValueError('Unsupported H5AD attribute')
+            for key in item.attrs:
+                attr = item.attrs.get_id(key)
+                if np.prod(attr.shape, dtype=np.int64) and attr.get_storage_size() > 65536:
+                    raise ValueError('Excessive H5AD attribute')
+                value = item.attrs[key]
                 if np.asarray(value).size > 4096:
                     raise ValueError('Excessive H5AD attribute')
                 if privacy and np.asarray(value).dtype.kind in 'OSU':
@@ -54,9 +55,6 @@ def inspect(source, *, private_paths=(), privacy=False):
                         if _PATH.search(str(text)):
                             raise ValueError('Private locator in H5AD metadata')
             if isinstance(item, h5py.Group):
-                encoding = item.attrs.get('encoding-type')
-                if encoding not in ('anndata','dict','dataframe','categorical','csr_matrix','csc_matrix','raw'):
-                    raise ValueError('Unsupported H5AD group encoding')
                 for name in item:
                     if not isinstance(item.get(name, getlink=True), h5py.HardLink):
                         raise ValueError('Indirect HDF5 links are unsupported')
@@ -64,12 +62,11 @@ def inspect(source, *, private_paths=(), privacy=False):
                         raise ValueError('Private locator in H5AD field name')
                     visit(item[name], depth+1)
             else:
-                if item.is_virtual or item.external or item.ndim > 2:
+                if item.is_virtual or item.external:
                     raise ValueError('Unsupported H5AD dataset layout')
                 creation = item.id.get_create_plist()
-                if (any(creation.get_filter(i)[0] not in (1,2,3) for i in range(creation.get_nfilters()))
-                        or creation.fill_value_defined() != h5py.h5d.FILL_VALUE_DEFAULT):
-                    raise ValueError('Unsupported HDF5 filter or fill value')
+                if any(creation.get_filter(i)[0] not in (1,2,3) for i in range(creation.get_nfilters())):
+                    raise ValueError('Unsupported HDF5 filter')
                 string = h5py.check_string_dtype(item.dtype) is not None
                 if string:
                     if item.ndim > 1:

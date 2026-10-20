@@ -2,7 +2,6 @@
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
-import tempfile
 import os
 from typing import TypedDict
 
@@ -55,10 +54,7 @@ def _operation():
     return nullcontext(current()) if current() is not None else authority_operation(VerificationContext())
 
 
-def source(args, spec):
-    if spec['schema'] == c.EXTERNAL_SPEC:
-        from .external_marker_annotation import qualify
-        return qualify(args, spec)
+def _canonical_source(args, spec):
     from agent.orchestration.verification_authority import bind_annotation_matrix
     authority, manifest = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], current())
     if (manifest['contract_version'] != c.matrix.CONTRACT or
@@ -77,22 +73,23 @@ def source(args, spec):
     return authority, manifest, binding
 
 
-def _publication(args, execution_identity):
+def _publication(args, execution_identity, *, version=2):
     args = c.arguments(args)
     token = c.digest(dict(arguments=args, policy=RECOVERY_POLICY, execution_identity=execution_identity,
-                          profile_sha256=c.profile_sha(args)))
+                          profile_sha256=c.profile_sha(args, version)))
     return args, Path(args['output_dir']) / ('annotation-' + token), token
 
 
-def _make_receipt(args, token, sha):
+def _make_receipt(args, token, sha, *, version=2):
     return dict(artifact_type='agent.annotation-receipt', schema_version=1, policy=RECOVERY_POLICY,
                 execution_identity=token, arguments_sha256=c.digest(args), manifest_sha256=sha,
-                profile_sha256=c.profile_sha(args))
+                profile_sha256=c.profile_sha(args, version))
 
 
 def _receipt(destination, args, token=None):
     r = c.read_json(destination / 'receipt.json', limit=16384)
-    if (r != _make_receipt(args, r['execution_identity'], r['manifest_sha256']) or
+    version = c.load_manifest(destination/'artifact/manifest.json', r['manifest_sha256'])['schema_version']
+    if (r != _make_receipt(args, r['execution_identity'], r['manifest_sha256'], version=version) or
             destination.name != 'annotation-' + r['execution_identity'] or
             token is not None and token != r['execution_identity']):
         raise ValueError('Annotation recovery receipt mismatch')
@@ -103,7 +100,7 @@ def _receipt(destination, args, token=None):
 def _summary(value, path, sha):
     binding = value['matrix_binding']
     return dict(status='success', manifest_path=str(path), manifest_sha256=sha,
-        artifact_type=c.ARTIFACT, artifact_schema_version=1, contract_version=c.CONTRACT,
+        artifact_type=c.ARTIFACT, artifact_schema_version=value['schema_version'], contract_version=c.CONTRACT,
         annotated_h5ad_path=str(path.parent / 'annotated.h5ad'),
         annotated_h5ad_sha256=value['sidecars']['annotated.h5ad']['sha256'],
         source_manifest_sha256=binding['manifest_sha256'] if 'manifest_sha256' in binding else binding['source_sha256'],
@@ -125,28 +122,35 @@ def _counts(groups, matrix):
         groups_omitted=max(0,len(groups)-50))
 
 
-def _provenance(args, authority, participation=None):
-    if c.profile(args) == c.EXTERNAL_PROFILE:
-        return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args), source_path=args['source_path'],
+def _provenance(args, authority, participation=None, *, version=2):
+    if args.get('annotation_method') == c.EXTERNAL_PRIMARY:
+        return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args, version), source_path=args['source_path'],
                     source_sha256=args['source_sha256'], input_qualification_sha256=authority,
                     source_contract='external-peak-annotation-input.v1',
                     counting_history='declared_not_reconstructed', count_slot=args['count_slot'],
                     annotation_spec_sha256=args['annotation_spec_sha256'],
                     **({'rp_' + k: v for k, v in participation.items()} if participation is not None else {}))
-    return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args),
+    return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args, version),
                 matrix_manifest_path=args['matrix_manifest_path'], matrix_manifest_sha256=args['matrix_manifest_sha256'],
                 matrix_authority_sha256=authority, annotation_spec_sha256=args['annotation_spec_sha256'])
 
 
 def _build(args, output):
     spec = c.resolved_specification(args)
-    authority, matrix, binding = source(args, spec)
+    if spec['schema'] == c.EXTERNAL_SPEC:
+        from .external_marker_annotation import prepare
+        a, (authority, matrix, binding) = prepare(args, spec)
+        component_input = dict(_matrix=a)
+    else:
+        authority, matrix, binding = _canonical_source(args, spec)
+        a, _ = c.load_source(binding)
+        component_input = {}
     output.mkdir()
-    primary = c.backend(binding).annotate_cell_groups(**c.component_arguments(args, spec, binding, output/'primary'))
+    primary = c.backend(binding).annotate_cell_groups(
+        **c.component_arguments(args, spec, binding, output/'primary'), **component_input)
     participation = primary.get('feature_participation')
     cells = c.read_json(output/'primary/cells.json', limit=1024**3)
     groups = c.read_json(output/'primary/groups.json', limit=1024**3)
-    a, _ = c.load_source(binding)
     if any(k in a.obs for k in c.OBS_COLUMNS) or 'cell_type_annotation' in a.uns:
         raise ValueError('Canonical input already contains annotation-owned metadata')
     if [r['cell_id'] for r in cells] != a.obs_names.tolist():
@@ -155,7 +159,7 @@ def _build(args, output):
         a.obs[column] = pd.Categorical([r[key] for r in cells])
     a.uns['cell_type_annotation'] = _provenance(args, authority, participation)
     a.write_h5ad(output/'annotated.h5ad', convert_strings_to_categoricals=False)
-    value = dict(artifact_type=c.ARTIFACT, schema_version=1, contract_version=c.CONTRACT,
+    value = dict(artifact_type=c.ARTIFACT, schema_version=2, contract_version=c.CONTRACT,
         profile=c.profile(args), profile_sha256=c.profile_sha(args), arguments=args, inputs=spec,
         source_authority_sha256=authority, matrix_binding=binding,
         sidecars={str(p.relative_to(output)):dict(sha256=science.sha256(p),size_bytes=p.stat().st_size)
@@ -178,8 +182,9 @@ def _same_sparse(left, right):
             all(np.array_equal(getattr(left,k),getattr(right,k)) for k in ('indptr','indices','data')))
 
 
-def _verify_derivative(path, binding, cells, args, authority, participation=None):
-    original, _ = c.load_source(binding)
+def _verify_derivative(path, binding, cells, args, authority, participation=None, *, version=2, original=None):
+    if original is None:
+        original, _ = c.load_source(binding)
     derived = ad.read_h5ad(path)
     direct = binding.get('method') == c.EXTERNAL_PRIMARY
     if (not _same_array(original.X, derived.X)
@@ -192,7 +197,7 @@ def _verify_derivative(path, binding, cells, args, authority, participation=None
         actual = [None if pd.isna(x) else str(x) for x in derived.obs[column]]
         if actual != [r[key] for r in cells]:
             raise ValueError('Annotated H5AD metadata differs from exact cell propagation')
-    if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority, participation):
+    if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority, participation, version=version):
         raise ValueError('Annotated H5AD matrix/annotation lineage mismatch')
     np.testing.assert_equal(original.uns, derived.uns)
     if direct:
@@ -220,21 +225,71 @@ def _same_array(left,right):
         return sparse.issparse(left) and sparse.issparse(right) and _same_sparse(left,right)
     if isinstance(left,pd.DataFrame) or isinstance(right,pd.DataFrame):
         return isinstance(left,pd.DataFrame) and isinstance(right,pd.DataFrame) and left.equals(right)
-    return left.shape == right.shape and left.dtype == right.dtype and np.array_equal(left,right,equal_nan=True)
+    return (left.shape == right.shape and left.dtype == right.dtype
+            and np.array_equal(left, right, equal_nan=left.dtype.kind in 'fc'))
+
+
+def _verify_completion(root, binding, spec, cells, groups, original=None):
+    """Native result structure and exact label propagation, without biological replay."""
+    from collections import Counter
+    ids = (root/'primary/cells.tsv').read_text().splitlines()
+    genes = (root/'primary/genes.tsv').read_text().splitlines()
+    if science.ordered_identity_sha256(ids) != binding['ordered_cells_sha256']:
+        raise ValueError('Native cell identity differs from the input')
+    science.ordered_identity_sha256(genes)
+    rows = list(pd.read_csv(root/'primary/groups.tsv', sep='\t', dtype=str,
+                           keep_default_na=False).itertuples(index=False, name=None))
+    order = science.exact_groups(ids, rows)
+    if 'path' in spec['groups']:
+        expected = list(pd.read_csv(spec['groups']['path'], sep='\t', dtype=str,
+                                    keep_default_na=False).itertuples(index=False, name=None))
+    else:
+        from .external_marker_annotation import group_rows
+        expected = group_rows(original, spec)
+    if rows != expected or [g['group'] for g in groups] != order:
+        raise ValueError('Native groups differ from the selected exact input')
+    sizes = Counter(g for _, g in rows)
+    for group in groups:
+        if (group['n_cells'] != sizes[group['group']] or
+                group['status'] not in ('assigned', 'unresolved', 'insufficient_evidence', 'ambiguous') or
+                group['validation_state'] != 'not_assessed'):
+            raise ValueError('Invalid native group completion')
+        if group['status'] == 'assigned':
+            science.identifier(group['primary_annotation'])
+        elif group['primary_annotation'] is not None:
+            raise ValueError('Unresolved native group has a primary annotation')
+    lookup = {g['group']: g for g in groups}
+    expected_cells = [dict(cell_id=cell, group=group, **{
+        key: lookup[group][key] for key in ('candidate', 'status', 'primary_annotation')})
+        for cell, group in rows]
+    if cells != expected_cells:
+        raise ValueError('Native cell assignments differ from group propagation')
+    rp = sparse.load_npz(root/'primary/rp.npz')
+    if (not sparse.isspmatrix_csr(rp) or rp.shape != (len(ids), len(genes)) or
+            not np.isfinite(rp.data).all() or (rp.data < 0).any() or
+            (np.asarray(rp.sum(axis=1)).ravel() <= 0).any()):
+        raise ValueError('Invalid native RP result structure')
+    rp.check_format(full_check=True)
 
 
 @owned_verification('annotation')
 def verify_annotation(path, *, expected_sha256):
-    """Replay M13 science only; upstream matrix proof is imported, never rebuilt.
+    """Check native completion, exact propagation and pinned publication integrity.
 
-    Uses the qualified backend again with independently loaded immutable inputs,
-    not a second implementation of annotation biology. Rehashed evidence must
-    reproduce that backend and exact annotation/derivative propagation.
+    This does not rerun RP, marker testing or candidate scoring. Historical v1
+    replay authority can only be reused from its accepted RunStore record.
     """
     value = c.load_manifest(path, expected_sha256)
+    if value['schema_version'] == 1:
+        raise ValueError('Historical replay authority is required; standalone legacy requalification is retired')
     args = value['arguments']; root = Path(path).parent
     spec = c.resolved_specification(args)
-    authority, matrix, binding = source(args, spec)
+    original = None
+    if spec['schema'] == c.EXTERNAL_SPEC:
+        from .external_marker_annotation import prepare
+        original, (authority, matrix, binding) = prepare(args, spec)
+    else:
+        authority, matrix, binding = _canonical_source(args, spec)
     if value['inputs'] != spec or value['source_authority_sha256'] != authority or value['matrix_binding'] != binding:
         raise ValueError('Annotation source or scientific input binding mismatch')
     for name, entry in value['sidecars'].items():
@@ -242,6 +297,12 @@ def verify_annotation(path, *, expected_sha256):
         if p != root/name or p.stat().st_size != entry['size_bytes']:
             raise ValueError('Annotation sidecar size or path mismatch')
     provenance = c.read_json(root/'primary/result.json')
+    if spec['schema'] == c.EXTERNAL_SPEC:
+        if provenance.get('binding') != binding or provenance.get('inputs') != spec:
+            raise ValueError('Native completion has a different source or resource binding')
+    elif (provenance.get('matrix') != binding or any(
+            provenance.get(key) != spec[key] for key in ('gene_resource', 'signature_resource'))):
+        raise ValueError('Native completion has a different canonical source or resource binding')
     if value.get('feature_participation') != provenance.get('feature_participation'):
         raise ValueError('Native feature participation metadata differs from the backend')
     expected_sidecars = {name.removeprefix('primary/'): entry['sha256']
@@ -249,33 +310,13 @@ def verify_annotation(path, *, expected_sha256):
                         if name.startswith('primary/') and name != 'primary/result.json'}
     if provenance.get('sidecars') != expected_sidecars:
         raise ValueError('Primary component sidecar identities differ from annotation publication')
-    with tempfile.TemporaryDirectory(prefix='.annotation-verification-', dir=root.parent) as tmp:
-        replay = Path(tmp)/'primary'
-        expected_provenance = c.backend(binding).annotate_cell_groups(**c.component_arguments(args,spec,binding,replay))
-        for key in ('sidecars',):
-            provenance.pop(key); expected_provenance.pop(key)
-        if provenance != expected_provenance:
-            raise ValueError('Annotation backend provenance mismatch')
-        for name in ('groups.json','cells.json','candidate_evidence.json','signature_coverage.json'):
-            if c.read_json(root/'primary'/name,limit=1024**3) != c.read_json(replay/name,limit=1024**3):
-                raise ValueError('Annotation evidence or primary assignments fail scientific replay')
-        if not _same_sparse(sparse.load_npz(root/'primary/rp.npz'), sparse.load_npz(replay/'rp.npz')):
-            raise ValueError('Annotation RP evidence fails pinned backend replay')
-        for name in ('markers-native.tsv.gz','markers-maestro-filtered.tsv','markers-signature-input.tsv','group-sizes.tsv'):
-            pd.testing.assert_frame_equal(pd.read_csv(root/'primary'/name,sep='\t',keep_default_na=False),
-                                          pd.read_csv(replay/name,sep='\t',keep_default_na=False),check_exact=True)
-        for name in ('genes.tsv','cells.tsv','groups.tsv'):
-            if (root/'primary'/name).read_bytes() != (replay/name).read_bytes():
-                raise ValueError('Annotation evidence axes differ from scientific inputs')
-        name = 'feature-participation.tsv'
-        if 'primary/' + name in value['sidecars']:
-            if (root/'primary'/name).read_bytes() != (replay/name).read_bytes():
-                raise ValueError('Native feature participation differs from scientific replay')
     cells = c.read_json(root/'primary/cells.json',limit=1024**3)
     groups = c.read_json(root/'primary/groups.json',limit=1024**3)
+    _verify_completion(root, binding, spec, cells, groups, original)
     if value['summary'] != _counts(groups,matrix):
         raise ValueError('Annotation summary mismatch')
-    _verify_derivative(root/'annotated.h5ad',binding,cells,args,authority,value.get('feature_participation'))
+    _verify_derivative(root/'annotated.h5ad',binding,cells,args,authority,value.get('feature_participation'),
+                       version=value['schema_version'], original=original)
     cancellation_checkpoint()
     return _summary(value,Path(path),expected_sha256)
 
@@ -308,6 +349,8 @@ def execute_annotation(arguments, execution_identity=None):
 
 def recover_annotation(arguments, execution_identity):
     args,destination,token = _publication(arguments,execution_identity)
+    if not destination.exists():
+        args,destination,token = _publication(arguments,execution_identity, version=1)
     if not destination.is_dir() or destination.is_symlink():
         raise ValueError('Annotation recovery publication unavailable')
     receipt = _receipt(destination,args,token)
@@ -321,5 +364,5 @@ def annotate_scATAC_cell_types(annotation_spec_path, annotation_spec_sha256, out
                               matrix_manifest_path=None, matrix_manifest_sha256=None,
                               groups_path=None, groups_sha256=None, source_path=None, source_sha256=None,
                               annotation_method=None, count_slot=None, group_column=None) -> CellTypeAnnotationResult:
-    """Annotate exact canonical groups with explicit pinned tissue/context resources."""
+    """Annotate exact groups on canonical or declared peak counts with pinned resources."""
     return execute_annotation({k: v for k, v in locals().items() if v is not None})

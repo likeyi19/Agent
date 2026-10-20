@@ -480,6 +480,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             visible['dialogue']['annotation_sources'] = group_choices(binding, sessions._application.registry)['sources']
             visible['dialogue']['annotation_resources'] = raw_offers(input_sets, 'annotation')
             visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
+        from .annotation_groups import public_choices
+        visible['dialogue']['annotation_group_results'] = public_choices(sessions, interaction)
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         if context is not None:
             visible['dialogue']['planning_context'] = list(context.public_items())

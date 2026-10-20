@@ -295,7 +295,8 @@ def test_bam_upload_does_not_route_unsupported_intent_or_start_science(bam_facto
         assert len(backend.models) == 1 and len(backend.models[0].calls) == 1
         assert calls == {'intake': 0, 'production': 0, 'verification': 0}
         state = backend.service._application.sessions.load('analysis')
-        assert state.generation == 0 and not state.revisions and state.turn('analysis').run_id is None
+        assert state.generation == 0 and not state.revisions and not state.turns
+        assert state.interactions[0].status == 'clarification'
 
 
 def test_bam_restart_completed_retry_reads_history_but_new_consumption_checks_bytes(

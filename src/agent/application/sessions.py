@@ -48,7 +48,9 @@ class AnalysisSessions:
                 epizoo_resources=(), input_sets=(), reference_resources=None):
         """Interpret one bounded follow-up; existing one-shot/session APIs are unchanged."""
         from .turns import respond
-        outcome = respond(AnalysisSessions(self._application, self._store.root), session_id, turn_id, utterance, interpreter=interpreter,
+        scoped = AnalysisSessions(self._application, self._store.root)
+        scoped._store = self._store
+        outcome = respond(scoped, session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation, answerer=answerer,
                        predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
                        submission=submission, epizoo_resources=epizoo_resources, input_sets=input_sets, reference_resources=reference_resources)
@@ -82,26 +84,6 @@ class AnalysisSessions:
         """Read bounded accepted evidence for an exact revision/output; no science."""
         from .dialogue_evidence import read_evidence
         return read_evidence(self, session_id, revision_id, output_name, fields=fields, detail=detail)
-
-    def record_no_run_turn(self, session_id, turn_id, *, outcome, expected_generation):
-        """Record an explicit non-execution outcome; no linguistic interpretation."""
-        text(turn_id)
-        natural(expected_generation)
-        if outcome not in {'clarification', 'failed', 'cancelled'}:
-            raise SessionError('Invalid non-execution outcome.')
-        def change(state):
-            previous = next((t for t in state.turns if t.turn_id == turn_id), None)
-            if previous is not None:
-                if (previous.request_id is not None or previous.status != outcome
-                        or previous.base_generation != expected_generation):
-                    raise SessionConflictError('Non-execution turn identity conflict.')
-                return state
-            if state.generation != expected_generation:
-                raise SessionConflictError('Session generation changed.')
-            turn = SessionTurn(turn_id, state.active_revision_id, state.generation,
-                               None, None, None, outcome)
-            return replace(state, turns=state.turns + (turn,))
-        return self._store._update(session_id, change)
 
     def start_turn(self, session_id, turn_id, request, outputs, *, expected_generation, retain=()):
         """Capture a base and explicit output selections before starting any work."""

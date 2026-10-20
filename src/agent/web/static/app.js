@@ -3,6 +3,7 @@
 // Browser storage holds display conveniences. Session generations and history
 // are reconstructed from Agent whenever a session is opened or a turn completes.
 const STORAGE_KEY = "agent.web.presentation.v1";
+const RECENT_SESSIONS_KEY = "agent.web.recent-sessions.v1";
 const RESOURCE_STORAGE_KEY = "agent.web.selected-resource.v1";
 const MULTI_RESOURCE_STORAGE_KEY = "agent.web.selected-resources.v1";
 const MAX_SELECTED_RESOURCES = 8;
@@ -50,6 +51,31 @@ function readConveniences() {
   } catch (_) {
     return {};
   }
+}
+
+function recentSessions() {
+  try {
+    const rows = JSON.parse(localStorage.getItem(RECENT_SESSIONS_KEY) || "[]");
+    return Array.isArray(rows) ? rows.filter((r) => r && typeof r.id === "string"
+      && r.id.length > 0 && r.id.length <= 256 && typeof r.label === "string").slice(0, 30) : [];
+  } catch (_) { return []; }
+}
+
+function rememberSession(view) {
+  const rows = recentSessions();
+  const first = view.turns.find((t) => t.utterance);
+  const previous = rows.find((r) => r.id === view.session_id);
+  const row = {id: view.session_id, label: previous && previous.label !== "New conversation"
+    ? previous.label : first ? first.utterance.slice(0, 80) : "New conversation"};
+  const updated = [row, ...rows.filter((r) => r.id !== row.id)].slice(0, 30);
+  try { localStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(updated)); } catch (_) {}
+  const select = element("recent-sessions");
+  select.replaceChildren(...updated.map((r) => {
+    const option = document.createElement("option");
+    option.value = r.id; option.textContent = r.label; option.title = r.id;
+    return option;
+  }));
+  select.value = view.session_id;
 }
 
 function saveConveniences() {
@@ -109,6 +135,7 @@ function showError(error) {
 }
 
 function awaitingPresentation(turn) {
+  if (turn.error && turn.error.code === "INTERACTIVE_PROCESSING_INTERRUPTED") return false;
   // Answer and scientific completion precede immutable display publication.
   // An explicit submission failure has no display to await.
   const submissionFailure = ["failed", "cancelled"].includes(turn.status) && !turn.run_id
@@ -1177,6 +1204,21 @@ function renderHistory() {
       note.className = "turn-error";
       note.textContent = `${error.code}: ${error.message}`;
       article.append(note);
+      if (error.code === "INTERACTIVE_PROCESSING_INTERRUPTED" || (turn.status === "finalizing" && turn.response)) {
+        const recover = document.createElement("button");
+        recover.type = "button"; recover.className = "secondary";
+        recover.textContent = "Recover saved progress";
+        recover.addEventListener("click", async () => {
+          recover.disabled = true;
+          const sessionId = state.session.session_id, epoch = state.epoch;
+          try {
+            await api(`${turnPath(sessionId, turn.turn_id)}/recover`, "POST");
+            await refreshCurrentSession(sessionId, epoch);
+          } catch (failure) { showError(failure); }
+          finally { recover.disabled = false; }
+        });
+        article.append(recover);
+      }
     }
     return article;
   }));
@@ -1196,6 +1238,7 @@ function updateControls() {
   element("utterance").disabled = !state.session;
   element("new-session").disabled = state.opening || state.posting;
   element("reopen-session").disabled = state.opening;
+  element("recent-sessions").disabled = state.opening || state.posting;
   const cancel = element("cancel-turn");
   cancel.hidden = !(state.activeTurn && state.activeTurn.run_id &&
     ["planning", "validated", "running"].includes(state.activeTurn.status) && !terminal(state.activeTurn));
@@ -1280,6 +1323,7 @@ function displaySession(view, preferredRevisionId = null) {
   const refreshRevision = !state.revision || state.revision.revision_id !== nextRevisionId
     || !previous || previous.session_id !== view.session_id;
   state.session = view;
+  rememberSession(view);
   if (state.attachmentSession !== view.session_id) restoreAttachments(view.session_id);
   state.durableTurnIds = new Set(view.turns.map((turn) => turn.turn_id));
   element("current-session").textContent = view.session_id;
@@ -1887,6 +1931,25 @@ element("add-scientific-input").addEventListener("click", () => {
 });
 
 element("new-session").addEventListener("click", () => createSession());
+element("recent-sessions").addEventListener("change", (event) => {
+  if (event.target.value) openSession(event.target.value);
+});
+element("history-notice").addEventListener("click", async () => {
+  if (!state.session || !state.session.turns.length) return;
+  const button = element("history-notice"), sessionId = state.session.session_id, epoch = state.epoch;
+  button.disabled = true;
+  try {
+    const first = state.session.turns[0].turn_id;
+    const page = await api(`${sessionPath(sessionId)}?before_turn_id=${encodeURIComponent(first)}`);
+    if (epoch !== state.epoch) return;
+    const existing = new Set(state.session.turns.map((turn) => turn.turn_id));
+    state.session = {...state.session, turns: [...page.turns.filter((turn) => !existing.has(turn.turn_id)), ...state.session.turns],
+      history_truncated: page.history_truncated};
+    button.hidden = !page.history_truncated;
+    renderHistory();
+  } catch (error) { showError(error); }
+  finally { button.disabled = false; }
+});
 
 async function createSession() {
   const epoch = ++state.epoch;

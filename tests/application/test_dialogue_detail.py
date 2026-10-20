@@ -13,7 +13,7 @@ from test_dialogue_evidence import app, accepted, forbid_work, files
 from test_scientific_dialogue import Model, question, ask
 
 
-def publication(app, *, qc=False, candidates=2, huge=False, current_contract=True):
+def publication(app, *, qc=False, candidates=2, huge=False, current_contract=True, annotation_version=1):
     root = app.workspace_root / 'published'
     root.mkdir(exist_ok=True)
     def write(name, value, raw=False):
@@ -31,7 +31,7 @@ def publication(app, *, qc=False, candidates=2, huge=False, current_contract=Tru
         tool = 'compute_scATAC_qc'
         values = {}
     else:
-        from agent.tools.analysis.annotation_contract import CONTRACT, ARTIFACT, PROFILE_SHA256
+        from agent.tools.analysis.annotation_contract import CONTRACT, ARTIFACT, profile_sha
         groups = [dict(group=g, n_cells=3, primary_annotation='B', status='assigned',
             reason='unique_positive_maximum', top_score=2.0, top_candidates=['B']) for g in ('3','7')]
         rows = [dict(group=g, candidate='B' if n == 0 else f'C{n}', score=2.0,
@@ -39,8 +39,8 @@ def publication(app, *, qc=False, candidates=2, huge=False, current_contract=Tru
             unobserved_marker_genes=[]) for g in ('3','7') for n in range(candidates)]
         coverage = [dict(candidate='B' if n == 0 else f'C{n}', entries=3,
             measured_entries=2, duplicate_entries=0, missing_genes=['CD19']) for n in range(candidates)]
-        manifest = dict(contract_version=CONTRACT, artifact_type=ARTIFACT, schema_version=1,
-            profile_sha256=PROFILE_SHA256, sidecars={
+        manifest = dict(contract_version=CONTRACT, artifact_type=ARTIFACT, schema_version=annotation_version,
+            profile_sha256=profile_sha({}, annotation_version), sidecars={
                 'primary/groups.json':write('primary/groups.json',groups),
                 'primary/candidate_evidence.json':write('primary/candidate_evidence.json',rows),
                 'primary/signature_coverage.json':write('primary/signature_coverage.json',coverage)})
@@ -50,12 +50,13 @@ def publication(app, *, qc=False, candidates=2, huge=False, current_contract=Tru
         manifest['arguments'] = {}  # Explicit legacy method identity for this new fixture.
     binding = write('manifest.json',manifest)
     rid = accepted(app, tool, overrides=dict(values, manifest_path=str(root/'manifest.json'),
-        manifest_sha256=binding['sha256'], contract_version=CONTRACT, artifact_type=ARTIFACT, artifact_schema_version=1))[0]
+        manifest_sha256=binding['sha256'], contract_version=CONTRACT, artifact_type=ARTIFACT, artifact_schema_version=manifest['schema_version']))[0]
     return rid, root
 
 
-def test_annotation_exact_detail_and_no_work(app, monkeypatch):
-    rid, root = publication(app)
+@pytest.mark.parametrize('annotation_version', [1, 2])
+def test_annotation_exact_detail_and_no_work(app, monkeypatch, annotation_version):
+    rid, root = publication(app, annotation_version=annotation_version)
     guarded = forbid_work(app, monkeypatch)
     before = files(app)
     view = guarded.sessions.evidence('session',rid,'output0', detail=DetailRequest('annotation_rationale','3',1))

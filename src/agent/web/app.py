@@ -548,8 +548,8 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         return application.create_session(body.session_id or str(uuid4())).to_dict()
 
     @app.get('/api/v1/sessions/{session_id}')
-    def reopen_session(session_id: str):
-        return application.reopen_session(session_id).to_dict()
+    def reopen_session(session_id: str, before_turn_id: str | None = None):
+        return application.reopen_session(session_id, before_turn_id=before_turn_id).to_dict()
 
     @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}')
     def revision(session_id: str, revision_id: str):
@@ -684,6 +684,10 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/status')
     def turn(session_id: str, turn_id: str):
         return workers.status(session_id, turn_id).to_dict()
+
+    @app.post('/api/v1/sessions/{session_id}/turns/{turn_id}/recover')
+    def recover(session_id: str, turn_id: str):
+        return application.recover_turn(session_id, turn_id, complete_presentation=True).to_dict()
 
     @app.post('/api/v1/sessions/{session_id}/turns/{turn_id}/cancel')
     def cancel(session_id: str, turn_id: str):

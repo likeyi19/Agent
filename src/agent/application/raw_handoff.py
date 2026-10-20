@@ -325,7 +325,8 @@ def schema(sources, resources, field='fastq', *, groups=()):
     from .turn_decisions import _object
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
-        return {'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
+        return ({'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
+                if choices else {'type': 'null'})
     if field == 'annotation':
         from agent.tools.analysis.annotation_contract import EXTERNAL_SEMANTICS
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
@@ -366,10 +367,11 @@ def schema(sources, resources, field='fastq', *, groups=()):
         namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
         species=optional(('human', 'mouse')), barcode_policy=optional(('raw_sequence_whitelist',)),
         resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
-        members={'type': 'array', 'maxItems': 16, 'items': _object(dict(
+        members={'type': 'array', 'maxItems': 16 if sources else 0, 'items': _object(dict(
             source={'type': 'string', 'enum': [s['source'] for s in sources]},
             role={'type': 'string', 'enum': [r.value for r in ReadRole]},
-            lane={'type': 'string', 'pattern': '^[0-9]{3}$'}, chunk={'type': 'string', 'pattern': '^[0-9]{3}$'}))}))
+            lane={'type': 'string', 'pattern': '^[0-9]{3}$'}, chunk={'type': 'string', 'pattern': '^[0-9]{3}$'}))
+            if sources else {'type': 'string'}}))
 
 
 def resources(input_sets, field='fastq'):

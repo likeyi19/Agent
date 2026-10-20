@@ -38,6 +38,7 @@ _MESSAGES = {
     'INTERACTIVE_REFERENCE_INVALID': 'The requested turn, revision, or reference is unavailable.',
     'INTERACTIVE_MODEL_UNAVAILABLE': 'The requested model profile is not offered or is unavailable.',
     'INTERACTIVE_OPERATION_ACTIVE': 'This turn is already being processed.',
+    'INTERACTIVE_PROCESSING_INTERRUPTED': 'Processing stopped before the response was saved. Existing scientific results are preserved. Reopening or retrying does not repeat execution.',
     'INTERACTIVE_APPLICATION_FAILED': 'The application could not complete this turn.',
     'INTERACTIVE_PRESENTATION_UNAVAILABLE': 'No stored displayed response is available for this historical turn.',
     'INTERACTIVE_ARTIFACT_UNAVAILABLE': 'The accepted presentation artifact is unavailable.',
@@ -293,21 +294,31 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_SESSION_INVALID') from exc
         return self.reopen_session(session_id)
 
-    def reopen_session(self, session_id, *, limit=100):
+    def reopen_session(self, session_id, *, limit=100, before_turn_id=None):
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise _fail('INTERACTIVE_INPUT_INVALID')
         state = self._load(session_id)
         try:
+            selected = state.revisions[-limit:]
+            if state.active_revision_id is not None and not any(
+                    r.revision_id == state.active_revision_id for r in selected):
+                active = next(r for r in state.revisions if r.revision_id == state.active_revision_id)
+                selected = (active,) + selected[-(limit - 1):] if limit > 1 else (active,)
             revisions = tuple(RevisionView(r.revision_id, r.parent_revision_id, r.turn_id,
                 r.revision_id == state.active_revision_id, tuple(o.name for o in r.outputs))
-                for r in state.revisions[-limit:])
+                for r in selected)
             interaction_ids = [i.turn_id for i in state.interactions]
             # Legacy metadata has no conversation chronology. Keep it separate
             # at the front so bounded display history retains recent captures.
             ids = [t.turn_id for t in state.turns if t.turn_id not in interaction_ids] + interaction_ids
+            if before_turn_id is not None:
+                _identifier(before_turn_id)
+                if before_turn_id not in ids:
+                    raise _fail('INTERACTIVE_REFERENCE_INVALID')
+                ids = ids[:ids.index(before_turn_id)]
             return SessionView(state.session_id, state.generation, state.active_revision_id,
                 revisions, tuple(self._view(state, key) for key in ids[-limit:]),
-                len(state.revisions) > limit or len(ids) > limit)
+                len(ids) > limit)
         except InteractiveBoundaryError:
             raise
         except (ValueError, TypeError, KeyError) as exc:
@@ -572,7 +583,6 @@ class InteractiveAgentApplication:
         requests. It reserves no identity and grants no execution authority;
         ``submit_turn`` repeats admission under the existing processing lease.
         """
-        resources = self._epizoo_resources
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
             predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
@@ -584,7 +594,6 @@ class InteractiveAgentApplication:
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
                     registered_input=None, input_sets=(), attachment_ids=()):
-        resources = self._epizoo_resources
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
@@ -615,7 +624,9 @@ class InteractiveAgentApplication:
                 except (ValueError, RuntimeError, OSError) as exc:
                     raise _fail('INTERACTIVE_MODEL_UNAVAILABLE') from exc
                 model = app.runtime.planner.model
+                app.sessions._store = sessions._store
                 try:
+                    resources = self._epizoo_resources
                     outcome = app.sessions.respond(session_id, turn_id, utterance,
                         interpreter=model, answerer=model, expected_generation=expected_generation,
                         execution_inputs=inputs, predecessor_turn_id=predecessor_turn_id,
@@ -700,6 +711,17 @@ class InteractiveAgentApplication:
             error = response.error
         if interaction is not None and interaction.prerequisite is not None:
             status, error = 'clarification', None
+        if (interaction is not None and interaction.submission is not None
+                and interaction.submission.get('profile_id') is not None and response is None
+                and not self._application.sessions._store.is_processing(state.session_id, turn_id)):
+            # Recheck after observing a released lease: completion may have been
+            # published since the caller captured this snapshot.
+            latest = self._load(state.session_id)
+            if latest != state:
+                return self._view(latest, turn_id)
+            error = _fail('INTERACTIVE_PROCESSING_INTERRUPTED').error
+            if status not in {'succeeded', 'failed', 'cancelled', 'planned', 'clarification'}:
+                status = 'interrupted'
         # Terminal scientific acceptance already passed the resource owner's
         # validate_result guard in sessions._complete. Project that recorded use;
         # do not reopen sources or repeat scientific verification on a read.
@@ -759,6 +781,18 @@ class InteractiveAgentApplication:
         try:
             with sessions.processing_lease(session_id, turn_id):
                 state = self._load(session_id)
+                interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+                if (not any(t.turn_id == turn_id and t.request_id is not None for t in state.turns)
+                        and interaction is not None
+                        and interaction.presentation is None):
+                    shown = PresentedResponse(kind='answer', status='unavailable',
+                        text='This interaction stopped before a response was saved. Submit a new message to continue. Scientific execution has not been resumed.')
+                    def close_interaction(current):
+                        return replace(current, interactions=tuple(
+                            replace(i, status='failed' if i.status in {'interpreting', 'admitted'} else i.status,
+                                    presentation=shown.to_dict()) if i.turn_id == turn_id else i
+                            for i in current.interactions))
+                    state = sessions._store._update(session_id, close_interaction)
                 if any(t.turn_id == turn_id for t in state.turns):
                     state = sessions.recover(session_id, turn_id)
                     if complete_presentation:

@@ -657,7 +657,7 @@ def _role_source(reference, preceding):
 def _role_binding(origin, source, interaction):
     """Only explicit append of registered files may fill captured missing roles."""
     from .local_resources import LocalResourceAdmission, available_input_view
-    origin = available_input_view(origin)
+    origin = available_input_view(origin, allow_empty=True)
     interaction = available_input_view(interaction)
     captured = origin.submission if source is None else dict(
         execution_inputs=_serialize(source.admitted['inputs']),
@@ -791,10 +791,37 @@ def _validate_role_prerequisite(interaction, preceding):
         raise SessionError('Invalid pending scientific role binding.') from exc
 
 
+def missing_file_request(registry, interaction, decision, execution_inputs=None):
+    """Admit a typed target's absent file roles before any planning reservation.
+
+    No language classification or workflow completion: this only handles an empty
+    source set with no selected result context. Ambiguous and supplied inputs
+    retain their ordinary semantic binding and scientific qualification path.
+    """
+    from .local_resources import available_input_view, LocalResourceAdmission, group_choices
+    from .turn_decisions import RequestRoles, RoleRequirement
+    if (decision.target not in registry.names() or decision.context == 'current'
+            or decision.roles or interaction.submission is None or execution_inputs
+            or interaction.submission.get('execution_inputs')):
+        return None
+    if interaction.submission.get('available_input_overflow'):
+        raise IntentError('ambiguous_subject')
+    viewed = available_input_view(interaction, allow_empty=True)
+    metadata = viewed.submission.get('registered_input', {})
+    if metadata.get('composition') != 'scientific-role-selection.v1' or metadata.get('members'):
+        return None
+    binding = LocalResourceAdmission._submission_binding(viewed.submission)
+    ports = {p.name: p for p in registry.get(decision.target).semantic_planning.consumer_ports}
+    required = tuple(RoleRequirement(r['tool'], r['port']) for r in group_choices(binding, registry)['roles']
+        if r['tool'] == decision.target and ports[r['port']].required)
+    return (RequestRoles(decision.target, required, argument=decision.argument,
+        arguments=decision.arguments) if required else None)
+
+
 def admit_role_request(sessions, interaction, decision, resources):
     """Capture a known registered objective without creating a Run or Plan."""
     from .local_resources import available_input_view
-    interaction = available_input_view(interaction)
+    interaction = available_input_view(interaction, allow_empty=True)
     from .local_resources import LocalResourceAdmission
     registry = sessions._application.registry
     if decision.target not in registry.names() or interaction.submission is None:
@@ -1439,9 +1466,10 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             turn = SessionTurn(interaction.turn_id, interaction.base_revision_id, interaction.base_generation,
                 request.request_id, digest(effective.to_dict()), request.request_id + ':run', 'linked', tuple(selections),
                 retained_outputs=retained)
-            return replace(state, turns=state.turns+(turn,))
+            return replace(state, turns=state.turns+(turn,), interactions=tuple(
+                replace(i, status='submitted') if i.turn_id == interaction.turn_id else i
+                for i in state.interactions))
         sessions._store._update(sid, link)
-        _update(sessions, interaction.turn_id, status='submitted')
 
     execution_app = ResearchAgentApplication(app.workspace_root,
         planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)

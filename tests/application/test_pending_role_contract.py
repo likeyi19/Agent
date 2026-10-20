@@ -1,5 +1,5 @@
 """Typed shared role questions and pure captured-source admission contracts."""
-from dataclasses import FrozenInstanceError, asdict
+from dataclasses import FrozenInstanceError, asdict, replace
 import json
 
 import pytest
@@ -125,6 +125,34 @@ def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
     assert [entry['properties']['argument']['enum'] for entry in answer['arguments']['items']['anyOf']] == [
         ['label_key']]
     assert 'answer_roles' not in variants(public(selected=False, pending=True))
+
+
+@pytest.mark.parametrize('tool,ports', [
+    ('inspect_scATAC', {'dataset'}), ('pca_embed_cells', {'dataset'}),
+    ('transfer_cell_labels', {'reference_dataset', 'query_dataset'}),
+    ('evaluate_cell_clustering', {'analysis', 'ground_truth_dataset'}),
+])
+def test_absent_files_are_registry_requirements_not_language_rules(tool, ports):
+    from dataclasses import dataclass
+    from agent.application.dialogue_execution import missing_file_request
+    @dataclass
+    class Capture:
+        submission: dict
+    registry = build_default_tool_registry()
+    decision = parse_decision(wire(dict(kind='execute_plan', target=tool)))
+    interaction = Capture(submission=dict(execution_inputs={}))
+    result = missing_file_request(registry, interaction, decision)
+    assert isinstance(result, RequestRoles) and result.target == tool
+    assert {r.port for r in result.required_roles} == ports
+    assert not result.roles
+    # A supplied source or explicitly selected result is never replaced by an upload prompt.
+    assert missing_file_request(registry, Capture(submission={
+        'execution_inputs': {'input_path': '/selected/source'}}), decision) is None
+    assert missing_file_request(registry, interaction, replace(decision, context='current')) is None
+    assert missing_file_request(registry, interaction, replace(decision, target='not_registered')) is None
+    with pytest.raises(IntentError, match='ambiguous_subject'):
+        missing_file_request(registry, Capture(submission={
+            'execution_inputs': {}, 'available_input_overflow': True}), decision)
 
 
 def test_interpreter_gets_safe_original_roles_and_no_keyword_repair():

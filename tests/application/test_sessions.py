@@ -12,7 +12,7 @@ import pytest
 
 from agent.application import (ResearchAgentApplication, ApplicationResult, ApplicationStatus,
                                ArtifactReference, OutputSelection, SessionError, SessionConflictError)
-from agent.application.session_state import AnalysisSession, digest
+from agent.application.session_state import AnalysisSession, SessionTurn, digest
 from agent.application.session_store import FileSessionStore
 from agent.orchestration import ToolRegistry, ToolSpec, ResultContract, ErrorClassification
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, ErrorCategory, RunMode
@@ -345,14 +345,16 @@ def test_concurrent_activation_idempotence(app, monkeypatch):
     assert len(states[0].revisions) == len(states[0].navigation) == 1
 
 
-def test_no_run_outcomes(app, monkeypatch):
+def test_legacy_no_run_outcomes_remain_readable(app, monkeypatch):
     app.sessions.create('session')
     forbid_work(app, monkeypatch)
-    for outcome in ('clarification', 'failed', 'cancelled'):
-        state = app.sessions.record_no_run_turn('session', outcome, outcome=outcome, expected_generation=0)
-        assert state.turn(outcome).status == outcome
-        assert state.generation == 0 and state.active_revision_id is None
-        assert app.sessions.record_no_run_turn('session', outcome, outcome=outcome, expected_generation=0) == state
+    # Historical rows keep their identities; new clarification writers use Interaction.
+    turns = tuple(SessionTurn(outcome, None, 0, None, None, None, outcome)
+                  for outcome in ('clarification', 'failed', 'cancelled'))
+    state = app.sessions._store._update('session', lambda s: replace(s, turns=turns))
+    restored = FileSessionStore(app.sessions._store.root).load('session')
+    assert restored == state and restored.turns == turns
+    assert restored.generation == 0 and restored.active_revision_id is None
 
 
 def test_existing_run_attach_exact_identity(app):

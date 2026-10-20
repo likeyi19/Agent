@@ -362,7 +362,7 @@ def test_answer_and_failed_turn_refresh_do_not_replace_same_revision_content():
         attachmentSession:'s',viewedRevisionId:'one',revision:{revision_id:'one'}};
       const loads=[];
       const loadRevision=id=>loads.push(id), clearRevisionView=()=>loads.push(null);
-      const renderHistory=()=>{},renderRevisionHistory=()=>{},renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{};
+      const rememberSession=()=>{},renderHistory=()=>{},renderRevisionHistory=()=>{},renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{};
       const shortIdentity=x=>x,resultLabel=x=>x;
     """ + functions + """
       for(const status of ['answered','clarification','running','failed','cancelled']) {

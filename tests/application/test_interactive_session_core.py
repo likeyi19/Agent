@@ -71,7 +71,7 @@ def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, deci
     assert outcome.kind == 'clarify' and outcome.clarification.reason == expected
     state = application.sessions.load('empty')
     assert state.generation == 0 and state.active_revision_id is None and not state.revisions
-    assert state.turn('question').status == 'clarification'
+    assert not state.turns and state.interactions[0].status == 'clarification'
     assert state.interactions[0].base_revision_id is None and len(model.calls) == 1
     assert model.calls[0]['bases'] == {} and model.calls[0]['dialogue']['outputs'] == []
     assert 'inspect_scATAC' in model.calls[0]['dialogue']['tools']

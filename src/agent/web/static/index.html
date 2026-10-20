@@ -16,6 +16,10 @@
       </div>
       <div class="header-actions">
         <div class="model-controls">
+          <label for="recent-sessions">Recent conversations · this browser</label>
+          <select id="recent-sessions"><option value="">Open a conversation…</option></select>
+        </div>
+        <div class="model-controls">
           <label for="model-choice">Conversation model</label>
           <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
         </div>
@@ -159,7 +163,7 @@
       <div class="section-heading">
         <h2 id="conversation-heading">Conversation</h2>
         <button id="show-current-result" class="secondary" type="button" hidden>Results &amp; downloads</button>
-        <span id="history-notice" class="muted small" hidden>Showing bounded recent history.</span>
+        <button id="history-notice" class="secondary small" type="button" hidden>Load earlier messages</button>
       </div>
       <div id="conversation-history" role="log" aria-label="Conversation messages" tabindex="0" aria-live="polite" aria-relevant="additions text">
         <p class="empty-history">Create a session or reopen one to begin.</p>

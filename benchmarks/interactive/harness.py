@@ -24,7 +24,7 @@ from agent.orchestration.planner import PlannerError
 from agent.orchestration.llm_planner import _PROVIDER_ERROR_CODES
 from agent.orchestration.planning_model import classify_provider_exception
 from agent.orchestration.planning_scope import (
-    PlanningScope, capability_index, fingerprint, parse_selection, selection_request,
+    PlanningScope, capability_index, fingerprint,
 )
 from agent.orchestration.semantic_wire_v4 import parse_semantic_wire_v4
 from agent.orchestration.semantic_compiler import build_semantic_compiler_contract
@@ -33,6 +33,7 @@ from agent.schemas.orchestration import _serialize
 from benchmarks.planner.benchmark import guarded_registry
 
 from .fixtures import build_context
+from .legacy_selection import parse_selection, selection_request
 
 
 class ZeroScienceViolation(BaseException):

@@ -9,7 +9,6 @@ from agent.schemas.prior_output import PriorOutputBinding, PriorOutputRef
 from agent.schemas.run_state import _decode_plan, fingerprint_plan
 from agent.orchestration import build_default_tool_registry
 from agent.orchestration.active_context import ActiveContextItem, ActivePlanningContext, planning_context
-from agent.orchestration.planning_scope import selection_request
 from agent.orchestration.semantic_prompt import build_semantic_planning_prompt
 from agent.orchestration.semantic_wire_v4 import build_semantic_wire_v4_schema, parse_semantic_wire_v4
 from agent.orchestration.semantic_compiler import compile_semantic_plan, build_semantic_compiler_contract
@@ -40,14 +39,12 @@ def wire(handle='ctx.0', target='barcode_qc'):
 def test_scoped_context_private_identity_never_enters_prompts():
     registry = build_default_tool_registry()
     with planning_context(context()):
-        a, _ = selection_request(request(), registry)
         b = build_semantic_planning_prompt(request(), registry, visible_tool_names=('select_scATAC_cells',))
         schema = build_semantic_wire_v4_schema(registry, request(), visible_tool_names=('select_scATAC_cells',))
-    for value in (a,b,json.dumps(schema)):
+    for value in (b,json.dumps(schema)):
         for private in ('PRIVATE', 'private-session', 'private-revision', '1'*64, '2'*64, '3'*64):
             assert private not in value
-    assert json.loads(a)['active_artifact_types'] == ['scatac_barcode_qc.v1']
-    assert len(a.encode()) < 5000 and len(b.encode()) < 10000
+    assert len(b.encode()) < 10000
     assert schema['$defs']['context_source']['properties']['handle']['enum'] == ('ctx.0',)
 
 

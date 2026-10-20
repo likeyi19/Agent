@@ -285,12 +285,13 @@ def test_supported_new_request_with_omitted_declaration_reaches_existing_compile
     class Model:
         def complete(self, *, prompt, response_schema):
             captured = json.loads(prompt)
-            instructions = ' '.join(captured['instructions'])
-            assert 'otherwise supported new scientific command with a selected input' in instructions
-            assert 'Choose execute_plan and omit that declaration from arguments' in instructions
-            assert 'Planner/compiler determines the exact missing prerequisite' in instructions
-            assert 'Application creates its durable clarification' in instructions
-            assert 'never fabricate a pending request' in instructions
+            assert captured['utterance'] == OMITTED
+            variants = response_schema['properties']['decision']['anyOf']
+            execution, = [v['properties'] for v in variants
+                          if v['properties']['kind']['enum'] == ['execute_plan']]
+            assert 'compute_cell_umap' in execution['target']['enum']
+            assert execution['arguments'].get('minItems', 0) == 0
+            assert not captured['dialogue'].get('pending_prerequisite')
             return wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[]))
     decision = interpret(Model(), OMITTED, public())
     assert decision == Execute('current', 'plan', 'compute_cell_umap', None)
@@ -408,7 +409,7 @@ def test_fresh_semantic_species_refusal_preserves_reason_without_fabricating_pen
     assert result.run_id is None and result.revision_id is None
     state = assert_no_publication(h)
     assert state.interactions[0].prerequisite is None
-    assert state.turns[0].request_id is None and state.turns[0].run_id is None
+    assert not state.turns and state.interactions[0].status == 'clarification'
     assert not h[4].plans and len(h[5]) == 1
 
 

@@ -10,6 +10,42 @@ This is the detailed engineering contract and acceptance record. Start with
 [README.md](README.md) for the overview and CLI examples. Current contracts
 below take precedence over historical milestone scope and version statements.
 
+[UA3.6.5-R7](docs/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
+owns the current Session/lifecycle simplification. One Session is a persistent
+research conversation; Interaction owns capture, intent, clarification and exact
+display, SessionTurn owns scientific reservation/acceptance, RunStore owns execution,
+and Revision owns exact accepted outputs and parentage. New clarifications do not
+write SessionTurns. The retired `record_no_run_turn` writer is not a compatibility
+requirement; existing nonexecution rows remain readable. Scientific reservation and
+submitted interaction state are published atomically.
+
+The lazily retained Session facade shares a bounded exact-byte decoded snapshot;
+each interpretation still has its own scoped facade and model bundle. Full current
+file bytes, checksum/shape/history validation on changes, atomic replace/fsync,
+processing leases, generation CAS and scientific integrity remain authoritative.
+A missing processing lease with no saved response is visible as interruption, never
+automatic retry authority. Explicit Web recovery can finish saved presentation or
+close an interrupted response, and cannot resume native science. Historical displayed
+text is immutable. Browser-local recent Sessions do not enumerate server records;
+cursor paging exposes earlier conversation. R4 sharing and R5/R6 scientific owners
+remain unchanged. The linked record distinguishes real OpenRouter/native/browser
+acceptance, simulated lifecycle tests and limitations. Older milestone requirements
+for replaced Session mechanics are historical, not reasons to restore duplication.
+Final R7 engineering review passed within the linked acceptance scope. The user's
+final closeout instruction authorizes one reviewed R7 commit and normal push to
+`origin/main`; earlier no-commit statements describe the pre-closeout stages.
+
+The expanded R7 record also owns the Agent-wide architecture audit. A supported
+operation with missing user files is an input prerequisite, not an unsupported
+capability. Existing role requests may capture zero attachment candidates; exact
+later upload associations continue the original objective through ordinary
+planning. Empty candidate groups grant no execution or scientific authority.
+Supplied structured inputs and selected accepted-result context retain their
+existing bindings. Do not restore clarification-only SessionTurns or failed
+planning Runs merely to request a file. Compound raw/reference declarations keep
+their scientific owners. Legacy capability-selection prompt/parser experiments
+belong to `benchmarks/interactive/legacy_selection.py`, not production planning.
+
 [UA3.6.5-R5](docs/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects

@@ -255,9 +255,13 @@ def test_unrelated_new_task_does_not_inherit_role_pending_objective_or_sources(t
     pending(app, submit(app, group=group))
     result = submit(app, turn='unrelated', utterance=UNRELATED)
     assert result['revision_id'] is None and not executor.plans, result
-    admitted = app._application.sessions.load('session').interactions[-1].admitted
+    interaction = app._application.sessions.load('session').interactions[-1]
+    admitted = interaction.admitted
     assert admitted['inputs'] == {}
-    assert 'roles' not in admitted and 'registered_input' not in admitted and 'continuation' not in admitted
+    assert not admitted['roles'] and not admitted['registered_input']['members']
+    assert 'continuation' not in admitted
+    assert interaction.prerequisite['origin_turn_id'] == 'unrelated'
+    assert interaction.prerequisite['tool'] == 'inspect_scATAC'
 
 
 def test_role_answer_without_any_pending_request_cannot_create_a_task(tmp_path):

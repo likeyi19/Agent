@@ -607,7 +607,8 @@ def _detail(sessions, step, request):
 
     if request.section == 'annotation_rationale':
         from agent.tools.analysis.annotation_contract import CONTRACT, profile_sha
-        if manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] != profile_sha(manifest['arguments']):
+        if (manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] !=
+                profile_sha(manifest['arguments'], manifest['schema_version'])):
             raise _Unsupported('unsupported_detail_profile')
         name = 'primary/result.json'
         if 'primary/feature-participation.tsv' in manifest['sidecars']:

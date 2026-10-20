@@ -289,3 +289,26 @@ def test_validate_submission_is_read_only_and_normalizes_default_profile(tmp_pat
     assert len(default) == 64 and default == explicit
     assert backend.service.reopen_session('session') == before
     assert not backend.models and not backend.science_calls
+
+
+def test_interrupted_interaction_recovery_and_history_cursor(web):
+    from dataclasses import replace
+    from agent.application.session_state import Interaction
+    client, backend = web
+    create_session(client)
+    sessions = backend.service._application.sessions
+    lost = Interaction('lost', 'Interrupted question.', None, 0,
+        {'relations': {}, 'bases': {}}, submission={'profile_id': 'alpha'})
+    sessions._store._update('session', lambda s: replace(s, interactions=(lost,)))
+    before = sessions._store._path('session', '.json').read_bytes()
+    status = client.get('/api/v1/sessions/session/turns/lost/status').json()
+    assert status['status'] == 'interrupted'
+    assert sessions._store._path('session', '.json').read_bytes() == before
+    empty = client.get('/api/v1/sessions/session?before_turn_id=lost').json()
+    assert empty['turns'] == [] and not empty['history_truncated']
+    with sessions.processing_lease('session', 'lost'):
+        assert client.post('/api/v1/sessions/session/turns/lost/recover').status_code == 409
+    response = client.post('/api/v1/sessions/session/turns/lost/recover')
+    assert response.status_code == 200 and response.json()['response']['status'] == 'unavailable'
+    assert client.post('/api/v1/sessions/session/turns/lost/recover').json() == response.json()
+    assert not backend.models and not backend.science_calls

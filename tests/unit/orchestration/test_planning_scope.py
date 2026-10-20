@@ -11,7 +11,7 @@ from agent.orchestration import (
     build_default_tool_registry,
 )
 from agent.orchestration.planning_scope import (
-    PlanningScope, capability_index, parse_selection, selection_request,
+    PlanningScope, capability_index,
 )
 from agent.orchestration.semantic_prompt import build_semantic_planning_catalog, build_semantic_planning_prompt
 from agent.orchestration.semantic_wire_v4 import build_semantic_wire_v4_schema, parse_semantic_wire_v4

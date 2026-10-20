@@ -6,7 +6,7 @@ import pytest
 
 from agent.application import SessionConflictError
 from agent.application.sessions import AnalysisSessions
-from agent.application.session_state import Interaction
+from agent.application.session_state import Interaction, SessionTurn
 from agent.application.turn_context import snapshot, supplied_input_context
 from agent.schemas.orchestration import _serialize
 from test_dialogue_evidence import app, accepted, forbid_work
@@ -312,8 +312,9 @@ def test_capture_conflicts_with_metadata_completion_without_generation_change(ap
     def racing_snapshot(sessions, state, **kwargs):
         captured = original_snapshot(sessions, state, **kwargs)
         if racing_change == 'turn_only':
-            changed = sessions.record_no_run_turn('session', 'racing', outcome='clarification',
-                expected_generation=state.generation)
+            changed = sessions._store._update('session', lambda current: replace(current,
+                turns=current.turns + (SessionTurn('racing', current.active_revision_id,
+                    current.generation, None, None, None, 'clarification'),)))
         else:
             changed = sessions.recover('session', 'waiting')
             assert changed.turn('waiting').status == 'stale'

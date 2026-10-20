@@ -7,6 +7,25 @@ Existing foundation models such as EpiZoo and EpiAgent are scientific backends
 to reuse; the Agent does not reimplement them. EpiZoo is the currently validated
 embedding backend.
 
+[UA3.6.5-R7](docs/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
+simplifies ongoing research Sessions. Clarifications and questions are interactions;
+only scientific execution reserves a Run, and accepted results publish immutable
+Revisions with exact parentage. Atomic Session files reuse an already validated
+snapshot only when their complete bytes are unchanged. Scientific success remains
+separate from report/answer completion. Interrupted response processing is visible,
+and **Recover saved progress** reconciles existing work without restarting science.
+The two-panel browser offers local recent conversations and earlier-message paging.
+Private inputs/results remain reusable within their Session; explicit reference
+sharing continues through the existing ScientificResourceLibrary. The linked record
+owns bounded validation and remaining limitations; historical milestone descriptions
+of superseded Session mechanics are not current implementation requirements.
+The Agent-wide R7 follow-up reviews all internal owners. Supported requests with
+missing files use the existing durable role prerequisites, including an initially
+empty source set. Uploading the file in a later reply continues the original
+objective without a clarification-only Run. Interpreter intent, Registry planning,
+exact compilation and native scientific qualification retain distinct owners.
+Retired capability-selection experiments now live only in the benchmark harness.
+
 [UA3.6.5-R5](docs/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects

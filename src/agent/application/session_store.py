@@ -19,6 +19,9 @@ class FileSessionStore:
 
     def __init__(self, root):
         self.root = Path(root)
+        # One bounded immutable snapshot. Reuse requires exact file bytes, never
+        # a timestamp, generation or filesystem identity alone.
+        self._cached = None
         self._check_root()
 
     def _check_root(self):
@@ -74,6 +77,25 @@ class FileSessionStore:
         finally:
             os.close(fd)
 
+    def is_processing(self, session_id, turn_id):
+        """Observe the existing OS lease without creating or changing records."""
+        text(turn_id)
+        path = self._path(session_id, '.turn-' + digest({'turn_id': turn_id}) + '.lease')
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return False
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise SessionError('Invalid interactive processing lease.')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            return False
+        finally:
+            os.close(fd)
+
     def _load(self, session_id):
         def pairs(items):
             value = {}
@@ -87,6 +109,9 @@ class FileSessionStore:
                 raw = stream.read(MAX_SESSION_BYTES + 1)
             if len(raw) > MAX_SESSION_BYTES:
                 raise SessionError('Session storage limit exceeded.')
+            cached = self._cached
+            if cached is not None and cached[0] == session_id and cached[1] == raw:
+                return cached[2]
             envelope = json.loads(raw, object_pairs_hook=pairs)
             if (type(envelope) is not dict or set(envelope) != {'format', 'record', 'sha256'}
                     or envelope['format'] != 'agent.analysis-session.v1'
@@ -95,6 +120,7 @@ class FileSessionStore:
             state = AnalysisSession.from_dict(envelope['record'])
             if state.session_id != session_id:
                 raise SessionError('Session identity mismatch.')
+            self._cached = (session_id, raw, state)
             return state
         except SessionError:
             raise
@@ -148,9 +174,9 @@ class FileSessionStore:
             return after
 
     def _write(self, state):
-        # Round-trip validation before publication prevents unreadable successful writes.
-        record = json.loads(canonical(state.to_dict()))
-        AnalysisSession.from_dict(record)
+        # Frozen constructors validate records and their historical relationships.
+        # Serializing them does not require decoding and validating history again.
+        record = state.to_dict()
         payload = canonical({'format': 'agent.analysis-session.v1', 'record': record,
                              'sha256': digest(record)})
         if len(payload) > MAX_SESSION_BYTES:
@@ -168,5 +194,6 @@ class FileSessionStore:
                 os.fsync(directory)
             finally:
                 os.close(directory)
+            self._cached = (state.session_id, payload, state)
         finally:
             Path(name).unlink(missing_ok=True)

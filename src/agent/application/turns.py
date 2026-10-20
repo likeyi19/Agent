@@ -85,11 +85,9 @@ def _terminal(sessions, interaction, clarification):
                                                                    'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources', 'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations', 'missing_annotation_declarations', 'missing_epizoo_declarations'})
     admitted = dict(kind='clarify', **asdict(clarification))
     def change(state):
-        turns = state.turns
-        if not any(t.turn_id == interaction.turn_id for t in turns):
-            turns += (SessionTurn(interaction.turn_id, interaction.base_revision_id,
-                                   interaction.base_generation, None, None, None, 'clarification'),)
-        return replace(state, turns=turns, interactions=tuple(
+        # A clarification is an interaction, not an execution checkpoint.
+        # Existing navigation-only SessionTurn records remain readable history.
+        return replace(state, interactions=tuple(
             replace(i, status='clarification', admitted=admitted, prerequisite=prerequisite) if i.turn_id == interaction.turn_id else i
             for i in state.interactions))
     sessions._store._update(sessions_id(sessions), change)
@@ -333,9 +331,10 @@ def execute(sessions, interaction, admitted):
                 raise SessionConflictError('Turn already submitted.')
             turn = SessionTurn(interaction.turn_id, admitted['revision_id'], generation, request_id,
                 digest(effective.to_dict()), request_id+':run', 'linked', selections, retained_outputs=retained)
-            return replace(state, turns=state.turns+(turn,))
+            return replace(state, turns=state.turns+(turn,), interactions=tuple(
+                replace(i, status='submitted') if i.turn_id == interaction.turn_id else i
+                for i in state.interactions))
         sessions._store._update(sessions_id(sessions), change)
-        _update(sessions, interaction.turn_id, status='submitted')
     from .service import ResearchAgentApplication
     execution_app = ResearchAgentApplication(app.workspace_root,
         planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)
@@ -353,7 +352,7 @@ def execute(sessions, interaction, admitted):
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
             answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
             epizoo_resources=(), input_sets=(), reference_resources=None):
-    # Each property access returns its own facade; no process-global turn context.
+    # AnalysisSessions.respond supplies a per-call facade over the shared store.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
     if type(utterance) is not str or not utterance.strip() or len(utterance) > 4096:
@@ -438,6 +437,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         from .dialogue_execution import scientific_parameters
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         role_submission = submission
+        if (submission is not None and not execution_inputs and not submission.get('execution_inputs')
+                and submission.get('registered_input') is None):
+            from .local_resources import available_input_view
+            role_submission = available_input_view(interaction, allow_empty=True).submission
         if (submission or {}).get('available_input') is not None:
             from .local_resources import available_input_view
             role_submission = available_input_view(interaction).submission
@@ -585,7 +588,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .guidance_selection import admit as admit_candidate
             admitted = admit_candidate(sessions, interaction, decision, execution_inputs)
         elif isinstance(decision, Execute) and decision.operation == 'plan':
-            from .dialogue_execution import admit as admit_execution
+            from .dialogue_execution import admit as admit_execution, missing_file_request, admit_role_request
+            pending_request = missing_file_request(sessions._application.registry, interaction, decision, execution_inputs)
+            if pending_request is not None:
+                admitted, prerequisite, choices = admit_role_request(sessions, interaction, pending_request, epizoo_resources)
+                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
             admitted = admit_execution(sessions, interaction, decision, execution_inputs,
                                        epizoo_resources=epizoo_resources)
             if visible['dialogue'].get('resource_source'):

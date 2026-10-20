@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from functools import cached_property
 from pathlib import Path
 
 from agent.orchestration import (
@@ -339,7 +340,7 @@ class ResearchAgentApplication:
     def run_store(self) -> FileRunStore:
         return self._run_store
 
-    @property
+    @cached_property
     def sessions(self):
         """Explicit durable navigation API; one-shot calls create no session state."""
         from .sessions import AnalysisSessions

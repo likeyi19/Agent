@@ -56,6 +56,89 @@ def send(client, *, turn='first', text=OBJECTIVE, ids=(), generation=0):
     return wait_turn(client, turn), body
 
 
+@pytest.mark.parametrize('initial_kind', ['request_roles', 'execute_plan'])
+def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_path, initial_kind):
+    class MissingFileModel(RoleModel):
+        def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            if (initial_kind == 'execute_plan' and 'turn_schema_version' in value
+                    and value['utterance'] == OBJECTIVE):
+                self.calls.append(value)
+                return json.dumps(dict(turn_schema_version=1, decision=dict(
+                    kind='execute_plan', target='inspect_scATAC', argument=None)))
+            return super().complete(prompt=prompt, response_schema=response_schema)
+    backend, uploads = role_web(tmp_path, model_type=MissingFileModel)
+    with TestClient(create_app(backend.service, uploads=uploads)) as client:
+        client.post('/api/v1/sessions', json=dict(session_id='session'))
+        pending, original = send(client)
+        assert pending['status'] == 'clarification', pending
+        assert 'dataset to inspect' in pending['response']['text']
+        state = backend.service._application.sessions.load('session')
+        assert not state.turns and not state.revisions and not backend.science_calls
+        assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
+        assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
+        assert state.interactions[0].prerequisite['field'] == 'roles'
+        prompt = backend.models[0].calls[0]
+        assert prompt['dialogue']['selected_sources'] == []
+        assert len(backend.models[0].calls) == 1
+        matrix = upload(client, 'matrix.h5ad', backend.source.read_bytes(), kind='h5ad').json()['resource_id']
+        accepted, body = send(client, turn='answer', text='Here is the file.', ids=(matrix,))
+        assert accepted['status'] == 'succeeded', accepted
+        assert backend.science_calls == ['inspect_scATAC']
+        run = backend.service._application.run_store.load(accepted['run_id'])
+        assert run.request.prompt == OBJECTIVE
+        assert run.request.inputs['input_path'] == uploads.resources.load(matrix).source_path
+        assert backend.models[-1].calls[0]['dialogue']['pending_prerequisite']['objective'] == OBJECTIVE
+        calls = sum(len(m.calls) for m in backend.models)
+        assert client.post('/api/v1/sessions/session/turns', json=body).status_code == 202
+        assert client.post('/api/v1/sessions/session/turns', json=original).status_code == 202
+        assert client.get('/api/v1/sessions/session').status_code == 200
+        assert backend.science_calls == ['inspect_scATAC']
+        assert sum(len(m.calls) for m in backend.models) == calls
+
+
+@pytest.mark.parametrize('field,target', [
+    ('fastq', 'prepare_scATAC_fragments'), ('bam', 'prepare_scATAC_bam_fragments'),
+    ('fragments', 'import_scATAC_fragments'), ('annotation', 'annotate_scATAC_cell_types'),
+    ('epizoo', 'epizoo_embed_cells'),
+])
+def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, field, target):
+    from dataclasses import asdict, replace
+    from agent.application.raw_handoff import empty
+    def valid_enums(value):
+        if isinstance(value, dict):
+            if 'enum' in value:
+                assert value['enum'], 'Empty enums cannot be sent to a structured provider'
+            for child in value.values():
+                valid_enums(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                valid_enums(child)
+    class EmptySourceModel(RoleModel):
+        def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            assert 'turn_schema_version' in value, 'Missing files entered planning'
+            valid_enums(response_schema)
+            declared = empty(field)
+            if field == 'epizoo':
+                declared = replace(declared, operation='inference')
+            self.calls.append(value)
+            return json.dumps(dict(turn_schema_version=1, decision=dict(
+                kind='request_roles', target=target, required_roles=[], roles=[],
+                **{field: asdict(declared)}, arguments=[])))
+    backend, uploads = role_web(tmp_path, model_type=EmptySourceModel)
+    with TestClient(create_app(backend.service, uploads=uploads)) as client:
+        client.post('/api/v1/sessions', json=dict(session_id='session'))
+        pending, _ = send(client)
+        assert pending['status'] == 'clarification', pending
+        state = backend.service._application.sessions.load('session')
+        assert state.interactions[0].prerequisite['field'] == field
+        assert not state.turns and not state.revisions and not backend.science_calls
+        assert len(backend.models[0].calls) == 1
+        assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
+        assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
+
+
 def test_candidate_roles_continue_original_objective_and_only_accept_bound_source(tmp_path):
     backend, uploads = role_web(tmp_path)
     with TestClient(create_app(backend.service, uploads=uploads)) as client:

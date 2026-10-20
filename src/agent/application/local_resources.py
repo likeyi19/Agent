@@ -455,7 +455,8 @@ class RegisteredInputGroup:
             if type(self.attachment_candidates) is not bool:
                 raise ValueError('Invalid attachment candidate designation.')
             maximum = 16 if self.attachment_candidates else MAX_GROUP_MEMBERS
-            if self.composition != _GROUP_COMPOSITION or not 1 <= len(self.members) <= maximum:
+            minimum = 0 if self.attachment_candidates else 1
+            if self.composition != _GROUP_COMPOSITION or not minimum <= len(self.members) <= maximum:
                 raise ValueError('Invalid source selection.')
             members = []
             for member in self.members:
@@ -535,7 +536,7 @@ def _group_port(registry, tool_name, port_name):
     return port, choices[0], argument
 
 
-def available_input_view(interaction):
+def available_input_view(interaction, *, allow_empty=False):
     """View captured Session file candidates through existing explicit role binding.
 
     Callers activate this view only for role selection, never for ordinary
@@ -545,6 +546,12 @@ def available_input_view(interaction):
     submission = _serialize(interaction.submission or {})
     metadata = submission.get('available_input')
     if metadata is None:
+        if (allow_empty and interaction.submission is not None
+                and submission.get('registered_input') is None and not submission.get('execution_inputs')
+                and not submission.get('available_input_overflow')):
+            binding = RegisteredInputGroup((), {}, attachment_candidates=True)
+            return replace(interaction, submission=dict(submission, execution_inputs={},
+                registered_input=binding.attribution()))
         return interaction
     if submission.get('execution_inputs'):
         raise _fail('LOCAL_RESOURCE_BINDING_INVALID')

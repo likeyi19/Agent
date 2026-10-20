@@ -224,7 +224,8 @@ def test_fragments_file_does_not_route_unsupported_intent_or_start_science(
         assert len(backend.models) == 1 and len(backend.models[0].calls) == 1
         assert calls == {'production': 0, 'verification': 0}
         state = backend.service._application.sessions.load('analysis')
-        assert state.generation == 0 and not state.revisions and state.turn('import').run_id is None
+        assert state.generation == 0 and not state.revisions and not state.turns
+        assert state.interactions[0].status == 'clarification'
 
 
 def test_fragments_http_and_fresh_facade_retries_preserve_history_without_science(

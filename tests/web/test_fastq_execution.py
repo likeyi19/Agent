@@ -317,7 +317,8 @@ def test_fastq_upload_collection_does_not_route_unsupported_intent(tiny, reads, 
         assert len(web.models) == 1 and len(web.models[0].calls) == 1
         assert calls == dict(intake=0, production=0, verification=0, alignment=0)
         state = web.service._application.sessions.load('analysis')
-        assert state.generation == 0 and not state.revisions and state.turn('analysis').run_id is None
+        assert state.generation == 0 and not state.revisions and not state.turns
+        assert state.interactions[0].status == 'clarification'
 
 
 @pytest.mark.parametrize('during_provider', [False, True])

@@ -45,11 +45,16 @@ def choices(sessions, interaction):
     store = sessions._application.run_store
     found = {}
     for output in revision.outputs:
-        stored, _, _ = _accepted_step(store, output.run_id, output.step_id)
+        stored, planned, _ = _accepted_step(store, output.run_id, output.step_id)
         if accepted_step_digest(stored) != output.accepted_step_sha256:
             raise ValueError('Captured grouping result anchor changed')
         run_id, step_id = output.run_id, output.step_id
         if stored.tool_name == 'compute_cell_umap' and stored.result.get('clustering_present', True):
+            if not isinstance(planned.arguments.get('analysis_path'), (StepOutputRef, PriorOutputRef)):
+                # A standalone/historical layout can answer questions without
+                # qualifying a clustering source for a different analysis.
+                # Recorded but corrupt dependencies still fail below.
+                continue
             run_id, step_id = _dependency(store, run_id, step_id, 'analysis_path')
             stored, _, _ = _accepted_step(store, run_id, step_id)
         if stored.tool_name != 'cluster_cells':

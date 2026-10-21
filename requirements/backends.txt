@@ -1,0 +1,5 @@
+# Optional scientific backends. Run from the Agent repository root after
+# provisioning the qualified numerical/CUDA stack; see docs/guides/backends.md.
+# Install with --no-deps --no-build-isolation to preserve that stack.
+-e ./third_party/epizoo
+-e ./third_party/epiagent

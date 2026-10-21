@@ -21,7 +21,7 @@ except ImportError:
 
 def backend():
     if pysam is None:
-        pytest.skip('Install optional requirements-bam.txt for BAM fixtures')
+        pytest.skip('Install optional requirements/bam.txt for BAM fixtures')
     return pysam
 
 
@@ -101,7 +101,7 @@ def tag(observation, name):
 def test_optional_backend_version_and_dependency_declaration():
     assert backend().__version__ == '0.24.1'
     assert b._backend().version.__htslib_version__ == '1.24'
-    lines = Path('requirements-bam.txt').read_text().splitlines()
+    lines = Path('requirements/bam.txt').read_text().splitlines()
     assert [v for v in lines if v and not v.startswith('#')] == ['pysam==0.24.1']
 
 

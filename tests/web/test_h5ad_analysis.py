@@ -125,7 +125,7 @@ def analysis_harness(tmp_path, monkeypatch):
     frequencies.write_bytes(b'Qualified software fixture frequencies.')
     filter_indices = auxiliaries / 'cCRE_filter_idx_mouse.csv'
     filter_indices.write_bytes(b'Qualified software fixture filter.')
-    monkeypatch.setattr(epizoo_embedding.epizoo_backend, 'DEFAULT_RESOURCES_DIR', auxiliaries)
+    monkeypatch.setenv('AGENT_EPIZOO_RESOURCES_DIR', str(auxiliaries))
     monkeypatch.setattr(epizoo_embedding, 'get_cached_epizoo_model',
         lambda **kwargs: SimpleNamespace(_agent_checkpoint_sha256=CHECKPOINT_HASH,
             _agent_checkpoint_source_snapshot=epizoo_embedding.epizoo_backend._resource_file_snapshot(checkpoint)))

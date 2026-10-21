@@ -39,7 +39,7 @@ def main(argv=None):
         import uvicorn
         from .app import create_app
     except ImportError:
-        print("Web dependencies are unavailable. Install requirements-web.txt in the Agent environment.", file=sys.stderr)
+        print("Web dependencies are unavailable. Install requirements/web.txt in the Agent environment.", file=sys.stderr)
         return 2
     try:
         configuration = load_web_configuration(arguments.config)

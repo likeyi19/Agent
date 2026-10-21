@@ -100,7 +100,7 @@ def test_species_independent_helper(inputs):
                     reason='Explicit local full mouse reference acceptance; no model execution.')
 def test_exact_authoritative_mouse_ordered_feature_identity(tmp_path):
     from agent.tools.data._ordered_identity import ordered_identity_sha256
-    source=Path('/home/likeyi/program/EpiZoo/data/Fang2021_downsampled_2000_cells.h5ad')
+    source=Path(os.environ['AGENT_TEST_FANG_H5AD'])
     expected='e2585fa28673779877fb3540d23ab6f36d929a11c901545e2459226dfa6b9fac'
     physical='16189d0dabd21cc1d9f51e5f39662da82037fe9f54938f8593a3ff49aa50cfab'
     assert p._hash(source)==physical
@@ -113,8 +113,8 @@ def test_exact_authoritative_mouse_ordered_feature_identity(tmp_path):
         assert ordered_identity_sha256(names)==expected
     result=p.provision_h5ad_reference(source_h5ad_path=source,source_h5ad_sha256=physical,
         expected_feature_count=1_341_077,expected_ordered_feature_sha256=expected,
-        species='mouse',assembly='mm10',fasta_path='/home/likeyi/program/mm10.fa',
-        fai_path='/home/likeyi/program/mm10.fa.fai',output_dir=tmp_path/'mouse-reference',
+        species='mouse',assembly='mm10',fasta_path=os.environ['AGENT_TEST_MOUSE_FASTA'],
+        fai_path=os.environ['AGENT_TEST_MOUSE_FAI'],output_dir=tmp_path/'mouse-reference',
         authority='Project-authoritative Fang2021 full mouse/mm10 ordered feature vocabulary.')
     bundle=p.verify_h5ad_reference_derivation(result['manifest_path'],expected_sha256=result['manifest_sha256'])
     assert bundle.ccre.feature_count==1_341_077

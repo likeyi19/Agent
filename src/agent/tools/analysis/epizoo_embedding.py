@@ -102,10 +102,10 @@ def validate_resource_provenance(
             "inference_settings": dict(settings)}
 
 
-def _pinned_resource_paths(checkpoint_path: str | Path, species: str) -> dict[str, Path]:
+def _pinned_resource_paths(checkpoint_path: str | Path | None, species: str) -> dict[str, Path]:
     configuration = epizoo_backend._normalize_species(species)
-    directory = epizoo_backend.DEFAULT_RESOURCES_DIR.expanduser().resolve()
-    return {"checkpoint_sha256": Path(checkpoint_path).expanduser().resolve(),
+    directory = epizoo_backend.resolve_resources_dir()
+    return {"checkpoint_sha256": epizoo_backend.resolve_checkpoint_path(checkpoint_path),
             "frequencies_sha256": directory / configuration.frequency_filename,
             "filter_indices_sha256": directory / configuration.filter_filename}
 
@@ -326,7 +326,7 @@ def epizoo_embed_cells(
     output_dir: str | Path,
     *,
     species: str | Mapping[str, object],
-    checkpoint_path: str | Path = epizoo_backend.DEFAULT_CHECKPOINT_PATH,
+    checkpoint_path: str | Path | None = None,
     device: str = "cuda:0",
     overwrite: bool = False,
     expected_resource_identity: Mapping[str, str] | None = None,
@@ -347,7 +347,7 @@ def epizoo_embed_cells(
     if target_model_manifest_path is not None or target_model_manifest_sha256 is not None:
         if (target_model_manifest_path is None or target_model_manifest_sha256 is None
                 or expected_resource_identity is not None
-                or checkpoint_path != epizoo_backend.DEFAULT_CHECKPOINT_PATH):
+                or checkpoint_path is not None):
             raise ValueError('Bind one complete target model; legacy resource overrides cannot be combined.')
         from agent.tools.models.epizoo_target_inference import embed_target
         from agent.tools.data.regulatory_feature_reference import validate_species
@@ -377,6 +377,7 @@ def epizoo_embed_cells(
     pinned_paths = None
     if expected is not None:
         pinned_paths = _pinned_resource_paths(checkpoint_path, normalized_species)
+        checkpoint_path = pinned_paths["checkpoint_sha256"]
         pinned_snapshots = _check_resource_files(pinned_paths, expected)
 
     inspection = inspect_scATAC(input_path)
@@ -417,7 +418,7 @@ def epizoo_embed_cells(
     except epizoo_backend.EpiZooResourceChangedError as exc:
         raise EpiZooResourceIdentityError("EPIZOO_RESOURCE_IDENTITY_MISMATCH") from exc
     pinned_kwargs = ({} if expected is None else
-                     {"resources_dir": epizoo_backend.DEFAULT_RESOURCES_DIR})
+                     {"resources_dir": pinned_paths["frequencies_sha256"].parent})
     try:
         backend_result = epizoo_backend.embed_cells(
             model,

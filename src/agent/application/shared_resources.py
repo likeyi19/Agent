@@ -322,7 +322,7 @@ class ScientificResourceLibrary:
                 state = epizoo._unwrap_state_dict(torch.load(model.checkpoint_path,
                     map_location='cpu', weights_only=True, mmap=True))
                 epizoo._validate_checkpoint_state_dict(state)
-                epizoo._load_resources(epizoo._normalize_species(model.species), epizoo.DEFAULT_RESOURCES_DIR)
+                epizoo._load_resources(epizoo._normalize_species(model.species), paths['frequencies_sha256'].parent)
         else:
             _fail('Only explicit common scientific reference roles can enter the library.')
         files = VerificationContext().files(pins)

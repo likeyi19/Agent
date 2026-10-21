@@ -1,0 +1,20 @@
+# Existing qualified stack: constraints preserve versions; they do not install
+# CUDA, FlashAttention, optional scientific tools, or unrelated packages.
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.17.1
+anndata==0.12.19
+scanpy==1.11.5
+scikit-learn==1.9.0
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+flash-attn==2.8.3
+transformers==4.57.6
+tokenizers==0.22.2
+triton==3.3.1
+einops==0.8.2
+h5py==3.16.0
+tqdm==4.70.0
+pyfaidx==0.9.0.4
+setuptools==80.9.0
+wheel==0.48.0

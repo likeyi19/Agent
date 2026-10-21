@@ -1,6 +1,8 @@
 """Resource contract tests; filesystem checks mocked, no substitute execution weights."""
 from copy import deepcopy
 from dataclasses import asdict
+from pathlib import Path
+import runpy
 import pytest
 import torch
 from agent.tools.models.epizoo_adaptation import resources as r
@@ -47,3 +49,40 @@ def test_rehashed_resource_contract_fails(source_contract,bad):
 def test_model_key_shape_contract(source_contract):
     source_contract['identity_sha256']=digest(source_contract)
     assert r.verify_bundle(source_contract)==source_contract
+
+
+def _qualification_arguments():
+    path=Path(__file__).with_name('qualify_real_backend.py')
+    return runpy.run_path(str(path),run_name='qualification_location_test')['_parse_arguments']
+
+
+def test_real_weight_qualification_locations_are_separate(tmp_path,monkeypatch):
+    checkpoint=tmp_path/'models'/'pretrained_EpiZoo.pth'
+    auxiliary=tmp_path/'references'/'vocabulary'
+    checkout=tmp_path/'EpiZoo'
+    monkeypatch.setenv('AGENT_EPIZOO_CHECKPOINT',str(checkpoint))
+    monkeypatch.setenv('AGENT_EPIZOO_RESOURCES_DIR',str(auxiliary))
+    args=_qualification_arguments()(['--output',str(tmp_path/'output'),'--epizoo',str(checkout)])
+    assert args.checkpoint==checkpoint
+    assert args.resources_dir==auxiliary
+    assert args.epizoo==checkout
+    assert not args.output.exists()
+
+
+def test_real_weight_qualification_explicit_locations_override_environment(tmp_path,monkeypatch):
+    monkeypatch.setenv('AGENT_EPIZOO_CHECKPOINT',str(tmp_path/'unused'/'checkpoint.pth'))
+    monkeypatch.setenv('AGENT_EPIZOO_RESOURCES_DIR',str(tmp_path/'unused-resources'))
+    models=tmp_path/'explicit-models';auxiliary=tmp_path/'explicit-auxiliary'
+    args=_qualification_arguments()(['--output',str(tmp_path/'output'),'--epizoo',str(tmp_path/'checkout'),
+                                    '--models',str(models),'--resources-dir',str(auxiliary)])
+    assert args.checkpoint==models/'pretrained_EpiZoo.pth'
+    assert args.resources_dir==auxiliary
+    assert not args.output.exists()
+
+
+def test_real_weight_qualification_has_no_old_path_default(tmp_path,monkeypatch):
+    monkeypatch.delenv('AGENT_EPIZOO_CHECKPOINT',raising=False)
+    monkeypatch.delenv('AGENT_EPIZOO_RESOURCES_DIR',raising=False)
+    with pytest.raises(ValueError,match='AGENT_EPIZOO_CHECKPOINT'):
+        _qualification_arguments()(['--output',str(tmp_path/'output'),'--epizoo',str(tmp_path/'checkout')])
+    assert not (tmp_path/'output').exists()

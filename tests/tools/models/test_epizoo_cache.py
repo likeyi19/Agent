@@ -139,3 +139,26 @@ def test_simultaneous_misses_initialize_only_one_model(
 
     assert len(loads) == 1
     assert all(model is loads[0] for model in models)
+
+
+def test_configured_checkpoint_is_resolved_before_cache_lookup(tmp_path, monkeypatch):
+    loaded_paths = []
+
+    def load(**kwargs):
+        loaded_paths.append(kwargs["checkpoint_path"])
+        return object()
+
+    monkeypatch.setattr(cache.epizoo_backend, "load_model", load)
+    first_path, second_path = tmp_path / "first.pth", tmp_path / "second.pth"
+    monkeypatch.setenv("AGENT_EPIZOO_CHECKPOINT", str(first_path))
+    first = cache.get_cached_epizoo_model(device="cpu")
+    assert cache.get_cached_epizoo_model(device="cpu") is first
+    monkeypatch.setenv("AGENT_EPIZOO_CHECKPOINT", str(second_path))
+    second = cache.get_cached_epizoo_model(device="cpu")
+    assert second is not first
+    assert cache.get_cached_epizoo_model(first_path, device="cpu") is first
+    assert loaded_paths == [first_path, second_path]
+    monkeypatch.delenv("AGENT_EPIZOO_CHECKPOINT")
+    with pytest.raises(ValueError, match="AGENT_EPIZOO_CHECKPOINT"):
+        cache.get_cached_epizoo_model(device="cpu")
+    assert loaded_paths == [first_path, second_path]

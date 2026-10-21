@@ -1,9 +1,12 @@
 from pathlib import Path
 import json
+import subprocess
+import sys
 import pytest
 from agent.application import ResearchAgentApplication
 from agent.orchestration import AgentRequest,AgentPlan,PlanStep,RunMode,LLMPlanner,build_default_tool_registry
 from agent.tools.data import neutral_matrix_tool as public
+from agent.schemas.orchestration import _serialize
 
 
 class Planner:
@@ -106,6 +109,35 @@ def test_adaptation_application(integration,tmp_path,monkeypatch):
     assert all(s.verification.artifact_authority['schema_version']==2 for s in result.run_result.steps)
     assert app.resume(result.run_id)==result
     assert counts==dict(production=1,owner=1) and matrix_calls==[1]
+    # Software-only mocked backend; retain fresh-process authority reuse without
+    # claiming another real EpiZoo/SEAM qualification or training execution.
+    script = '''
+import json, sys
+from contextlib import ExitStack
+from unittest.mock import patch
+from agent.application import ResearchAgentApplication
+from agent.schemas.orchestration import _serialize
+from agent.tools.models.epizoo_adaptation import publication, backend
+from agent.tools.data import cell_by_ccre_verifier as owner
+from agent.tools.data.authority_context import owned_verification
+def forbidden(*args, **kwargs):
+    raise AssertionError('Cold recovery repeated adaptation or reconstruction')
+with ExitStack() as stack:
+    stack.enter_context(patch.object(publication.resources, 'runtime', lambda: dict(mock=True)))
+    stack.enter_context(patch.object(publication.resources, 'code_bundle', lambda: dict(files=[])))
+    for module, name in ((publication, '_build'), (backend, 'train'),
+                         (backend, 'sequences_and_embeddings'), (owner, '_verify_external')):
+        stack.enter_context(patch.object(module, name, forbidden))
+    stack.enter_context(patch.object(publication, 'verify_target',
+        owned_verification('epizoo_adaptation')(forbidden)))
+    restored = ResearchAgentApplication(sys.argv[1]).resume(sys.argv[2])
+    assert restored.status.value == 'SUCCEEDED', restored.error
+    print(json.dumps(_serialize(restored.run_result.steps[-1].result), sort_keys=True))
+'''
+    cold = subprocess.run([sys.executable, '-B', '-c', script, str(tmp_path/'app'), result.run_id],
+                          check=True, capture_output=True, text=True)
+    assert json.loads(cold.stdout) == _serialize(result.run_result.steps[-1].result)
+    assert counts == dict(production=1,owner=1) and matrix_calls == [1]
     resource.write_text('changed resource')
     assert app.resume(result.run_id).status.value=='FAILED'
 

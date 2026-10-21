@@ -1,0 +1,29 @@
+Agent-managed EpiZoo source snapshot
+
+Upstream: https://github.com/likeyi19/EpiZoo
+Revision: 029cd631d0f9806a646c4a3b42ce10b958f2b67f
+Original scientific implementation and required runtime configuration are copied
+byte-for-byte from the clean working source. SOURCE.json records every original
+and included file hash and the exact selected-source/snapshot identities.
+
+Licenses: the root LICENSE is the upstream MIT license. SEAM configuration and
+its DNABERT-2/MosaicBERT-derived custom code retain their own Apache-2.0 LICENSE
+and original README attribution under config/SEAM_config/. Preserve both notices.
+
+Local amendments are restricted to packaging and test configuration:
+- pyproject.toml and requirements.txt pin numpy 2.4.6 and anndata 0.12.19, the
+  already qualified Agent environment, instead of upstream 2.1.2 and 0.12.10.
+  No scientific implementation, numerical dependency installation or other
+  upstream dependency declaration is changed by this snapshot.
+- The optional native mapping test takes the explicit AGENT_TEST_LIFTOVER path
+  instead of an old developer-home path. Its scientific assertions are unchanged.
+
+Included: the complete epizoo Python package, install metadata, dependency
+requirements, licenses/readmes, required SEAM runtime configuration and upstream
+scientific qualification tests. Tests are retained for deliberate maintenance;
+this integration does not add an EpiAgent tool or change the Agent Registry.
+Excluded: research data, checkpoints, reference/frequency/filter payloads,
+notebooks, research illustrations, Git metadata, egg-info/cache files, an unused
+SEAM .bak copy and repository-only gitattributes. Model/reference resources stay
+under the configured agent-data/resources owners. This copy does not depend on
+the independent research checkout or change its files.

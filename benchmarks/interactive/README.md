@@ -17,16 +17,23 @@ bounded recovery, natural explanations plus semantic review, exact references,
 zero-science guards and source privacy. The accepted Q2/F1/F2 records below are
 historical evidence; their command lines and exact call schedules are archival.
 
-`scenarios.py` defines fourteen immutable scenarios. `fixtures.py` builds fresh
+FS-3 removes the closed UA3.5 runner/fixture family and the superseded Stage A
+selection experiment. Their tracked source remains available in Git history;
+accepted historical outcomes below keep their original scope. The fixed-scope
+Stage B probe still tests the supported semantic wire, compiler and explicit
+`PlanningScope`; current direct-v4 planning and its independent tests remain.
+
+`scenarios.py` defines twelve immutable scenarios; retired I02/I06 identifiers
+are not reused. `fixtures.py` builds fresh
 disposable scripted accepted metadata through real Session/evidence readers.
 These fixtures test dialogue contracts; they establish neither biological
 acceptance nor reusable scientific authority. Real accepted-artifact closure
 qualification remains a separate, explicitly provisioned exercise.
 
 `harness.run_attempt(scenario, candidate, model=...)` requires an explicit model.
-Interpreter, Stage A, fixed-scope Stage B, scientific Answer and Guidance are
-independent. Stage A and fixed-scope B are explicit historical contract probes,
-not stages of the current product planning path. Layer 2 uses actual Session interpretation/admission, intercepts
+Interpreter, fixed-scope semantic planning, scientific Answer and Guidance are
+independent. The explicit fixed-scope probe is not a stage of current product
+planning. Layer 2 uses actual Session interpretation/admission, intercepts
 only the execution handoff, and delegates unchanged planning/recovery to the
 application runtime with `PLAN_ONLY`. It preserves the interpreter target check.
 Actual-plan retained-output selection and scientific Revision activation are
@@ -98,7 +105,9 @@ production reliability claim. Scientific execution was zero; broader Agent
 surfaces and biological acceptance remain unqualified. Release-time model
 qualification remains future work. Web choices, operator defaults, production
 code, Agent prompts/schemas and scientific semantics are unchanged. All live
-evidence under `evals/` stays local and uncommitted.
+evidence originally written under `evals/` remains historical. FS-3 retains the
+necessary immutable records outside the repository under
+`agent-data/acceptance/historical/model-qualification/`.
 
 IR1 I12 null-subject wording is complete: the Interpreter instruction distinguishes
 no new model-asserted subject from an authoritative subject retained through a
@@ -109,14 +118,14 @@ All use `subject=null` and admit exact annotation subject `3`.
 This qualifies the canonical scripted-metadata Interpreter/admission surface.
 One earlier completion is unqualified because local evidence collection failed;
 it is recorded separately and excluded from the three PASS results. Evidence
-remains local under `evals/ir1_i12_null_subject_2026-10-07/`.
+is retained under `agent-data/acceptance/historical/model-qualification/ir1-null-subject/`.
 IR2 clarity-first Guidance is accepted at `8d79f69`: I13 PASS / PASS / PASS,
 fixed follow-up PASS and larger selection Guidance PASS, all with contract,
 exact binding and external human semantic review. Aliases/shared-value dictionaries
 were removed; direct full scientific semantics and authoritative readiness remain.
 Correctness and clarity precede the approximately 10% size reduction. No model/profile
 capacity admission was added; runtime/default configuration is unchanged. See the
-[interaction/model layer closeout](../../docs/interaction-model-layer-closeout.md).
+[interaction/model layer closeout](../../docs/history/interaction-model-layer-closeout.md).
 
 Run focused offline acceptance in the `agent` environment:
 
@@ -139,7 +148,9 @@ reviewed infrastructure edits; real live runs require a clean tracked tree and
 index. Stability accepts an explicit `--human-review` path for the separate
 historical disposition.
 
-Use dry validation before a separately authorized live run:
+The following Q2 commands are retired historical invocation records. These entry
+points reject before model construction or output; they are not current run
+instructions:
 
 ```bash
 PYTHONPATH=src:. python -B -m benchmarks.interactive.run_breadth --dry-run
@@ -163,7 +174,7 @@ substitutes models, repeats scenarios, tunes prompts or ranks candidates:
 
 ```bash
 PYTHONPATH=src:. python -B -m benchmarks.interactive.run_smoke --live \
-  --output evals/interactive_model_qualification_q1_NEW_RUN
+  --output /home/likeyi/program/agent-data/scratch/model-admission/NEW_RUN
 ```
 
 Model-discovery requests and completion calls are counted separately. Results
@@ -183,3 +194,19 @@ recovery stops before exceeding the ceiling. New scientific prose remains
 `HUMAN_REVIEW_PENDING` until externally reviewed. Reusing these runners requires
 the appropriate frozen local evidence/discovery records and separate live-call
 authorization; F3 made no provider calls and reran neither phase.
+
+FS-3 retains the complete F1 hash-manifest file closure at
+`/home/likeyi/program/agent-data/acceptance/historical/model-qualification/frontier-f1/`.
+Read-only validation requires its explicit directory:
+
+```python
+from benchmarks.interactive.run_frontier_stability import validate_f1
+
+saved, identity = validate_f1(
+    "/home/likeyi/program/agent-data/acceptance/historical/model-qualification/frontier-f1"
+)
+```
+
+Q2 merged results and the frozen-input audit are retained separately under
+`model-qualification/free-cohort-q2/`; human review dispositions remain separate
+immutable records. New benchmarks require explicit destinations outside Git.

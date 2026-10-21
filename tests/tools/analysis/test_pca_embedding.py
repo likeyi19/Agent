@@ -135,3 +135,19 @@ def test_method_observations_are_not_pca_execution(source,monkeypatch):
     observation=pca.observe_methods(source[0])
     assert observation['pca']=='eligible' and observation['epizoo']==[]
     assert str(source[0]) not in str(observation)
+
+
+def test_optional_epizoo_observation_without_config_does_not_block_pca(source, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from agent.tools.models import epizoo
+    monkeypatch.delenv('AGENT_EPIZOO_RESOURCES_DIR', raising=False)
+    monkeypatch.delenv('AGENT_EPIZOO_CHECKPOINT', raising=False)
+    cfg = replace(epizoo.MOUSE_CONFIG, raw_dimension=source[1].shape[1])
+    monkeypatch.setattr(epizoo, '_normalize_species', lambda value: cfg)
+    monkeypatch.setattr(epizoo, '_get_backend', lambda: pytest.fail('Backend import'))
+    optional = SimpleNamespace(species='mouse', checkpoint_path='/models/optional.pth',
+        inputs=lambda: {'expected_resource_identity': {}})
+    observation = pca.observe_methods(source[0], (optional,))
+    assert observation['pca'] == 'eligible'
+    assert observation['epizoo'] == []

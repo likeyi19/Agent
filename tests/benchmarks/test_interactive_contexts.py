@@ -60,7 +60,8 @@ def ev_module():
 
 def test_inventory_is_frozen_and_covers_all_isolated_surfaces():
     scenarios = canonical_scenarios()
-    assert len(scenarios) == len({s.scenario_id for s in scenarios}) == 14
+    assert len(scenarios) == len({s.scenario_id for s in scenarios}) == 12
+    assert not {'I02', 'I06'} & {s.scenario_id for s in scenarios}
     assert {s.surface for s in scenarios} == SURFACES
     assert all(s.request.mode is RunMode.PLAN_ONLY for s in scenarios if s.request)
     assert all(s.human_review_required for s in scenarios if s.surface in ("answer", "guidance"))

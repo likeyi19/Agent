@@ -31,11 +31,11 @@ def _normalize_device(device: str | torch.device) -> torch.device:
 
 
 def _cache_key(
-    checkpoint_path: str | Path,
+    checkpoint_path: str | Path | None,
     device: str | torch.device,
     dtype: torch.dtype,
 ) -> tuple[_EpiZooModelCacheKey, Path, torch.device]:
-    resolved_checkpoint = Path(checkpoint_path).expanduser().resolve()
+    resolved_checkpoint = epizoo_backend.resolve_checkpoint_path(checkpoint_path)
     resolved_device = _normalize_device(device)
     key = _EpiZooModelCacheKey(
         checkpoint_path=str(resolved_checkpoint),
@@ -46,7 +46,7 @@ def _cache_key(
 
 
 def get_cached_epizoo_model(
-    checkpoint_path: str | Path = epizoo_backend.DEFAULT_CHECKPOINT_PATH,
+    checkpoint_path: str | Path | None = None,
     *,
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,

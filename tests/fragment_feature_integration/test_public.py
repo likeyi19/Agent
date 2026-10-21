@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 import numpy as np
 import anndata as ad
@@ -6,6 +8,7 @@ import pytest
 from agent.application import ResearchAgentApplication
 from agent.orchestration import AgentRequest, LLMPlanner, RunMode, build_default_tool_registry
 from agent.tools.data import fragment_feature_tool as public
+from agent.schemas.orchestration import _serialize
 
 TOOL = 'build_scATAC_cell_by_features'
 
@@ -55,6 +58,32 @@ def test_application(factory,tmp_path,monkeypatch):
     assert authority['execution_identity'] in text
     assert Path(result['manifest_path']).parent.parent.name.removeprefix('cell-by-ccre-') in text
     assert app.resume(run.run_id)==run and calls==[1]
+    # Preserve the retired M14.7 utility's distinct fresh-process zero-call check.
+    script = '''
+import json, sys
+from contextlib import ExitStack
+from unittest.mock import patch
+from agent.application import ResearchAgentApplication
+from agent.schemas.orchestration import _serialize
+from agent.tools.data import _cell_by_ccre_production as production, cell_by_ccre_verifier as owner
+from agent.tools.data import external_fragments_verifier as fragments, explicit_cells
+from agent.tools.data.authority_context import owned_verification
+def forbidden(*args, **kwargs):
+    raise AssertionError('Cold recovery repeated scientific production/reconstruction')
+with ExitStack() as stack:
+    for module, name in ((production, 'construct_counts'), (owner, 'reconstruct'),
+                         (fragments, '_reconstruct_source')):
+        stack.enter_context(patch.object(module, name, forbidden))
+    stack.enter_context(patch.object(explicit_cells, 'verify_explicit_cells',
+        owned_verification('explicit_cells')(forbidden)))
+    restored = ResearchAgentApplication(sys.argv[1]).resume(sys.argv[2])
+    assert restored.status.value == 'SUCCEEDED', restored.error
+    print(json.dumps(_serialize(restored.run_result.steps[0].result), sort_keys=True))
+'''
+    cold = subprocess.run([sys.executable, '-B', '-c', script, str(tmp_path/'app'), run.run_id],
+                          check=True, capture_output=True, text=True)
+    assert json.loads(cold.stdout) == _serialize(result)
+    assert calls == [1]
     Path(args['explicit_cells_manifest_path']).write_bytes(b'changed')
     assert app.resume(run.run_id).status.value=='FAILED'
 

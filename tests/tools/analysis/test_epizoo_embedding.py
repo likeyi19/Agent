@@ -322,7 +322,7 @@ def pinned_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     for source in (checkpoint, frequencies, filters):
         original_stat = source.stat()
         os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns - 1_000_000_000))
-    monkeypatch.setattr(tool.epizoo_backend, "DEFAULT_RESOURCES_DIR", directory)
+    monkeypatch.setenv("AGENT_EPIZOO_RESOURCES_DIR", str(directory))
     pins = {"resource_id": "reviewed-mouse",
             "checkpoint_sha256": tool.epizoo_backend._sha256_file(checkpoint),
             "frequencies_sha256": tool.epizoo_backend._sha256_file(frequencies),
@@ -365,7 +365,7 @@ def test_pinned_execution_publishes_bounded_owner_provenance(
         "num_workers": 0, "device": "cpu", "dtype": "float32", "amp_requested": True,
         "amp_enabled": False, "show_progress": False, "overwrite": False,
     }
-    assert calls[0]["resources_dir"] == tool.epizoo_backend.DEFAULT_RESOURCES_DIR
+    assert calls[0]["resources_dir"] == tool.epizoo_backend.resolve_resources_dir()
     assert "path" not in json.dumps(provenance)
 
 
@@ -379,6 +379,51 @@ def test_pinned_execution_preserves_explicit_cpu_device_index(
                                     expected_resource_identity=pins)
     assert result["device"] == "cpu:0"
     assert result["resource_provenance"]["inference_settings"]["device"] == "cpu:0"
+
+
+def test_pinned_execution_captures_configured_locations_once(
+    input_h5ad, tmp_path, pinned_backend, monkeypatch,
+) -> None:
+    checkpoint, frequencies, _, pins, model, _, calls = pinned_backend
+    monkeypatch.setenv("AGENT_EPIZOO_CHECKPOINT", str(checkpoint))
+
+    def load(**kwargs):
+        assert kwargs["checkpoint_path"] == checkpoint
+        monkeypatch.setenv("AGENT_EPIZOO_CHECKPOINT", str(tmp_path / "other.pth"))
+        monkeypatch.setenv("AGENT_EPIZOO_RESOURCES_DIR", str(tmp_path / "other-resources"))
+        return model
+
+    monkeypatch.setattr(tool, "get_cached_epizoo_model", load)
+    result = tool.epizoo_embed_cells(input_h5ad, tmp_path / "captured", species="mouse",
+                                    device="cpu", expected_resource_identity=pins)
+    assert calls[0]["resources_dir"] == frequencies.parent
+    assert result["checkpoint_path"] == str(checkpoint)
+    assert result["resource_provenance"]["actual_resource_identity"] == pins
+
+
+def test_configured_auxiliary_directory_has_no_old_location_fallback(
+    input_h5ad, tmp_path, pinned_backend, monkeypatch,
+) -> None:
+    checkpoint, _, _, pins, _, _, calls = pinned_backend
+    monkeypatch.setenv("AGENT_EPIZOO_RESOURCES_DIR", str(tmp_path / "missing-resources"))
+    with pytest.raises(tool.EpiZooResourceIdentityError):
+        tool.epizoo_embed_cells(input_h5ad, tmp_path / "no-fallback", species="mouse",
+            checkpoint_path=checkpoint, device="cpu", expected_resource_identity=pins)
+    assert calls == []
+    assert not (tmp_path / "no-fallback").exists()
+
+
+def test_equal_auxiliary_bytes_from_another_path_do_not_match_pinned_consumption(
+    input_h5ad, tmp_path, pinned_backend,
+) -> None:
+    checkpoint, frequencies, _, pins, _, metadata, _ = pinned_backend
+    other = tmp_path / "other-frequencies.npy"
+    copyfile(frequencies, other)
+    metadata["resources"]["frequencies"]["path"] = str(other)
+    with pytest.raises(tool.EpiZooResourceIdentityError):
+        tool.epizoo_embed_cells(input_h5ad, tmp_path / "cross-path", species="mouse",
+            checkpoint_path=checkpoint, device="cpu", expected_resource_identity=pins)
+    assert list((tmp_path / "cross-path").iterdir()) == []
 
 
 @pytest.mark.parametrize("field", ["checkpoint_sha256", "frequencies_sha256", "filter_indices_sha256"])

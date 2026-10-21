@@ -13,7 +13,7 @@ from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from agent.application.session_state import digest
 
 
-SURFACES = frozenset(("interpreter", "stage_a", "stage_b", "answer", "guidance", "layer2"))
+SURFACES = frozenset(("interpreter", "stage_b", "answer", "guidance", "layer2"))
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ class Scenario:
 
 
 def canonical_scenarios(input_path="/synthetic/qualification-pbmc.h5ad") -> tuple[Scenario, ...]:
-    """Fourteen ready-to-replay cases, not a request to execute or live-run them."""
+    """Twelve current cases; retired selection probes I02/I06 keep no executable fixture."""
     inspect = "Inspect the selected scATAC-seq dataset."
     def request(name, text, inputs):
         return AgentRequest("qualification-" + name, text, inputs, RunMode.PLAN_ONLY)
@@ -65,13 +65,9 @@ def canonical_scenarios(input_path="/synthetic/qualification-pbmc.h5ad") -> tupl
     unrelated = request("unrelated-inputs", unrelated_text, {
         "input_path": input_path, "reference_input_path": "/synthetic/reference.h5ad",
         "query_input_path": "/synthetic/query.h5ad", "species": "mouse"})
-    unsupported_text = "Predict protein folding structures from the supplied scATAC-seq dataset."
-    unsupported = request("unsupported", unsupported_text, {"input_path": input_path})
     return (
         Scenario("I01", "layer2", inspect, request=inspection,
                  expected={"kind": "plan", "tool": "inspect_scATAC", "tools": ("inspect_scATAC",)}, preflight=True),
-        Scenario("I02", "stage_a", inspect, request=inspection,
-                 expected={"kind": "select", "capabilities": ("processed_inspection",)}),
         Scenario("I03", "stage_b", inspect, request=inspection,
                  expected={"kind": "plan", "tool": "inspect_scATAC", "tools": ("inspect_scATAC",),
                            "request_sources": {"inspect_scATAC.path": "input_path"}},
@@ -83,8 +79,6 @@ def canonical_scenarios(input_path="/synthetic/qualification-pbmc.h5ad") -> tupl
                  expected={"kind": "plan", "tool": "inspect_scATAC", "tools": ("inspect_scATAC",),
                            "request_sources": {"inspect_scATAC.path": "input_path"}},
                  fixed_capability_ids=("processed_inspection", "reference_annotation"), preflight=True),
-        Scenario("I06", "stage_a", unsupported_text, request=unsupported,
-                 expected={"kind": "unsupported"}),
         Scenario("I07", "interpreter", "Make the TSS threshold stricter.", fixture="selection",
                  expected={"kind": "clarify", "reason": "missing_parameter_value"}),
         Scenario("I08", "answer", "What does the non-zero entry count tell us about this matrix?", fixture="matrix",

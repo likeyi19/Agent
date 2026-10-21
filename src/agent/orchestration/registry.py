@@ -1880,13 +1880,16 @@ def build_default_tool_registry() -> ToolRegistry:
                 source=direct, scientific_parameter=True, conversational_exact_string=True),
             "matrix_semantics": _planning_argument((str,), "Exact target-model measurement semantics.",
                 choices=("fragment_counts", "binary_accessibility"), source=direct, scientific_parameter=True),
-            "checkpoint_path": _planning_argument(
+            "checkpoint_path": ArgumentSpec(
                 path_types,
-                "Explicit EpiZoo checkpoint; omit to use the registered tool default.",
-                source=direct,
-                artifacts=(ArtifactSemanticKind.EPIZOO_CHECKPOINT,),
-                scientific_parameter=True,
-                provenance=branch,
+                planning=ArgumentPlanningSemantics(
+                    description="Explicit EpiZoo checkpoint; omit to use the registered tool default.",
+                    source_eligibility=direct,
+                    accepted_artifact_kinds=(ArtifactSemanticKind.EPIZOO_CHECKPOINT,),
+                    scientific_parameter=True,
+                    provenance_role=branch,
+                    default_when_omitted="registered_tool_default",
+                ),
             ),
             "device": _planning_argument(
                 (str,),

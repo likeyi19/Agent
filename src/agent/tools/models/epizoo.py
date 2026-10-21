@@ -13,6 +13,7 @@ from functools import lru_cache
 from hashlib import sha256
 from importlib import import_module, metadata as importlib_metadata
 from io import BytesIO
+import os
 from pathlib import Path
 import re
 import stat
@@ -28,10 +29,23 @@ import torch
 from torch.utils.data import DataLoader
 
 
-DEFAULT_CHECKPOINT_PATH = Path(
-    "/home/likeyi/program/model_checkpoints/EpiZoo/pretrained_EpiZoo.pth"
-)
-DEFAULT_RESOURCES_DIR = Path("/home/likeyi/program/EpiZoo/data")
+def _configured_path(value: str | Path | None, variable: str) -> Path:
+    if value is None:
+        value = os.environ.get(variable)
+        if value is None or not value.strip():
+            raise ValueError(f"Configure {variable} or supply the EpiZoo location explicitly.")
+    return Path(value).expanduser().resolve()
+
+
+def resolve_checkpoint_path(value: str | Path | None = None) -> Path:
+    """Resolve one explicit checkpoint location without searching other roots."""
+    return _configured_path(value, "AGENT_EPIZOO_CHECKPOINT")
+
+
+def resolve_resources_dir(value: str | Path | None = None) -> Path:
+    """Resolve the configured frequency/vocabulary directory at consumption."""
+    return _configured_path(value, "AGENT_EPIZOO_RESOURCES_DIR")
+
 
 MODEL_CONFIG: Mapping[str, Any] = MappingProxyType({
     "vocab_size": 1_514_484,
@@ -402,14 +416,14 @@ def _validate_loaded_model(model: Any) -> None:
 
 
 def load_model(
-    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+    checkpoint_path: str | Path | None = None,
     *,
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,
 ) -> Any:
     """Load the fixed pretrained EpiZoo architecture with strict validation."""
 
-    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+    checkpoint_path = resolve_checkpoint_path(checkpoint_path)
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"EpiZoo checkpoint not found: {checkpoint_path}")
     if dtype not in {torch.float16, torch.float32}:
@@ -527,9 +541,9 @@ def _prepare_sparse_adata(adata: ad.AnnData) -> ad.AnnData:
 
 
 def _load_resources(
-    species_cfg: _SpeciesConfig, resources_dir: str | Path
+    species_cfg: _SpeciesConfig, resources_dir: str | Path | None
 ) -> _Resources:
-    resources_dir = Path(resources_dir).expanduser().resolve()
+    resources_dir = resolve_resources_dir(resources_dir)
     frequency_path = resources_dir / species_cfg.frequency_filename
     filter_path = resources_dir / species_cfg.filter_filename
     for label, path in (("frequency", frequency_path), ("filter-index", filter_path)):
@@ -678,7 +692,7 @@ def embed_cells(
     adata: ad.AnnData,
     *,
     species: Literal["human", "mouse", 0, 1],
-    resources_dir: str | Path = DEFAULT_RESOURCES_DIR,
+    resources_dir: str | Path | None = None,
     device: str | torch.device | None = None,
     batch_size: int = 4,
     max_length: int = 8192,

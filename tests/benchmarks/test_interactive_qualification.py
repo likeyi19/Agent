@@ -50,9 +50,6 @@ def turn(kind="execute_plan", **values):
     return {"turn_schema_version": 1, "decision": {"kind": kind, **values}}
 
 
-def selection(*capabilities):
-    return {"selection_schema_version": 1, "decision": {
-        "kind": "select", "capability_ids": list(capabilities)}}
 
 
 def inspection(*, source="input_path", tool="inspect_scATAC", step_id="arbitrary-step"):
@@ -120,18 +117,9 @@ def test_interpreter_only_never_enters_planning(scenarios, candidate, monkeypatc
     assert_zero_science(record)
 
 
-def test_stage_a_does_not_enter_stage_b(scenarios, candidate, monkeypatch):
-    monkeypatch.setattr(LLMPlanner, "_plan_detailed", lambda *a, **k: pytest.fail("Stage A entered B"))
-    record, model = result(scenarios["I02"], candidate, selection("processed_inspection"))
-    assert len(model.calls) == 1
-    assert "selection_schema_version" in model.calls[0][0]
-    assert record["decision_kind"] == "select"
-    assert record["contract_success"] is record["semantic_success"] is True
-    assert record["compiler_success"] is record["preflight_success"] is None
-    assert_zero_science(record)
 
 
-def test_stage_b_uses_frozen_scope_without_stage_a(scenarios, candidate, monkeypatch):
+def test_direct_semantic_probe_uses_explicit_scope(scenarios, candidate, monkeypatch):
     record, model = result(scenarios["I03"], candidate, inspection())
     assert len(model.calls) == 1
     prompt, schema = model.calls[0]
@@ -191,13 +179,6 @@ def test_unrelated_inputs_are_not_semantically_interchangeable(scenarios, candid
     assert record["failure_category"] == "semantic"
 
 
-def test_genuinely_unsupported_stage_a_is_successful_typed_refusal(scenarios, candidate):
-    record, model = result(scenarios["I06"], candidate,
-        {"selection_schema_version": 1, "decision": {"kind": "unsupported"}})
-    assert len(model.calls) == 1
-    assert record["contract_success"] is record["semantic_success"] is True
-    assert record["decision_kind"] == "unsupported"
-    assert record["failure_category"] is None
 
 
 def test_valid_unsupported_is_semantic_failure_without_retry(scenarios, candidate):
@@ -211,13 +192,6 @@ def test_valid_unsupported_is_semantic_failure_without_retry(scenarios, candidat
     assert_zero_science(record)
 
 
-@pytest.mark.parametrize("capabilities", [("embedding_analysis",), ("raw_preprocessing",)])
-def test_wrong_but_legal_scope_is_semantic_failure(scenarios, candidate, capabilities):
-    record, model = result(scenarios["I02"], candidate, selection(*capabilities))
-    assert len(model.calls) == 1
-    assert record["contract_success"] is True
-    assert record["semantic_success"] is False
-    assert record["failure_category"] == "semantic"
 
 
 @pytest.mark.parametrize("payload", ["not JSON", '{"schema_version":4,"decision":{"kind":"plan","steps":[]}}',
@@ -230,7 +204,7 @@ def test_contract_rejections_are_distinct_from_semantics(scenarios, candidate, p
     assert record["compiler_success"] is record["preflight_success"] is None
 
 
-@pytest.mark.parametrize("surface,scenario_id", [("interpreter", "I01"), ("stage_a", "I02"), ("stage_b", "I03")])
+@pytest.mark.parametrize("surface,scenario_id", [("interpreter", "I01"), ("stage_b", "I03")])
 def test_transport_failures_record_codes_without_secret_prose(scenarios, candidate, surface, scenario_id):
     secret = "credential-value-must-not-be-recorded"
     error = PlanningModelError(secret, code="PROVIDER_RATE_LIMITED")
@@ -243,7 +217,7 @@ def test_transport_failures_record_codes_without_secret_prose(scenarios, candida
     assert_zero_science(record)
 
 
-@pytest.mark.parametrize("scenario_id", ["I01", "I02", "I03"])
+@pytest.mark.parametrize("scenario_id", ["I01", "I03"])
 def test_arbitrary_model_error_code_cannot_expose_credentials(scenarios, candidate, scenario_id):
     secret = "credential-value-must-not-be-recorded"
     scenario = interpreter_case(scenarios) if scenario_id == "I01" else scenarios[scenario_id]

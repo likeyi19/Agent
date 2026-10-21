@@ -7,7 +7,20 @@ Existing foundation models such as EpiZoo and EpiAgent are scientific backends
 to reuse; the Agent does not reimplement them. EpiZoo is the currently validated
 embedding backend.
 
-[UA3.6.5-R7](docs/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
+Both scientific backend packages are managed as code-only snapshots under
+`third_party/`; see the [backend installation guide](docs/guides/backends.md)
+for pinned source identities and installation into the qualified environment.
+EpiAgent remains a backend for future tools, with no current registered execution
+capability. Model weights and scientific resources remain outside Git.
+
+See the [documentation index](docs/README.md) for current operating guidance,
+architecture owners and historical acceptance records.
+
+The [scientific storage guide](docs/guides/scientific-storage.md) records the FS-2
+resource deployment, FS-3 development retirement, explicit EpiZoo location
+configuration and fresh UAT workspace.
+
+[UA3.6.5-R7](docs/architecture/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
 simplifies ongoing research Sessions. Clarifications and questions are interactions;
 only scientific execution reserves a Run, and accepted results publish immutable
 Revisions with exact parentage. Atomic Session files reuse an already validated
@@ -26,7 +39,7 @@ objective without a clarification-only Run. Interpreter intent, Registry plannin
 exact compilation and native scientific qualification retain distinct owners.
 Retired capability-selection experiments now live only in the benchmark harness.
 
-[UA3.6.5-R5](docs/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
+[UA3.6.5-R5](docs/architecture/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects
 accepted facts with reviewed field meanings, generates cited natural prose and
@@ -40,7 +53,7 @@ separate. Native scientific defaults are described without being treated as user
 instructions. The linked record owns validation status and remaining limitations;
 older milestone descriptions of the replaced mechanisms are historical.
 
-[UA3.6.5-R6](docs/ua3.6.5-r6-agent-scientific-tools-integration-redesign.md)
+[UA3.6.5-R6](docs/architecture/ua3.6.5-r6-agent-scientific-tools-integration-redesign.md)
 simplifies the scientific handoff while retaining R5 planning and answers.
 AnnData owns peak-H5AD parsing; bounded HDF5 storage safety remains, while
 download privacy is handled at delivery. MAESTRO runs once and publishes a
@@ -63,13 +76,13 @@ history; new DA v2 completion checks no longer replay edgeR. Historical v1
 readers remain, and independent scientific qualification tests are retained.
 EpiZoo vocabulary requirements and raw-data/QC/matrix scientific contracts remain.
 
-[UA3.6.5-R2A](docs/ua3.6.5-r2a-generic-cell-embedding.md) adds centered, sparse-safe
+[UA3.6.5-R2A](docs/history/ua3.6.5-r2a-generic-cell-embedding.md) adds centered, sparse-safe
 Scanpy PCA for ordinary H5AD X measurements. PCA and EpiZoo use the same neighbor,
 Leiden and UMAP tools with their actual representation and dimensions. Explicit
 EpiZoo requests retain exact model-vocabulary requirements and never silently
 switch methods. PCA applies no normalization or feature/cell filtering.
 
-[UA3.6.5-R3](docs/ua3.6.5-r3-native-tool-first-simplification.md) removes the
+[UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md) removes the
 primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,
 counts and names stay exact; native zero-weight and unmatched-contig participation
 is recorded in annotation details and exported H5AD provenance. Complete annotation
@@ -77,7 +90,7 @@ references no longer require a QC catalog. This does not change primary-nuclear
 preprocessing or establish biological annotation accuracy. R4 below supplies the
 subsequent normal laboratory resource deployment.
 
-[UA3.6.5-R4](docs/ua3.6.5-r4-unified-scientific-resource-library.md) uses one
+[UA3.6.5-R4](docs/architecture/ua3.6.5-r4-unified-scientific-resource-library.md) uses one
 persistent scientific library, configured with `scientific_resource_root` outside
 task storage. Installed references are discovered automatically; unchanged entries
 reuse their initial scientific validation. Uploads stay private unless the user
@@ -88,18 +101,18 @@ reference installation has no private-registration/promotion or redistribution-p
 workflow. Provisioning owns the applicable usage basis; scientific execution retains
 method compatibility and exact file integrity checks.
 
-[M14.10 generic QC integration](docs/m14.10-generic-qc.md) admits independently
+[M14.10 generic QC integration](docs/history/m14.10-generic-qc.md) admits independently
 qualified normalized transcript-TSS resources through the existing QC and
 explicit cell-selection tools. QC-selected neutral matrices use the existing
 fragment-to-feature matrix owner; caller-declared cells remain an explicit
 override. Legacy human/mouse science and identities are preserved.
-[M14.11 real macaque acceptance](docs/m14.11-real-macaque-qc.md) exercises the
+[M14.11 real macaque acceptance](docs/history/m14.11-real-macaque-qc.md) exercises the
 shared QC → explicit selection → matrix path with qualified macFas5 resources.
 Other species still require their own qualified resources. Cell Selection uses
 adjustable owner starting defaults of 1000 QC fragment records and TSS enrichment
 4 when omitted; explicit values take precedence. These do not establish universal
 biological optima, ArchR-equivalent scores or statistical cell calling. See the
-[USI-3C closeout](docs/usi-3c-scientific-defaults-practical-readiness.md).
+[USI-3C closeout](docs/history/usi-3c-scientific-defaults-practical-readiness.md).
 
 Milestones 1–9 and Post-M9 Planner Interface Hardening are complete, including
 static target-port/Groq compatibility, feature-space semantic-v4 parity, and
@@ -143,7 +156,7 @@ remains inspectable without inferred barcode semantics.
 Milestone 10.3 is complete: deterministic, read-only BAM intake supports explicit
 local `.bam` files and non-recursive directories. It uses mature `pysam`/htslib
 parsing, with no custom BAM decoder. The tested optional dependency is
-`pysam==0.24.1`, declared in [requirements-bam.txt](requirements-bam.txt) and
+`pysam==0.24.1`, declared in [requirements/bam.txt](requirements/bam.txt) and
 lazy-loaded for BAM inspection; existing FASTQ/H5AD workflows do not require it.
 Bounded sequential reading works without an index and collects compact
 header/reference, species/source-assembly, sort/index, mapping/pairing, and
@@ -204,7 +217,7 @@ M11.5c now adds cell-by-cCRE construction. Realignment/liftOver, automatic
 statistical cell calling and model inference from raw sequencing remain deferred.
 
 Direct marker-based cell-type annotation is available through
-[`annotate_scATAC_cell_types`](docs/m13.5-agent-annotation-integration.md).
+[`annotate_scATAC_cell_types`](docs/history/m13.5-agent-annotation-integration.md).
 It consumes an accepted canonical fragment-count matrix or declared human hg38
 Cell Ranger ATAC cut-site peak counts, exact independent groups, and pinned
 tissue/context resources. It publishes primary labels in a new annotated H5AD
@@ -219,10 +232,10 @@ neither gates or changes primary annotation.
 
 **Milestone 11.6 — Production Reference & Runtime Resource Provisioning is complete.**
 The accepted slices are [M11.6a — production resource specification and operator
-workflow](docs/m11.6a-production-resource-specification.md), [M11.6b — production
-parent/QC resources and qualification](docs/m11.6b-production-qc-resources.md), and
+workflow](docs/history/m11.6a-production-resource-specification.md), [M11.6b — production
+parent/QC resources and qualification](docs/history/m11.6b-production-qc-resources.md), and
 [M11.6c — full-reference Chromap resources and runtime
-handoff](docs/m11.6c-production-chromap-resources.md).
+handoff](docs/history/m11.6c-production-chromap-resources.md).
 
 Authenticated human/hg38 and mouse/mm10 parents retain full ordered cCRE
 vocabularies of 1,355,445 and 1,341,077, respectively. Production-qualified GENCODE
@@ -251,7 +264,7 @@ QC/selection science and M11.5 matrix science are unchanged. Provisioning adds
 no Planner-visible scientific tool.
 
 **M11 RAW PREPROCESSING ACCEPTED AND CLOSED.**
-[M11.8 — Biological Validation & Raw Preprocessing Closeout](docs/m11.8-biological-closeout.md)
+[M11.8 — Biological Validation & Raw Preprocessing Closeout](docs/history/m11.8-biological-closeout.md)
 accepts the preserved human PBMC Next GEM FASTQ run under its frozen explicit
 QC-selection policy, building on M11.7 execution and Post-M11.7b verification.
 The 1,119 selected candidates have median QC depth 14,358 and median Agent TSS
@@ -263,8 +276,8 @@ This representative acceptance does not certify every candidate as a singlet,
 establish statistical cell calling, or qualify real BAM/external-fragment/mouse
 generalization or model readiness. Retained depth/nucleosome outliers and historical
 timing limitations are explicit in the closeout record.
-**[M12 — Matrix-Level Input Support is closed](docs/m12-matrix-level-input-closeout.md).**
-[M12.1 — Exact external cell-by-cCRE adoption](docs/m12.1-exact-external-cell-by-ccre-adoption.md)
+**[M12 — Matrix-Level Input Support is closed](docs/history/m12-matrix-level-input-closeout.md).**
+[M12.1 — Exact external cell-by-cCRE adoption](docs/history/m12.1-exact-external-cell-by-ccre-adoption.md)
 supports constrained H5AD with the exact complete canonical cCRE vocabulary,
 int64 CSR values, truthful external provenance and verified source conservation.
 This complements the existing raw FASTQ/BAM/fragments → canonical cell-by-cCRE route.
@@ -273,12 +286,12 @@ the paired PBMC validation did not justify production approval of binary overlap
 evidence. This is a scientific/product decision, not pending implementation.
 There is no automatic peak conversion or arbitrary matrix-format support.
 
-[Post-M11.7b.1 — Verification authority](docs/post-m11.7b.1-verification-authority.md)
+[Post-M11.7b.1 — Verification authority](docs/history/post-m11.7b.1-verification-authority.md)
 introduces producer-neutral v2 authority contracts and explicit FASTQ-authority
 reuse in QC verification. Default verification remains deep; later authority propagation, application reuse
 and explicit preserved-run qualification are described below.
 
-[Post-M11.7b.2 — Scientific authority propagation](docs/post-m11.7b.2-scientific-authority-propagation.md)
+[Post-M11.7b.2 — Scientific authority propagation](docs/history/post-m11.7b.2-scientific-authority-propagation.md)
 extends new durable scientific execution across FASTQ/BAM/external fragments → QC
 → Selection → Matrix. Every layer retains its independent scientific verification;
 compatible authority prevents repeated upstream reconstruction and raw-source
@@ -286,19 +299,19 @@ hashing. Historical verified source identity and explicit current-source freshne
 are separate policies. Standalone/recovery verification stays deep. Application
 reuse and preserved-run qualification are described below.
 
-[Post-M11.7b.3a — Application authority reuse](docs/post-m11.7b.3a-application-authority-reuse.md)
+[Post-M11.7b.3a — Application authority reuse](docs/history/post-m11.7b.3a-application-authority-reuse.md)
 now scopes successful application postprocessing with the existing trusted authority
 loader. Evidence, visualization discovery and report verification retain their own
 checks while reusing compatible scientific proofs. Standalone and runtime recovery
 remain deep.
 
-[Post-M11.7b.3b — Explicit legacy qualification](docs/post-m11.7b.3b-legacy-authority-qualification.md)
+[Post-M11.7b.3b — Explicit legacy qualification](docs/history/post-m11.7b.3b-legacy-authority-qualification.md)
 adds an operator API to deeply verify existing raw-processing outputs and publish
 current authority in an additive sidecar bound to unchanged terminal execution
 history. Qualification performs no production or schema migration. Normal loading
 remains read-only.
 
-[Post-M11.7b.3c — Preserved real-run closeout](docs/post-m11.7b.3c-preserved-real-run-closeout.md)
+[Post-M11.7b.3c — Preserved real-run closeout](docs/history/post-m11.7b.3c-preserved-real-run-closeout.md)
 applies these mechanisms to the preserved human PBMC 1k Next GEM run. Explicit
 qualification issued all four scientific authorities without changing payloads or
 execution/publication history. After explicitly authorized archival of old evidence,
@@ -328,14 +341,14 @@ At that milestone no matrix-building tool or Planner/Application integration was
 added; the registry remained at 17 tools. The project-authoritative mouse full vocabulary is provisioned
 deterministically from the exact Fang2021 H5AD ordered feature names into the
 unchanged reference interface, with a hash-bound derivation receipt. See the
-[M11.5a contract and acceptance](docs/m11.5a-matrix-contract.md).
+[M11.5a contract and acceptance](docs/history/m11.5a-matrix-contract.md).
 
 **M11.5b adds bounded data-layer matrix construction and complete independent
 verification.** Exact verified fragments, selection and reference produce one
 ordered int64 CSR H5AD. SQLite-backed BEDTools incidence counting and a separate
 augmented interval-tree verifier preserve full axes and zero rows/columns. This
 data-layer milestone did not add a registered tool. M11.5c now supplies
-Planner/Application, reporting and durable lifecycle integration. See [implementation and evidence](docs/m11.5b-matrix-construction.md).
+Planner/Application, reporting and durable lifecycle integration. See [implementation and evidence](docs/history/m11.5b-matrix-construction.md).
 
 **M11.5c integrates the full matrix into Agent.** The eighteenth registered tool,
 `build_scATAC_cell_by_ccre`, consumes exact fragments-v2, selection-v1 and reference
@@ -351,7 +364,7 @@ immutable H5AD with a durable receipt, and supports resume, cancellation, bounde
 evidence and figureless reports. Empty selections and zero rows remain valid.
 `AGENT_MATRIX_BEDTOOLS` configures the explicitly qualified executable; existing
 QC runtime/resource qualification remains mandatory. PLAN_ONLY reads no scientific
-payloads and performs no matrix work. See [the API and closeout](docs/m11.5c-agent-integration.md).
+payloads and performs no matrix work. See [the API and closeout](docs/history/m11.5c-agent-integration.md).
 
 The full mouse 1,341,077-column component acceptance remains valid. A complete
 production mm10 QC → selection → full matrix run remains operational acceptance
@@ -392,13 +405,13 @@ This is an intentional pre-release compatibility break. Fragments v1 artifacts
 and their persisted runs/receipts are unsupported by the current runtime;
 there is no automatic upgrade or dual recovery path. Git history and the
 historical M11.2/M11.3a–c records preserve the former v1 behavior. See the
-[M11.3d contract and M11.4 input boundary](docs/m11.3d-fragment-convergence.md).
+[M11.3d contract and M11.4 input boundary](docs/history/m11.3d-fragment-convergence.md).
 
 **M11.4a freezes QC science and resources.** Immutable QC reference bundles,
 deterministic transcript-TSS construction, independent source reinspection, and
 narrow local pysam/BEDTools qualification are available as data-layer APIs.
 These APIs add no tools. Production hg38/mm10 annotation provisioning remains
-deferred. See [the frozen QC contract](docs/m11.4a-qc-resources.md).
+deferred. See [the frozen QC contract](docs/history/m11.4a-qc-resources.md).
 
 **M11.4b adds verified per-barcode QC.** `compute_scATAC_qc` publishes
 `scatac-barcode-qc.v1` for every observed `(namespace, barcode_identifier)`,
@@ -415,7 +428,7 @@ An independently provisioned operator qualification catalog
 Tiny synthetic bundles require explicit test opt-in (`AGENT_QC_ALLOW_SYNTHETIC=1`).
 No canonical biological hg38/mm10 QC bundle is supplied by this milestone.
 Durable recovery and figureless Application evidence/reporting freshly verify QC.
-See [the M11.4b contract and API](docs/m11.4b-barcode-qc.md).
+See [the M11.4b contract and API](docs/history/m11.4b-barcode-qc.md).
 
 **M11.4c adds explicit QC selection.** `select_scATAC_cells` consumes one exact
 verified QC artifact and caller-supplied thresholds, publishing
@@ -430,7 +443,7 @@ scope: fragments v2 → barcode QC → optional explicit QC selection → ordere
 set. M11.4c brought the registry to 17 tools; M11.5c adds matrix construction as
 tool 18. Metrics-only QC remains valid; selection is never inserted automatically.
 Automatic calling, doublets, FRiP and biological cell-calling validation remain deferred.
-See [the M11.4c contract, API and M11.5 handoff](docs/m11.4c-explicit-selection.md).
+See [the M11.4c contract, API and M11.5 handoff](docs/history/m11.4c-explicit-selection.md).
 
 
 **M11.3b is complete: verified external-fragment adoption.** The new
@@ -447,7 +460,7 @@ External adoption has reviewed semantic planning metadata and
 durable recovery and verified figureless Application reporting. Synthetic
 acceptance passed; route-specific biological acceptance remains unqualified by
 the representative FASTQ M11.8 closeout. See the
-[M11.3b contract](docs/m11.3b-external-fragments.md).
+[M11.3b contract](docs/history/m11.3b-external-fragments.md).
 
 **M11.3c is complete at synthetic acceptance: qualified BAM → fragments v2.**
 `prepare_scATAC_bam_fragments` supports only `agent-cb-paired-atac.v1`: one BAM,
@@ -463,13 +476,13 @@ Complete source identity, independent BAM transformation verification, v2 output
 integrity, exact durable recovery and figureless Application reporting are
 supported. Historical alignment/correction and source-history declarations are
 not independently proven. All 18 scientific tools have semantic metadata;
-PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/m11.3c-bam-fragments.md).
+PLAN_ONLY performs no BAM IO. See the [M11.3c contract](docs/history/m11.3c-bam-fragments.md).
 Route-specific biological acceptance remains unqualified by the representative
 FASTQ M11.8 closeout.
 
 CRAM/SAM support, automatic statistical cell calling and raw-derived EpiZoo
 inference remain unimplemented. See the
-[M11.3a contract](docs/m11.3a-fragment-boundary.md) and detailed
+[M11.3a contract](docs/history/m11.3a-fragment-boundary.md) and detailed
 [M11.2 contract](AGENTS.md#milestone-112--fastq-to-canonical-fragments-and-joint-closeout).
 
 ## Architecture
@@ -581,7 +594,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
-| Exact external cCRE adoption | `adopt_scATAC_cell_by_ccre`: constrained int64 CSR H5AD, exact complete reference vocabulary, explicit external value semantics, independently verified conservation, durable matrix authority and figureless reporting; see [M12.1](docs/m12.1-exact-external-cell-by-ccre-adoption.md) |
+| Exact external cCRE adoption | `adopt_scATAC_cell_by_ccre`: constrained int64 CSR H5AD, exact complete reference vocabulary, explicit external value semantics, independently verified conservation, durable matrix authority and figureless reporting; see [M12.1](docs/history/m12.1-exact-external-cell-by-ccre-adoption.md) |
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
 | External fragment adoption | `import_scATAC_fragments`: explicit 10x fragment semantics, complete source validation and conservation, canonical v2 artifacts, durable recovery, and figureless Application reporting |
@@ -723,11 +736,11 @@ figureless reports; failure of an expected visualization remains fatal.
 The transport-independent interactive Python interface supports empty-session
 first turns, exact stored display history, idempotent submissions, persisted
 status views, and operator-admitted per-turn model profiles. See the
-[M18.2 contract and acceptance](docs/m18.2-interactive-application-boundary.md).
+[M18.2 contract and acceptance](docs/history/m18.2-interactive-application-boundary.md).
 The basic same-origin browser application is available through FastAPI:
 
 ```bash
-python -m pip install -r requirements-web.txt
+python -m pip install -r requirements/web.txt
 PYTHONPATH=src python -m agent.web --config /path/to/operator-web.json \
   --host 127.0.0.1 --port 8000
 ```
@@ -736,9 +749,9 @@ Open the configured address, create or reopen a Session, choose an admitted
 model and optional operator-configured scientific input set, and submit a request.
 The browser polls durable turn state and restores exact stored responses after
 refresh. Provider credentials and scientific input paths remain server-side.
-See [M18.3 configuration, API and acceptance](docs/m18.3-basic-web-application.md)
+See [M18.3 configuration, API and acceptance](docs/history/m18.3-basic-web-application.md)
 for the operator JSON format, launch options and recovery limits.
-See [Post-M18.1 typed turn admission](docs/post-m18.1-typed-turn-admission.md)
+See [Post-M18.1 typed turn admission](docs/history/post-m18.1-typed-turn-admission.md)
 for the current boundary between interpreted intent and deterministic admission.
 
 The browser places scientific results on the left and an independently scrolling
@@ -748,7 +761,7 @@ Revision automatically; a selected historical preview stays in place with an
 explicit return-to-current action. Previewing never activates a result. Full
 Session, turn and Revision identities remain available in details. Summaries,
 original figures and downloads share the existing accepted scientific view.
-See the [USI-7 layout closeout](docs/usi-7-web-ux-reports-download-closeout.md)
+See the [USI-7 layout closeout](docs/history/usi-7-web-ux-reports-download-closeout.md)
 for the final layout, restoration behavior and browser acceptance.
 
 The interpreter receives safe supplied-input availability and accepted-result
@@ -757,7 +770,7 @@ It interprets natural references; Agent binds the selected scope to exact accept
 Revision/output identities. Distinct scientific results still require an explicit
 choice or clarification. Input descriptions contain registered expectations and
 shallow types, never supplied values, paths or a scientific-readiness claim.
-See [Post-M18.2b context and chat-first UI](docs/post-m18.2b-conversational-context-chat-ui.md).
+See [Post-M18.2b context and chat-first UI](docs/history/post-m18.2b-conversational-context-chat-ui.md).
 Software/UI acceptance and the safe supplied-input/result-context projections
 are accepted. The live Groq current-result/scientific-answer chain remains
 unqualified because of provider-authored semantic variability. Accepted
@@ -771,9 +784,9 @@ submits an ordinary interpreted turn through M17.2; it never calls a tool direct
 Reports are labelled client-safe evidence projections because original Markdown
 can contain server paths. Returning to an earlier revision and executing new work
 creates a normal child; historical revisions remain immutable. See the
-[M18.4 interaction and acceptance record](docs/m18.4-rich-scientific-interaction.md).
+[M18.4 interaction and acceptance record](docs/history/m18.4-rich-scientific-interaction.md).
 
-[M18.5 real interactive acceptance and M18 closeout](docs/m18.5-real-interactive-acceptance.md)
+[M18.5 real interactive acceptance and M18 closeout](docs/history/m18.5-real-interactive-acceptance.md)
 validates this browser workflow over preserved real PBMC science, including
 guided execution, revision branching, refresh, fresh-server restart and bounded
 failure paths. The full lightweight regression passes 4,868 tests with 83 skipped.
@@ -1088,7 +1101,7 @@ separate. Use Ctrl/⌘ + Enter to send; Enter inserts a newline. Results and dir
 streamed downloads appear beside accepted replies and under **Results, downloads
 & history**. Browse earlier results without changing context, or choose
 **Continue from here** to activate one. See the
-[USI-7 UI closeout](docs/usi-7-web-ux-reports-download-closeout.md) for browser
+[USI-7 UI closeout](docs/history/usi-7-web-ux-reports-download-closeout.md) for browser
 validation, report projection semantics and deployment limits.
 
 The legacy registered-H5AD picker remains under **Advanced inputs**. Its source
@@ -1100,7 +1113,7 @@ or other scientific readiness.
 This remains a trusted local/lab-host application with loopback-first launch,
 without account authorization. Existing safe report-text and PNG downloads are
 unchanged; inspection does not generate a new downloadable scientific dataset.
-See the [UA3.1 implementation and validation record](docs/ua3.1-web-upload.md)
+See the [UA3.1 implementation and validation record](docs/history/ua3.1-web-upload.md)
 for transfer/retry bounds and multi-turn acceptance.
 
 For EpiZoo analysis, state the selected dataset's species in the initial request,
@@ -1145,13 +1158,13 @@ operation, and accepted evidence records effective thresholds, owner defaults an
 exact user-declaration provenance. Unknown identities and ambiguous consumers
 fail closed; this does not qualify every registered parameter or live-provider
 language accuracy.
-See the [UA3.5.3 unified binding record](docs/ua3.5.3-unified-scientific-input-binding.md),
-the [UA3.5.2 parameter record](docs/ua3.5.2-leiden-resolution-defaults.md),
-the [UA3.5.1 handoff record](docs/ua3.5.1-conversational-prerequisite-handoff.md), and the
-[UA3.2.2 composition and acceptance record](docs/ua3.2.2-h5ad-composition.md)
+See the [UA3.5.3 unified binding record](docs/history/ua3.5.3-unified-scientific-input-binding.md),
+the [UA3.5.2 parameter record](docs/history/ua3.5.2-leiden-resolution-defaults.md),
+the [UA3.5.1 handoff record](docs/history/ua3.5.1-conversational-prerequisite-handoff.md), and the
+[UA3.2.2 composition and acceptance record](docs/history/ua3.2.2-h5ad-composition.md)
 for the approved mouse default example, configuration procedure, provenance and
 closeout status. Configuration activation remains operator-owned.
-The [UA3.5 closeout](docs/ua3.5-closeout.md) records the accepted human workflow,
+The [UA3.5 closeout](docs/history/ua3.5-closeout.md) records the accepted human workflow,
 initial-declaration admission and non-secret human deployment requirements,
 with their distinct scientific and language qualification limits.
 
@@ -1188,7 +1201,7 @@ compatibility. Missing prerequisites produce safe errors. Typed selections still
 supply declarations and numerical parameters; conversational collection is
 deferred. Sources remain selectable after refresh/restart. Existing accepted
 matrix, QC and selection downloads remain available; fragments/TBI downloads
-remain deferred. See the [implementation and acceptance record](docs/ua3.4.1-external-fragments-web-upload.md).
+remain deferred. See the [implementation and acceptance record](docs/history/ua3.4.1-external-fragments-web-upload.md).
 
 ### BAM browser attachment (UA3.4.2)
 
@@ -1210,7 +1223,7 @@ explicit selection wins. Inspection stays available without such a default.
 The ordinary plan may consume an explicit pinned intake or a new inspection's
 semantic output. Qualified preparation and optional downstream QC/selection/matrix
 still require their existing resources and parameters. The operator JSON remains
-unchanged. See the [UA3.4.2 record](docs/ua3.4.2-bam-web-upload.md) for a
+unchanged. See the [UA3.4.2 record](docs/history/ua3.4.2-bam-web-upload.md) for a
 configuration example and acceptance scope. Existing upload limits apply per
 source; oversized transfers report the exact limit and `upload_max_bytes` action.
 
@@ -1236,7 +1249,7 @@ already captured by the collection and cannot be overridden by companions. Exist
 qualified Chromap/index runtime provisioning remains operator-owned; no configuration
 is changed automatically. Natural language selects the operations, while typed
 selections still supply scientific declarations and thresholds. See the
-[FASTQ acceptance and UA3.4 closeout](docs/ua3.4.3-fastq-web-upload.md).
+[FASTQ acceptance and UA3.4 closeout](docs/history/ua3.4.3-fastq-web-upload.md).
 
 ## Validation and current boundaries
 
@@ -1286,22 +1299,22 @@ and nonblocking engineering follow-ups are preserved in [AGENTS.md](AGENTS.md).
 
 Species adaptation now composes exact neutral matrix adoption with the qualified
 EpiZoo backend through AgentApplication. See the [M14.3 input specification,
-profiles and acceptance record](docs/m14.3-species-adaptation-integration.md).
+profiles and acceptance record](docs/history/m14.3-species-adaptation-integration.md).
 This produces a target model; public target-model inference and biological
 performance validation remain deferred.
 
-[M14.4 real macaque technical acceptance](docs/m14.4-real-macaque-mapped-acceptance.md)
+[M14.4 real macaque technical acceptance](docs/history/m14.4-real-macaque-mapped-acceptance.md)
 exercises mapped-reference adaptation on all 331 supplied cells and 615,873 target
 features, including real SEAM, bounded optimizer updates and fresh-process recovery.
 It does not establish biological convergence or embedding quality.
 
-[M14.5 binary de-novo qualification](docs/m14.5-real-zebrafish-de-novo-acceptance.md)
+[M14.5 binary de-novo qualification](docs/history/m14.5-real-zebrafish-de-novo-acceptance.md)
 adds the explicit `binary-de-novo-qualification.v1` adaptation profile for neutral
 `binary_accessibility` matrices. It preserves the existing fragment-count profiles
 and excludes binary mapped-reference/production execution and insertion counts.
 The real zebrafish acceptance retains all 2,000 demo cells and 466,307 features.
 
-[M14.6 external fragments to regulatory-feature matrices](docs/m14.6-fragment-feature-matrix.md)
+[M14.6 external fragments to regulatory-feature matrices](docs/history/m14.6-fragment-feature-matrix.md)
 adds a data-layer path for an explicit species/reference, ordered caller-supplied
 barcodes, and an exact cCRE/peak/region vocabulary. It reuses verified fragments,
 unit fragment-overlap counting, the independent matrix owner and durable
@@ -1309,7 +1322,7 @@ publication. It introduces no QC or cell-calling claim. Public Agent integration
 was deferred at that data-layer checkpoint (22 tools). M14.7 below adds public
 integration; real-fragment biological acceptance remains deferred.
 
-[M14.7 public fragment-derived matrices](docs/m14.7-public-fragment-feature-matrix.md)
+[M14.7 public fragment-derived matrices](docs/history/m14.7-public-fragment-feature-matrix.md)
 exposes `build_scATAC_cell_by_features` for verified external fragments, exact
 caller-declared cells and a neutral regulatory-feature reference. It preserves
 fragment-derived authority separately from external H5AD adoption and composes
@@ -1317,7 +1330,7 @@ with compatible species adaptation. Registry count is 23; QC, automatic calling
 and biological-fragments qualification are not implied.
 
 
-[M14.8 real macaque fragment acceptance](docs/m14.8-real-macaque-fragment-matrix.md)
+[M14.8 real macaque fragment acceptance](docs/history/m14.8-real-macaque-fragment-matrix.md)
 uses an explicit reference-bound primary-nuclear scope, preserves retained fragment
 records exactly, and reproduces every count in the 331-cell complete AllcCRE
 matrix through the public fragment-derived owner. Historical external matrix
@@ -1325,7 +1338,7 @@ authority remains distinct. New neutral fragment preparation uses
 `prepare_primary_fragments` followed by `import_primary_fragments`; legacy
 human/mouse contracts and previously accepted unscoped artifacts are unchanged.
 
-[M14.9 neutral BAM production](docs/m14.9-neutral-bam-fragments.md) adds the
+[M14.9 neutral BAM production](docs/history/m14.9-neutral-bam-fragments.md) adds the
 data-layer `prepare_neutral_bam_fragments` entry point. An explicit neutral
 source/reference/library declaration and shared primary-nuclear scope feed the
 existing paired-ATAC producer and independent verifier. Output is normal

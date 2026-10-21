@@ -33,7 +33,6 @@ from agent.schemas.orchestration import _serialize
 from benchmarks.planner.benchmark import guarded_registry
 
 from .fixtures import build_context
-from .legacy_selection import parse_selection, selection_request
 
 
 class ZeroScienceViolation(BaseException):
@@ -80,7 +79,6 @@ class RecordingModel:
         payload = json.loads(prompt)
         phase = next((name for key, name in (
             ('turn_schema_version', 'interpreter'),
-            ('selection_schema_version', 'stage_a'),
             ('dialogue_schema_version', 'answer'),
             ('grounding_review_version', 'grounding_review'),
             ('guidance_schema_version', 'guidance'),
@@ -210,8 +208,6 @@ def _semantic(scenario, result, *, context=None):
     if 'tool' in expected:
         checks.append(result.get('selected_tool') == expected['tool'] if scenario.surface in ('interpreter', 'layer2')
                       else expected['tool'] in result.get('plan_tools', ()))
-    if 'capabilities' in expected:
-        checks.append(set(result.get('capability_ids', ())) == set(expected['capabilities']))
     if 'tools' in expected:
         checks.append(set(result.get('plan_tools', ())) == set(expected['tools']))
     if 'support' in expected:
@@ -236,11 +232,10 @@ def _semantic(scenario, result, *, context=None):
 
 def _planner_observations(recorder, request, registry, diagnostics=()):
     """Parse transient returned candidates independently of presentation failures."""
-    scope = None
     planning_index = 0
     details = [d.to_details() if hasattr(d, 'to_details') else dict(d) for d in diagnostics]
     for row, response in zip(recorder.calls, recorder.responses):
-        if row['surface'] not in ('stage_a', 'stage_b'):
+        if row['surface'] != 'stage_b':
             continue
         planning_index += 1
         observed = [d for d in details if d.get('provider_call_index') == planning_index]
@@ -251,36 +246,30 @@ def _planner_observations(recorder, request, registry, diagnostics=()):
         if row['provider_outcome'] == 'failed':
             continue
         try:
-            if row['surface'] == 'stage_a':
-                scope = parse_selection(response, registry)
-                row.update(contract_success=True, decision_kind='select',
-                           capability_ids=list(scope.capability_ids))
-            else:
-                visible = scope.visible_tool_names if scope is not None else (
-                    PlanningScope(registry, recorder.scenario.fixed_capability_ids or None).visible_tool_names)
-                candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible)
-                bindings = {}
-                rules = build_semantic_compiler_contract(registry).request_bindings
-                for step in candidate.steps:
-                    for source in step.sources:
-                        if not hasattr(source, 'input_name'): continue
-                        for rule in rules:
-                            if (rule.tool_name == step.tool_name and rule.target_port == source.target_port
-                                    and rule.selector == source.input_name):
-                                bindings[step.tool_name + '.' + rule.argument_name] = rule.input_name
-                    # Recover omitted unambiguous bindings from actual compiler output.
-                    if recorder.compiled_plan is not None:
-                        compiled = [s for s in recorder.compiled_plan.steps if s.step_id == step.step_id]
-                        if len(compiled) == 1:
-                            for argument, value in compiled[0].arguments.items():
-                                key = step.tool_name + '.' + argument
-                                origins = {r.input_name for r in rules if r.tool_name == step.tool_name
-                                    and r.argument_name == argument and r.input_name in request.inputs
-                                    and request.inputs[r.input_name] == value}
-                                if key not in bindings and len(origins) == 1: bindings[key] = origins.pop()
-                row.update(contract_success=True, decision_kind='plan',
-                           plan_tools=[step.tool_name for step in candidate.steps],
-                           request_sources=bindings)
+            visible = PlanningScope(registry, recorder.scenario.fixed_capability_ids or None).visible_tool_names
+            candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible)
+            bindings = {}
+            rules = build_semantic_compiler_contract(registry).request_bindings
+            for step in candidate.steps:
+                for source in step.sources:
+                    if not hasattr(source, 'input_name'): continue
+                    for rule in rules:
+                        if (rule.tool_name == step.tool_name and rule.target_port == source.target_port
+                                and rule.selector == source.input_name):
+                            bindings[step.tool_name + '.' + rule.argument_name] = rule.input_name
+                # Recover omitted unambiguous bindings from actual compiler output.
+                if recorder.compiled_plan is not None:
+                    compiled = [s for s in recorder.compiled_plan.steps if s.step_id == step.step_id]
+                    if len(compiled) == 1:
+                        for argument, value in compiled[0].arguments.items():
+                            key = step.tool_name + '.' + argument
+                            origins = {r.input_name for r in rules if r.tool_name == step.tool_name
+                                and r.argument_name == argument and r.input_name in request.inputs
+                                and request.inputs[r.input_name] == value}
+                            if key not in bindings and len(origins) == 1: bindings[key] = origins.pop()
+            row.update(contract_success=True, decision_kind='plan',
+                       plan_tools=[step.tool_name for step in candidate.steps],
+                       request_sources=bindings)
         except PlannerError as exc:
             row.update(contract_success=exc.code == 'UNSUPPORTED_REQUEST',
                        decision_kind='unsupported' if exc.code == 'UNSUPPORTED_REQUEST' else None,
@@ -347,10 +336,6 @@ def run_attempt(scenario, candidate, *, model, attempt_id='attempt-1', registry=
                         result.update(admission_success=True, admitted=_safe_admitted(admitted))
                     except decisions.IntentError as exc:
                         result.update(admission_success=False, error_code=exc.reason)
-                elif scenario.surface == 'stage_a':
-                    prompt, schema = selection_request(request, guarded)
-                    scope = parse_selection(recorder.complete(prompt=prompt, response_schema=schema), guarded)
-                    result.update(contract_success=True, decision_kind='select', capability_ids=list(scope.capability_ids))
                 elif scenario.surface == 'stage_b':
                     scope = PlanningScope(guarded, scenario.fixed_capability_ids)
                     planner = LLMPlanner(recorder, profile=candidate.profile())
@@ -449,7 +434,7 @@ def run_attempt(scenario, candidate, *, model, attempt_id='attempt-1', registry=
             except (ValueError, TypeError, KeyError) as exc:
                 result.update(contract_success=False, error_code='INVALID_STRUCTURED_RESPONSE')
             _planner_observations(recorder, request, guarded, diagnostics)
-            planner_calls = [row for row in recorder.calls if row['surface'] in ('stage_a', 'stage_b')]
+            planner_calls = [row for row in recorder.calls if row['surface'] == 'stage_b']
             if planner_calls:
                 last = planner_calls[-1]
                 result['contract_success'] = last['contract_success']
@@ -493,8 +478,7 @@ def run_attempt(scenario, candidate, *, model, attempt_id='attempt-1', registry=
             if len(recorder.calls) == 1:
                 recorder.calls[0]['semantic_success'] = result['semantic_success']
                 recorder.calls[0]['failure_category'] = result['failure_category']
-            result['initial_outcome'] = dict(planner_calls[1] if len(planner_calls) > 1 and planner_calls[0]['surface'] == 'stage_a'
-                                             else planner_calls[0] if planner_calls else recorder.calls[0]) if recorder.calls else None
+            result['initial_outcome'] = dict(planner_calls[0] if planner_calls else recorder.calls[0]) if recorder.calls else None
             result['final_outcome'] = dict(decision_kind=result['decision_kind'], contract_success=result['contract_success'],
                 semantic_success=result['semantic_success'], compiler_success=result['compiler_success'],
                 preflight_success=result['preflight_success'], failure_category=result['failure_category'],

@@ -1,7 +1,8 @@
 """Explicit resource qualification. No weights or scientific implementations here."""
 from dataclasses import asdict
 import importlib.metadata
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import subprocess
 
 from .contract import file_record,check_file,digest,read_json,write_json
@@ -33,11 +34,76 @@ def runtime():
         deterministic_algorithms=False,cudnn_benchmark=False)
 
 
+def _source_revision(root):
+    """Bind an exact managed snapshot, or an independent repository root."""
+    snapshot=root.parent
+    marker=snapshot/'SOURCE.json'
+    if not marker.exists() and not marker.is_symlink():
+        repository=Path(subprocess.check_output(
+            ['git','-C',str(snapshot),'rev-parse','--show-toplevel'],text=True).strip()).resolve()
+        if repository!=snapshot:
+            raise ValueError('EpiZoo source identity is missing; enclosing repository is not its upstream.')
+        revision=subprocess.check_output(['git','-C',str(snapshot),'rev-parse','HEAD'],text=True).strip()
+        return revision,None
+    if marker.is_symlink() or not marker.is_file():
+        raise ValueError('EpiZoo source identity must be a regular snapshot manifest.')
+    binding=file_record(marker)
+    value=read_json(marker,binding['sha256'])
+    fields=('schema','package','upstream_repository','revision','original_source','source_files','files',
+            'source_identity_sha256','snapshot_identity_sha256','changes')
+    from .contract import checks
+    checks.shape(value,fields)
+    if (value['schema']!='agent-vendored-backend.v1' or value['package']!='epizoo'
+            or value['upstream_repository']!='https://github.com/likeyi19/EpiZoo'
+            or not isinstance(value['revision'],str) or not re.fullmatch('[0-9a-f]{40}',value['revision'])):
+        raise ValueError('Unsupported EpiZoo source identity.')
+    # Historical paths and amendment prose are audit metadata, not runtime inputs.
+    if (not isinstance(value['original_source'],dict) or not isinstance(value['changes'],list)
+            or not all(isinstance(change,dict) for change in value['changes'])):
+        raise ValueError('Invalid EpiZoo snapshot provenance metadata.')
+    for key,identity in (('source_files','source_identity_sha256'),('files','snapshot_identity_sha256')):
+        records=value[key]
+        if not isinstance(records,list) or not records or digest(records)!=value[identity]:
+            raise ValueError('EpiZoo snapshot identity differs.')
+    records=value['files']
+    names=[]
+    for record in records:
+        checks.shape(record,('path','sha256','size_bytes'))
+        checks.sha(record['sha256']); checks.integer(record['size_bytes'],0)
+        name=record['path']
+        if not isinstance(name,str): raise ValueError('Invalid EpiZoo snapshot path.')
+        relative=PurePosixPath(name)
+        if (relative.is_absolute() or str(relative)!=name or name=='.'
+                or '..' in relative.parts or '\\' in name):
+            raise ValueError('EpiZoo snapshot paths must remain inside their root.')
+        names.append(name)
+        path=snapshot.joinpath(*relative.parts)
+        if any(parent.is_symlink() for parent in (path,*path.parents) if parent!=snapshot.parent):
+            raise ValueError('EpiZoo snapshot files cannot traverse symlinks.')
+        if not path.resolve(strict=True).is_relative_to(snapshot):
+            raise ValueError('EpiZoo snapshot file escaped its root.')
+        if file_record(path)!={'path':str(path),'sha256':record['sha256'],'size_bytes':record['size_bytes']}:
+            raise ValueError('EpiZoo snapshot source bytes changed.')
+    if names!=sorted(set(names)):
+        raise ValueError('EpiZoo snapshot paths must be unique and ordered.')
+    names=set(names)
+    expected={name for name in names if name.startswith('epizoo/') and name.endswith('.py')}
+    actual={str(path.relative_to(snapshot)) for path in root.rglob('*.py')}
+    config=snapshot/'config/SEAM_config'
+    configuration={str(path.relative_to(snapshot)) for path in config.iterdir() if path.is_file()}
+    if (not expected or actual!=expected or 'epizoo/__init__.py' not in names
+            or configuration!={name for name in names if name.startswith('config/SEAM_config/')}):
+        raise ValueError('EpiZoo runtime source/configuration closure changed.')
+    check_file(binding)
+    return value['revision'],binding
+
+
 def code_bundle():
     import epizoo
     root=Path(epizoo.__file__).resolve().parent
-    revision=subprocess.check_output(['git','-C',str(root.parent),'rev-parse','HEAD'],text=True).strip()
+    revision,source_manifest=_source_revision(root)
     files=[file_record(p) for p in sorted(root.rglob('*.py'))]
+    if source_manifest is not None: files.append(source_manifest)
     # Agent adapters are part of the compatibility closure as well.
     files += [file_record(p) for p in sorted(Path(__file__).parent.glob('*.py'))]
     files += [file_record(Path(__file__).parent.parent / 'native_posttraining.py')]

@@ -225,8 +225,9 @@ def observe_methods(path, resources=()):
             data = ad.AnnData(x, obs=pd.DataFrame(index=ids), var=pd.DataFrame(index=features))
             native._validate_adata(data, cfg)
             pins = resource.inputs()['expected_resource_identity']
-            wrapper._check_resource_files(wrapper._pinned_resource_paths(resource.checkpoint_path, resource.species), pins)
-            reference = native._load_resources(cfg, native.DEFAULT_RESOURCES_DIR)
+            paths = wrapper._pinned_resource_paths(resource.checkpoint_path, resource.species)
+            wrapper._check_resource_files(paths, pins)
+            reference = native._load_resources(cfg, paths['frequencies_sha256'].parent)
             native._validate_retained_feature_order(data, reference)
             if (np.asarray(x[:,reference.filter_indices].sum(axis=1)).ravel() <= 0).any():
                 continue

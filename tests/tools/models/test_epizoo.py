@@ -19,12 +19,8 @@ from agent.tools.models import epizoo as wrapper
 from agent.tools.models import epizoo_cache
 
 
-FANG_H5AD = Path(
-    "/home/likeyi/program/EpiZoo/data/Fang2021_downsampled_2000_cells.h5ad"
-)
-CHECKPOINT = Path(
-    "/home/likeyi/program/model_checkpoints/EpiZoo/pretrained_EpiZoo.pth"
-)
+FANG_H5AD = Path(os.environ.get("AGENT_TEST_FANG_H5AD",
+    "/home/likeyi/program/agent-data/datasets/derived/epizoo-examples/Fang2021_downsampled_2000_cells.h5ad"))
 
 
 def test_fixed_checkpoint_configuration() -> None:
@@ -42,7 +38,52 @@ def test_fixed_checkpoint_configuration() -> None:
     }
     signature = inspect.signature(wrapper.load_model)
     assert "strict" not in signature.parameters
-    assert signature.parameters["checkpoint_path"].default == wrapper.DEFAULT_CHECKPOINT_PATH
+    assert signature.parameters["checkpoint_path"].default is None
+
+
+@pytest.mark.parametrize(("resolver", "variable"), [
+    (wrapper.resolve_checkpoint_path, "AGENT_EPIZOO_CHECKPOINT"),
+    (wrapper.resolve_resources_dir, "AGENT_EPIZOO_RESOURCES_DIR"),
+])
+def test_resource_locations_are_explicit_and_resolved_at_consumption(
+    tmp_path, monkeypatch, resolver, variable,
+) -> None:
+    monkeypatch.delenv(variable, raising=False)
+    with pytest.raises(ValueError, match=variable):
+        resolver()
+    explicit = tmp_path / "explicit"
+    assert resolver(explicit) == explicit.resolve()
+    for name in ("first", "second"):
+        configured = tmp_path / name
+        monkeypatch.setenv(variable, str(configured))
+        assert resolver() == configured.resolve()
+        assert resolver(explicit) == explicit.resolve()
+    monkeypatch.setenv(variable, "  ")
+    with pytest.raises(ValueError, match=variable):
+        resolver()
+
+
+def test_unconfigured_model_load_fails_before_native_backend(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_EPIZOO_CHECKPOINT", raising=False)
+    monkeypatch.setattr(wrapper, "_get_backend", lambda: pytest.fail("Backend import"))
+    with pytest.raises(ValueError, match="AGENT_EPIZOO_CHECKPOINT"):
+        wrapper.load_model()
+
+
+def test_auxiliary_owner_uses_only_configured_directory(tmp_path, monkeypatch) -> None:
+    config = replace(wrapper.MOUSE_CONFIG, raw_dimension=4, retained_ccres=2)
+    np.save(tmp_path / config.frequency_filename, np.array([1., 2., 3., 4.]))
+    pd.DataFrame({"cCRE": ["peak-1", "peak-2"], "idx": [0, 1]}).to_csv(
+        tmp_path / config.filter_filename)
+    monkeypatch.setenv("AGENT_EPIZOO_RESOURCES_DIR", str(tmp_path))
+    loaded = wrapper._load_resources(config, None)
+    assert loaded.frequency_path == tmp_path / config.frequency_filename
+    assert loaded.filter_path == tmp_path / config.filter_filename
+    assert tuple(loaded.retained_names) == ("peak-1", "peak-2")
+    monkeypatch.setenv("AGENT_EPIZOO_RESOURCES_DIR", str(tmp_path / "missing"))
+    with pytest.raises(FileNotFoundError):
+        wrapper._load_resources(config, None)
+    assert wrapper._load_resources(config, tmp_path).frequency_sha256 == loaded.frequency_sha256
 
 
 @pytest.mark.parametrize(
@@ -75,7 +116,7 @@ def test_species_resources(
     first_idx: int,
     last_idx: int,
 ) -> None:
-    resources = wrapper._load_resources(config, wrapper.DEFAULT_RESOURCES_DIR)
+    resources = wrapper._load_resources(config, wrapper.resolve_resources_dir())
     assert resources.frequencies.shape == frequency_shape
     assert resources.filter_indices.shape == (retained,)
     assert resources.retained_names.shape == (retained,)
@@ -448,7 +489,7 @@ def test_boolean_storage_accepts_existing_full_model_vocabulary(mouse_subset, st
     # Deliberately binary test derivative, not a new biological acceptance dataset.
     binary = mouse_subset.copy()
     binary.X = storage(binary.X.astype(bool))
-    resources = wrapper._load_resources(wrapper.MOUSE_CONFIG, wrapper.DEFAULT_RESOURCES_DIR)
+    resources = wrapper._load_resources(wrapper.MOUSE_CONFIG, wrapper.resolve_resources_dir())
     assert wrapper._validate_adata(binary, wrapper.MOUSE_CONFIG) is binary
     wrapper._validate_retained_feature_order(binary, resources)
     assert tuple(binary.obs_names) == tuple(mouse_subset.obs_names)
@@ -480,7 +521,7 @@ def test_sparse_value_validation(mouse_subset, mutation: str, message: str) -> N
 
 def test_retained_feature_order_validation_rejects_mismatch(mouse_subset) -> None:
     resources = wrapper._load_resources(
-        wrapper.MOUSE_CONFIG, wrapper.DEFAULT_RESOURCES_DIR
+        wrapper.MOUSE_CONFIG, wrapper.resolve_resources_dir()
     )
     invalid = mouse_subset.copy()
     names = invalid.var_names.to_numpy(copy=True)
@@ -538,7 +579,7 @@ class _FakeModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.marker = torch.nn.Parameter(torch.zeros(1))
-        self._agent_checkpoint_path = str(CHECKPOINT)
+        self._agent_checkpoint_path = "/models/synthetic-epizoo.pth"
         self._agent_checkpoint_sha256 = "fake-checkpoint-hash"
         self._agent_synthesized_checkpoint_buffers = (
             "cca_loss_fn.pos_weight",
@@ -729,7 +770,7 @@ def test_actual_epizoo_sparse_preprocessing_on_small_subset(
     reason="Set RUN_EPIZOO_CHECKPOINT_TEST=1 for the 2.6B-parameter CPU load test.",
 )
 def test_strict_checkpoint_loading_on_cpu() -> None:
-    model = wrapper.load_model(CHECKPOINT, device="cpu", dtype=torch.float16)
+    model = wrapper.load_model(device="cpu", dtype=torch.float16)
     assert model._agent_checkpoint_missing_keys == ()
     assert model._agent_checkpoint_unexpected_keys == ()
     assert model._agent_checkpoint_validated is True
@@ -772,7 +813,7 @@ def test_cuda_wrapper_matches_manual_epizoo_pipeline(monkeypatch) -> None:
     monkeypatch.setattr(wrapper, "_get_backend", lambda: instrumented_backend)
 
     model = wrapper.load_model(
-        CHECKPOINT,
+        wrapper.resolve_checkpoint_path(),
         device=device,
         dtype=torch.float32,
     )
@@ -802,11 +843,11 @@ def test_cuda_wrapper_matches_manual_epizoo_pipeline(monkeypatch) -> None:
     )
 
     frequencies = np.load(
-        wrapper.DEFAULT_RESOURCES_DIR / "cCRE_frequencies_mouse.npy",
+        wrapper.resolve_resources_dir() / "cCRE_frequencies_mouse.npy",
         allow_pickle=False,
     )
     filter_indices = pd.read_csv(
-        wrapper.DEFAULT_RESOURCES_DIR / "cCRE_filter_idx_mouse.csv",
+        wrapper.resolve_resources_dir() / "cCRE_filter_idx_mouse.csv",
         index_col=0,
     )["idx"].to_numpy()
     manual = backend.compute_tfidf(

@@ -7,12 +7,11 @@ from agent.orchestration.planning_scope import fingerprint
 from . import harness, run_frontier as frontier
 
 CANDIDATE = frontier.CANDIDATE
-F1_DIRECTORY = Path('evals/frontier_comparator_f1_gpt56sol_2026-10-07')
 
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-def validate_f1(original=F1_DIRECTORY):
+def validate_f1(original):
     """Check the entire retained evidence set without writing any F1 artifact."""
     directory = Path(original)
     manifest_path = directory / 'evidence_manifest.json'

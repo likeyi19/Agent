@@ -5,7 +5,6 @@ not the current Agent's planning or answer call budget. No experiment is run her
 """
 from decimal import Decimal
 import json
-from pathlib import Path
 from . import run_breadth as breadth
 from .candidates import Candidate, build_candidate
 from .diagnostics import sanitize_provider_error
@@ -17,8 +16,6 @@ SCHEDULE = ('admission', *SELECTED)
 CANDIDATE = Candidate('openrouter-gpt-5.6-sol', 'openrouter', 'openai/gpt-5.6-sol',
     'openai-chat-completions', 'OPENROUTER_API_KEY', 'f1-openrouter-gpt-5-6-sol',
     'https://openrouter.ai/api/v1')
-HISTORY = Path('evals/interactive_model_qualification_q2_1b_2026-10-07/merged_results.json')
-HISTORICAL_AUDIT = Path('evals/interactive_model_qualification_q2_2_2026-10-07/frozen_input_audit.json')
 PROMPT_PRICE = Decimal('0.000002')
 COMPLETION_PRICE = Decimal('0.00001')
 OUTPUT_LIMIT = 4096

@@ -2,8 +2,10 @@
 
 R5 retains the explicit `--track v3` compatibility benchmark and its binding
 scorer. The historical two-stage `--track scoped-v4` live/replay runner is retired:
-it fails explicitly before constructing a model. Its corpus, read-only candidate
-scoring and accepted reports retain their original semantics. Current direct-v4
+it fails explicitly before constructing a model. FS-3 removes its obsolete
+`scoped.py`, `scoped_cases.json` and scorer-only test module, together with the
+historical selection parser and its probe callers. Accepted reports retain their
+original semantics; retired source remains available in Git history. Current direct-v4
 coverage lives in orchestration/application tests and the existing interactive
 harness; no replacement qualification framework is introduced.
 

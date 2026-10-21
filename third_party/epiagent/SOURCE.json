@@ -1,0 +1,168 @@
+{
+  "upstream_url": "https://github.com/xy-chen16/EpiAgent.git",
+  "revision": "9c4b7902537b14871bdb13d2fad43bff9974310a",
+  "package_version": "0.0.3",
+  "source_worktree_clean": true,
+  "source_location_historical": "/home/likeyi/program/EpiAgent",
+  "scientific_modules_byte_exact": true,
+  "license": "MIT; original LICENSE retained verbatim",
+  "packaging_only_changes": [
+    "Use the faiss-cpu distribution, which supplies the unchanged upstream faiss import, instead of the upstream faiss distribution declaration.",
+    "Declare torch-geometric>=2.6.1 for the existing unconditional epiagent.model SGConv import."
+  ],
+  "included_files": [
+    {
+      "path": "LICENSE",
+      "source_sha256": "9d367b20833cab2de757f6e41f4a816e2ed0fbaf6d006e71458d98c9efb88531",
+      "source_bytes": 1065,
+      "git_blob": "1bc38855607132ff1ae4842a767386e4721ea959",
+      "source_mtime_ns": 1787647040312675330,
+      "source_ctime_ns": 1787647040312675330,
+      "vendored_sha256": "9d367b20833cab2de757f6e41f4a816e2ed0fbaf6d006e71458d98c9efb88531",
+      "vendored_bytes": 1065,
+      "byte_exact": true
+    },
+    {
+      "path": "MANIFEST.in",
+      "source_sha256": "35c0756bc263731b9532321aa9620be96167a706cd6608909668fbc34586bff7",
+      "source_bytes": 55,
+      "git_blob": "b9bfd82b60768413dcc53cc3f7a3cf8a3a67be11",
+      "source_mtime_ns": 1787647040312675330,
+      "source_ctime_ns": 1787647040312675330,
+      "vendored_sha256": "35c0756bc263731b9532321aa9620be96167a706cd6608909668fbc34586bff7",
+      "vendored_bytes": 55,
+      "byte_exact": true
+    },
+    {
+      "path": "README.md",
+      "source_sha256": "0ebae8c80e9bf9c48d9841e4e770374b2499f5af869892c38e83157582703883",
+      "source_bytes": 12060,
+      "git_blob": "414eee5c92bdf708c7e8ea6579ff9b15a705b231",
+      "source_mtime_ns": 1787647040312675330,
+      "source_ctime_ns": 1787647040312675330,
+      "vendored_sha256": "0ebae8c80e9bf9c48d9841e4e770374b2499f5af869892c38e83157582703883",
+      "vendored_bytes": 12060,
+      "byte_exact": true
+    },
+    {
+      "path": "pyproject.toml",
+      "source_sha256": "f2e11f72d877857fd2c5fcd599351224395965cf530ddc6605f0b5bc037a266f",
+      "source_bytes": 93,
+      "git_blob": "1b68d94ecd0dc92bb45c7722df8642e0afe836e1",
+      "source_mtime_ns": 1787647040528675490,
+      "source_ctime_ns": 1787647040528675490,
+      "vendored_sha256": "f2e11f72d877857fd2c5fcd599351224395965cf530ddc6605f0b5bc037a266f",
+      "vendored_bytes": 93,
+      "byte_exact": true
+    },
+    {
+      "path": "setup.py",
+      "source_sha256": "12294046a13a4f8a1fb0bc9f5a700ec3e0127f57f698a2130ea71047cbd39265",
+      "source_bytes": 1089,
+      "git_blob": "851dc8f5b04514ad774c188c00f29075f3bb717a",
+      "source_mtime_ns": 1787647040528675490,
+      "source_ctime_ns": 1787647040528675490,
+      "vendored_sha256": "244a0c69304d3833c886068cacee71276af58cd3bb902d8a3de695411a363580",
+      "vendored_bytes": 1201,
+      "byte_exact": false
+    },
+    {
+      "path": "epiagent/__init__.py",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_bytes": 0,
+      "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_bytes": 0,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/dataset.py",
+      "source_sha256": "93b9c2f5875c61d2eed82ea065f8406b880b2fd6aa19cc10df822965c1d6c51f",
+      "source_bytes": 66385,
+      "git_blob": "8510e545c98006e0c54e3ce158eea7c39e042790",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "93b9c2f5875c61d2eed82ea065f8406b880b2fd6aa19cc10df822965c1d6c51f",
+      "vendored_bytes": 66385,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/inference.py",
+      "source_sha256": "8f93a54014d08a9411cb715a8d958147329f8991228b9e9366fcd518fb46ad4f",
+      "source_bytes": 10288,
+      "git_blob": "e440d5cd44230e51cadc93196a9d73be34dbfc24",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "8f93a54014d08a9411cb715a8d958147329f8991228b9e9366fcd518fb46ad4f",
+      "vendored_bytes": 10288,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/model.py",
+      "source_sha256": "cd2bd931cc238afdbb97444b4e425b06a0d21d1d3ec6437b6ef616938181e591",
+      "source_bytes": 42215,
+      "git_blob": "f45445692369bb488a1181d279df631a0a3a5705",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "cd2bd931cc238afdbb97444b4e425b06a0d21d1d3ec6437b6ef616938181e591",
+      "vendored_bytes": 42215,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/preprocessing.py",
+      "source_sha256": "261df35d4c429e97ee0b780b6d9e6822c17fbaaeb302cc37f00a99bac5b09159",
+      "source_bytes": 3600,
+      "git_blob": "4e2efb87fefa1cd23da1f1ee89d041794b4fcb03",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "261df35d4c429e97ee0b780b6d9e6822c17fbaaeb302cc37f00a99bac5b09159",
+      "vendored_bytes": 3600,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/tokenization.py",
+      "source_sha256": "efdadca9640a2397fa81943536630d95a3482261f3c7fd2c6da7595ebe2f793d",
+      "source_bytes": 3287,
+      "git_blob": "b0d4050c192d4180690aa00118cfc213b45e4730",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "efdadca9640a2397fa81943536630d95a3482261f3c7fd2c6da7595ebe2f793d",
+      "vendored_bytes": 3287,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/train.py",
+      "source_sha256": "61af7b22f151a232fd6445fb7a2dab092962d571d9ef49d2fd6960f3d46139f6",
+      "source_bytes": 41434,
+      "git_blob": "af11d2815a7d85af62a2eb5ef6c8ab7e3694deae",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "61af7b22f151a232fd6445fb7a2dab092962d571d9ef49d2fd6960f3d46139f6",
+      "vendored_bytes": 41434,
+      "byte_exact": true
+    },
+    {
+      "path": "epiagent/utils.py",
+      "source_sha256": "6d8699becad3fb8e85d3732d1b87ef7f1119f6b1ecbce327bfb0a12208cbb80b",
+      "source_bytes": 25028,
+      "git_blob": "3c4bad7d15ed5305b10c53ab3f08363365f2322c",
+      "source_mtime_ns": 1787647040521675485,
+      "source_ctime_ns": 1787647040521675485,
+      "vendored_sha256": "6d8699becad3fb8e85d3732d1b87ef7f1119f6b1ecbce327bfb0a12208cbb80b",
+      "vendored_bytes": 25028,
+      "byte_exact": true
+    }
+  ],
+  "excluded_content": [
+    ".git",
+    "data/",
+    "demo/",
+    "model/",
+    "inst/",
+    "reproducibility/",
+    "caches or generated files"
+  ],
+  "no_registry_tool_added": true
+}

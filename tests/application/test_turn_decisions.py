@@ -165,19 +165,11 @@ def test_parameter_wire_never_admits_arbitrary_input_dictionaries_or_multiple_ar
         parse_decision(decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=argument)))
 
 
-def test_parameter_schema_is_narrow_nullable_and_not_offered_on_read_only_or_qc_decisions():
+def test_parameter_schema_retires_the_singular_writer():
     variants = decision_schema(pending_public())['properties']['decision']['anyOf']
     for variant in variants:
         kind = variant['properties']['kind']['enum'][0]
-        if kind not in ('execute_plan', 'answer_prerequisite'):
-            assert 'argument' not in variant['properties']
-            continue
-        argument, null = variant['properties']['argument']['anyOf']
-        assert null == {'type': 'null'}
-        assert argument['properties']['tool']['enum'] == ['cluster_cells']
-        assert argument['properties']['argument']['enum'] == ['resolution']
-        assert argument['required'] == ['tool', 'argument', 'literal', 'evidence']
-        assert argument['additionalProperties'] is False
+        assert 'argument' not in variant['properties']
 
 
 @pytest.mark.parametrize('utterance,literal,expected', [
@@ -239,11 +231,13 @@ def test_assignment_association_and_execution_intent_belong_to_the_interpreter()
         def complete(self, *, prompt, response_schema):
             value = json.loads(prompt)
             assert any('A number alone does not request an operation' in i for i in value['instructions'])
-            assert any('existing default' in i for i in value['instructions'])
+            assert any('default_when_omitted' in i for i in value['instructions'])
             if value['utterance'] == question:
                 return decision_wire(dict(kind='answer', intent='unsupported', relation='current', technical=False))
             return decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=asdict(declaration)))
-    assert interpret(Model(), utterance, pending_public()).argument == declaration
+    interpreted = interpret(Model(), utterance, pending_public())
+    assert interpreted.argument is None
+    assert [asdict(d) for d in interpreted.arguments] == [asdict(declaration)]
     assert isinstance(interpret(Model(), question, pending_public()), Answer)
 
 

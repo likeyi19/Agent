@@ -14,7 +14,7 @@ from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument,
-    _input_roles, _scientific_arguments, admit_leiden_resolution, is_exact_string_argument, _object, _shape)
+    _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape)
 
 
 def _resolution_input(registry):
@@ -79,9 +79,63 @@ def scientific_parameters(registry):
     return offered
 
 
-def _arguments(decision):
-    argument = getattr(decision, 'argument', None)
-    return (() if argument is None else (argument,)) + decision.arguments
+def _research_intent(interaction, decision):
+    """Bind selected metadata to its captured result group, never to a filename."""
+    rows = interaction.snapshot.get('dialogue', {}).get('results', ())
+    by_handle = {row['handle']: row for row in rows}
+    if any(handle not in by_handle for handle in decision.references):
+        raise IntentError('invalid_reference')
+    if decision.visualization is not None:
+        value = decision.visualization
+        handles = [value['coordinates']] + ([] if value['labels'] == 'new' else [value['labels']])
+        if (any(h not in decision.references for h in handles)
+                or by_handle[value['coordinates']]['tool'] != 'compute_cell_umap'):
+            raise IntentError('invalid_reference')
+    if any(text not in interaction.utterance for text in decision.unfulfilled):
+        raise IntentError('ungrounded_operand')
+    retained = []
+    explicit = {(d.tool, d.argument) for d in decision.arguments}
+    for reference in decision.retain_parameters:
+        row = by_handle.get(reference.result)
+        candidates = [] if row is None else [p for p in row['parameters'] if p['argument'] == reference.argument]
+        if len(candidates) != 1:
+            raise IntentError('unavailable_context')
+        if (row['tool'], reference.argument) in explicit:
+            raise IntentError('ambiguous_parameter')
+        retained.append(dict(result=reference.result, tool=row['tool'], **_serialize(candidates[0])))
+    return {k:v for k,v in dict(references=list(decision.references), delivery=list(decision.delivery),
+                               unfulfilled=list(decision.unfulfilled),
+                               retained_parameters=retained, visualization=decision.visualization).items() if v}
+
+
+def _with_retained(registry, values, retained):
+    values = dict(values)
+    names = set()
+    for row in retained:
+        name, spec = _parameter_input(registry, row['tool'], row['argument'])
+        spec.validate(row['argument'], row['value'])
+        if name in names or name in values and values[name] != row['value']:
+            raise IntentError('conflicting_scientific_parameter')
+        names.add(name)
+        values[name] = _serialize(row['value'])
+    return values
+
+
+def _validate_research_intent(interaction):
+    from .turn_decisions import Execute, RetainedParameter
+    admitted = interaction.admitted or {}
+    if not any(k in admitted for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization')):
+        return
+    retained = admitted.get('retained_parameters', ())
+    decision = Execute('current', 'plan', admitted['tool'], None,
+        arguments=_scientific_arguments(_serialize(admitted.get('arguments', ()))),
+        references=tuple(admitted.get('references', ())), delivery=tuple(admitted.get('delivery', ())),
+        retain_parameters=tuple(RetainedParameter(row['result'], row['argument']) for row in retained),
+        unfulfilled=tuple(admitted.get('unfulfilled', ())), visualization=admitted.get('visualization'))
+    expected = _research_intent(interaction, decision)
+    if any(_serialize(admitted.get(k, ())) != expected.get(k, [])
+           for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization')):
+        raise ValueError('Captured research intention changed.')
 
 
 def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existing=False):
@@ -131,7 +185,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
         binding = LocalResourceAdmission._submission_binding(interaction.submission)
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
-            group_role_inputs(binding, roles, registry), declarations)
+            _with_retained(registry, group_role_inputs(binding, roles, registry), admitted.get('retained_parameters', ())), declarations)
         receipt = admitted.get('resource_selection')
         if receipt is not None:
             _shape(receipt, ('catalog', 'resource_context_sha256'))
@@ -148,7 +202,8 @@ def _replay_initial_inputs(registry, interaction, declarations):
         if _serialize(admitted.get('registered_input')) != expected:
             raise ValueError('Scientific input role attribution changed.')
         return values
-    values = _bind_arguments(registry, interaction.utterance, received, declarations)
+    values = _bind_arguments(registry, interaction.utterance,
+        _with_retained(registry, received, admitted.get('retained_parameters', ())), declarations)
     choice = any(isinstance(d, ScalarChoiceArgument) for d in declarations)
     needs_resource = (choice and original.get('tool_name') == 'inspect_scATAC'
         and original.get('composition') in (None, 'h5ad-science.v1'))
@@ -171,66 +226,12 @@ def _replay_initial_inputs(registry, interaction, declarations):
     return values
 
 
-def _bind_resolution(registry, utterance, inputs, declaration):
-    return _bind_arguments(registry, utterance, inputs, (declaration,))
-
-
-def _validate_resolution_record(interaction):
-    """Check the single persisted declaration against its received source text."""
-    from .session_state import SessionError
-    admitted = interaction.admitted or {}
-    if 'argument' not in admitted:
-        received = {} if interaction.submission is None else interaction.submission.get('execution_inputs', {})
-        if ('argument_received_inputs_sha256' in admitted
-                or (interaction.submission is not None and admitted.get('operation') == 'plan'
-                    and 'continuation' not in admitted and 'selected_candidate' not in admitted and 'arguments' not in admitted
-                    and 'resolution' in admitted.get('inputs', {}) and 'resolution' not in received)):
-            raise SessionError('Missing persisted Leiden resolution declaration.')
-        return
-    try:
-        from agent.orchestration.registry import build_default_tool_registry
-        registry = build_default_tool_registry()
-        declaration = LeidenResolution(**_serialize(admitted['argument']))
-        name, specification = _resolution_input(registry)
-        value = admit_leiden_resolution(declaration, interaction.utterance, specification)
-        specification.validate(name, admitted.get('inputs', {}).get(name))
-        if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
-                or admitted['inputs'].get(name) != value):
-            raise ValueError('Declaration differs from admitted input.')
-        received = {} if interaction.submission is None else _serialize(interaction.submission)['execution_inputs']
-        if name in received:
-            specification.validate(name, received[name])
-            if received[name] != value:
-                raise ValueError('Conflicting received declaration.')
-        if 'continuation' not in admitted:
-            if interaction.submission is not None:
-                declarations = (declaration,) + _scientific_arguments(_serialize(admitted.get('arguments', ())))
-                expected = _replay_initial_inputs(registry, interaction, declarations)
-                if expected != _serialize(admitted['inputs']):
-                    raise ValueError('Declaration changed other received inputs.')
-                original = interaction.submission.get('registered_input')
-                if original is not None and any(admitted.get('registered_input', {}).get(k) != original.get(k)
-                        for k in ('resource_id', 'record_sha256', 'tool_name', 'resource_choice')):
-                    raise ValueError('Declaration changed the registered source.')
-            else:
-                values = _serialize(admitted['inputs'])
-                declarations = (declaration,) + _scientific_arguments(_serialize(admitted.get('arguments', ())))
-                names = {_parameter_input(registry, d.tool, d.argument)[0] for d in declarations}
-                without = {k: v for k, v in values.items() if k not in names}
-                if 'arguments_added_inputs' in admitted:
-                    without = {k: v for k, v in values.items() if k not in admitted['arguments_added_inputs']}
-                if admitted.get('argument_received_inputs_sha256') not in (digest(values), digest(without)):
-                    raise ValueError('Declaration changed received direct inputs.')
-    except (ValueError, TypeError, KeyError, AttributeError) as exc:
-        raise SessionError('Invalid persisted Leiden resolution declaration.') from exc
-
-
 def _validate_argument_record(interaction):
     """Recheck current-turn typed declarations without providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
-    if 'arguments' not in admitted:
-        if 'arguments_received_inputs_sha256' in admitted:
+    if not any(k in admitted for k in ('argument', 'arguments', 'retained_parameters')):
+        if any(k in admitted for k in ('argument_received_inputs_sha256', 'arguments_received_inputs_sha256')):
             raise SessionError('Missing persisted scientific arguments.')
         if (interaction.submission is not None and 'execution_inputs' in interaction.submission and admitted.get('kind') == 'execute'
                 and admitted.get('operation') == 'plan' and 'continuation' not in admitted
@@ -248,13 +249,16 @@ def _validate_argument_record(interaction):
     try:
         from agent.orchestration.registry import build_default_tool_registry
         registry = build_default_tool_registry()
-        declarations = _scientific_arguments(_serialize(admitted['arguments']))
+        if admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan':
+            raise ValueError('Scientific declarations require an admitted execution.')
+        declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
         if 'argument' in admitted:
             declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
-        if not 1 <= len(declarations) <= 8 or len({(d.tool, d.argument) for d in declarations}) != len(declarations):
+        if len(declarations) > 8 or len({(d.tool, d.argument) for d in declarations}) != len(declarations):
             raise ValueError('Invalid scoped declarations.')
         values = _serialize(admitted['inputs'])
-        expected = _bind_arguments(registry, interaction.utterance, values, declarations)
+        expected = _bind_arguments(registry, interaction.utterance,
+            _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations)
         if expected != values:
             raise ValueError('Arguments differ from admitted values.')
         if 'continuation' not in admitted and 'parameter_continuation' not in admitted:
@@ -271,13 +275,15 @@ def _validate_argument_record(interaction):
                         raise ValueError('Argument changed registered source.')
             else:
                 names = {_parameter_input(registry, d.tool, d.argument)[0] for d in declarations}
+                names.update(_parameter_input(registry, row['tool'], row['argument'])[0]
+                             for row in admitted.get('retained_parameters', ()))
                 without = {k: v for k, v in values.items() if k not in names}
                 if 'arguments_added_inputs' in admitted:
                     added = admitted['arguments_added_inputs']
                     if len(set(added)) != len(added) or not set(added) <= names:
                         raise ValueError('Invalid added argument identities.')
                     without = {k: v for k, v in values.items() if k not in added}
-                if admitted.get('arguments_received_inputs_sha256') not in (digest(values), digest(without)):
+                if admitted.get('arguments_received_inputs_sha256', admitted.get('argument_received_inputs_sha256')) not in (digest(values), digest(without)):
                     raise ValueError('Arguments changed received direct inputs.')
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise SessionError('Invalid persisted scientific arguments.') from exc
@@ -467,7 +473,7 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 or admitted.get('tool', reference['tool']) != origin.admitted['tool']
                 or admitted.get('revision_id', interaction.base_revision_id) != interaction.base_revision_id):
             raise ValueError('Parameter continuation changed scope.')
-        declarations = _scientific_arguments(_serialize(admitted['arguments']))
+        declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
         if any(d.tool != reference['tool'] for d in declarations):
             raise ValueError('Parameter changed operation.')
         expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True)
@@ -578,9 +584,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     return admitted
 
 
-def _parameter_identities(admitted, interactions):
-    """Read only explicitly linked declarations and originally missing identities."""
-    identities = set()
+def _parameter_records(admitted, interactions):
+    """Follow only the existing prerequisite links, never conversation order."""
     records = []
     queue = [admitted]
     by_id = {i.turn_id: i for i in interactions}
@@ -591,18 +596,28 @@ def _parameter_identities(admitted, interactions):
         continuation = record.get('parameter_continuation', record.get('continuation'))
         if continuation is None:
             continue
-        origin = by_id[continuation['origin_turn_id']]
-        if continuation.get('field') == 'parameters':
-            identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
         for pointer in dict.fromkeys(continuation.get(k) for k in ('origin_turn_id', 'binding_turn_id')):
             if pointer is not None and pointer not in visited:
                 visited.add(pointer)
                 queue.append(by_id[pointer].admitted)
+    return records
+
+
+def _parameter_identities(admitted, interactions):
+    """Read only explicitly linked declarations and originally missing identities."""
+    identities = set()
+    by_id = {i.turn_id: i for i in interactions}
+    records = _parameter_records(admitted, interactions)
     for record in records:
+        continuation = record.get('parameter_continuation', record.get('continuation'))
+        if continuation is not None and continuation.get('field') == 'parameters':
+            origin = by_id[continuation['origin_turn_id']]
+            identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
         declarations = list(record.get('arguments', ()))
         if 'argument' in record:
             declarations.append(record['argument'])
         identities.update((d['tool'], d['argument']) for d in declarations)
+        identities.update((p['tool'], p['argument']) for p in record.get('retained_parameters', ()))
     return identities
 
 
@@ -814,8 +829,7 @@ def missing_file_request(registry, interaction, decision, execution_inputs=None)
     ports = {p.name: p for p in registry.get(decision.target).semantic_planning.consumer_ports}
     required = tuple(RoleRequirement(r['tool'], r['port']) for r in group_choices(binding, registry)['roles']
         if r['tool'] == decision.target and ports[r['port']].required)
-    return (RequestRoles(decision.target, required, argument=decision.argument,
-        arguments=decision.arguments) if required else None)
+    return (RequestRoles(decision.target, required, arguments=decision.arguments) if required else None)
 
 
 def admit_role_request(sessions, interaction, decision, resources):
@@ -833,18 +847,16 @@ def admit_role_request(sessions, interaction, decision, resources):
         required_roles=[asdict(r) for r in decision.required_roles], roles=[asdict(r) for r in decision.roles])
     prototype = replace(interaction, admitted=admitted)
     values, roles, missing, metadata = _role_completion(registry, prototype, None, interaction,
-        decision.roles, _arguments(decision))
+        decision.roles, decision.arguments)
     if not missing:
         raise IntentError('invalid_prerequisite')
     admitted.update(inputs=values, roles=roles, registered_input=metadata)
-    if decision.argument is not None:
-        admitted['argument'] = asdict(decision.argument)
     if decision.arguments:
         admitted['arguments'] = [asdict(d) for d in decision.arguments]
     if decision.context == 'current':
         context, _ = sessions.planning_context_for_interaction(sessions._interaction_session_id,
             interaction.turn_id, integrity=False)
-        if context is None:
+        if context is None or not context.items:
             raise IntentError('unavailable_context')
         admitted['context'] = 'current'
     pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
@@ -984,8 +996,8 @@ def validate_prerequisite(interaction, preceding):
             _validate_parameter_prerequisite(interaction, preceding)
         elif not role_continuation and admitted.get('kind') != 'request_roles':
             _validate_input_role_record(interaction)
-            _validate_resolution_record(interaction)
             _validate_argument_record(interaction)
+            _validate_research_intent(interaction)
         return
     if 'context' in admitted:
         captured = interaction.snapshot
@@ -1004,8 +1016,8 @@ def validate_prerequisite(interaction, preceding):
         if origin is not None and (origin.admitted or {}).get('context') != admitted.get('context'):
             raise SessionError('Pending execution context changed.')
     _validate_input_role_record(interaction)
-    _validate_resolution_record(interaction)
     _validate_argument_record(interaction)
+    _validate_research_intent(interaction)
     captured = _serialize(interaction.snapshot)
     expected = capture_prerequisite(preceding, interaction.base_revision_id,
         interaction.base_generation, interaction.submission,
@@ -1164,9 +1176,6 @@ def admit_species(sessions, interaction, decision, resources):
         if resolution_name in declarations and declarations[resolution_name] != current_inputs[resolution_name]:
             raise IntentError('conflicting_scientific_parameter')
         declarations[resolution_name] = current_inputs[resolution_name]
-    if decision.argument is not None:
-        declarations = _bind_resolution(sessions._application.registry, interaction.utterance,
-                                       declarations, decision.argument)
     if decision.arguments:
         _bind_arguments(sessions._application.registry, interaction.utterance, current_inputs, decision.arguments)
         declarations = _bind_arguments(sessions._application.registry, interaction.utterance,
@@ -1193,8 +1202,6 @@ def admit_species(sessions, interaction, decision, resources):
         continuation=dict(origin_turn_id=origin.turn_id, species=decision.species))
     if origin.admitted.get('context') == 'current':
         admitted['context'] = 'current'
-    if decision.argument is not None:
-        admitted['argument'] = asdict(decision.argument)
     if decision.arguments:
         admitted['arguments'] = [asdict(d) for d in decision.arguments]
     return admitted
@@ -1203,7 +1210,7 @@ def admit_species(sessions, interaction, decision, resources):
 def execution_submission(interaction):
     """Use the admitted binding for continuation, preserving the received turn."""
     admitted = interaction.admitted or {}
-    if not any(key in admitted for key in ('continuation', 'argument', 'arguments', 'roles')):
+    if not any(key in admitted for key in ('continuation', 'argument', 'arguments', 'roles', 'retained_parameters')):
         return interaction.submission
     submission = dict(_serialize(interaction.submission) or {}, execution_inputs=_serialize(admitted['inputs']))
     if 'registered_input' in admitted:
@@ -1237,6 +1244,38 @@ def _execution_objective(interaction, interactions):
     return _received_origin(interaction, interactions).utterance
 
 
+def planning_task(interaction, state):
+    """Keep the original task through prerequisites; rebind only exact groups."""
+    origin = _received_origin(interaction, state.interactions)
+    admitted = origin.admitted or {}
+    task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization') if k in admitted}
+    if origin.turn_id == interaction.turn_id or not task:
+        return task
+    from .turn_context import result_groups
+    old = {g['handle']: g for g in result_groups(origin.snapshot, state)}
+    current = result_groups(interaction.snapshot, state)
+    def identity(group):
+        return tuple(group['canonical'][key] for key in ('revision_id', 'output_name', 'accepted_step_sha256'))
+    def rebind(handle):
+        matches = [g['handle'] for g in current if identity(g) == identity(old[handle])]
+        if len(matches) != 1:
+            raise IntentError('unavailable_context')
+        return matches[0]
+    if 'references' in task:
+        task['references'] = [rebind(h) for h in task['references']]
+    if 'visualization' in task:
+        drawing = task['visualization']
+        drawing['coordinates'] = rebind(drawing['coordinates'])
+        if drawing['labels'] != 'new':
+            drawing['labels'] = rebind(drawing['labels'])
+    if 'retained_parameters' in task:
+        changed = {(d['tool'], d['argument']) for record in _parameter_records(interaction.admitted, state.interactions)
+                   if record != origin.admitted for d in record.get('arguments', ())}
+        task['retained_parameters'] = [dict(row, result=rebind(row['result']))
+            for row in task['retained_parameters'] if (row['tool'], row['argument']) not in changed]
+    return task
+
+
 def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     if decision.roles:
         from .local_resources import available_input_view
@@ -1248,6 +1287,7 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     admitted = dict(kind='execute', operation='plan', tool=decision.target, revision_id=interaction.base_revision_id,
                 request_id='turn-' + digest(dict(session=sessions._interaction_session_id, turn=interaction.turn_id)),
                 inputs=values)
+    admitted.update(_research_intent(interaction, decision))
     grouped = (interaction.submission is not None
         and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
     if grouped:
@@ -1264,27 +1304,27 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
         admitted.update(inputs=values, roles=roles, registered_input=completed.attribution())
     elif decision.roles:
         raise IntentError('unsupported_intent')
+    values = _with_retained(sessions._application.registry, values, admitted.get('retained_parameters', ()))
+    admitted['inputs'] = values
     if decision.context == 'current':
         context, _ = sessions.planning_context_for_interaction(
             sessions._interaction_session_id, interaction.turn_id, integrity=False)
-        if context is None:
+        if context is None or not context.items:
             raise IntentError('unavailable_context')
         admitted['context'] = 'current'
-    if _arguments(decision):
-        values = _bind_arguments(sessions._application.registry, interaction.utterance, values, _arguments(decision))
+    if decision.arguments or admitted.get('retained_parameters'):
+        values = _bind_arguments(sessions._application.registry, interaction.utterance, values, decision.arguments)
         admitted.update(inputs=values)
-        if decision.argument is not None:
-            admitted['argument'] = asdict(decision.argument)
         if decision.arguments:
             admitted['arguments'] = [asdict(d) for d in decision.arguments]
         if interaction.submission is None:
             names = {_parameter_input(sessions._application.registry, d.tool, d.argument)[0]
-                     for d in _arguments(decision)}
-            if decision.arguments:
+                     for d in decision.arguments}
+            names.update(_parameter_input(sessions._application.registry, row['tool'], row['argument'])[0]
+                         for row in admitted.get('retained_parameters', ()))
+            if decision.arguments or admitted.get('retained_parameters'):
                 admitted['arguments_added_inputs'] = sorted(names - set(inputs or {}))
-            for field in ('argument', 'arguments'):
-                if field in admitted:
-                    admitted[field + '_received_inputs_sha256'] = digest({} if inputs is None else _serialize(inputs))
+            admitted['arguments_received_inputs_sha256'] = digest({} if inputs is None else _serialize(inputs))
         elif 'registered_input' in interaction.submission:
             from .local_resources import LocalResourceAdmission, ResourceAdmissionError
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
@@ -1338,9 +1378,10 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         from .guidance_selection import execution_context, planning_intent
         context = execution_context(sessions, interaction, admitted)
         intent = planning_intent(sessions, interaction, admitted, context)
-    elif admitted.get('context') == 'current':
-        context, context_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id)
-        if context is None:
+    else:
+        context, context_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id,
+            reuse=admitted.get('context') == 'current')
+        if admitted.get('context') == 'current' and (context is None or not context.items):
             raise IntentError('unavailable_context')
     request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
     registered = interaction.submission is not None and 'registered_input' in interaction.submission
@@ -1367,6 +1408,12 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                         outputs=list(app.registry.get(s.tool_name).result_contract.required_fields)) for s in plan.steps]
         schema = _object(dict(outputs={'type':'array','minItems':1,'maxItems':32,
             'items':_object(dict(name={'type':'string'}, step_id={'type':'string'}, output_key={'type':'string'}))}))
+        origin = _received_origin(interaction, sessions.load(sid).interactions)
+        drawing = (origin.admitted or {}).get('visualization')
+        if drawing is not None and drawing['labels'] == 'new':
+            item = schema['properties']['outputs']['items']
+            item['properties']['use'] = {'anyOf':[{'type':'string','enum':['visualization_labels']},{'type':'null'}]}
+            item['required'].append('use')
         retention = {}
         retained_offer = []
         if not selected and context is not None:
@@ -1391,6 +1438,12 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 'Each name is a nonblank string label and must be unique across all selections for the new revision, '
                 'including when different steps expose the same output_key. Names need not equal output keys; '
                 'use meaningful labels that distinguish the selected results. Do not infer or append scientific steps.'))
+        if drawing is not None and drawing['labels'] == 'new':
+            selection_prompt['visualization'] = _serialize(drawing)
+            selection_prompt['instructions'] += (
+                ' Mark exactly one selected new output use=visualization_labels to identify the actual operation '
+                'supplying the requested categorical field. Other outputs use=null. This selects a result, '
+                'not another scientific step or a new embedding fit. Never select by last-step or alias order.')
         if retained_offer:
             selection_prompt['retained_outputs'] = retained_offer
             selection_prompt['instructions'] += (
@@ -1406,12 +1459,14 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 raise IntentError('planning_failed')
             selections = []
             for item in choice['outputs']:
-                _shape(item, ('name','step_id','output_key'))
+                _shape(item, ('name','step_id','output_key') + (('use',) if drawing is not None and drawing['labels'] == 'new' else ()))
                 options = [o for o in offered if o['step_id'] == item['step_id']]
                 if len(options) != 1 or item['output_key'] not in options[0]['outputs']:
                     raise IntentError('planning_failed')
                 selections.append(OutputSelection(**item))
             if len({o.name for o in selections}) != len(selections): raise IntentError('planning_failed')
+            if drawing is not None and drawing['labels'] == 'new' and sum(s.use == 'visualization_labels' for s in selections) != 1:
+                raise IntentError('planning_failed')
             retained = ()
             if retained_offer:
                 handles = choice['retain']
@@ -1432,7 +1487,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         if selected:
             execution_context(sessions, interaction, admitted)
         elif context is not None:
-            checked_context, checked_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id)
+            checked_context, checked_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id,
+                reuse=admitted.get('context') == 'current')
             if checked_context != context or checked_locators != context_locators:
                 raise IntentError('unavailable_context')
         if registered:
@@ -1457,7 +1513,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             if selected and (state.active_revision_id != interaction.base_revision_id
                              or state.generation != interaction.base_generation):
                 raise SessionConflictError('Selected candidate state changed before submission.')
-            if context is not None and not selected and (
+            if admitted.get('context') == 'current' and not selected and (
                     state.active_revision_id != interaction.base_revision_id
                     or state.generation != interaction.base_generation):
                 raise SessionConflictError('Captured planning state changed before submission.')
@@ -1481,6 +1537,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         interaction.submission, tool, arguments)) if grouped else None
     with execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
         result = execution_app.run(request)
+    if result.status.value == 'SUCCEEDED':
+        from .result_reading import publish_cell_overlay
+        publish_cell_overlay(sessions, sid, interaction, result)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):
         try:
@@ -1575,15 +1634,13 @@ def completion_outcome(state, turn_id, *, error=None):
     status = turn.status
     active = status == 'activated' and state.active_revision_id == turn.revision_id
     interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
-    continuation = {} if interaction is None or interaction.admitted is None else interaction.admitted.get('continuation', {})
-    declaration = '' if 'species' not in continuation else 'The dataset is declared as ' + continuation['species'] + '. '
-    if (status == 'activated' and interaction is not None
-            and (interaction.admitted or {}).get('tool') == 'annotate_scATAC_cell_types'):
-        declaration += ('MAESTRO annotation completed. Labels are group-derived marker inferences, '
-            'stored for each corresponding cell in a new H5AD; they are not independently validated biological identities. '
-            'The annotation report and annotated H5AD are available in the result downloads. ')
+    origin = None if interaction is None else _received_origin(interaction, state.interactions)
+    delivery = () if origin is None else (origin.admitted or {}).get('delivery', ())
+    limitation = ((' Requested post-run ' + ', '.join(delivery)
+        + ' is recorded but is not fulfilled by this execution response.') if delivery else '')
+    unfulfilled = () if origin is None else (origin.admitted or {}).get('unfulfilled', ())
+    if unfulfilled:
+        limitation += ' Requirements not fulfilled by this execution: ' + '; '.join(unfulfilled) + '.'
     return TurnOutcome('execute', status,
-        text=declaration + 'The request followed the registered scientific execution path. '
-             + ('Its accepted outputs form the active revision.' if active
-                else 'Its accepted revision is historical; another revision is active.' if status == 'activated'
-                else 'Its persisted execution status is ' + status + '.'), error=error)
+        text=('Accepted scientific results are available.' if status in {'activated', 'stale'}
+              else 'Scientific execution status: ' + status + '.') + limitation, error=error)

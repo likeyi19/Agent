@@ -5,35 +5,18 @@ This is data handoff, never clustering, source alignment or label inference.
 from pathlib import Path
 import io
 
-import anndata as ad
 import pandas as pd
 
-from agent.orchestration.prior_outputs import accepted_step_digest, validate_binding
+from agent.orchestration.prior_outputs import accepted_step_digest
 from agent.orchestration.verification_authority import _accepted_step
 from agent.schemas import StepOutputRef
 from agent.schemas.prior_output import PriorOutputRef
 from .session_state import digest
+from .result_reading import dependency as _dependency, original_source
 
 
 class GroupAssociationError(ValueError):
     """A valid accepted result lacks the required association with these counts."""
-
-
-def _dependency(store, run_id, step_id, argument):
-    stored, planned, _ = _accepted_step(store, run_id, step_id)
-    ref = planned.arguments.get(argument)
-    if isinstance(ref, StepOutputRef):
-        source_run, source_step, output = run_id, ref.step_id, ref.output_key
-    elif isinstance(ref, PriorOutputRef):
-        validate_binding(ref.binding, store=store)
-        source_run, source_step, output = ref.binding.run_id, ref.binding.step_id, ref.output_key
-    else:
-        raise ValueError('Grouping reuse requires recorded scientific source lineage')
-    source, _, state = _accepted_step(store, source_run, source_step)
-    if (state.lifecycle_status.value != 'SUCCEEDED'
-            or source.result[output] != stored.resolved_arguments[argument]):
-        raise ValueError('Accepted grouping dependency changed')
-    return source_run, source_step
 
 
 def choices(sessions, interaction):
@@ -78,33 +61,17 @@ def project(sessions, interaction, selected, source):
     row = rows[0]
     store = sessions._application.run_store
     clustered, _, _ = _accepted_step(store, row['run_id'], row['step_id'])
-    graph_run, graph_step = _dependency(store, row['run_id'], row['step_id'], 'analysis_path')
-    graph, _, _ = _accepted_step(store, graph_run, graph_step)
-    if graph.tool_name != 'build_cell_neighbors':
-        raise ValueError('Unsupported clustering graph lineage')
-    from agent.orchestration.verification_authority import _load_context
-    _load_context(store, graph_run, 'historical_verified_sources.v1').validate_anchors()
-    embedding_run, embedding_step = _dependency(store, graph_run, graph_step, 'embedding_path')
-    embedding, _, _ = _accepted_step(store, embedding_run, embedding_step)
-    # PCA records exact input bytes. Older EpiZoo results do not; equal cells or
-    # input paths cannot fill that provenance gap.
-    if (embedding.tool_name != 'pca_embed_cells'
-            or embedding.result['source_sha256'] != source['source_sha256']):
+    original = original_source(store, row['run_id'], row['step_id'])
+    if original is None or original['sha256'] != source['source_sha256']:
         raise GroupAssociationError('The selected clustering does not retain an exact source identity for these counts. Select its original count matrix or supply an independently derived ordered grouping.')
-    from agent.tools.analysis.marker_annotation import checked_file
-    from agent.tools.analysis.embedding_analysis import _validate_neighbors_artifact, _validate_cluster_labels
-    path = checked_file(clustered.result['analysis_path'], clustered.result['analysis_sha256'])
-    data = ad.read_h5ad(path)
-    _validate_neighbors_artifact(data, expected_stages=frozenset({'clustering'}))
-    _validate_cluster_labels(data)
-    original = ad.read_h5ad(checked_file(source['source_path'], source['source_sha256']), backed='r')
+    from agent.tools.analysis.categorical import observations, axis, require_same_cells
+    ids, labels = observations(clustered.result['analysis_path'], clustered.result['analysis_sha256'], 'leiden')
     try:
-        if not original.obs_names.equals(data.obs_names):
-            raise GroupAssociationError('The selected clustering and counts have different ordered cells. Cell alignment or relabeling is not automatic.')
-    finally:
-        original.file.close()
+        require_same_cells(ids, axis(source['source_path'], source['source_sha256']))
+    except ValueError as exc:
+        raise GroupAssociationError('The selected clustering and counts have different ordered cells. Cell alignment or relabeling is not automatic.') from exc
     buffer = io.StringIO()
-    pd.DataFrame(dict(cell_id=data.obs_names, group=data.obs['leiden'].astype(str))).to_csv(
+    pd.DataFrame(dict(cell_id=ids, group=labels.astype(str))).to_csv(
         buffer, sep='\t', index=False)
     content = buffer.getvalue().encode()
     identity = digest(dict(selected=row, source_sha256=source['source_sha256']))

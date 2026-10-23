@@ -294,6 +294,23 @@ def test_initial_explicit_thresholds_use_the_same_binding_without_clarification(
     assert len(harness.service._application.sessions.load('session').interactions) == 1
 
 
+def test_deferred_delivery_survives_the_existing_parameter_prerequisite(tmp_path, selection_inputs):
+    objective = OBJECTIVE + ' Then explain the accepted result.'
+    harness = legacy_selection_harness(tmp_path / 'application', decisions={objective:
+        dict(kind='execute_plan', target=TOOL, delivery=['explanation'])})
+    harness.service.create_session('session')
+    with selection_work() as calls:
+        assert_pending(submit(harness, utterance=objective, inputs=selection_inputs), *REQUIRED)
+        assert_pending(submit(harness, 'partial', DEPTH), REQUIRED[1])
+    assert not calls
+    sessions = harness.service._application.sessions
+    context, _ = sessions.planning_context_for_interaction('session', 'partial', integrity=False)
+    assert context.public_research_context()['task'] == dict(delivery=['explanation'], delivery_status='deferred')
+    from agent.application.dialogue_execution import _execution_objective
+    state = sessions.load('session')
+    assert _execution_objective(state.interactions[-1], state.interactions) == objective
+
+
 def test_partial_answer_restart_invalid_attempt_and_retry_preserve_accepted_values(
         tmp_path, selection_inputs):
     workspace = tmp_path / 'application'

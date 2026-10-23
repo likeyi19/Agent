@@ -1,5 +1,6 @@
 """Captured Session projection and exact retained-source consistency."""
 from dataclasses import replace
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,8 +23,11 @@ from test_qualification import legacy
 
 def capture(sessions, session_id, turn_id='future'):
     state = sessions.load(session_id)
+    from agent.application.scientific_dialogue import capture as capture_dialogue
+    captured = snapshot(sessions, state)
+    captured['dialogue'] = capture_dialogue(sessions, state, captured, None)
     interaction = Interaction(turn_id, 'Continue the current analysis.', state.active_revision_id,
-                              state.generation, snapshot(sessions, state))
+                              state.generation, captured)
     sessions._store._update(session_id, lambda previous: replace(previous,
         interactions=previous.interactions + (interaction,)))
     return interaction
@@ -40,6 +44,13 @@ def test_persisted_interaction_context_needs_no_turn_and_performs_no_writes(proc
     assert locators == {'ctx.0': source.session.revisions[0].outputs}
     assert not any(turn.turn_id == 'future' for turn in source.app.sessions.load('analysis').turns)
     assert source.app.sessions.load('analysis').to_dict() == before
+    from agent.application.scientific_dialogue import public
+    view = public(interaction.snapshot, source.app.sessions.load('analysis'), source.app.registry,
+                  sessions=source.app.sessions, utterance=interaction.utterance, context=context)
+    assert view['result_groups'][0]['handle'] == context.results[0]['handle'] == 'g0'
+    assert view['result_groups'][0]['parameters'] == [dict(p) for p in context.results[0]['parameters']]
+    assert context.results[0]['reusable_inputs'] == ('ctx.0',)
+    assert str(source.embedding) not in str(context.public_research_context())
     with pytest.raises(TypeError):
         locators['ctx.1'] = ()
 
@@ -52,6 +63,45 @@ def test_metadata_projection_checks_records_without_reading_publication_bytes(pr
     monkeypatch.setattr(VerificationContext, 'files', forbidden)
     context, _ = source.app.sessions.planning_context_for_interaction('analysis', 'future', integrity=False)
     assert context.items[0].binding == source.binding
+
+
+def test_repeated_results_share_registry_descriptions_without_losing_recorded_metadata(processed_source):
+    from agent.application.scientific_dialogue import public, MAX_TARGET_CONTEXT_BYTES
+    source = processed_source
+    state = source.app.sessions.run('analysis', 'second', AgentRequest('second', 'Build another graph.', {
+        'embedding_path': str(source.embedding), 'cell_ids_path': str(source.cell_ids), 'n_neighbors': 7}),
+        (OutputSelection('neighbors', 'neighbors', 'analysis_path'),), expected_generation=1)
+    assert state.turn('second').status == 'activated'
+    interaction = capture(source.app.sessions, 'analysis')
+    rows = interaction.snapshot['dialogue']['results']
+    assert len(rows) == 2 and len({row['handle'] for row in rows}) == 2
+    assert all('description' not in row and 'ports' not in row for row in rows)
+    assert [next(p['value'] for p in row['parameters'] if p['argument'] == 'n_neighbors')
+            for row in rows] == [7, 15]
+    assert all(p['origin'] in ('accepted_argument', 'owner_effective_value') for row in rows for p in row['parameters'])
+    assert rows[0]['relations'] == ('current',) and 'parent' in rows[1]['relations']
+    context, _ = source.app.sessions.planning_context_for_interaction('analysis', 'future')
+    view = public(interaction.snapshot, source.app.sessions.load('analysis'), source.app.registry,
+        sessions=source.app.sessions, utterance=interaction.utterance, context=context)
+    assert list(view['semantics']) == ['build_cell_neighbors']
+    assert view['semantics']['build_cell_neighbors']['roles']
+    assert view['result_groups'][0]['canonical_output'] != view['result_groups'][1]['canonical_output']
+    assert len(json.dumps(view, ensure_ascii=False).encode()) < MAX_TARGET_CONTEXT_BYTES
+    # Older captured rows are readable without rewriting or comparing static
+    # Registry prose as if it were accepted scientific metadata.
+    from agent.application.scientific_dialogue import capture as capture_dialogue
+    state = source.app.sessions.load('analysis')
+    old_snapshot = snapshot(source.app.sessions, state)
+    old_snapshot['dialogue'] = capture_dialogue(source.app.sessions, state, old_snapshot, None)
+    for row in old_snapshot['dialogue']['results']:
+        row.update(description='Historical static tool description.', ports=[])
+    legacy = replace(interaction, turn_id='legacy', snapshot=old_snapshot)
+    source.app.sessions._store._update('analysis', lambda previous: replace(previous,
+        interactions=previous.interactions + (legacy,)))
+    before = source.app.sessions.load('analysis').to_dict()
+    old_context, _ = source.app.sessions.planning_context_for_interaction('analysis', 'legacy')
+    assert old_context.results == context.results
+    assert source.app.sessions.load('analysis').to_dict() == before
 
 
 def test_corrupt_publication_is_never_silently_removed_from_execution_context(processed_source):
@@ -79,6 +129,11 @@ def test_captured_context_never_follows_a_later_navigation_pointer(processed_sou
     assert context.base_revision_id == interaction.base_revision_id
     assert locators == {'ctx.0': ()}  # No implicit retained output or revision edit.
     assert interaction.base_revision_id == state.revisions[1].revision_id
+    clustered = next(row for row in context.results if 'current' in row['relations'])
+    assert clustered['tool'] == 'cluster_cells' and clustered['uses'] == ('reference',)
+    assert clustered['reusable_inputs'] == ('ctx.0',)
+    assert clustered['parameters'] == interaction.snapshot['dialogue']['results'][0]['parameters']
+    assert context.public_research_context()['base'] == 'captured_current'
 
 
 def test_empty_or_foreign_session_cannot_supply_another_sessions_context(processed_source):
@@ -255,6 +310,9 @@ def test_control_dependencies_are_not_inferred_as_scientific_lineage(processed_s
     capture(app.sessions, 'analysis')
     context, _ = app.sessions.planning_context_for_interaction('analysis', 'future')
     assert tuple(item.binding for item in context.items) == (source.binding,)
+    current = next(row for row in context.public_research_context()['results'] if 'current' in row['relations'])
+    assert current['tool'] == 'cluster_cells' and current['reusable_inputs'] == ['ctx.0']
+    assert all(item.binding != different for item in context.items)
 
 
 def test_unselected_graph_dependency_preserves_metadata_and_integrity_boundaries(processed_source, monkeypatch):
@@ -269,6 +327,19 @@ def test_unselected_graph_dependency_preserves_metadata_and_integrity_boundaries
         patch.setattr(VerificationContext, 'files', lambda *a, **kw: pytest.fail('Metadata read source bytes'))
         context, locators = app.sessions.planning_context_for_interaction('analysis', 'future', integrity=False)
         assert context.items[0].binding == source.binding and locators == {'ctx.0': ()}
+        visible = context.public_research_context()['results'][0]
+        assert visible['tool'] == 'compute_cell_umap' and visible['uses'] == ['reference']
+        assert visible['reusable_inputs'] == ['ctx.0']
+        assert context.public_items()[0]['producer_tool'] == 'build_cell_neighbors'
+        assert str(source.embedding) not in json.dumps(context.public_research_context())
+        with pytest.raises(ValueError, match='unoffered'):
+            context.binding(visible['handle'])
+        from agent.orchestration.active_context import planning_context
+        with planning_context(context):
+            plan = LLMPlanner(ScientificPlanModel(consumer=True)).plan(
+                AgentRequest('continue-hidden', 'Cluster the recorded upstream graph.', {
+                    'output_dir': str(source.embedding.parent / 'planned-only')}), app.registry)
+        assert plan.steps[0].arguments['analysis_path'].binding == source.binding
     path = Path(source.run.steps[0].result['analysis_path'])
     path.write_bytes(path.read_bytes() + b'changed')
     with pytest.raises((AuthorityError, ValueError, OSError)):

@@ -18,13 +18,13 @@ from contextlib import contextmanager
 @contextmanager
 def response_work():
     """Compose the existing science profiler with distinct response/metadata counts."""
-    from agent.application import responses, response_facts
+    from agent.application import responses, response_facts, scientific_dialogue
     from agent.application.session_store import FileSessionStore
     from agent.orchestration.run_store import FileRunStore
     from agent.tools.data.barcode_qc_verifier import verify_barcode_qc
     functions = {
         'response.render': responses.render,
-        'response.execution': responses.render_execution,
+        'response.execution': scientific_dialogue.completion,
         'response.navigation': responses.render_navigation,
         'response.clarification': responses.clarification_text,
         'metadata.session_load': FileSessionStore.load,

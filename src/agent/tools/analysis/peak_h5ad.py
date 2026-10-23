@@ -26,10 +26,10 @@ def strings(item, selection):
     return result
 
 
-def inspect(source, *, private_paths=(), privacy=False):
+def inspect(source, *, private_paths=(), privacy=False, observation_fields=None):
     """Reject indirect storage, unsafe filters and excessive allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
-        if not {'X','obs','var'} <= set(f):
+        if observation_fields is None and not {'X','obs','var'} <= set(f):
             raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
         if privacy and f.userblock_size:
             raise ValueError('Unreviewed HDF5 user block cannot be delivered')
@@ -55,7 +55,8 @@ def inspect(source, *, private_paths=(), privacy=False):
                         if _PATH.search(str(text)):
                             raise ValueError('Private locator in H5AD metadata')
             if isinstance(item, h5py.Group):
-                for name in item:
+                names = observation_fields if observation_fields is not None and item.name == '/obs' else item
+                for name in names:
                     if not isinstance(item.get(name, getlink=True), h5py.HardLink):
                         raise ValueError('Indirect HDF5 links are unsupported')
                     if privacy and _PATH.search(name):
@@ -83,5 +84,10 @@ def inspect(source, *, private_paths=(), privacy=False):
                     raise ValueError('Unsupported H5AD value dtype')
                 if size > MAX_LOGICAL_BYTES:
                     raise ValueError('H5AD decoded values exceed 2 GiB limit')
-        visit(f,0)
+        if observation_fields is not None:
+            if not isinstance(f.get('obs', getlink=True), h5py.HardLink):
+                raise ValueError('Indirect HDF5 observation storage is unsupported')
+            visit(f['obs'], 0)
+        else:
+            visit(f,0)
         return size

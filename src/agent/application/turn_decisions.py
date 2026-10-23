@@ -8,6 +8,7 @@ from fractions import Fraction
 import json
 import re
 import unicodedata
+from agent.schemas.orchestration import freeze_json_mapping, _serialize
 
 
 class IntentError(ValueError):
@@ -87,6 +88,27 @@ def _validate_arguments(arguments, argument=None):
         raise ValueError('Duplicate scoped scientific argument.')
 
 
+def _normalize_arguments(decision):
+    """Read the historical singular declaration; all new writers use arguments."""
+    if decision.argument is not None:
+        if not isinstance(decision.argument, LeidenResolution):
+            raise ValueError('Invalid historical scientific argument.')
+        _validate_arguments(decision.arguments, decision.argument)
+        object.__setattr__(decision, 'arguments', (ScopedArgument(**asdict(decision.argument)),) + decision.arguments)
+        object.__setattr__(decision, 'argument', None)
+
+
+@dataclass(frozen=True)
+class RetainedParameter:
+    result: str
+    argument: str
+
+    def __post_init__(self):
+        if (type(self.result) is not str or re.fullmatch(r'g[0-9]+', self.result) is None
+                or type(self.argument) is not str or not self.argument.isidentifier() or len(self.argument) > 128):
+            raise ValueError('Invalid accepted parameter reference.')
+
+
 @dataclass(frozen=True)
 class InputRole:
     """One Registry consumer associated with an opaque captured source."""
@@ -146,6 +168,7 @@ class RequestRoles:
     epizoo: 'EpiZooDeclaration | None' = None
 
     def __post_init__(self):
+        _normalize_arguments(self)
         if self.epizoo is not None:
             from .epizoo_handoff import EpiZooDeclaration, target
             from .raw_handoff import validate_arguments
@@ -194,11 +217,9 @@ class RequestRoles:
                 raise ValueError('Invalid BAM task request.')
             _validate_arguments(self.arguments)
             return
-        if self.argument is not None and not isinstance(self.argument, LeidenResolution):
-            raise ValueError('Invalid explicit scientific declaration.')
         _validate_role_requirements(self.required_roles)
         _validate_roles(self.roles)
-        _validate_arguments(self.arguments, self.argument)
+        _validate_arguments(self.arguments)
         if (type(self.target) is not str or self.target not in {r.tool for r in self.required_roles}
                 or self.context not in ('none', 'current')
                 or not {(r.tool, r.port) for r in self.roles} < {
@@ -268,16 +289,44 @@ class Execute:
     arguments: tuple[ScopedArgument, ...] = ()
     context: str = 'none'
     roles: tuple[InputRole, ...] = ()
+    references: tuple[str, ...] = ()
+    delivery: tuple[str, ...] = ()
+    retain_parameters: tuple[RetainedParameter, ...] = ()
+    unfulfilled: tuple[str, ...] = ()
+    visualization: object = None
 
     def __post_init__(self):
+        _normalize_arguments(self)
         if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
             raise ValueError('Invalid bounded execution context.')
-        if self.argument is not None and not isinstance(self.argument, LeidenResolution):
-            raise ValueError('Invalid explicit scientific declaration.')
-        _validate_arguments(self.arguments, self.argument)
+        _validate_arguments(self.arguments)
         _validate_roles(self.roles)
         if self.roles and self.operation != 'plan':
             raise ValueError('Scientific input roles require ordinary planning.')
+        if (type(self.references) is not tuple or len(self.references) > 32
+                or any(type(h) is not str or re.fullmatch(r'g[0-9]+', h) is None for h in self.references)
+                or len(set(self.references)) != len(self.references)
+                or type(self.delivery) is not tuple or len(set(self.delivery)) != len(self.delivery)
+                or any(k not in ('explanation', 'comparison', 'visualization') for k in self.delivery)
+                or type(self.retain_parameters) is not tuple or len(self.retain_parameters) > 8
+                or any(not isinstance(p, RetainedParameter) for p in self.retain_parameters)
+                or len(set(self.retain_parameters)) != len(self.retain_parameters)
+                or type(self.unfulfilled) is not tuple or len(self.unfulfilled) > 8
+                or any(type(t) is not str or not t.strip() or len(t) > 512 for t in self.unfulfilled)
+                or len(set(self.unfulfilled)) != len(self.unfulfilled)
+                or self.operation != 'plan' and (self.references or self.delivery or self.retain_parameters or self.unfulfilled)):
+            raise ValueError('Invalid bounded research intention.')
+        if self.visualization is not None:
+            value = self.visualization
+            _shape(_serialize(value), ('coordinates', 'labels', 'field'))
+            if (self.operation != 'plan' or 'visualization' not in self.delivery
+                    or any(type(value[k]) is not str for k in value)
+                    or re.fullmatch(r'g[0-9]+', value['coordinates']) is None
+                    or value['labels'] != 'new' and re.fullmatch(r'g[0-9]+', value['labels']) is None
+                    or not 0 < len(value['field']) <= 256
+                    or not value['field'].startswith(('source:', 'result:'))):
+                raise ValueError('Invalid explicit cell visualization operands.')
+            object.__setattr__(self, 'visualization', freeze_json_mapping(value, 'visualization'))
 
 
 @dataclass(frozen=True)
@@ -301,11 +350,11 @@ class SpeciesAnswer:
     arguments: tuple[ScopedArgument, ...] = ()
 
     def __post_init__(self):
+        _normalize_arguments(self)
         if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
-                or type(self.species) is not str or self.species not in ('human', 'mouse')
-                or self.argument is not None and not isinstance(self.argument, LeidenResolution)):
+                or type(self.species) is not str or self.species not in ('human', 'mouse')):
             raise ValueError('Invalid pending species declaration.')
-        _validate_arguments(self.arguments, self.argument)
+        _validate_arguments(self.arguments)
         if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
             raise ValueError('Species answers use the existing species field.')
 
@@ -382,12 +431,29 @@ class ScientificQuestion:
     target: ScientificTarget
     comparison: ScientificTarget | None = None
     focus: str = 'question'
+    detail: dict | None = None
 
     def __post_init__(self):
         if (not isinstance(self.target, ScientificTarget)
                 or self.comparison is not None and not isinstance(self.comparison, ScientificTarget)
                 or self.focus not in ('question', 'continue')):
             raise ValueError('Invalid scientific question.')
+        if self.detail is not None:
+            validate_scientific_detail(self.detail, self.comparison)
+
+
+def validate_scientific_detail(detail, comparison):
+    """Validate the existing two-target selection, not a list of read queries."""
+    _shape(detail, ('section', 'field', 'other_field', 'offset', 'limit'))
+    from .dialogue_evidence import DetailRequest
+    if detail['section'] not in ('categorical_fields', 'category_counts', 'category_association'):
+        raise ValueError('Unsupported scientific detail request.')
+    single = dict(detail)
+    if detail['section'] == 'category_counts' and detail['other_field'] is not None:
+        if comparison is None:
+            raise ValueError('Independent second counts require a second accepted target.')
+        single['other_field'] = None  # Each owner count read still has one field.
+    DetailRequest(**single)
 
 
 @dataclass(frozen=True)
@@ -615,17 +681,22 @@ def parse_decision(raw, *, utterance=None):
             if 'intent' in value:
                 if value['intent'] != 'scientific': raise IntentError('invalid_decision')
             else:
-                _shape(value, ('kind', 'target', 'comparison', 'focus'))
+                _shape(value, ('kind', 'target', 'comparison', 'focus') + (('detail',) if 'detail' in value else ()))
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization'}:
                 if type(value['target']) is not str:
+                    raise IntentError('invalid_decision')
+                if any(type(value[k]) is not list for k in ('references', 'delivery', 'retain_parameters', 'unfulfilled') if k in value):
                     raise IntentError('invalid_decision')
                 return Execute('current', 'plan', value['target'], None,
                                _leiden_argument(value.get('argument')),
                                _scientific_arguments(value.get('arguments', [])),
-                               value.get('context', 'none'), _input_roles(value.get('roles', [])))
+                               value.get('context', 'none'), _input_roles(value.get('roles', [])),
+                               tuple(value.get('references', [])), tuple(value.get('delivery', [])),
+                               tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])),
+                               tuple(value.get('unfulfilled', [])), value.get('visualization'))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -638,12 +709,12 @@ def parse_decision(raw, *, utterance=None):
             return Clarify(value['reason'], value_required=value['reason'] == 'missing_parameter_value')
         if kind == 'answer':
             if value.get('intent') == 'scientific':
-                _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus'))
+                _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus') + (('detail',) if 'detail' in value else ()))
                 def target(v):
                     _shape(v, ('output', 'subject'))
                     return ScientificTarget(**v)
                 return Answer('scientific', scientific=ScientificQuestion(target(value['target']),
-                    None if value['comparison'] is None else target(value['comparison']), value['focus']))
+                    None if value['comparison'] is None else target(value['comparison']), value['focus'], value.get('detail')))
             _shape(value, ('kind', 'intent', 'relation', 'technical'))
             return Answer(value['intent'], value['relation'], value['technical'])
         if kind == 'navigate':
@@ -674,9 +745,6 @@ def _object(properties):
 def decision_schema(public):
     offered = [o for b in public['bases'].values() for o in b['operations']]
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
-    argument = {'anyOf': [_object(dict(tool=enum(('cluster_cells',)),
-        argument=enum(('resolution',)), literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
-        evidence={'type': 'string', 'minLength': 1, 'maxLength': 4096})), {'type': 'null'}]}
     parameters = public.get('dialogue', {}).get('scientific_parameters', ())
     identities = tuple(dict.fromkeys((item['tool'], item['argument']) for item in parameters))
     def declaration_schema(item):
@@ -707,12 +775,37 @@ def decision_schema(public):
                              + [g['handle'] for g in public['dialogue'].get('result_groups', ())]
                              + list(public['dialogue'].get('result_referents', {})) + ['@focus', '@previous']),
                              subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
-        variants.append(_object(dict(kind=enum(('answer_scientific',)), target=target,
-            comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))))
+        scientific = dict(kind=enum(('answer_scientific',)), target=target,
+            comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))
+        if any('categorical' in g for g in public['dialogue'].get('result_groups', ())):
+            scientific['detail'] = {'anyOf': [{'type':'null'}, _object(dict(
+                section=enum(('categorical_fields', 'category_counts', 'category_association')),
+                field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
+                other_field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
+                offset={'type':'integer', 'minimum':0}, limit={'type':'integer', 'minimum':1, 'maximum':32}))]}
+        variants.append(_object(scientific))
         variants.append(_object(dict(kind=enum(('answer_guidance',)),
             targets={'type':'array', 'maxItems':4, 'items':target},
             candidate={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]})))
-        execution = dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']), argument=argument)
+        execution = dict(kind=enum(('execute_plan',)), target=enum(public['dialogue']['tools']),
+            delivery={'type':'array', 'uniqueItems':True, 'maxItems':3,
+                      'items':enum(('explanation', 'comparison', 'visualization'))},
+            unfulfilled={'type':'array', 'uniqueItems':True, 'maxItems':8,
+                         'items':{'type':'string', 'minLength':1, 'maxLength':512}})
+        groups = public['dialogue'].get('result_groups', ())
+        if groups:
+            coordinates = [row['handle'] for row in groups if row['tool'] == 'compute_cell_umap']
+            if coordinates:
+                execution['visualization'] = {'anyOf': [_object(dict(coordinates=enum(coordinates),
+                    labels=enum(['new'] + [row['handle'] for row in groups]),
+                    field={'type':'string','minLength':1,'maxLength':256})), {'type':'null'}]}
+            execution['references'] = {'type':'array', 'maxItems':32, 'uniqueItems':True,
+                                       'items':enum(row['handle'] for row in groups)}
+            retained = [_object(dict(result=enum((row['handle'],)),
+                        argument=enum(p['argument'] for p in row.get('parameters', ()))))
+                        for row in groups if row.get('parameters')]
+            if retained:
+                execution['retain_parameters'] = {'type':'array', 'maxItems':8, 'items':{'anyOf':retained}}
         if public['dialogue'].get('planning_context'):
             execution['context'] = enum(('none', 'current'))
         if identities:
@@ -727,7 +820,8 @@ def decision_schema(public):
         if input_roles:
             if selected_sources:
                 execution['roles'] = role_schema(input_roles)
-            variants.append(_object(execution | dict(kind=enum(('request_roles',)),
+            variants.append(_object({k:v for k,v in execution.items()
+                if k not in ('delivery', 'references', 'retain_parameters', 'unfulfilled', 'visualization')} | dict(kind=enum(('request_roles',)),
                 roles=role_schema(input_roles) if selected_sources else {'type': 'array', 'maxItems': 0, 'items': {'type': 'string'}},
                 required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') else 2, 'maxItems': 8,
                     'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
@@ -771,7 +865,7 @@ def decision_schema(public):
         pending = public['dialogue'].get('pending_prerequisite')
         if pending is not None and pending.get('field', 'species') == 'species':
             answer = dict(kind=enum(('answer_prerequisite',)),
-                pending=enum((pending['handle'],)), species=enum(pending['choices']), argument=argument)
+                pending=enum((pending['handle'],)), species=enum(pending['choices']),)
             if exact:
                 answer['arguments'] = exact_declarations
             variants.append(_object(answer))
@@ -825,20 +919,27 @@ def interpret(model, utterance, public):
             'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no prior-discussion focus; captured result groups and result_referents remain available. Clarify unresolved short references instead of inventing a topic.',
             'Use unavailable_context only when the requested target is missing or its evidence unavailable. Missing rationale or scientific certainty within an available summary is for the scientific answer stage to explain as insufficient evidence, not a reason to reject the target.',
             'You select intent and exact references, not the scientific conclusion. You need not see factual values to select answer_scientific for an available result. Detailed accepted evidence is loaded after admission.',
+            'Use answer_scientific.detail section=categorical_fields to discover eligible field names; field=null and offset/limit page field names, independently of category-record pages. A named field can be requested by its exact source:/result: handle even beyond the displayed page: Agent resolves it against the actual authorized source. Copy the exact field name, never guess, rename or supply an HDF5 path. Clarify genuinely ambiguous field/source choices. The predecessor records a prior selected page.',
+            'Use section=category_counts for distributions. field belongs to target; to request independent distributions from two accepted results, select comparison and its exact other_field. These are separate cited statistics, requiring no attempted association. With other_field=null only the target distribution is requested. Use section=category_association only for a requested contingency table: other_field belongs to comparison when selected, otherwise target. Counts and association have category-record offset/limit. Missing correspondence limits association, not independent facts. Source observations are not biological ground truth; method questions need no categorical detail.',
             'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',
             'Answer intents: version, matrix, selection, thresholds, changes (originating revision versus parent), execution, reuse, comparison, provenance, verification, unsupported.',
             'Operational comparison needs parent, previous_active, or previous. Scientific comparison selects exact offered result handles, including explicitly identified historical versions or branches. history_complete=false means older results may be omitted from this bounded inventory; ask for navigation to an unavailable version, never substitute another result. Other answers normally use current.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
+            'For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. Only planning_context handles with qualified semantic ports may supply executable inputs, with context=current. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.',
+            'execute_plan.delivery records distinct subsequent explanation, comparison or visualization intentions alongside the scientific computation. Select explanation when the user requests scientific explanation or interpretation after new computation; completion then uses accepted evidence and the existing scientific answer service. Other delivery intentions are disclosed as incomplete unless actually produced. Do not invent Registry tools or promise fulfillment. Do not duplicate figures already provided by registered science and the default figure composition in delivery. A visualization requiring registered computation must still be planned as science. A question without new computation remains answer_scientific. Do not reject supported science solely because it includes result delivery.',
+            'For categorical coloring of an accepted UMAP during a scientific continuation, execute_plan.visualization selects coordinates from one explicit captured UMAP result group, labels from another captured group or new for the planned result, and field as an exact result: or source: categorical column. Include existing source groups in references and visualization in delivery. The existing output selector identifies the specific new label result. This presentation reuses coordinates; do not add a UMAP fit just to recolor them. Never choose by latest/last/first, equal cell counts or filenames; clarify ambiguous sources or fields. With no new scientific computation, standalone figure publication is not supported by the current interaction; do not fabricate a scientific plan for it.',
+            'Preserve the whole scientific objective. Missing essential capabilities, ambiguous associations or incompatible scientific inputs cannot be silently omitted: clarify instead. Missing resolvable files/declarations use existing prerequisites. execute_plan.unfulfilled quotes exact clauses from this utterance for unsupported, independently separable requirements only when the user permits their omission without materially changing the objective. Agent records and discloses them; use [] otherwise. Never use this to skip essential science or resolvable prerequisites. If separability is unclear, clarify. Never add hidden fallback plans or retry a semantic refusal until success.',
+            'Use retain_parameters only when the user asks to retain prior settings. Select exact offered result/argument pairs; Agent binds their recorded values and provenance. Never copy accepted values into explicit current arguments or manufacture literal evidence from prior defaults. Explicit current changes override only their own parameter; omitted unrelated parameters stay omitted, and unknown historical settings require clarification when essential.',
             'For selected scientific uploads or structured inputs, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. When dialogue.reference_supplementation is available, a missing genome for declared species/assembly and an uploaded regulatory H5AD can use request_resources with explicit reference_category peak_set or regulatory_regions. This asks for plain FASTA (optional FAI) and preserves the objective. Qualified pending reference choices can answer that original request. Otherwise an operator must provision missing resources. Never fabricate resources.',
             'A supported scientific operation with missing files is not an unsupported capability. Use request_roles with the offered Registry input roles and only exact existing source associations; leave roles empty when no file is available. This captures the original objective for a later upload. Do not construct a workflow or invent source handles. If a required declaration is omitted for a selected input, choose execute_plan and omit that declaration from arguments; the compiler determines its exact prerequisite. Use missing_species only while answering an offered pending species prerequisite. Unsupported capabilities, ambiguous sources, conflicting declarations and incompatible inputs remain distinct.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'Registered default_when_omitted values apply when the user has no special preference. Do not ask for optional scientific parameters merely because no explicit value was supplied. Preserve explicit requested values; defaults do not supply literal evidence for a user declaration.',
-            'execute_plan.argument is the nullable cluster_cells.resolution declaration. execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat an identity across argument and arguments.',
+            'execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat a parameter identity.',
             *(['For an offered exact_string parameter, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
-            'Use argument=null when resolution is omitted; the scientific owner retains its existing default. A number alone does not request an operation. Explanatory questions about resolution remain answers, never execution or edits to a pending request. Clarify ambiguous argument association or conflicting explicit values; do not guess, invent an amount or replace an invalid value with a default.',
+            'A number alone does not request an operation. Explanatory parameter questions remain answers, never execution or edits to a pending request. Clarify ambiguous parameter association or conflicting values; do not invent an amount or replace an invalid value with a default.',
             'Use arguments=[] for omitted scientific parameters. Registered owners and existing compiler/resource contracts decide requirements and defaults; never invent a numeric default, infer scientific input identity, or create arbitrary execution dictionaries. Exact decimal or rational threshold literals stay exact; do not approximate them with floating point values.',
             'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
             'Subject=null means no new subject is asserted by the model for this turn. '
@@ -867,7 +968,7 @@ def interpret(model, utterance, public):
             'Choose answer_prerequisite only when this utterance unambiguously answers that specifically pending species question for the same request and selected dataset. Use its exact offered pending handle and normalize the explicit declaration to the offered human or mouse value. Meaning is yours to interpret; never infer species from filenames, dimensions, features, available checkpoints or unrelated datasets.',
             'Uncertainty or ambiguous species requires clarify/ambiguous_species; another species requires clarify/unsupported_species; a conflicting declaration requires clarify/conflicting_species. Do not guess or emit arbitrary scientific input dictionaries.',
             'If the user changes the analysis objective, choose the ordinary decision for that new request, such as execute_plan. Cancellation or an unrelated message must never answer the old prerequisite; use clarify/unsupported_intent when no other supported decision applies. An answer authorizes continuation only of the captured original objective, never additional operations.',
-            'answer_prerequisite.argument and arguments may declare explicit offered scientific parameters in the same reply only for operations already requested by the captured objective. Otherwise use null and []; original validated scientific parameters remain captured. Do not add clustering or other operations to answer a species prerequisite.',
+            'answer_prerequisite.arguments may declare explicit offered scientific parameters in the same reply only for operations already requested by the captured objective. Otherwise use []; original validated scientific parameters remain captured. Do not add operations to answer a species prerequisite.',
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field', 'species') == 'species'
               and public.get('dialogue', {}).get('pending_prerequisite') is not None else []) + ([
             'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',

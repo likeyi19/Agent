@@ -80,7 +80,8 @@ class ConversationalModel:
             elif self.action == 'ambiguous':
                 decision = dict(kind='clarify', reason='ambiguous_subject')
             elif self.action == 'new':
-                decision = dict(kind='execute_plan', target='inspect_scATAC', context='none')
+                decision = dict(kind='execute_plan', target='inspect_scATAC', context='none',
+                                references=['g0'], delivery=['comparison'])
             elif self.action == 'incompatible':
                 decision = dict(kind='execute_plan', target='cluster_cells', context='none')
             else:
@@ -88,6 +89,7 @@ class ConversationalModel:
                 start = value['utterance'].index(literal)
                 decision = dict(kind='execute_plan', target='compute_cell_umap', context='current', arguments=[dict(
                     tool='cluster_cells', argument='resolution', literal=literal, start=start, end=start+3)])
+                decision.update(references=['g0'], delivery=['explanation', 'comparison'])
             return json.dumps(dict(turn_schema_version=1, decision=decision))
         if 'selection_schema_version' in value:
             capabilities = ['processed_inspection'] if self.action == 'new' else ['embedding_analysis']
@@ -134,6 +136,9 @@ class ConversationalModel:
                 source=dict(kind='input', input='analysis_path'))], control_dependencies=[])]
         else:
             items = value['active_outputs']
+            assert value['research_context']['task'] == dict(references=['g0'],
+                delivery=['explanation', 'comparison'], delivery_status='deferred')
+            assert value['research_context']['results'][0]['handle'] == 'g0'
             assert len(items) == 1
             assert items[0]['producer_tool'] == 'build_cell_neighbors'
             assert items[0]['source_port'] == 'neighbors'
@@ -202,6 +207,7 @@ def test_ordinary_resolution_change_reuses_neighbors_and_runs_real_leiden_umap(p
         view = facade.submit_turn('analysis', 'modify', MODIFICATION, expected_generation=1)
     assert view.status == 'succeeded', view.to_dict()
     assert view.response.kind == 'execute' and view.revision_id
+    assert 'not fulfilled' in view.response.text
     run = accepted_run(facade, 'modify')
     assert run.lifecycle_status is RunLifecycleStatus.SUCCEEDED
     assert tuple(step.tool_name for step in run.plan.steps) == ('cluster_cells', 'compute_cell_umap')
@@ -289,13 +295,22 @@ def test_read_only_question_does_not_offer_or_execute_a_scientific_plan(processe
     assert_preserved(before)
 
 
-def test_unrelated_new_input_never_inherits_old_scientific_artifact(processed_source, tmp_path):
+def test_unrelated_new_input_never_inherits_old_scientific_artifact(processed_source, tmp_path, monkeypatch):
     source = processed_source
     other = tiny_other_input(tmp_path / 'unrelated.h5ad')
-    facade, models = interactive(source, action='new')
+    def forbid_historical_binding():
+        # Before the decision the Interpreter needs the offered reuse inventory.
+        # Once it selects an independent task, neither planning nor the final
+        # output-selection recheck should prepare historical authority.
+        from agent.orchestration import prior_outputs
+        def forbidden(*args, **kwargs):
+            pytest.fail('Independent task prepared historical execution bindings')
+        for name in ('optional_binding_for_locator', 'qualified_dependencies_for_locator', 'validate_binding'):
+            monkeypatch.setattr(prior_outputs, name, forbidden)
+    facade, models = interactive(source, action='new', before_interpret=forbid_historical_binding)
     before = preserved_run_bytes(source)
     with conversational_work() as counts:
-        view = facade.submit_turn('analysis', 'unrelated', 'Inspect this unrelated supplied matrix.',
+        view = facade.submit_turn('analysis', 'unrelated', 'Inspect this unrelated supplied matrix and compare with the previous result.',
             expected_generation=1, execution_inputs={'input_path': str(other)})
     assert view.status == 'succeeded', view.to_dict()
     run = accepted_run(facade, 'unrelated')
@@ -307,6 +322,11 @@ def test_unrelated_new_input_never_inherits_old_scientific_artifact(processed_so
     state = facade._application.sessions.load('analysis')
     assert state.generation == 2 and state.revisions[0] == source.session.revisions[0]
     assert tuple(output.name for output in state.revisions[-1].outputs) == ('inspection',)
+    planner = next(value for value, _, _ in models[0].calls if 'semantic_prompt_version' in value)
+    assert not planner.get('active_outputs')
+    assert planner['research_context']['task']['references'] == ['g0']
+    assert planner['research_context']['results'][0]['handle'] == 'g0'
+    assert planner['research_context']['results'][0]['reusable_inputs'] == []
     assert_preserved(before)
 
 
@@ -386,7 +406,7 @@ Path(sys.argv[2]).write_text(json.dumps(dict(view=retry.to_dict(), counts=dict(c
             assert path.read_bytes() == raw
 
 
-@pytest.mark.parametrize('handle', ['ctx.1', 'other-session-graph'])
+@pytest.mark.parametrize('handle', ['ctx.1', 'other-session-graph', 'g0'])
 def test_unoffered_historical_source_cannot_create_a_scientific_revision(processed_source, handle):
     source = processed_source
     before = preserved_run_bytes(source)

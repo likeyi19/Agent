@@ -268,6 +268,26 @@ def _source_state(value):
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+def _snapshot_source(path, root, size, sha256, destination):
+    """Pin one accepted file; shared by ordinary and integrated delivery."""
+    checksum, copied = hashlib.sha256(), 0
+    with _open_matrix_source(path, root) as source:
+        before = os.fstat(source.fileno())
+        if before.st_size != size:
+            raise ValueError('Changed scientific file size.')
+        while chunk := source.read(MATRIX_CHUNK_BYTES):
+            copied += len(chunk)
+            if copied > size:
+                raise ValueError('Changed scientific file size.')
+            destination.write(chunk)
+            checksum.update(chunk)
+        if _source_state(os.fstat(source.fileno())) != _source_state(before):
+            raise ValueError('Changed scientific source.')
+    if copied != size or checksum.hexdigest() != sha256:
+        raise ValueError('Changed scientific payload.')
+    destination.flush(); destination.seek(0)
+
+
 class VerifiedMatrixSnapshot:
     """An anonymous private file and its single explicit capacity reservation."""
 
@@ -359,7 +379,9 @@ class MatrixDownloadPreparer:
                      and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
         compact = (artifact.contract == analysis_delivery.CONTRACT
                    and getattr(artifact, 'role', None) == analysis_delivery.ROLE)
-        export = processed or annotation or compact
+        integrated = (artifact.contract == analysis_delivery.CONTRACT
+                      and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
+        export = processed or annotation or compact or integrated
         exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
@@ -370,7 +392,8 @@ class MatrixDownloadPreparer:
             filename = model_delivery.FILES[model_role][0]
             content_type = 'application/json' if model_metadata else 'application/octet-stream'
         elif export:
-            filename = (analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
+            filename = (artifact.reference.filename if integrated else
+                        analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
                         if compact else exporter.FILENAME)
             if filename is None:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
@@ -397,36 +420,27 @@ class MatrixDownloadPreparer:
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
         delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, MAX_MATRIX_BYTES)
+        original = artifact.manifest['original_source'] if integrated else None
+        original_size = 0 if original is None else original['size_bytes']
+        if integrated:
+            if type(original_size) is not int or original_size < 1:
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
+            if original_size > MAX_MATRIX_BYTES:
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
+            delivered_limit = min(original_size + size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES,
+                                  MAX_MATRIX_BYTES)
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
         reservation = size + (model_delivery.MAX_METADATA_BYTES if model_metadata else delivered_limit) if export or model_metadata else size
-        reserved, snapshot, derivative = False, None, None
+        reservation += original_size
+        reserved, snapshot, derivative, original_snapshot = False, None, None, None
         try:
             self._reserve(reservation)
             reserved = True
             # TemporaryFile is 0600 and anonymous/unlinked on this Linux host.
             # Retaining this descriptor avoids reopening either source or temp.
             snapshot = tempfile.TemporaryFile(mode='w+b')
-            checksum, copied = hashlib.sha256(), 0
-            with _open_matrix_source(artifact.path, artifact.managed_root) as source:
-                before = os.fstat(source.fileno())
-                if before.st_size != size:
-                    raise ValueError('Changed matrix size.')
-                while True:
-                    chunk = source.read(MATRIX_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    copied += len(chunk)
-                    if copied > size:
-                        raise ValueError('Changed matrix size.')
-                    snapshot.write(chunk)
-                    checksum.update(chunk)
-                if _source_state(os.fstat(source.fileno())) != _source_state(before):
-                    raise ValueError('Changed matrix source.')
-            if copied != size or checksum.hexdigest() != artifact.sha256:
-                raise ValueError('Changed matrix payload.')
-            snapshot.flush()
-            snapshot.seek(0)
+            _snapshot_source(artifact.path, artifact.managed_root, size, artifact.sha256, snapshot)
             if matrix:
                 validate_matrix_h5ad(snapshot, artifact.contract, artifact.manifest)
             elif model_metadata:
@@ -442,12 +456,20 @@ class MatrixDownloadPreparer:
                 pass  # Exact accepted state-dict bytes; never deserialize weights for delivery.
             elif export:
                 derivative = tempfile.TemporaryFile(mode='w+b')
-                create_export = (analysis_delivery.create_analysis_export if compact else
-                                 annotation_delivery.create_annotation_export if annotation
-                                 else neighbors_delivery.create_neighbors_export)
-                create_export(snapshot, derivative, artifact.manifest,
-                    source_sha256=artifact.sha256, source_size_bytes=size,
-                    manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)
+                if integrated:
+                    original_snapshot = tempfile.TemporaryFile(mode='w+b')
+                    source_path = Path(original['path'])
+                    _snapshot_source(source_path, source_path.parent, original_size, original['sha256'], original_snapshot)
+                    analysis_delivery.create_integrated_export(snapshot, original_snapshot, derivative,
+                        artifact.manifest, source_sha256=artifact.sha256, max_bytes=delivered_limit)
+                    original_snapshot.close(); original_snapshot = None
+                else:
+                    create_export = (analysis_delivery.create_analysis_export if compact else
+                                     annotation_delivery.create_annotation_export if annotation
+                                     else neighbors_delivery.create_neighbors_export)
+                    create_export(snapshot, derivative, artifact.manifest,
+                        source_sha256=artifact.sha256, source_size_bytes=size,
+                        manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)
                 derivative.flush()
                 derivative.seek(0)
                 checksum, delivered_size = hashlib.sha256(), 0
@@ -475,7 +497,7 @@ class MatrixDownloadPreparer:
             if not matrix and exc.code == 'MATRIX_DOWNLOAD_BUSY':
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_BUSY') from exc
             raise
-        except (ValueError, TypeError, RuntimeError, OSError, ImportError) as exc:
+        except (ValueError, TypeError, RuntimeError, OSError, ImportError, KeyError) as exc:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE') from exc
         finally:
             try:
@@ -485,6 +507,8 @@ class MatrixDownloadPreparer:
                 finally:
                     if derivative is not None:
                         derivative.close()
+                    if original_snapshot is not None:
+                        original_snapshot.close()
             finally:
                 if reserved:
                     self._release(reservation)

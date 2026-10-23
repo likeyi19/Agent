@@ -757,3 +757,51 @@ __all__ = [
     "cluster_cells",
     "compute_cell_umap",
 ]
+
+
+def scientific_methods(source):
+    """Project recorded methods, not current defaults or private source locators.
+
+    Accepted consumers can read this without loading graphs or PCA fit arrays.
+    Downstream publications already carry their producers' effective parameters.
+    """
+    import h5py
+    from anndata.io import read_elem
+    from contextlib import nullcontext
+    with (nullcontext(source) if isinstance(source, h5py.File) else h5py.File(source, 'r')) as handle:
+        methods = {}
+        embedding = ('uns/agent_cell_embedding' if 'uns/agent_cell_embedding' in handle
+                     else 'uns/agent_milestone6/embedding')
+        if embedding in handle:
+            group = handle[embedding]
+            methods['embedding'] = {key: read_elem(group[key]) for key in (
+                'method', 'representation', 'embedding_dim', 'embedding_dtype', 'parameters',
+                'software_versions', 'source_sha256', 'cell_order_sha256', 'feature_order_sha256')
+                if key in group}
+        elif 'obsm/X_epizoo' in handle:
+            methods['embedding'] = dict(EPIZOO_REPRESENTATION)
+        if 'uns/agent_milestone6' in handle:
+            group = handle['uns/agent_milestone6']
+            versions = read_elem(group['software_versions']) if 'software_versions' in group else {}
+            stage = read_elem(group['stage'])
+            for key, method in (('neighbors', 'Scanpy neighbors'), ('clustering', 'Leiden'), ('umap', 'UMAP')):
+                if 'parameters/' + key in group:
+                    methods[key] = dict(method=method, parameters=read_elem(group['parameters/' + key]))
+                    if stage == key:
+                        methods[key]['software_versions'] = versions
+        return methods
+
+
+def method_facts(path):
+    """The report's existing lightweight embedding facts use the same projection."""
+    import h5py
+    with h5py.File(path, 'r') as handle:
+        # Retain the exact historical report projection. The export's explicit
+        # legacy representation description must not reinterpret old evidence.
+        if 'uns/agent_milestone6/embedding' not in handle:
+            return {}
+        metadata = scientific_methods(handle)['embedding']
+    facts = dict(embedding_method=metadata['method'], representation=metadata['representation'])
+    if 'parameters' in metadata:
+        facts['embedding_parameters'] = dict(metadata['parameters'])
+    return facts

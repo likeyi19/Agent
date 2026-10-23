@@ -32,6 +32,7 @@ from .embedding_analysis import (
     _validate_cluster_labels,
     _validate_neighbors_artifact,
 )
+from .categorical import ordered_ids as _ordered_ids, label_token as _label_token, require_same_cells
 
 
 EVALUATION_REPORT_SCHEMA_VERSION = 1
@@ -133,49 +134,6 @@ def _ensure_report_available(path: Path, *, overwrite: bool) -> None:
             f"Clustering-evaluation report already exists: {path}. "
             "Use overwrite=True to replace it."
         )
-
-
-def _ordered_ids(index: pd.Index, *, source: str) -> tuple[str, ...]:
-    values = tuple(str(value) for value in index)
-    if not values:
-        raise ValueError(f"{source} must contain at least one cell.")
-    if any(not value for value in values):
-        raise ValueError(f"{source} cell identifiers must be nonempty.")
-    if len(set(values)) != len(values):
-        raise ValueError(f"{source} cell identifiers must be unique.")
-    return values
-
-
-def _label_token(value: object, *, source: str) -> str:
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, bool):
-        raise ValueError(f"{source} contains unsupported boolean label values.")
-    if isinstance(value, str):
-        if not value.strip():
-            raise ValueError(f"{source} contains blank-string label values.")
-        payload: object = value
-        value_type = "string"
-    elif isinstance(value, int):
-        payload = str(value)
-        value_type = "integer"
-    elif isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(f"{source} contains non-finite label values.")
-        payload = value.hex()
-        value_type = "float"
-    else:
-        raise ValueError(
-            f"{source} contains unsupported or unhashable label value type "
-            f"{type(value).__name__}."
-        )
-    return json.dumps(
-        {"type": value_type, "value": payload},
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
 
 
 def _normalized_labels(series: pd.Series, *, source: str) -> tuple[str, ...]:
@@ -385,16 +343,7 @@ def _evaluate_sources(
     finally:
         _close_adata(reference)
 
-    if len(analysis_ids) != len(reference_ids):
-        raise ValueError(
-            "Analysis and reference artifacts must contain identical cell counts."
-        )
-    if analysis_ids != reference_ids:
-        if set(analysis_ids) == set(reference_ids):
-            raise ValueError(
-                "Analysis and reference cell identifiers have different exact order."
-            )
-        raise ValueError("Analysis and reference cell identities do not exactly match.")
+    require_same_cells(analysis_ids, reference_ids)
 
     true_tokens = _normalized_labels(
         reference_labels, source=f"Reference label column {normalized_label_key!r}"

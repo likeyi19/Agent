@@ -1300,16 +1300,8 @@ def _prepare_evidence(
         if (step.tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap')
                 and ('analysis_sha256' in step_result.result
                      or step_result.result.get('contract_version') == 'cell-neighbors-publication.v2')):
-            # Read only pinned owner metadata, not the representation/graphs again.
-            import h5py
-            from anndata.io import read_elem
-            with h5py.File(step_result.result['analysis_path'], 'r') as handle:
-                key = 'uns/agent_milestone6/embedding'
-                metadata = read_elem(handle[key]) if key in handle else None
-            if metadata is not None:
-                facts.update(embedding_method=metadata['method'], representation=metadata['representation'])
-                if 'parameters' in metadata:
-                    facts['embedding_parameters'] = _plain_json(metadata['parameters'], 'embedding_parameters')
+            from agent.tools.analysis.embedding_analysis import method_facts
+            facts.update(_plain_json(method_facts(step_result.result['analysis_path']), 'embedding_method'))
         if step.tool_name == "compute_cell_umap" and "clustering_present" in step_result.result:
             facts["clustering_present"] = step_result.result["clustering_present"]
         if step.tool_name == 'adapt_epizoo_species' and step_result.result['purpose'] == 'native':

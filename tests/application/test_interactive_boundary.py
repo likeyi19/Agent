@@ -342,7 +342,7 @@ def test_display_ack_failure_and_explicit_recovery_never_repeat_science(tmp_path
     retry=first(service,source)
     assert retry.status=='succeeded' and retry.response is None
     recovered=service.recover_turn('session','first')
-    assert recovered.response.status=='activated' and recovered.response.text.startswith('The request followed')
+    assert recovered.response.status=='activated' and recovered.response.text.startswith('The accepted scientific results')
     assert first(service,source)==recovered and len(models)==1 and calls==['inspect_scATAC']
     with pytest.raises(InteractiveBoundaryError) as caught:
         service.recover_turn('session','first',complete_presentation='false')

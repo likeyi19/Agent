@@ -26,6 +26,7 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
+from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value, public_citation_source, figure_inventory
 from .local_resources import (LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, RegisteredInputGroup, ResourceAdmissionError,
     qualified_epizoo_resources)
 
@@ -44,6 +45,8 @@ _MESSAGES = {
     'INTERACTIVE_ARTIFACT_UNAVAILABLE': 'The accepted presentation artifact is unavailable.',
     'INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE': 'The accepted scientific file is unavailable.',
 }
+
+MAX_RESULT_VIEW_BYTES = 262_144
 
 
 _MATRIX_CONTRACTS = {
@@ -120,23 +123,6 @@ def _inputs(values):
         raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
 
-def _unsafe_fact_field(field):
-    return field == 'path' or field.endswith('_path') or field in {
-        'workspace_root', 'authority_payload', 'api_key', 'credentials',
-        'provider_endpoint', 'base_url', 'provider_prompt',
-    }
-
-
-def _unsafe_fact_value(value):
-    """Omit a whole unsafe field; never rewrite or reinterpret scientific values."""
-    if isinstance(value, Mapping):
-        return any(_unsafe_fact_field(k) or _unsafe_fact_value(child) for k, child in value.items())
-    if isinstance(value, (tuple, list)):
-        return any(_unsafe_fact_value(child) for child in value)
-    return isinstance(value, str) and (value.startswith(('/', '~/', 'file://'))
-        or len(value) > 2 and value[0].isalpha() and value[1:3] in (':\\', ':/'))
-
-
 def _present(outcome, state=None, *, turn_id=None):
     """Store the displayed response, not a second copy of scientific evidence."""
     if outcome.presentation is not None:
@@ -156,8 +142,18 @@ def _present(outcome, state=None, *, turn_id=None):
             # never from prose or the currently active revision.
             targets = tuple(dict.fromkeys((admitted[k]['revision_id'], admitted[k]['output_name'],
                 admitted[k]['subject']) for k in ('target', 'comparison') if admitted.get(k) is not None))
+        if outcome.kind == 'execute' and state is not None:
+            turn = state.turn(turn_id)
+            revision = next(r for r in state.revisions if r.revision_id == turn.revision_id)
+            grouped = {}
+            for output in revision.outputs:
+                grouped.setdefault((output.run_id, output.step_id, output.accepted_step_sha256), []).append(output)
+            targets = tuple((revision.revision_id, min(outputs, key=lambda o: (o.name, o.output_key)).name, None)
+                            for outputs in grouped.values())
         scientific = dict(support=value.support, limitations=value.limitations,
                           evidence_scope=value.evidence_scope,
+                          availability=value.availability,
+                          citations=[dict(claim_id=c.claim_id, field=c.field, source=public_citation_source(c.source)) for c in value.claims],
                           targets=[dict(revision_id=revision, output_name=output, subject=subject)
                                    for revision, output, subject in targets])
     guidance = None
@@ -343,13 +339,34 @@ class InteractiveAgentApplication:
                 # Download ineligibility never removes the existing scientific
                 # result, evidence or presentation details.
                 scientific_artifacts = ()
+            from .turn_context import revision_results
+            from agent.report.analysis_report import _TOOL_TITLES, _REPORT_FIELDS, _METHOD_FIELDS
+            groups, remaining = [], MAX_RESULT_VIEW_BYTES
+            for group in revision_results(self._application.sessions, state, revision):
+                source = group['canonical']
+                evidence = self.evidence(session_id, revision_id, source['output_name']).to_dict()
+                size = len(canonical(evidence))
+                included = size <= remaining
+                if included:
+                    remaining -= size
+                groups.append(dict(handle=group['handle'], tool=group['tool'],
+                    label=_TOOL_TITLES.get(group['tool'], group['tool']),
+                    canonical_output=source['output_name'],
+                    outputs=[dict(name=o.name, field=o.output_key) for o in revision.outputs
+                             if o.name in {m['output_name'] for m in group['members']}],
+                    parameters=group['parameters'], derived_from=group['derived_from'],
+                    summary_fields=[field for field in _REPORT_FIELDS.get(group['tool'], ())
+                        if field not in _METHOD_FIELDS.get(group['tool'], ())
+                        and not field.endswith(('_sha256', '_path')) and 'contract' not in field],
+                    method_fields=list(_METHOD_FIELDS.get(group['tool'], ())),
+                    evidence=evidence if included else None))
             return RevisionView(revision.revision_id, revision.parent_revision_id, revision.turn_id,
                 revision.revision_id == state.active_revision_id, tuple(o.name for o in revision.outputs),
                 run_id=revision.run_id, base_generation=turn.base_generation, session_generation=state.generation,
                 status=view.status, retained_outputs=tuple(o.name for o in turn.retained_outputs),
                 result=view.response, steps=view.steps, artifacts=self.artifact_handles(session_id, revision_id),
                 evidence_outputs=tuple(o.name for o in revision.outputs),
-                scientific_artifacts=scientific_artifacts)
+                scientific_artifacts=scientific_artifacts, result_groups=tuple(groups))
         except InteractiveBoundaryError:
             raise
         except (SessionError, ValueError, RuntimeError, OSError) as exc:
@@ -385,16 +402,26 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_REFERENCE_INVALID') from exc
 
     def evidence(self, session_id, revision_id, output_name, *, fields=None,
-                 detail_section=None, subject=None, limit=8, candidate=None):
+                 detail_section=None, subject=None, limit=8, candidate=None,
+                 field=None, other_field=None, offset=0, comparison=None, comparison_output_name=None):
         """Read the existing accepted evidence/detail owner through a safe view."""
         _identifier(revision_id)
         _identifier(output_name)
-        self._load(session_id)
+        state = self._load(session_id)
         from .dialogue_evidence import DetailRequest, DialogueEvidence
         try:
-            if detail_section is None and (subject is not None or candidate is not None or limit != 8):
+            if comparison_output_name is not None:
+                if comparison is not None:
+                    raise ValueError('Select one comparison source.')
+                revision = next(r for r in state.revisions if r.revision_id == revision_id)
+                output = next(o for o in revision.outputs if o.name == comparison_output_name)
+                comparison = dict(revision_id=revision_id, output_name=output.name,
+                                  accepted_step_sha256=output.accepted_step_sha256, subject=None)
+            if detail_section is None and (subject is not None or candidate is not None or limit != 8
+                    or field is not None or other_field is not None or offset or comparison is not None):
                 raise ValueError('Detail operands require an explicit section.')
-            detail = (None if detail_section is None else DetailRequest(detail_section, subject, limit, candidate))
+            detail = (None if detail_section is None else DetailRequest(detail_section, subject, limit, candidate,
+                field, other_field, offset, comparison))
             original = self._application.sessions.evidence(session_id, revision_id, output_name,
                 fields=fields, detail=detail)
             values = {f.name: getattr(original, f.name) for f in dataclass_fields(DialogueEvidence)}
@@ -410,25 +437,18 @@ class InteractiveAgentApplication:
                 values[name] = tuple(safe)
             if omitted:
                 values['limitations'] += ('Path or private configuration fields are explicitly omitted from this client view.',)
-            sections = {'annotate_scATAC_cell_types': ('annotation_rationale',),
-                        'compute_scATAC_qc': ('length_histogram',)}
-            # Reuse the labels already reviewed for reporting. Facts and their
-            # provenance remain the existing evidence owner's exact projection.
-            from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
-            labels = dict(clustering_parameters='Clustering parameters',
-                clustering_resolution_origin='Leiden resolution origin',
-                selection_threshold_origins='Selection threshold origins',
-                explicit_user_parameters='Explicit user parameters')
+            from .dialogue_evidence import detail_sections
+            from .dialogue_evidence import field_semantics
+            labels = {}
             if original.source is not None:
-                labels.update({field: _FIELD_LABELS[field]
-                    for field in _REPORT_FIELDS.get(original.source.tool_name, ()) if field in _FIELD_LABELS})
-                if original.source.tool_name == 'annotate_scATAC_cell_types':
-                    labels['contract_version'] = 'Annotation contract'
-            labels = {fact.field: labels[fact.field] for name in ('facts', 'coverage', 'detail')
-                for fact in values[name] if fact.field in labels}
+                for name in ('facts', 'coverage', 'detail'):
+                    for fact in values[name]:
+                        semantics = field_semantics(self._application.registry, original.source.tool_name, fact.field)
+                        if 'label' in semantics:
+                            labels[fact.field] = semantics['label']
             return EvidenceView(**values, supported_details=() if original.source is None
-                else sections.get(original.source.tool_name, ()), field_labels=labels)
-        except (ValueError, TypeError, RecursionError) as exc:
+                else detail_sections(original.source.tool_name), field_labels=labels)
+        except (ValueError, TypeError, RecursionError, StopIteration) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
 
     def _attachment_records(self, session_id, attachment_ids, registered_input=None):
@@ -643,9 +663,21 @@ class InteractiveAgentApplication:
                     # Sanitized completion is stored only for a captured turn.
                     if not any(i.turn_id == turn_id for i in self._load(session_id).interactions):
                         raise _fail('INTERACTIVE_APPLICATION_FAILED') from exc
-                    error = _fail('INTERACTIVE_APPLICATION_FAILED').error
-                    presentation = PresentedResponse(kind='execute', status='failed',
-                        text=error.message, error=error)
+                    latest = self._load(session_id)
+                    completed = next((t for t in latest.turns if t.turn_id == turn_id
+                                      and t.status in {'activated', 'stale'}), None)
+                    if completed is not None:
+                        from .scientific_dialogue import ScientificResponse
+                        from .turns import TurnOutcome
+                        message = 'Scientific computation completed. Accepted results and downloads remain available; the explanation is unavailable.'
+                        fallback = TurnOutcome('execute', completed.status, text=message,
+                            scientific=ScientificResponse((), 'insufficient_evidence', message, (),
+                                                          'accepted_execution_state', 'unavailable'))
+                        presentation = _present(fallback, latest, turn_id=turn_id)
+                    else:
+                        error = _fail('INTERACTIVE_APPLICATION_FAILED').error
+                        presentation = PresentedResponse(kind='execute', status='failed',
+                            text=error.message, error=error)
                 try:
                     sessions.store_presentation(session_id, turn_id, presentation.to_dict())
                 except (SessionError, ValueError, RuntimeError, OSError) as exc:
@@ -812,13 +844,9 @@ class InteractiveAgentApplication:
                             and state.turn(turn_id).status in {'activated','stale','failed','cancelled','planned'}):
                         from .responses import summarize
                         from .turns import TurnOutcome
-                        if interaction.admitted.get('operation') == 'plan':
-                            from .dialogue_execution import completion_outcome
-                            outcome = completion_outcome(state, turn_id)
-                        else:
-                            outcome = summarize(sessions, session_id, turn_id,
-                                TurnOutcome('execute', state.turn(turn_id).status))
-                        sessions.store_presentation(session_id, turn_id, _present(outcome).to_dict())
+                        outcome = summarize(sessions, session_id, turn_id,
+                            TurnOutcome('execute', state.turn(turn_id).status))
+                        sessions.store_presentation(session_id, turn_id, _present(outcome, state, turn_id=turn_id).to_dict())
                 return self.turn(session_id, turn_id)
         except SessionConflictError as exc:
             raise _fail('INTERACTIVE_OPERATION_ACTIVE') from exc
@@ -989,6 +1017,17 @@ class InteractiveAgentApplication:
                         raise ValueError('Conflicting accepted scientific artifact identity.')
                 else:
                     unique[handle] = item
+            from .analysis_delivery import CONTRACT, ROLE, integrated_analysis
+            for item in tuple(unique.values()):
+                if item.contract == CONTRACT and item.role == ROLE:
+                    try:
+                        integrated = integrated_analysis(self, item)
+                        if integrated is not None:
+                            unique[integrated.reference.handle] = integrated
+                    except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                        # Optional packaging availability never removes accepted
+                        # compact results, science, or historical downloads.
+                        pass
             return tuple(unique.values())
         except (SessionError, ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration) as exc:
             raise _fail('INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE') from exc
@@ -1280,6 +1319,11 @@ class InteractiveAgentApplication:
             turn = state.turn(revision.turn_id)
             workspace = self._application._workspace
             root = workspace.runs / workspace.run_digest(turn.run_id)
+            accepted_figures = figure_inventory(self._application.sessions, turn, revision)
+            figures = {f['path']:f['metadata'] for f in accepted_figures}
+            by_digest = {}
+            for figure in accepted_figures:
+                by_digest.setdefault(figure['sha256'], []).append(figure['metadata'])
             items = []
             for file in turn.completion_files:
                 path = Path(file.path)
@@ -1294,7 +1338,9 @@ class InteractiveAgentApplication:
                         'analysis_report' if path.suffix == '.md' else relative.parts[0])
                 handle = digest(dict(session_id=session_id, revision_id=revision_id,
                     turn_id=turn.turn_id, relative=str(relative), sha256=file.sha256))
-                items.append((ArtifactHandle(handle, kind, file.sha256, revision_id, turn.turn_id), file))
+                items.append((ArtifactHandle(handle, kind, file.sha256, revision_id, turn.turn_id,
+                    figure=figures.get(file.path) or (by_digest[file.sha256][0]
+                        if len(by_digest.get(file.sha256, ())) == 1 else None)), file))
             return tuple(items)
         except (SessionError, ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
@@ -1365,25 +1411,26 @@ class InteractiveAgentApplication:
                 'This text projects accepted revision output evidence. It is not the original Markdown report.',
                 'No scientific reconstruction or fresh scientific verification was performed.', '']
             size = sum(len(line.encode('utf-8')) + 1 for line in lines)
-            for output in revision.outputs:
+            for group in revision.result_groups:
                 start = len(lines)
-                view = self.evidence(session_id, revision_id, output)
-                lines.extend([f'Output: {output}', f'Evidence availability: {view.status}'])
-                if view.reason is not None:
-                    lines.append(f'Availability reason: {view.reason}')
-                if view.source is not None:
-                    lines.extend([f'Tool: {view.source.tool_name}', f'Result contract: {view.source.result_contract}',
-                        f'Evidence SHA-256: {view.source.evidence_sha256}',
-                        'Accepted verification checks: ' + ', '.join(view.source.verification_checks)])
-                for fact in view.facts:
-                    rendered = (json.dumps(_serialize(fact.value), ensure_ascii=False, allow_nan=False)
-                                if fact.status == 'available' else fact.reason or fact.status)
-                    lines.append(f'{fact.field} [{fact.status}]: {rendered}')
-                if view.source is not None and view.source.tool_name == 'select_scATAC_cells':
-                    lines.append('The effective selection thresholds can be adjusted. Owner defaults, when used, '
-                        'are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. '
-                        'An empty selection means no barcode met these criteria; thresholds are not automatically lowered.')
-                lines.extend(['Limitations:'] + list(view.limitations) + [''])
+                view = group['evidence']
+                if view is None:
+                    view = self.evidence(session_id, revision_id, group['canonical_output']).to_dict()
+                lines.extend([f"Result: {group['label']}",
+                    'Accepted output aliases: ' + ', '.join(o['name'] for o in group['outputs']),
+                    f"Evidence availability: {view['status']}"])
+                if view['reason'] is not None:
+                    lines.append(f"Availability reason: {view['reason']}")
+                source = view['source']
+                if source is not None:
+                    lines.extend([f"Tool: {source['tool_name']}", f"Result contract: {source['result_contract']}",
+                        f"Evidence SHA-256: {source['evidence_sha256']}",
+                        'Accepted verification checks: ' + ', '.join(source['verification_checks'])])
+                for fact in view['facts']:
+                    rendered = (json.dumps(_serialize(fact['value']), ensure_ascii=False, allow_nan=False)
+                                if fact['status'] == 'available' else fact['reason'] or fact['status'])
+                    lines.append(f"{fact['field']} [{fact['status']}]: {rendered}")
+                lines.extend(['Limitations:'] + list(view['limitations']) + [''])
                 size += sum(len(line.encode('utf-8')) + 1 for line in lines[start:])
                 if size > 1_048_576:
                     raise ValueError('Report projection exceeds the byte bound.')

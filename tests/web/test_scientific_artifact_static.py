@@ -19,7 +19,8 @@ def test_download_uses_server_descriptor_identity_and_normal_browser_attachment(
     files = source[source.index('function scientificArtifactPath'):source.index('function renderArtifacts')]
     assert 'scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)' in files
     assert 'download.download = artifact.filename' in files
-    assert 'names[artifact.label] || artifact.label' in files
+    assert 'artifact.title || artifact.label' in files
+    assert 'artifact.description ||' in files and 'artifact.purpose ||' in files
     assert '${artifact.filename}' in files
     assert 'formatBytes(artifact.size_bytes)' in files
     assert 'artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id' in files
@@ -51,19 +52,14 @@ def test_details_report_and_figure_controls_remain_available():
     assert 'innerHTML' not in source
 
 
-def test_chat_and_details_share_reviewed_matrix_qc_selection_file_allowlist():
+def test_chat_and_details_use_server_file_descriptions_without_a_duplicate_label_policy():
     source = (STATIC / 'app.js').read_text()
     policy = source[source.index('function supportedScientificFile'):source.index('function scientificFileNode')]
-    for artifact_type, filename, label in (
-        ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
-        ('scientific_qc_table', 'barcodes.tsv.gz', 'Barcode QC'),
-        ('scientific_qc_table', 'lengths.tsv.gz', 'Fragment length distribution'),
-        ('scientific_selection_table', 'decisions.tsv.gz', 'Cell-selection decisions'),
-        ('scientific_selection_table', 'selected.tsv.gz', 'Selected cells'),
-    ):
-        assert artifact_type in policy and filename in policy and label in policy
-    assert 'Object.hasOwn' in policy
-    assert 'supportedScientificFile(artifact)' in source[source.index('function appendScientificFiles'):]
+    for artifact_type in ('scientific_matrix', 'scientific_qc_table', 'scientific_selection_table',
+                          'scientific_integrated', 'scientific_analysis'):
+        assert artifact_type in policy
+    assert 'Original accepted matrix' not in policy and 'safe export' not in policy
+    assert 'scientificFileGroups(sessionId,' in source[source.index('function appendScientificFiles'):]
 
 
 def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
@@ -83,3 +79,14 @@ def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
     assert viewer.index('await loadRevision(revisionId)') < viewer.index('if (epoch !== state.epoch) return')
     assert 'showWorkspacePanel("results")' in viewer
     assert '/activate' not in messages + renderer + viewer
+
+
+def test_downloads_use_scientific_figure_identity_and_honest_request_feedback():
+    source = (STATIC / 'app.js').read_text()
+    identity = source[source.index('function distinctFigureArtifacts'):source.index('function selectResultFigure')]
+    key = next(line for line in identity.splitlines() if 'const key =' in line)
+    assert 'artifact.revision_id' in key and 'artifact.figure.manifest_sha256' in key and 'artifact.figure.figure_id' in key
+    assert 'artifact.sha256' not in key
+    guard = source[source.index('function guardDownload'):source.index('function scientificFileNode')]
+    assert 'event.preventDefault()' in guard and 'Requested — retry if needed' in guard
+    assert '.blob(' not in guard and 'complete' not in guard.lower().split('//')[0]

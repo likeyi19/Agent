@@ -29,6 +29,38 @@ MAX_FIELDS = 128
 MAX_DETAIL_BYTES = 8 * 1024 * 1024
 
 
+# Reviewed scope explanations only, not new scores, biological interpretations,
+# or method implementations. Values and method parameters remain evidence facts.
+RESULT_LIMITATIONS = {
+    'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
+    'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
+    'annotate_scATAC_cell_types': 'The compact summary records assignments and statuses. It does not contain marker rationale or calibrated confidence; omitted groups are not evidence of absent groups.',
+    'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
+    'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
+    'adapt_epizoo_species': 'Adaptation completion and structural qualification do not establish improved biological performance.',
+    'cluster_cells': 'Clustering summaries record method parameters and cluster counts. They do not establish cluster correspondence, cell-type identity, biological superiority, significance or causality.',
+    'compute_cell_umap': 'UMAP parameters and output dimensions describe a layout. Independently computed coordinates have no established alignment: rotation, reflection or scale differences do not establish biological change. No coordinate comparison or biological superiority is established.',
+    'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
+}
+
+
+def _unsafe_fact_field(field):
+    return field == 'path' or field.endswith('_path') or field in {
+        'workspace_root', 'authority_payload', 'api_key', 'credentials',
+        'provider_endpoint', 'base_url', 'provider_prompt',
+    }
+
+
+def _unsafe_fact_value(value):
+    """Omit a whole unsafe field; never rewrite or reinterpret scientific values."""
+    if isinstance(value, Mapping):
+        return any(_unsafe_fact_field(k) or _unsafe_fact_value(child) for k, child in value.items())
+    if isinstance(value, (tuple, list)):
+        return any(_unsafe_fact_value(child) for child in value)
+    return isinstance(value, str) and (value.startswith(('/', '~/', 'file://'))
+        or len(value) > 2 and value[0].isalpha() and value[1:3] in (':\\', ':/'))
+
+
 @dataclass(frozen=True)
 class DetailRequest:
     """Exact reviewed section, optional subject, and owner-order record bound."""
@@ -36,6 +68,10 @@ class DetailRequest:
     subject: str | None = None
     limit: int = 8
     candidate: str | None = None
+    field: str | None = None
+    other_field: str | None = None
+    offset: int = 0
+    comparison: Mapping | None = None
 
     def __post_init__(self):
         if (type(self.section) is not str or not 0 < len(self.section) <= 128
@@ -43,6 +79,24 @@ class DetailRequest:
                 or self.candidate is not None and (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128)
                 or type(self.limit) is not int or not 1 <= self.limit <= 32):
             raise ValueError('Invalid bounded detail request.')
+        if (type(self.offset) is not int or self.offset < 0
+                or any(v is not None and (type(v) is not str or not 0 < len(v) <= 256)
+                       for v in (self.field, self.other_field))):
+            raise ValueError('Invalid categorical detail operands.')
+        categorical = self.section in ('category_counts', 'category_association', 'categorical_fields')
+        if categorical:
+            if self.subject is not None or self.candidate is not None:
+                raise ValueError('Categorical fields are distinct from annotation group subjects.')
+            if self.section != 'categorical_fields' and self.field is None:
+                raise ValueError('Select an exact categorical field.')
+            if self.section == 'category_association' and self.other_field is None:
+                raise ValueError('Select both categorical fields.')
+        elif self.field is not None or self.other_field is not None or self.offset or self.comparison is not None:
+            raise ValueError('Unsupported detail operands.')
+        if self.section != 'category_association' and (self.other_field is not None or self.comparison is not None):
+            raise ValueError('Only association reads accept a second source.')
+        if self.comparison is not None:
+            object.__setattr__(self, 'comparison', freeze_json_mapping(self.comparison, 'comparison'))
 
 
 @dataclass(frozen=True)
@@ -55,9 +109,12 @@ class EvidenceFact(_JsonModel):
     reason: str | None = None
     artifact_sha256: str | None = None
     artifact_name: str | None = None
+    derivation: Mapping | None = None
 
     def __post_init__(self):
         object.__setattr__(self, 'value', freeze_json_mapping({'value': self.value}, 'fact')['value'])
+        if self.derivation is not None:
+            object.__setattr__(self, 'derivation', freeze_json_mapping(self.derivation, 'derivation'))
 
 
 @dataclass(frozen=True)
@@ -502,19 +559,39 @@ def _project(sessions, state, revision, output, fields, detail):
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
         unselected_fields=tuple(sorted((set(facts) | set(parameters)) - set(selected))))
+    if step.tool_name in RESULT_LIMITATIONS:
+        result = replace(result, limitations=result.limitations + (RESULT_LIMITATIONS[step.tool_name],))
     if step.tool_name == 'annotate_scATAC_cell_types' and step.resolved_arguments.get('source_path'):
         result = replace(result, limitations=result.limitations + (
             'Native MAESTRO uses exact supplied contig names. Peaks without native transcript weights do not contribute; this is not biological absence. No alias correction is performed. Feature participation, when recorded, is available in annotation details. Annotation is a computational result, not independent biological validation.',))
     if detail is not None:
-        result = replace(result, detail=_detail(sessions, step, detail),
-            evidence_scope='accepted_summary_and_published_detail',
+        from .result_reading import read
+        if detail.section not in detail_sections(step.tool_name):
+            raise _Unsupported('unsupported_detail_section')
+        categorical = detail.section in ('categorical_fields', 'category_counts', 'category_association')
+        result = replace(result, detail=(
+            read(sessions, state, run, step, detail)
+            if categorical
+            else _detail(sessions, step, detail)),
+            evidence_scope='accepted_summary_and_on_demand_facts' if categorical else 'accepted_summary_and_published_detail',
             limitations=tuple(x for x in result.limitations if x != 'Detailed sidecars and raw artifacts are not read.') + (
                 'Detail is a bounded owner-order subset, not a ranking; omissions are not scientific absence.',) + (
+                ('Categorical metadata and statistics are read after acceptance; derived statistics were not part of the original historical publication.',)
+                if categorical else ()) + (
                 ('Whole-result annotation support includes only the published primary candidate for each displayed group; other candidates require a group-specific question.',)
                 if detail.section == 'annotation_rationale' and detail.subject is None else ()))
     if len(_bytes(result)) > MAX_VIEW_BYTES:
         raise _Unavailable('evidence_view_size_limit')
     return result
+
+
+def detail_sections(tool):
+    """One section inventory for application answering and interactive clients."""
+    from .result_reading import CATEGORICAL_TOOLS
+    return ({'annotate_scATAC_cell_types': ('annotation_rationale',),
+             'compute_scATAC_qc': ('length_histogram',)}.get(tool, ())
+            + (('categorical_fields', 'category_counts', 'category_association')
+               if tool in CATEGORICAL_TOOLS else ()))
 
 
 def detail_request(view, subject):
@@ -531,9 +608,7 @@ def detail_request(view, subject):
 
 
 def _detail(sessions, step, request):
-    expected = {'annotate_scATAC_cell_types': 'annotation_rationale',
-                'compute_scATAC_qc': 'length_histogram'}
-    if expected.get(step.tool_name) != request.section:
+    if request.section not in detail_sections(step.tool_name):
         raise _Unsupported('unsupported_detail_section')
     if request.section != 'annotation_rationale' and request.subject is not None:
         raise _Unsupported('unsupported_detail_subject')
@@ -709,3 +784,174 @@ def annotation_field_semantics(field):
         'validation_state': dict(kind='interpretation_limit', unit=None,
             description='Independent validation status. not_assessed means computational annotations have not established independently validated biological cell identities.'),
     }.get(field)
+
+
+def field_semantics(registry, tool, field):
+    """Shared reviewed meanings for R5 and interactive evidence; no new facts."""
+    from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
+    spec = registry.get(tool)
+    semantics = {}
+    parameter_labels = {'clustering_parameters': 'Clustering parameters',
+                        'selection_threshold_origins': 'Selection threshold origins',
+                        'explicit_user_parameters': 'Explicit user parameters',
+                        'clustering_parameters.resolution': 'Leiden resolution',
+                        'clustering_parameters.random_seed': 'Leiden random seed',
+                        'clustering_resolution_origin': 'Leiden resolution origin'}
+    if field in parameter_labels:
+        semantics['label'] = parameter_labels[field]
+        semantics['label_source'] = 'reviewed_clustering_parameter_projection'
+    if field == 'clustering_resolution_origin':
+        semantics['description'] = ('This origin is established by accepted execution arguments. '
+            'An explicit execution argument alone does not establish how a historical user supplied it. '
+            'The effective value comes from the accepted clustering owner result, not current defaults.')
+        semantics['description_source'] = 'reviewed_clustering_parameter_projection'
+    if field == 'clustering_neighbors_consumption':
+        semantics['description'] = ('The accepted clustering argument consumed a qualified neighbors publication. '
+            'same_plan_qualified_output records a direct output binding in its plan; '
+            'qualified_historical_output records an exact accepted PriorOutputRef. '
+            'This does not report cumulative scientific-owner call counts.')
+        semantics['description_source'] = 'reviewed_clustering_input_projection'
+    if field in ('detail.category_counts', 'detail.category_association'):
+        semantics.update(kind='on_demand_descriptive_statistic',
+            description='Read after acceptance from exact pinned observation fields. Denominators, missing values, unused categories and pagination are explicit. Source observations retain their publisher/source attribution and are not ground truth. No native scientific analysis was rerun.',
+            description_source='scientific_categorical_reader')
+    if field == 'detail.categorical_fields':
+        semantics.update(kind='observation_field_inventory',
+            description='Bounded eligible field-name metadata, not category statistics or biological facts. offset/next_offset page field names. Selecting a field still requires exact source-byte and owner type checks.',
+            description_source='scientific_categorical_reader')
+    if field.startswith('selection_threshold_origins.'):
+        argument_name = field.split('.', 1)[1]
+        argument = {**spec.required_arguments, **spec.optional_arguments}.get(argument_name)
+        if argument is not None:
+            semantics['label'] = argument_name + ' origin'
+            semantics['label_source'] = 'registry_argument_identity'
+            semantics['description'] = ('The origin comes from exact accepted execution argument presence. '
+                f'The accepted effective_thresholds.{argument_name} records the owner-effective value: '
+                'a non-null threshold is enabled, including a native default when the argument was omitted; '
+                'null denotes a disabled optional filter. Use that accepted value, not current defaults. '
+                'This origin alone does not establish a user instruction.')
+            semantics['description_source'] = 'reviewed_selection_parameter_projection'
+    if field.startswith('explicit_user_parameters.parameters.'):
+        semantics['label'] = field.rsplit('.', 1)[1] + ' user origin'
+        semantics['label_source'] = 'registry_argument_identity'
+        semantics['description'] = ('An exact utterance-bound Session declaration, its admitted input, '
+            'and the accepted planned and resolved operation argument agree. '
+            'This records an explicit user instruction; effective scientific values remain owner evidence facts.')
+        semantics['description_source'] = 'reviewed_session_parameter_projection'
+    if field in _REPORT_FIELDS.get(tool, ()) and field in _FIELD_LABELS:
+        semantics['label'] = _FIELD_LABELS[field]
+        semantics['label_source'] = 'reviewed_report_field'
+    description = spec.result_contract.planning_fields.get(field)
+    if description is not None:
+        semantics['description'] = description.description
+        semantics['description_source'] = 'registry_result_contract'
+    if tool == 'annotate_scATAC_cell_types':
+        reviewed = annotation_field_semantics(field)
+        if reviewed is not None:
+            semantics.update(reviewed, description_source='reviewed_native_annotation_summary')
+    semantics.setdefault('kind', 'execution_parameter' if field in spec.optional_arguments
+                         else 'unclassified_accepted_field')
+    return semantics
+
+
+def public_citation_source(source):
+    """Project the actual R5 citation contract, never arbitrary owner payloads."""
+    keys = ('revision_id', 'evidence_sha256', 'source_run_result_sha256', 'artifact_name',
+            'artifact_sha256', 'pointer', 'session_id')
+    result = {k:_serialize(source[k]) for k in keys if k in source}
+    if 'output_locator' in source:
+        result['output_locator'] = {k:source['output_locator'][k] for k in
+            ('name','run_id','step_id','output_key','accepted_step_sha256')}
+    if 'derivation' in source:
+        value = source['derivation']
+        result['derivation'] = {k:_serialize(value[k]) for k in ('read_version','cell_order_sha256') if k in value}
+        result['derivation']['sources'] = [{k:s[k] for k in (
+            'artifact_sha256','field','location','role','accepted_step_sha256','run_id','step_id',
+            'source_sha256','neighbors_identity_sha256') if k in s} for s in value.get('sources', ())]
+        for key, allowed in (('request', ('section','field','other_field','offset','limit')),
+                             ('comparison', ('revision_id','output_name','accepted_step_sha256','subject'))):
+            child = value.get(key)
+            result['derivation'][key] = None if child is None else {k:child[k] for k in allowed if k in child}
+    return result
+
+
+def figure_inventory(sessions, turn, revision=None):
+    """Distinct accepted figures from pinned manifests, including report copies.
+
+    This replaces file-suffix accounting and the Interactive-only manifest reader.
+    Internal manifest storage metadata is never copied to the public projection.
+    """
+    from agent.report.visualization import ANALYSIS_VISUALIZATION_MANIFEST_FILENAME, _sha256_file
+    workspace = sessions._application._workspace
+    pinned = {f.path:f.sha256 for f in turn.completion_files}
+    figures = {}
+    for file in turn.completion_files:
+        path = Path(file.path)
+        if path.name != ANALYSIS_VISUALIZATION_MANIFEST_FILENAME:
+            continue
+        workspace.require_regular_file(path)
+        if path.stat().st_size > MAX_EVIDENCE_BYTES:
+            raise ValueError('Unbounded accepted figure manifest.')
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != file.sha256:
+            raise ValueError('Changed accepted figure manifest.')
+        manifest = json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
+        if manifest['source']['run_id'] != turn.run_id:
+            raise ValueError('Changed figure publishing identity.')
+        for record in manifest['figures']:
+            target = path.parent / record['relative_path']
+            target.relative_to(path.parent)
+            workspace.require_regular_file(target)
+            if (target.resolve() != target or pinned.get(str(target)) != record['png_sha256']
+                    or _sha256_file(target) != record['png_sha256']):
+                raise ValueError('Changed accepted figure bytes.')
+            sources = []
+            composite = record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
+            for item in record['source_artifacts']:
+                source = {k:item[k] for k in ('tool_name','artifact_kind','result_field','field','role',
+                          'source_sha256','neighbors_identity_sha256') if k in item}
+                source.update(run_id=turn.run_id, step_id=item['producing_step_id'])
+                if composite:
+                    locator = item['accepted_output']
+                    source['output'] = {k:locator[k] for k in ('name','run_id','step_id','output_key','accepted_step_sha256','revision_id')}
+                    if source['output']['revision_id'] is None and revision is not None and locator['run_id'] == turn.run_id:
+                        source['output']['revision_id'] = revision.revision_id
+                    source.update(run_id=locator['run_id'], step_id=locator['step_id'], sha256=item['integrity']['sha256'])
+                sources.append(source)
+            outputs = () if revision is None else revision.outputs
+            if composite:
+                label = next(s['output'] for s in sources if s['role'] == 'categories')
+                names = [o.name for o in outputs if all(getattr(o,k) == label[k] for k in
+                         ('run_id','step_id','accepted_step_sha256'))]
+            else:
+                names = [o.name for o in outputs if o.run_id == turn.run_id and o.step_id in record['source_step_ids']]
+            public = dict(kind=record['figure_kind'], figure_id=record['figure_id'], manifest_sha256=file.sha256,
+                run_id=turn.run_id, revision_id=None if revision is None else revision.revision_id,
+                step_ids=record['source_step_ids'], output_names=names, sources=sources)
+            if composite:
+                public['coordinate_reused'] = True
+                public['correspondence'] = {k:record['presentation']['correspondence'][k]
+                    for k in ('basis','n_cells','cell_order_sha256')}
+            identity = (file.sha256, record['figure_id'])
+            figures[identity] = dict(path=str(target), sha256=record['png_sha256'], metadata=public)
+    return tuple(figures.values())
+
+
+def delivered_visualization(sessions, session_id, interaction, figures):
+    from .result_reading import visualization_inputs
+    inputs = visualization_inputs(sessions, session_id, interaction)
+    if inputs is None:
+        from .dialogue_execution import _received_origin
+        origin = _received_origin(interaction, sessions.load(session_id).interactions)
+        tool = (origin.admitted or {}).get('tool')
+        return any(not f['metadata'].get('coordinate_reused') and f['metadata']['output_names']
+            and any(s['tool_name'] == tool for s in f['metadata']['sources']) for f in figures)
+    coordinate, labels, field = inputs
+    def same(source, target):
+        output = source.get('output', {})
+        return (all(output.get(k) == target[k] for k in ('name','run_id','step_id','output_key','accepted_step_sha256'))
+                and (target['revision_id'] is None or output.get('revision_id') == target['revision_id']))
+    return any(figure['metadata'].get('coordinate_reused')
+        and any(s.get('role') == 'coordinates' and same(s, coordinate) for s in figure['metadata']['sources'])
+        and any(s.get('role') == 'categories' and same(s, labels) and s.get('field') == field
+                for s in figure['metadata']['sources']) for figure in figures)

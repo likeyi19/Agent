@@ -336,7 +336,9 @@ def build_semantic_planning_prompt(
     payload = {
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
-            'Select registered scientific tools directly for the complete request; no preliminary capability classification. Preserve explicit method and parameter choices.',
+            'Select registered scientific tools directly for the complete scientific computation; no preliminary capability classification. Preserve explicit method and parameter choices.',
+            'The user_request retains the whole research objective. research_context.task separates requested non-computational delivery from science. Explanation, descriptive comparison and presentation are post-run responsibilities, not invented Registry tools. Delivery intentions marked deferred are not fulfilled by this plan. Do not classify supported science as unsupported solely because subsequent delivery is requested.',
+            'Missing essential scientific capabilities or incompatible inputs remain unsupported; never silently omit science or change the objective. Missing resolvable declarations use the existing prerequisite path. task.unfulfilled records the exact independently separable requirements excluded during interpretation and disclosed to the user; do not invent replacements or claim them fulfilled. Compose the entire remaining scientific objective. Other omissions require clarification or unsupported, never a hidden partial plan.',
             'Scientific parameters with default_when_omitted use that native default when omitted. Ask only for genuinely unresolved required scientific decisions, never internal paths, digests, output directories or run identities; Agent binds engineering values from exact sources.',
             'Offered tools/compatible sources; no invention; valid DAG, lineage, explicit sources.',
             'deterministic_scoped: compiler-bound from explicit scope; do not emit source. optional_explicit: per-step scope, no fanout, defaults on omission.',
@@ -366,6 +368,9 @@ def build_semantic_planning_prompt(
     }
     from .active_context import current_context
     active = current_context()
+    if active is not None:
+        payload['research_context'] = active.public_research_context()
+        payload['instructions'] += ('Result groups are reference metadata only. Only active_outputs handles authorize executable source selection; readable results, matching counts and recorded dependencies do not grant new authority. Accepted parameter values are not current user declarations. task.retained_parameters records explicitly selected prior settings; compiler and admission enforce their exact consumers.',)
     if active is not None and active.items:
         payload['active_outputs'] = active.public_items()
         payload['wire_v4']['source_kinds']['context'] = ('kind', 'handle')

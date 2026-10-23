@@ -82,10 +82,11 @@ def _clarification(value):
     _boolean(value['value_required'], 'value_required')
 
 
-def _scientific(value):
+def _scientific(value, *, version=1):
     legacy = {'support', 'limitations', 'evidence_scope'}
     richer = legacy | {'targets'}
-    if not isinstance(value, Mapping) or set(value) not in (legacy, richer):
+    current = richer | {'availability', 'citations'}
+    if not isinstance(value, Mapping) or set(value) not in ((legacy, richer) if version == 1 else (current,)):
         raise ValueError('Invalid interactive scientific presentation fields.')
     _support(value['support'])
     _strings(value['limitations'], 'scientific limitations')
@@ -103,6 +104,20 @@ def _scientific(value):
             identities.append((target['revision_id'], target['output_name'], target['subject']))
         if len(set(identities)) != len(identities):
             raise ValueError('Duplicate scientific presentation target.')
+    if version == 2:
+        if value['availability'] not in ('generated', 'deterministic', 'unavailable'):
+            raise ValueError('Invalid scientific explanation availability.')
+        citations = value['citations']
+        if not isinstance(citations, (tuple, list)) or len(citations) > 64:
+            raise ValueError('Invalid scientific citations.')
+        for citation in citations:
+            _shape(citation, ('claim_id', 'field', 'source'), 'scientific citation')
+            _identifier(citation['claim_id'], 'claim identity')
+            _text(citation['field'], 'claim field', 4096)
+            if not isinstance(citation['source'], Mapping):
+                raise ValueError('Invalid scientific citation source.')
+        if value['availability'] == 'unavailable' and citations:
+            raise ValueError('Unavailable explanations cannot cite generated claims.')
 
 
 def _guidance(value):
@@ -191,10 +206,10 @@ class PresentedResponse(_JsonModel):
     scientific: object = None
     guidance: object = None
     error: ClientError | None = None
-    version: int = 1
+    version: int = 2
 
     def __post_init__(self):
-        if type(self.version) is not int or self.version != 1:
+        if type(self.version) is not int or self.version not in (1, 2):
             raise ValueError('Unsupported interactive presentation version.')
         if self.kind not in ('answer', 'clarify', 'navigate', 'execute'):
             raise ValueError('Invalid interactive response kind.')
@@ -210,9 +225,12 @@ class PresentedResponse(_JsonModel):
                 ('guidance', _guidance, 'answer')):
             value = getattr(self, name)
             if value is not None:
-                if self.kind != kind:
+                if self.kind != kind and not (name == 'scientific' and self.version == 2 and self.kind == 'execute'):
                     raise ValueError(f'Invalid {name} response kind.')
-                validator(value)
+                if name == 'scientific':
+                    validator(value, version=self.version)
+                else:
+                    validator(value)
                 object.__setattr__(self, name, freeze_json_mapping(value, name))
         encoded = json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False).encode('utf-8')
         if len(encoded) > MAX_PRESENTATION_BYTES:
@@ -313,6 +331,7 @@ class RevisionView(_JsonModel):
     artifacts: tuple[ArtifactHandle, ...] = ()
     evidence_outputs: tuple[str, ...] = ()
     scientific_artifacts: tuple[ScientificArtifactHandle, ...] = ()
+    result_groups: tuple = ()
 
     def __post_init__(self):
         _identifier(self.revision_id, 'revision_id')
@@ -349,6 +368,12 @@ class RevisionView(_JsonModel):
         if any(a.revision_id != self.revision_id or a.turn_id != self.turn_id
                for a in self.scientific_artifacts):
             raise ValueError('Scientific artifact inventory belongs to a different revision.')
+        if type(self.result_groups) is not tuple or len(self.result_groups) > 32:
+            raise ValueError('Invalid revision result groups.')
+        for group in self.result_groups:
+            if group['canonical_output'] not in self.outputs or any(o['name'] not in self.outputs for o in group['outputs']):
+                raise ValueError('Result group references an unselected output.')
+        object.__setattr__(self, 'result_groups', tuple(freeze_json_mapping(g, 'result group') for g in self.result_groups))
 
 
 @dataclass(frozen=True)
@@ -383,6 +408,7 @@ class ArtifactHandle(_JsonModel):
     sha256: str
     revision_id: str
     turn_id: str
+    figure: object = dataclass_field(default=None, kw_only=True, metadata={'omit_none': True})
 
     def __post_init__(self):
         for name in ('handle', 'artifact_type', 'revision_id', 'turn_id'):
@@ -390,19 +416,29 @@ class ArtifactHandle(_JsonModel):
         if (type(self.sha256) is not str or len(self.sha256) != 64
                 or any(char not in '0123456789abcdef' for char in self.sha256)):
             raise ValueError('Invalid interactive artifact digest.')
+        if self.figure is not None:
+            if self.artifact_type != 'analysis_figure':
+                raise ValueError('Figure provenance belongs to a scientific figure.')
+            object.__setattr__(self, 'figure', freeze_json_mapping(self.figure, 'figure provenance'))
 
 
 @dataclass(frozen=True)
 class ScientificArtifactHandle(ArtifactHandle):
     """Eligible accepted identity; payload integrity is checked on download."""
 
-    size_bytes: int
+    size_bytes: int | None
     filename: str = 'matrix.h5ad'
     label: str = 'Original accepted matrix'
+    title: str = dataclass_field(init=False)
+    purpose: str = dataclass_field(init=False)
+    description: str = dataclass_field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
-        _natural(self.size_bytes, 'scientific artifact size')
+        # An unprepared integrated derivative has no known delivered size.
+        # Server-only payload sizes separately own snapshot/capacity admission.
+        if self.size_bytes is not None or self.artifact_type != 'scientific_integrated':
+            _natural(self.size_bytes, 'scientific artifact size')
         reviewed = {
             ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
             ('scientific_qc_table', 'barcodes.tsv.gz', 'Barcode QC'),
@@ -415,12 +451,45 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_analysis', 'embeddings.h5ad', 'Cell embeddings — safe export'),
             ('scientific_analysis', 'clusters.h5ad', 'Embeddings and Leiden — safe export'),
             ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
+            ('scientific_integrated', 'integrated-embeddings.h5ad', 'Original data with accepted analysis'),
+            ('scientific_integrated', 'integrated-clusters.h5ad', 'Original data with accepted analysis'),
+            ('scientific_integrated', 'integrated-analysis.h5ad', 'Original data with accepted analysis'),
             ('scientific_model', 'epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
             ('scientific_model', 'epizoox-model.json', 'Model configuration and reuse requirements'),
         }
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):
             raise ValueError('Unsupported scientific artifact descriptor.')
+        for name, value in self._description().items():
+            object.__setattr__(self, name, value)
+
+    def _description(self):
+        """One client descriptor owns purpose/wording for chat and result details.
+
+        These are transient delivery descriptions, never accepted result state.
+        Existing labels and handles remain compatible with historical clients.
+        """
+        if self.artifact_type == 'scientific_integrated':
+            stage = {'integrated-embeddings.h5ad': 'cell embeddings', 'integrated-clusters.h5ad': 'Leiden clusters',
+                     'integrated-analysis.h5ad': 'UMAP analysis'}[self.filename]
+            title, purpose, description = ('Original data with ' + stage + ' (H5AD)', 'Integrated annotated H5AD',
+                'Integrated annotated H5AD — prepared when downloaded. '
+                'Continue analysis with original measurements, features and safe metadata plus this accepted result.')
+        elif self.artifact_type == 'scientific_analysis':
+            stage = {'embeddings.h5ad': 'Cell embeddings', 'clusters.h5ad': 'Leiden clusters',
+                     'analysis.h5ad': 'UMAP analysis', 'neighbors.h5ad': 'Neighbor graph'}[self.filename]
+            title, purpose, description = (stage + ' (compact H5AD)', 'Compact analysis-result H5AD',
+                'Lightweight cell analysis and recorded methods. No original matrix or feature axis; X=None.')
+        elif self.artifact_type == 'scientific_annotation':
+            title, purpose, description = ('Annotated original data (H5AD)', 'Integrated annotated H5AD',
+                'Original measurements and features with accepted cell annotations; private metadata omitted.')
+        elif self.artifact_type == 'scientific_matrix':
+            title, purpose, description = (self.label, 'Scientific datasets and tables',
+                'Accepted scientific matrix with its original measurement semantics.')
+        else:
+            title, purpose, description = (self.label, 'Scientific datasets and tables',
+                'Accepted tool output; provenance and method details are available with the result.')
+        return dict(title=title, purpose=purpose, description=description)
 
 
 @dataclass(frozen=True)
@@ -449,8 +518,10 @@ class EvidenceView(DialogueEvidence):
             _collection(getattr(self, name), EvidenceFact, 'field', name)
         _strings(self.unselected_fields, 'unselected_fields', maximum=128)
         _strings(self.limitations, 'limitations', maximum=128)
-        if (type(self.supported_details) is not tuple or len(self.supported_details) > 2
-                or any(s not in ('annotation_rationale', 'length_histogram') for s in self.supported_details)):
+        if (type(self.supported_details) is not tuple or len(self.supported_details) > 5
+                or len(set(self.supported_details)) != len(self.supported_details)
+                or any(s not in ('annotation_rationale', 'length_histogram', 'categorical_fields',
+                                 'category_counts', 'category_association') for s in self.supported_details)):
             raise ValueError('Invalid supported evidence detail inventory.')
         available = {fact.field for name in ('facts', 'coverage', 'detail') for fact in getattr(self, name)}
         if not isinstance(self.field_labels, Mapping) or set(self.field_labels) - available:

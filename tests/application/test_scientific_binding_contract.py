@@ -185,7 +185,8 @@ def test_combined_historical_and_generic_declarations_share_the_eight_argument_b
         parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', argument=legacy, arguments=arguments)))
     accepted = parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
         argument=legacy, arguments=arguments[:7])))
-    assert len(accepted.arguments) == 7 and accepted.argument.tool == 'cluster_cells'
+    assert len(accepted.arguments) == 8 and accepted.argument is None
+    assert accepted.arguments[0].tool == 'cluster_cells'
 
 
 @pytest.mark.parametrize('arguments', [None, True, {}, '4', [], [{}] * 9])

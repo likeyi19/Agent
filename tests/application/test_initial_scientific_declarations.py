@@ -454,15 +454,15 @@ def test_initial_species_and_numeric_resolution_share_exact_consumer_binding(tmp
     assert 'min_dist' not in h[4].plans[0].steps[3].arguments
 
 
-def test_initial_choice_and_historical_singular_resolution_preserve_both_binding_records(tmp_path):
+def test_initial_choice_and_historical_singular_resolution_use_generic_binding_records(tmp_path):
     objective = EXPLICIT + ' Use resolution 0.7.'
     legacy = LeidenResolution(**asdict(numeric(objective)))
     h = harness(tmp_path, objective=objective, declarations=(choice(objective),), argument=legacy)
     result = submit(h, objective)
     state = assert_admitted(h, result, objective=objective, extra=dict(resolution=.7))
     admitted = state.interactions[0].admitted
-    assert _serialize(admitted['argument']) == asdict(legacy)
-    assert _serialize(admitted['arguments']) == [asdict(choice(objective))]
+    assert 'argument' not in admitted
+    assert _serialize(admitted['arguments']) == [asdict(legacy), asdict(choice(objective))]
     assert h[4].plans[0].steps[2].arguments['resolution'] == .7
 
 

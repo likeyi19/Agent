@@ -1,5 +1,6 @@
 """Closed safe exports of pinned embeddings, Leiden and UMAP results."""
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import anndata as ad
@@ -11,6 +12,8 @@ ROLE = 'compact_analysis_export'
 FILENAME = 'analysis.h5ad'
 FILENAMES = {'embedding': 'embeddings.h5ad', 'clustering': 'clusters.h5ad', 'umap': FILENAME}
 LABEL = 'Embeddings, Leiden and UMAP — safe export'
+INTEGRATED_ROLE = 'integrated_analysis_export'
+EXPORT_KEY = 'agent_scientific_export'
 
 
 def accepted_analysis(service, session_id, revision, origin, output, *, step_id=None):
@@ -22,7 +25,7 @@ def accepted_analysis(service, session_id, revision, origin, output, *, step_id=
     from agent.application.matrix_delivery import _open_matrix_source
     run_id = revision.run_id if output is None else output.run_id
     step_id = step_id if output is None else output.step_id
-    stored, _, state = _accepted_step(service._application.run_store, run_id, step_id)
+    stored, planned, state = _accepted_step(service._application.run_store, run_id, step_id)
     result = stored.result
     anchor = accepted_step_digest(stored)
     stages = {'epizoo_embed_cells': 'embedding', 'pca_embed_cells': 'embedding', 'cluster_cells': 'clustering', 'compute_cell_umap': 'umap'}
@@ -49,16 +52,77 @@ def accepted_analysis(service, session_id, revision, origin, output, *, step_id=
                      if result.get('clustering_present') is False else LABEL}[stage]
     reference = ScientificArtifactHandle(digest(identity), 'scientific_analysis', sha,
         revision.revision_id, origin.turn_id, size, filename, label)
+    from agent.schemas import StepOutputRef, PriorOutputRef
+    from .result_reading import dependency, analysis_lineage
+    dependencies = {}
+    for argument, ref in planned.arguments.items():
+        if isinstance(ref, (StepOutputRef, PriorOutputRef)):
+            source_run, source_step = dependency(service._application.run_store, run_id, step_id, argument)
+            producer, _, _ = _accepted_step(service._application.run_store, source_run, source_step)
+            dependencies[argument] = dict(run_id=source_run, step_id=source_step,
+                output_key=ref.output_key, accepted_step_sha256=accepted_step_digest(producer))
+    provenance = dict(revision_id=revision.revision_id, run_id=run_id, step_id=step_id,
+                      accepted_step_sha256=anchor, dependencies=dependencies)
+    versions, execution = {}, {}
+    lineage = []
+    for source_run, producer, _ in analysis_lineage(service._application.run_store, run_id, step_id):
+        lineage.append(dict(run_id=source_run, step_id=producer.step_id, tool_name=producer.tool_name,
+            accepted_step_sha256=accepted_step_digest(producer),
+            **({'analysis_sha256': producer.result['analysis_sha256']} if 'analysis_sha256' in producer.result else {})))
+        key = {'pca_embed_cells': 'embedding', 'epizoo_embed_cells': 'embedding',
+               'build_cell_neighbors': 'neighbors', 'cluster_cells': 'clustering', 'compute_cell_umap': 'umap'}.get(producer.tool_name)
+        if key is not None and 'software_versions' in producer.result:
+            versions[key] = dict(producer.result['software_versions'])
+        if producer.tool_name == 'epizoo_embed_cells':
+            # Legacy embedding files predate method metadata. Project only
+            # actual accepted owner fields/arguments; absent defaults stay unknown.
+            execution['embedding'] = {k: producer.result[k] for k in
+                ('backend', 'species', 'device', 'embedding_dtype') if k in producer.result}
+            execution['embedding']['recorded_execution_arguments'] = {k: producer.resolved_arguments[k]
+                for k in ('device',)
+                if k in producer.resolved_arguments}
+            resources = producer.result.get('resource_provenance', {})
+            if 'expected_resource_identity' in resources:
+                execution['embedding']['resource_identity'] = dict(resources['expected_resource_identity'])
+            if 'inference_settings' in resources:
+                execution['embedding']['parameters'] = dict(resources['inference_settings'])
+    provenance['lineage'] = {str(index): item for index, item in enumerate(lineage)}
     return _ScientificMatrixArtifact(reference, path, root, sha, size, CONTRACT,
-        dict(n_cells=result['n_cells'], **({'stage': stage} if stage != 'umap' else {}), **({'clustering_present': False}
-             if result.get('clustering_present') is False else {})), ROLE)
+        dict(n_cells=result['n_cells'], stage=stage, provenance=provenance,
+             method_software_versions=versions, recorded_execution=execution,
+             clustering_present=result.get('clustering_present', True)), ROLE)
 
 
-def create_analysis_export(source, destination, manifest, *, source_sha256,
-                           source_size_bytes, manifest_sha256, max_bytes):
+def integrated_analysis(service, artifact):
+    """Offer an optional derivative of this result and its recorded exact source.
+
+    Inventory reads accepted lineage and file size only. Bytes, privacy and axes
+    are checked on private snapshots when the researcher requests the download.
+    """
+    from .result_reading import original_source
+    from .matrix_delivery import _open_matrix_source
+    from .session_state import digest
+    from .interactive_schemas import ScientificArtifactHandle
+    provenance = artifact.manifest['provenance']
+    source = original_source(service._application.run_store, provenance['run_id'], provenance['step_id'])
+    if source is None:
+        return None
+    path = Path(source['path'])
+    with _open_matrix_source(path, path.parent) as stream:
+        size = os.fstat(stream.fileno()).st_size
+    ref = artifact.reference
+    filename = 'integrated-' + ref.filename
+    reference = ScientificArtifactHandle(digest(dict(compact_handle=ref.handle, role=INTEGRATED_ROLE,
+        original_sha256=source['sha256'], original_size_bytes=size)), 'scientific_integrated', artifact.sha256,
+        ref.revision_id, ref.turn_id, None, filename, 'Original data with accepted analysis')
+    return replace(artifact, reference=reference, role=INTEGRATED_ROLE,
+        manifest=dict(artifact.manifest, original_source=dict(source, size_bytes=size)))
+
+
+def _compact_result(source, manifest, max_bytes):
     from agent.tools.analysis.peak_h5ad import _PATH
     from agent.tools.analysis.neighbors_delivery import _safe_objects, _strings
-    from agent.tools.analysis.embedding_analysis import _validate_neighbors_artifact, _validate_umap_labels, _validate_cluster_labels
+    from agent.tools.analysis.embedding_analysis import _validate_umap_labels, _validate_cluster_labels
     with h5py.File(source, 'r') as handle:
         _safe_objects(handle, max_bytes, numeric_kinds=frozenset({'i', 'f', 'b'}), max_depth=6, max_objects=160)
         def bounded_strings(name, value):
@@ -67,13 +131,27 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
                     pass
         handle.visititems(bounded_strings)
         from anndata.io import read_elem
-        data = read_elem(handle)
+        from agent.tools.analysis.embedding_analysis import scientific_methods
+        methods = scientific_methods(handle)
+        for key, versions in manifest.get('method_software_versions', {}).items():
+            if key in methods:
+                methods[key]['software_versions'] = versions
+        for key, record in manifest.get('recorded_execution', {}).items():
+            if key in methods:
+                methods[key].update(record)
+        data = ad.AnnData(obs=read_elem(handle['obs']), obsm={key: read_elem(handle['obsm'][key])
+            for key in (methods['embedding']['representation'], 'X_umap') if key in handle['obsm']})
+        # Only the selected observation/coordinate values and small provenance
+        # are needed. Accepted graph validity belongs to the scientific owner.
+        for key in ('agent_cell_embedding', 'agent_milestone6'):
+            if 'uns/' + key in handle:
+                group = handle['uns'][key]
+                data.uns[key] = {name: read_elem(group[name]) for name in group
+                    if name not in ('source_embedding_path', 'source_cell_ids_path', 'source_analysis_path')}
     stage = manifest.get('stage', 'umap')
     if stage not in ('embedding', 'clustering', 'umap'):
         raise ValueError('Unsupported compact analysis stage.')
-    if stage != 'embedding':
-        _validate_neighbors_artifact(data, expected_stages=frozenset({stage}))
-    elif data.X is not None or data.n_vars or not data.obs_names.is_unique:
+    if not data.obs_names.is_unique:
         raise ValueError('Invalid compact embedding structure.')
     clustered = (_validate_umap_labels(data) if stage == 'umap' else
                  bool(_validate_cluster_labels(data)) if stage == 'clustering' else False)
@@ -94,25 +172,95 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
         key, dimensions = 'X_epizoo', 512
     else:
         key, values = representation(data); dimensions = values.shape[1]
-    embedding_key = key
     for key, dimensions in ((key, dimensions),) + ((('X_umap', 2),) if stage == 'umap' else ()):
         values = np.asarray(data.obsm[key])
         if values.shape != (data.n_obs, dimensions) or not np.isfinite(values).all():
             raise ValueError('Invalid compact analysis coordinates.')
         result.obsm[key] = values.copy()
-    result.uns['agent_scientific_export'] = dict(contract=CONTRACT, source_sha256=source_sha256)
-    if embedding_key == 'X_pca':
-        metadata = data.uns.get('agent_cell_embedding', data.uns.get('agent_milestone6', {}).get('embedding'))
-        result.uns['agent_scientific_export'].update(method=metadata['method'], representation=embedding_key,
-            embedding_dim=metadata['embedding_dim'], parameters=metadata['parameters'], input_sha256=metadata['source_sha256'])
-    if stage != 'umap':
-        result.uns['agent_scientific_export']['stage'] = stage
-    elif not clustered:
-        result.uns['agent_scientific_export']['clustering_present'] = False
-    with h5py.File(destination, 'w') as handle:
+    return result, methods
+
+
+def _metadata(manifest, methods, source_sha256, *, integrated=False):
+    from .dialogue_evidence import _unsafe_fact_value
+    if _unsafe_fact_value(methods):
+        raise ValueError('Method metadata is ineligible for public delivery.')
+    metadata = dict(contract=CONTRACT, format='integrated_annotated_h5ad' if integrated else 'compact_analysis_result_h5ad',
+        scope=('Original supplied scientific data with selected accepted cell analysis; no scientific transformation.'
+               if integrated else 'Selected cell identities, assignments and coordinates; X=None and no original features.'),
+        source_sha256=source_sha256, stage=manifest.get('stage', 'umap'), methods=methods,
+        accepted_result=manifest.get('provenance', {}),
+        authority_scope='Delivery derivative; does not issue scientific authority.',
+        omitted_information='Derived neighbor graphs and PCA loadings/fit arrays; private source locators. '
+            'Unrecorded historical method settings are unavailable, not inferred.')
+    # Preserve the original compact PCA fields through the shared method
+    # projection; no method-specific export branch or invented defaults.
+    embedding = methods.get('embedding', {})
+    metadata.update({key: embedding[key] for key in ('method', 'representation', 'embedding_dim', 'parameters')
+                     if key in embedding})
+    if 'source_sha256' in embedding:
+        metadata['input_sha256'] = embedding['source_sha256']
+    return metadata
+
+
+def create_analysis_export(source, destination, manifest, *, source_sha256,
+                           source_size_bytes, manifest_sha256, max_bytes):
+    from agent.tools.analysis.neighbors_delivery import _BoundedDestination
+    result, methods = _compact_result(source, manifest, max_bytes)
+    result.uns[EXPORT_KEY] = _metadata(manifest, methods, source_sha256)
+    with h5py.File(_BoundedDestination(destination, max_bytes), 'w') as handle:
         from anndata.io import write_elem
         write_elem(handle, '/', result)
     destination.seek(0, 2)
     if destination.tell() > max_bytes:
         raise ValueError('Compact analysis export exceeds its size bound.')
+    destination.seek(0)
+
+
+def create_integrated_export(source, original, destination, manifest, *, source_sha256, max_bytes):
+    """Copy a pinned source logically in bounded blocks, then add exact results."""
+    from anndata.io import read_elem, write_elem
+    from .annotation_delivery import _copy, _redactions
+    from agent.tools.analysis.neighbors_delivery import _BoundedDestination
+    from agent.tools.analysis.peak_h5ad import inspect
+    from agent.tools.analysis.categorical import ordered_ids, require_same_cells
+    result, methods = _compact_result(source, manifest, max_bytes)
+    metadata = _metadata(manifest, methods, source_sha256, integrated=True)
+    metadata['original_source_sha256'] = manifest['original_source']['sha256']
+    metadata['fields'] = {}
+    with h5py.File(original, 'r') as supplied:
+        inspect(supplied)
+        cells = read_elem(supplied['obs'][supplied['obs'].attrs['_index']])
+        require_same_cells(ordered_ids(cells, source='Original data'), tuple(result.obs_names))
+        omitted = _redactions(supplied, preserve_annotation=False)
+        metadata['omitted_private_metadata_fields'] = len(omitted)
+        with h5py.File(_BoundedDestination(destination, max_bytes), 'w') as exported:
+            _copy(supplied, exported, omitted)
+            for slot, values in (('obs', result.obs), ('obsm', result.obsm)):
+                group = exported.require_group(slot)
+                if slot == 'obsm' and not group.attrs:
+                    group.attrs.update({'encoding-type': 'dict', 'encoding-version': '0.1.0'})
+                fields = {}
+                for name in values:
+                    # Original names always win. A collision at the one clearly
+                    # differentiated derived name is genuinely ambiguous.
+                    target = name if name not in group else 'agent_' + name
+                    if target in group:
+                        raise ValueError('Original and derived-result field names collide.')
+                    value = values[name]
+                    write_elem(group, target, value.array if slot == 'obs' else value)
+                    fields[name] = target
+                metadata['fields'][slot] = fields
+                if slot == 'obs':
+                    group.attrs['column-order'] = np.array([*group.attrs['column-order'], *fields.values()],
+                                                         dtype=h5py.string_dtype())
+            uns = exported.require_group('uns')
+            if not uns.attrs:
+                uns.attrs.update({'encoding-type': 'dict', 'encoding-version': '0.1.0'})
+            key = EXPORT_KEY if EXPORT_KEY not in uns else 'agent_integrated_export'
+            if key in uns:
+                raise ValueError('Original and export provenance keys collide.')
+            write_elem(uns, key, metadata)
+    destination.flush(); destination.seek(0)
+    # Storage/privacy check only: never replay the accepted scientific method.
+    inspect(destination, privacy=True)
     destination.seek(0)

@@ -15,10 +15,12 @@ STATIC = Path(__file__).resolve().parents[2] / 'src' / 'agent' / 'web' / 'static
 def test_coordinate_only_download_has_an_explicit_reviewed_label():
     code = (STATIC / 'app.js').read_text()
     predicate = code[code.index('function supportedScientificFile'):code.index('function scientificFileNode')]
-    assert 'artifact.artifact_type === "scientific_analysis"' in predicate
-    assert 'artifact.filename === "analysis.h5ad"' in predicate
-    assert 'artifact.label === "Embeddings and UMAP — safe export"' in predicate
-    assert '"analysis.h5ad": "Embeddings, Leiden and UMAP — safe export"' in predicate
+    assert '"scientific_analysis"' in predicate
+    from agent.application.interactive_schemas import ScientificArtifactHandle
+    descriptor = ScientificArtifactHandle('a'*64, 'scientific_analysis', 'b'*64, 'revision', 'turn', 32,
+                                        'analysis.h5ad', 'Embeddings and UMAP — safe export').to_dict()
+    assert descriptor['title'] == 'UMAP analysis (compact H5AD)'
+    assert 'X=None' in descriptor['description']
 
 
 class Page(HTMLParser):

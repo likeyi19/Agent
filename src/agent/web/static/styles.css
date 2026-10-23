@@ -300,3 +300,11 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .research-layout:not(.has-results) .conversation-workspace:has(.empty-history) .composer { max-height: 60vh; }
 
 .research-layout:not(.has-results) #conversation-history:has(.empty-history) { flex: 0 0 auto; overflow: visible; }
+.scientific-result { margin: 1rem 0; padding-top: .5rem; border-top: 1px solid var(--border, #ddd); }
+.scientific-table { overflow-x: auto; margin: .5rem 0; }
+.scientific-table table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.scientific-table th, .scientific-table td { text-align: left; padding: .4rem; border-bottom: 1px solid var(--border, #ddd); vertical-align: top; }
+.partial-coverage { font-weight: 600; }
+.result-values { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 2fr); gap: .45rem 1rem; font-size: .9rem; }
+.result-values dt { font-weight: 600; }
+.result-values dd { margin: 0; overflow-wrap: anywhere; }

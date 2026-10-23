@@ -1104,6 +1104,31 @@ streamed downloads appear beside accepted replies and under **Results, downloads
 [USI-7 UI closeout](docs/history/usi-7-web-ux-reports-download-closeout.md) for browser
 validation, report projection semantics and deployment limits.
 
+Scientific downloads distinguish **compact analysis-result H5AD** files from
+**integrated annotated H5AD** files. Compact PCA/Leiden/UMAP and neighbor exports
+contain ordered cells, accepted coordinates/assignments and recorded methods;
+they have `X=None` and no original feature axis. For accepted PCA analyses and
+their recorded Leiden/UMAP descendants, an optional integrated download preserves
+the exact original H5AD measurements, features, safe metadata, layers and existing
+representations, then adds that result's coordinates and assignments. Preparation
+happens when Download is clicked; it verifies source bytes and identical ordered
+cells without rerunning science. Annotation's existing original-data export
+remains available separately. Integration does not combine independent results
+or infer an original dataset for historical EpiZoo outputs lacking that identity.
+
+Original fields are preserved. A colliding derived field uses `agent_` plus its
+normal name; a second collision makes the integrated download unavailable.
+`uns['agent_scientific_export']` records actual methods, source/result identities,
+omissions and the added field names; when that key already exists, integration
+uses `agent_integrated_export`. Private metadata is omitted, while scientific
+arrays keep their values and sparse representation. Newly derived graphs and
+PCA fit arrays are omitted from integrated exports; original source graphs remain.
+An unavailable integrated export leaves accepted science and compact downloads
+intact. The shared two-transfer/1 GiB scientific-download bounds remain separate
+from the upload limit; downloads stream directly to the browser. If capacity is
+busy, return to the analysis tab and retry shortly. Figures are listed once per
+accepted scientific identity, with existing physical-copy download handles intact.
+
 The legacy registered-H5AD picker remains under **Advanced inputs**. Its source
 can be reselected after refresh or server restart. Uploading only registers
 completed bytes; the existing Interpreter/Planner decides the scientific

@@ -54,6 +54,23 @@ def safe_diagnostic_identifier(value: object) -> str | None:
     return None
 
 
+def safe_unsupported_reason(value: str, private_values=()) -> str:
+    """Bound private diagnostic prose with best-effort redaction of known values.
+
+    This is not a public-text safety boundary. The reason stays in operator-owned
+    diagnostics, never scientific conclusions, execution inputs or Web views.
+    """
+    for private in sorted(set(private_values), key=len, reverse=True):
+        if len(private) >= 4:
+            value = value.replace(private, '[redacted]')
+    value = re.sub(r'(?i)\b(?:bearer\s+\S+|(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+)', '[redacted]', value)
+    value = re.sub(r'(?i)\b(?:private|secret|token|api[_-]?key)[_-][\w-]+\b', '[redacted]', value)
+    value = re.sub(r'(?i)(?:https?://|file://|[A-Z]:[\\/]|(?<!\w)[/~])[\S]+', '[redacted]', value)
+    value = re.sub(r'([\'"`]).*?\1', '[quoted value omitted]', value, flags=re.DOTALL)
+    value = re.sub(r'\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b|\b(?:sk-[\w-]+|[A-Za-z0-9_=-]{32,})\b', '[redacted]', value)
+    return ' '.join(value.split())[:1024]
+
+
 @dataclass(frozen=True)
 class PlanningDiagnosticContext:
     """Immutable non-secret identity shared by one logical planning attempt."""
@@ -146,6 +163,7 @@ class PlanningDiagnosticContext:
         failover_used: bool | None = None,
         recovery_policy_fingerprint: str | None = None,
         argument_names: tuple[str, ...] = (),
+        unsupported_reason: str | None = None,
     ) -> PlanningDiagnostic:
         return PlanningDiagnostic(
             context=self,
@@ -184,6 +202,7 @@ class PlanningDiagnosticContext:
             failover_used=failover_used,
             recovery_policy_fingerprint=recovery_policy_fingerprint,
             argument_names=argument_names,
+            unsupported_reason=unsupported_reason,
         )
 
 
@@ -221,8 +240,12 @@ class PlanningDiagnostic:
     failover_used: bool | None = None
     recovery_policy_fingerprint: str | None = None
     argument_names: tuple[str, ...] = ()
+    unsupported_reason: str | None = None
 
     def __post_init__(self) -> None:
+        if self.unsupported_reason is not None and (self.stage is not PlanningDiagnosticStage.UNSUPPORTED
+                or type(self.unsupported_reason) is not str or len(self.unsupported_reason) > 1024):
+            raise ValueError('Invalid bounded unsupported diagnostic reason.')
         if (type(self.argument_names) is not tuple or len(self.argument_names) > 128
                 or len(set(self.argument_names)) != len(self.argument_names)
                 or any(safe_diagnostic_identifier(name) != name for name in self.argument_names)):
@@ -353,6 +376,7 @@ class PlanningDiagnostic:
             "target_port": self.target_port,
             "source_port": self.source_port,
             "reason_code": self.reason_code,
+            "unsupported_reason": self.unsupported_reason,
             "retry_after_seconds": self.retry_after_seconds,
             "previous_failure_stage": (
                 None

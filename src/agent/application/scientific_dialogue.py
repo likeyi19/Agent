@@ -11,26 +11,12 @@ import re
 from agent.schemas.orchestration import _JsonModel, _serialize, freeze_json_mapping
 from .turn_decisions import IntentError, _object, _shape
 from .session_state import SessionConflictError
-from .turn_context import stored_step
+from .turn_context import stored_step, result_groups as _result_groups, result_descriptions
+from .dialogue_evidence import RESULT_LIMITATIONS
 
 MAX_CONTEXT_BYTES = 32768
 MAX_CLAIMS = 64
 MAX_TARGET_CONTEXT_BYTES = 131072
-
-# Reviewed scope explanations only, not new scores, biological interpretations,
-# or method implementations. Values and method parameters remain evidence facts.
-NOTES = {
-    'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
-    'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result.',
-    'annotate_scATAC_cell_types': 'The compact summary records assignments and statuses. It does not contain marker rationale or calibrated confidence; omitted groups are not evidence of absent groups.',
-    'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
-    'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
-    'adapt_epizoo_species': 'Adaptation completion and structural qualification do not establish improved biological performance.',
-    'cluster_cells': 'Clustering summaries record method parameters and cluster counts. They do not establish cluster correspondence, cell-type identity, biological superiority, significance or causality.',
-    'compute_cell_umap': 'UMAP parameters and output dimensions describe a layout. Independently computed coordinates have no established alignment: rotation, reflection or scale differences do not establish biological change. No coordinate comparison or biological superiority is established.',
-    'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
-}
-
 
 def _scientific(interaction):
     return interaction.admitted is not None and interaction.admitted.get('intent') in ('scientific', 'guidance')
@@ -68,32 +54,6 @@ def _result_referent_targets(state, base_revision_id, context, preceding):
             if any(t['revision_id'] not in by_id for t in result['@previous_turn_result']):
                 raise IntentError('unavailable_context')
     return result
-
-
-def _result_groups(captured, state):
-    """Cooutputs share a group only under their complete accepted source tuple.
-
-    Equivalent locators use the lexicographically smallest (name, output_key)
-    as their canonical attribution. This normalization never chooses a step or
-    scientific result among independent groups.
-    """
-    revisions = {r.revision_id: r for r in state.revisions}
-    grouped = {}
-    for item in captured['dialogue']['outputs']:
-        revision = revisions[item['revision_id']]
-        locators = [o for o in revision.outputs if o.name == item['output_name']]
-        if len(locators) != 1 or locators[0].accepted_step_sha256 != item['accepted_step_sha256']:
-            raise IntentError('unavailable_context')
-        locator = locators[0]
-        key = (revision.revision_id, locator.run_id, locator.step_id, locator.accepted_step_sha256)
-        grouped.setdefault(key, []).append((item, locator))
-    groups = []
-    for members in grouped.values():
-        if len({item['tool'] for item, _ in members}) != 1:
-            raise IntentError('unavailable_context')
-        canonical, _ = min(members, key=lambda pair: (pair[1].name, pair[1].output_key))
-        groups.append(dict(handle=f'g{len(groups)}', members=[item for item, _ in members], canonical=canonical))
-    return groups
 
 
 def _group_evidence(sessions, session_id, group, *, views=None):
@@ -195,8 +155,12 @@ def capture(sessions, state, snapshot, requested_predecessor, *, tool_names=None
             accepted_step_sha256=locator.accepted_step_sha256, tool=tool,
             version=state.revisions.index(revisions[rid]) + 1,
             relations=[k for k, v in snapshot['relations'].items() if v == rid]))
-    return dict(outputs=outputs, predecessor=None if predecessor is None else predecessor.turn_id,
-                requested_predecessor=requested_predecessor, ambiguous=ambiguous, context=context)
+    value = dict(outputs=outputs, predecessor=None if predecessor is None else predecessor.turn_id,
+                 requested_predecessor=requested_predecessor, ambiguous=ambiguous, context=context)
+    value['results'] = result_descriptions(sessions, state, dict(snapshot, dialogue=value))
+    if len(json.dumps(value, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
+        raise IntentError('unavailable_context')
+    return value
 
 
 def validate_capture(state, interaction, preceding):
@@ -205,7 +169,7 @@ def validate_capture(state, interaction, preceding):
     if value is None:
         return
     keys = ('outputs', 'predecessor', 'requested_predecessor', 'ambiguous')
-    _shape(_serialize(value), keys if 'context' not in value else (*keys, 'context'))
+    _shape(_serialize(value), keys + tuple(k for k in ('context', 'results') if k in value))
     if type(value['ambiguous']) is not bool or len(value['outputs']) > 128:
         raise ValueError('Invalid dialogue capture.')
     predecessor = value['predecessor']
@@ -259,6 +223,20 @@ def validate_capture(state, interaction, preceding):
     if interaction.admitted is not None and 'selected_candidate' in interaction.admitted:
         from .guidance_selection import validate_selection
         validate_selection(state, interaction, preceding)
+    if interaction.admitted is not None and 'detail' in interaction.admitted:
+        from .turn_decisions import validate_scientific_detail
+        validate_scientific_detail(_serialize(interaction.admitted['detail']), interaction.admitted.get('comparison'))
+    if 'results' in value:
+        groups = _result_groups(interaction.snapshot, state)
+        if len(value['results']) != len(groups):
+            raise ValueError('Captured result descriptions changed.')
+        for group, row in zip(groups, value['results']):
+            canonical = group['canonical']
+            if (row['handle'] != group['handle'] or row['canonical_output'] != canonical['handle']
+                    or row['tool'] != canonical['tool'] or row['version'] != canonical['version']
+                    or list(row['relations']) != list(canonical['relations'])
+                    or list(row['outputs']) != [m['handle'] for m in group['members']]):
+                raise ValueError('Captured result description identity changed.')
     seen = set()
     for n, item in enumerate(value['outputs']):
         rid, name = item['revision_id'], item['output_name']
@@ -272,7 +250,7 @@ def validate_capture(state, interaction, preceding):
         raise ValueError('Captured result inventory changed.')
 
 
-def public(captured, state, registry, *, sessions, utterance, execution_inputs=None):
+def public(captured, state, registry, *, sessions, utterance, execution_inputs=None, context=None):
     value = captured['dialogue']
     previous = next((i for i in state.interactions if i.turn_id == value['predecessor']), None)
     def target_label(t):
@@ -283,19 +261,32 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
     focus = None if previous is None else dict(target=target_label(previous.admitted['target']),
         previous=target_label(previous.admitted.get('comparison') or previous.admitted.get('previous_subject')),
         focus=previous.admitted['focus'])
-    outputs, descriptions, views = [], {}, {}
-    for item in value['outputs']:
-        tool = item['tool']
-        spec = registry.get(tool)
-        if tool not in descriptions:
-            descriptions[tool] = dict(result_contract=spec.result_contract.name,
+    if focus is not None and previous.admitted.get('detail') is not None:
+        focus['detail'] = _serialize(previous.admitted['detail'])
+    outputs, views = [], {}
+    if context is not None:
+        descriptions = [_serialize(row) for row in context.results]
+    elif 'results' in value:
+        descriptions = _serialize(value['results'])
+    else:
+        descriptions = result_descriptions(sessions, state, captured)
+    semantics = {}
+    for row in descriptions:
+        # Historical captures retain their bytes; static metadata comes from the
+        # existing shared Registry projection rather than each result instance.
+        row.pop('description', None)
+        row.pop('ports', None)
+        if row['tool'] not in semantics:
+            spec = registry.get(row['tool'])
+            semantics[row['tool']] = dict(result_contract=spec.result_contract.name,
                 description='' if spec.planning is None else spec.planning.description[:1200],
-                roles=[] if spec.semantic_planning is None else [
-                    dict(name=p.name, semantic_type=p.semantic_type) for p in spec.semantic_planning.producer_ports])
+                roles=[] if spec.semantic_planning is None else [dict(name=p.name, semantic_type=p.semantic_type)
+                    for p in spec.semantic_planning.producer_ports])
+    for item in value['outputs']:
         output = {k:item[k] for k in ('handle','output_name','tool','version','relations')}
         output['is_active'] = item['revision_id'] == state.active_revision_id
-        # Only availability and field/subject identities reach interpretation.
-        # Values and exact source attribution stay in the later answer context.
+        # Summary values stay in the later answer context. Shared result-group
+        # descriptions separately expose accepted method parameters for planning.
         view = sessions.evidence(state.session_id, item['revision_id'], item['output_name'])
         views[item['handle']] = view
         output['evidence_status'] = view.status
@@ -308,7 +299,7 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
                                   complete=complete and len(ids) == len(subjects))
         outputs.append(output)
     from .scientific_guidance import predecessor_public
-    result = dict(guidance_predecessor=predecessor_public(previous), outputs=outputs, semantics=descriptions,
+    result = dict(guidance_predecessor=predecessor_public(previous), outputs=outputs, semantics=semantics,
         predecessor=focus, ambiguous_predecessor=value['ambiguous'], tools=list(registry.names()))
     from .guidance_selection import public_candidates
     result['execution_candidates'] = public_candidates(state, captured)
@@ -317,13 +308,26 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
     groups = _result_groups(captured, state)
     public_outputs = {o['handle']: o for o in outputs}
     result['result_groups'] = []
-    for group in groups:
+    for group, description in zip(groups, descriptions):
         canonical = public_outputs[group['canonical']['handle']]
         if all(views[m['handle']].status == 'available' for m in group['members']):
             _group_evidence(sessions, state.session_id, group, views=views)
-        result['result_groups'].append(dict(handle=group['handle'], outputs=[m['handle'] for m in group['members']],
-            canonical_output=canonical['handle'], **{k:canonical[k] for k in
-                ('tool', 'version', 'is_active', 'evidence_status')}))
+        result['result_groups'].append(dict(description, **{k:canonical[k] for k in
+            ('is_active', 'evidence_status')}))
+        from .dialogue_evidence import DetailRequest, detail_sections
+        if 'categorical_fields' in detail_sections(canonical['tool']):
+            item = group['canonical']
+            page = DetailRequest('categorical_fields', limit=32)
+            # Continue a selected field-name page through the same captured
+            # result, independently of category-count record pagination.
+            if (previous is not None and previous.admitted.get('detail', {}).get('section') == 'categorical_fields'
+                    and all(item[k] == previous.admitted['target'][k]
+                            for k in ('revision_id', 'output_name', 'accepted_step_sha256'))):
+                page = DetailRequest(**_serialize(previous.admitted['detail']))
+            detail = sessions.evidence(state.session_id, item['revision_id'], item['output_name'],
+                fields=(), detail=page)
+            if detail.status == 'available':
+                result['result_groups'][-1]['categorical'] = _serialize(detail.detail[0].value)
     result['result_referents'] = _referent_choices(captured, state, groups, state.interactions)
     offered = {(o['revision_id'], o['output_name']) for o in value['outputs']}
     result['history_complete'] = all((r.revision_id, o.name) in offered
@@ -475,9 +479,27 @@ def admit(sessions, interaction, question, *, evidence_set=False):
     if question.focus == 'continue' and prior is None: raise IntentError('ambiguous_predecessor')
     previous_subject = None if prior is None else (prior['target'] if prior['target'] != target
                                                    else prior.get('previous_subject'))
-    return dict(kind='answer', intent='scientific', dialogue_version=1, target=target, comparison=comparison,
+    detail = question.detail
+    if detail is not None:
+        if target['subject'] is not None or comparison is not None and comparison['subject'] is not None:
+            raise IntentError('ambiguous_subject')
+        from .dialogue_evidence import DetailRequest
+        for selected, field in ((target, detail['field']),
+                (comparison or target, detail['other_field'])):
+            if field is None:
+                continue
+            available = sessions.evidence(state.session_id, selected['revision_id'], selected['output_name'],
+                fields=(), detail=DetailRequest('categorical_fields', field=field, limit=1))
+            if available.status != 'available':
+                raise IntentError('unavailable_context')
+            if field not in {row['field'] for row in available.detail[0].value['fields']}:
+                raise IntentError('ambiguous_subject')
+    result = dict(kind='answer', intent='scientific', dialogue_version=1, target=target, comparison=comparison,
         previous_subject=previous_subject, focus=prior['focus'] if question.focus == 'continue' else interaction.utterance,
         predecessor=captured['predecessor'])
+    if detail is not None:
+        result['detail'] = dict(detail)
+    return result
 
 
 @dataclass(frozen=True)
@@ -501,6 +523,7 @@ class ScientificResponse(_JsonModel):
     explanation: str
     limitations: tuple[str, ...]
     evidence_scope: str = 'accepted_persisted_summary'
+    availability: str = 'generated'
 
 
 def _comparison_fields(views, targets):
@@ -565,7 +588,7 @@ def _descriptive_fields(views):
 def context(sessions, session_id, admitted, *, evidence_targets=None):
     targets = ([admitted['target']] + ([] if admitted['comparison'] is None else [admitted['comparison']])
                if evidence_targets is None else list(evidence_targets))
-    if evidence_targets is not None and len(targets) > 4:
+    if evidence_targets is not None and not 1 <= len(targets) <= 32:
         raise IntentError('unavailable_context')
     comparing = evidence_targets is None and len(targets) == 2
     views = [_load(sessions, session_id, t) for t in targets]
@@ -577,9 +600,13 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 b.source.output_locator['run_id'], b.source.output_locator['step_id'],
                 targets[1]['accepted_step_sha256']):
             raise IntentError('incompatible_comparison')
-    comparison_fields = _comparison_fields(views, targets) if comparing else None
-    descriptive_fields = _descriptive_fields(views) if comparing else frozenset()
+    selected_detail = admitted.get('detail') if evidence_targets is None else None
+    independent_counts = (selected_detail is not None and selected_detail['section'] == 'category_counts'
+                          and selected_detail['other_field'] is not None)
+    comparison_fields = frozenset() if independent_counts else _comparison_fields(views, targets) if comparing else None
+    descriptive_fields = _descriptive_fields(views) if comparing and not independent_counts else frozenset()
     claims, meanings, labels, limitations = [], {}, [], []
+    association_delivered = False
     for index, (target, view) in enumerate(zip(targets, views)):
         claim_limit = (index + 1) * (MAX_CLAIMS // len(targets))
         state = sessions.load(session_id)
@@ -588,7 +615,10 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         labels.append(dict(handle=f't{index}', label=label, subject=target['subject'], is_active=view.is_active,
                            tool=view.source.tool_name,
                            coverage=[dict(field=f.field,status=f.status,value=_serialize(f.value)) for f in view.coverage]))
-        if view.source.tool_name in NOTES: meanings[f'm{index}'] = NOTES[view.source.tool_name]
+        if 'completion_run_id' in admitted:
+            labels[-1]['completion_role'] = ('created_by_this_run'
+                if view.source.output_locator['run_id'] == admitted['completion_run_id'] else 'retained_accepted_result')
+        if view.source.tool_name in RESULT_LIMITATIONS: meanings[f'm{index}'] = RESULT_LIMITATIONS[view.source.tool_name]
         if view.source.tool_name == 'compute_scATAC_qc':
             from agent.tools.data.scatac_qc_profile import PROFILE, PROFILE_SHA256
             facts = {f.field:f.value for f in view.facts if f.status == 'available'}
@@ -606,13 +636,23 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             row_index, row = subjects[target['subject']]
             base = next(f.source_pointer for f in view.facts if f.field == 'group_summary')
             values = [(k,v,f'{base}/{row_index}/{k}') for k,v in row.items() if k != 'group']
-        from .dialogue_evidence import detail_request
-        request = detail_request(view, target['subject'])
+        from .dialogue_evidence import DetailRequest, detail_request
+        request = detail_request(view, target['subject']) if selected_detail is None else None
+        if selected_detail is not None:
+            if index == 0 and selected_detail['section'] == 'category_association':
+                request = DetailRequest(**selected_detail,
+                    comparison=admitted['comparison'])
+            elif index == 0 or independent_counts or selected_detail['section'] == 'category_association' and not association_delivered:
+                request = DetailRequest(selected_detail['section'] if index == 0 else 'category_counts',
+                    field=selected_detail['field'] if index == 0 else selected_detail['other_field'],
+                    limit=selected_detail['limit'], offset=selected_detail['offset'])
         detail_facts = ()
         if request is not None:
             detailed = sessions.evidence(session_id, target['revision_id'], target['output_name'], fields=(), detail=request)
             if detailed.status == 'available':
                 detail_facts = detailed.detail
+                association_delivered = any(f.field == 'category_association' and f.status == 'available'
+                                            for f in detail_facts)
                 limitations = [x for x in limitations if x != 'Detailed sidecars and raw artifacts are not read.']
                 limitations.extend(detailed.limitations)
                 if request.section == 'annotation_rationale':
@@ -620,9 +660,20 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                         'Signed matched markers and signature coverage are not new marker discovery, calibrated confidence, or proof of distinct biological cell types. '
                         'Missing signature genes are reported, never biological negatives.')
             else:
-                limitations.append(f'{label}: published detail is {detailed.status} ({detailed.reason}).')
+                limitations.append(f'{label}: requested detail is {detailed.status} ({detailed.reason}).')
+                if request.section == 'category_association':
+                    limitations.append('Categorical correspondence is unavailable. Independently attributed counts remain usable; no agreement or biological validation is established.')
+                    independent = sessions.evidence(session_id, target['revision_id'], target['output_name'], fields=(),
+                        detail=DetailRequest('category_counts', field=request.field, limit=request.limit, offset=request.offset))
+                    if independent.status == 'available':
+                        detail_facts = independent.detail
         def leaves(key, val, pointer, depth=0):
             if hasattr(val, 'items') and depth < 3:
+                # Lists of records and nested structured results retain their
+                # labels, denominators and coverage as one whole cited fact.
+                if any(isinstance(v, (tuple, list)) for v in val.values()):
+                    yield key, val, pointer
+                    return
                 for child, item in val.items():
                     if child == 'path' or child.endswith(('_path','_sha256')): continue
                     escaped = child.replace('~','~0').replace('/','~1')
@@ -631,7 +682,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 yield key, val, pointer
         values = [leaf for k,v,p in values for leaf in leaves(k,v,p)]
         summary_limit = claim_limit
-        if evidence_targets is not None and detail_facts:
+        if detail_facts:
             # Share each source's bounded allocation with its reviewed detail.
             # M16 comparison/summary allocation is unchanged.
             summary_limit -= min(sum(f.status == 'available' for f in detail_facts),
@@ -639,9 +690,12 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         for key, val, pointer in values:
             # Keep internal paths/digests out of the provider's scientific facts.
             # Full exact attribution is returned separately to the application.
+            from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
             if (key.endswith(('_sha256','_path')) or key == 'explicit_user_parameters.step_id'
-                    or isinstance(val, (dict, tuple, list)) or hasattr(val, 'keys')):
+                    or _unsafe_fact_field(key) or _unsafe_fact_value(val)):
                 continue
+            if isinstance(val, (tuple, list)) and key in ('obs_names_sample', 'var_names_sample'):
+                continue  # Cell/feature identifiers are not scientific summaries.
             if isinstance(val, str) and (len(val) > 512 or val.startswith('/')): continue
             if len(claims) >= summary_limit:
                 limitations.append('Additional accepted fields were omitted from this bounded context.')
@@ -668,6 +722,10 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             if fact.reason == 'presentation_coverage_count':
                 limitations.append(f'{label}: {fact.field} = {fact.value}; owner order, not ranking.')
                 continue
+            from .dialogue_evidence import _unsafe_fact_value
+            if _unsafe_fact_value(fact.value):
+                limitations.append(f'{label}: detail {fact.field} omitted (private content).')
+                continue
             # Preserve complete reviewed records, including candidate identity and
             # signed marker lists. No unlabeled flattening or re-ranking.
             claims.append(ScientificClaim(f'c{len(claims)}', f't{index}', target['subject'],
@@ -675,74 +733,27 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 dict(revision_id=target['revision_id'], output_locator=_serialize(view.source.output_locator),
                      source_run_result_sha256=view.source.source_run_result_sha256,
                      evidence_sha256=view.source.evidence_sha256, artifact_name=fact.artifact_name,
-                     artifact_sha256=fact.artifact_sha256, pointer=fact.source_pointer)))
-    # Reuse reviewed report labels and Registry field descriptions verbatim.
-    # Never promote a container description to an invented unit/meaning for
-    # an arbitrary nested scalar. Missing metadata stays absent.
-    from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
+                     artifact_sha256=fact.artifact_sha256, pointer=fact.source_pointer,
+                     **({} if fact.derivation is None else dict(derivation=_serialize(fact.derivation))))))
+    from .dialogue_evidence import field_semantics
     public_claims = []
     for claim in claims:
         entry = {k:v for k,v in claim.to_dict().items() if k != 'source'}
         view = views[int(claim.target[1:])]
-        spec = sessions._application.registry.get(view.source.tool_name)
-        field = claim.field
-        semantics = {}
-        parameter_labels = {'clustering_parameters.resolution': 'Leiden resolution',
-                            'clustering_parameters.random_seed': 'Leiden random seed',
-                            'clustering_resolution_origin': 'Leiden resolution origin'}
-        if field in parameter_labels:
-            semantics['label'] = parameter_labels[field]
-            semantics['label_source'] = 'reviewed_clustering_parameter_projection'
-        if field == 'clustering_resolution_origin':
-            semantics['description'] = ('This origin is established by accepted execution arguments. '
-                'An explicit execution argument alone does not establish how a historical user supplied it. '
-                'The effective value comes from the accepted clustering owner result, not current defaults.')
-            semantics['description_source'] = 'reviewed_clustering_parameter_projection'
-        if field == 'clustering_neighbors_consumption':
-            semantics['description'] = ('The accepted clustering argument consumed a qualified neighbors publication. '
-                'same_plan_qualified_output records a direct output binding in its plan; '
-                'qualified_historical_output records an exact accepted PriorOutputRef. '
-                'This does not report cumulative scientific-owner call counts.')
-            semantics['description_source'] = 'reviewed_clustering_input_projection'
-        if field.startswith('selection_threshold_origins.'):
-            argument_name = field.split('.', 1)[1]
-            argument = {**spec.required_arguments, **spec.optional_arguments}.get(argument_name)
-            if argument is not None:
-                semantics['label'] = argument_name + ' origin'
-                semantics['label_source'] = 'registry_argument_identity'
-                semantics['description'] = ('The origin comes from exact accepted execution argument presence. '
-                    f'The accepted effective_thresholds.{argument_name} records the owner-effective value: '
-                    'a non-null threshold is enabled, including a native default when the argument was omitted; '
-                    'null denotes a disabled optional filter. Use that accepted value, not current defaults. '
-                    'This origin alone does not establish a user instruction.')
-                semantics['description_source'] = 'reviewed_selection_parameter_projection'
-        if field.startswith('explicit_user_parameters.parameters.'):
-            semantics['label'] = field.rsplit('.', 1)[1] + ' user origin'
-            semantics['label_source'] = 'registry_argument_identity'
-            semantics['description'] = ('An exact utterance-bound Session declaration, its admitted input, '
-                'and the accepted planned and resolved operation argument agree. '
-                'This records an explicit user instruction; effective scientific values remain owner evidence facts.')
-            semantics['description_source'] = 'reviewed_session_parameter_projection'
-        if field in _REPORT_FIELDS.get(view.source.tool_name, ()) and field in _FIELD_LABELS:
-            semantics['label'] = _FIELD_LABELS[field]
-            semantics['label_source'] = 'reviewed_report_field'
-        description = spec.result_contract.planning_fields.get(field)
-        if description is not None:
-            semantics['description'] = description.description
-            semantics['description_source'] = 'registry_result_contract'
-        if view.source.tool_name == 'annotate_scATAC_cell_types':
-            from .dialogue_evidence import annotation_field_semantics
-            reviewed = annotation_field_semantics(field)
-            if reviewed is not None:
-                semantics.update(reviewed, description_source='reviewed_native_annotation_summary')
-        semantics.setdefault('kind', 'execution_parameter' if field in spec.optional_arguments
-                             else 'unclassified_accepted_field')
-        entry['semantics'] = semantics
+        entry['semantics'] = field_semantics(sessions._application.registry, view.source.tool_name, claim.field)
         public_claims.append(entry)
     public = dict(targets=labels, claims=public_claims, meanings=meanings,
                   limitations=list(dict.fromkeys(limitations)), scope='accepted_persisted_summary')
+    if evidence_targets is not None and 'completion_delivery' in admitted:
+        public['delivery'] = _serialize(admitted['completion_delivery'])
     if any(c.field.startswith('detail.') for c in claims):
         public['scope'] = 'accepted_summary_and_published_detail'
+    if any(c.source.get('derivation') is not None or c.field == 'detail.categorical_fields' for c in claims):
+        public['scope'] = 'accepted_summary_and_on_demand_facts'
+        public['meanings']['categorical_reading'] = ('Categorical metadata and descriptive statistics are read after acceptance, not added to the original publication. '
+            'Field inventories list eligible candidates, not category counts or scientific qualification. '
+            'Each table states its own denominator and completeness. Partial tables do not establish absence of omitted categories or pairs. '
+            'A cited category_association table establishes descriptive correspondence only for its exact fields and ordered entities; it is not independent biological validation.')
     if comparing:
         descriptive = comparison_fields == frozenset() and bool(descriptive_fields)
         independent = comparison_fields == frozenset() and not descriptive
@@ -753,6 +764,10 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                     'Population and cluster counts remain separately attributed facts.' if descriptive else
                     'Comparison describes accepted summary operands only. It establishes no cluster matching, cell transitions, '
                     'cell-type equivalence, statistical significance, biological superiority or causality.')
+        association_available = any(c.field == 'detail.category_association' for c in claims)
+        if association_available:
+            boundary = ('The cited categorical association table qualifies correspondence only for its exact fields, accepted sources and ordered cells. '
+                'Other facts retain their separate attribution. Descriptive agreement does not validate biological identities or establish significance or causality.')
         public['limitations'].append(boundary)
         public['meanings']['comparison_scope'] = boundary
         if comparison_fields and all(v.source.tool_name == 'cluster_cells' for v in views):
@@ -770,7 +785,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             if a.field.startswith(('detail.candidate.', 'detail.signature_coverage.')):
                 return b.field.startswith(a.field.rsplit('.', 1)[0] + '.') and a.value.get('candidate') == b.value.get('candidate')
             return a.field == b.field
-        public['comparison'] = dict(mode='independent_accepted_facts' if independent else
+        public['comparison'] = dict(mode='source_qualified_categorical_association' if association_available else 'independent_accepted_facts' if independent else
             'descriptive_accepted_operands' if descriptive else 'direct_accepted_operands', ranking_available=False,
             pairs=[dict(left=a.claim_id, right=b.claim_id,
                         relationship='equal' if a.value == b.value else 'different')
@@ -819,13 +834,18 @@ def response_schema(public, claims):
 ANSWER_INSTRUCTIONS = (
     'Write natural scientific prose, including accepted numbers, units and categories where useful. '
     'Each paragraph is a short statement with exact citations and kind finding, limitation or conditional.',
+    'For focus=completion, concisely explain the accepted data, actual methods and parameters, useful results, '
+    'provenance and relevant limits in response to the original request. Targets marked created_by_this_run '
+    'describe this execution; retained_accepted_result targets were retained, not rerun. Delivery intentions '
+    'are requests, not achievements: disclose unavailable portions and do not claim an unperformed comparison '
+    'or visualization. Figure-file availability does not establish biological interpretation of a figure.',
     'Cite the accepted facts supporting empirical assertions. Supplied target metadata, method context '
     'and field meanings can also support an explanation without repeated per-sentence citations. '
     'Preserve population, subject, original version and output attribution. Do not substitute values, '
     'units, methods or biological interpretations. Unknown field semantics remain unknown.',
     'Use offered comparison IDs and their exact operands when asserting an eligible scientific comparison. '
     'Separately attributed facts, partial answers and explanations of insufficient comparison evidence need '
-    'no comparison ID. Equal reported counts alone establish neither scientific correspondence nor '
+    'no comparison ID. A cited owner-generated category_association table directly supports its descriptive comparison without an operand-pair ID. Equal reported counts alone establish neither scientific correspondence nor '
     'compatible measurements. Do not infer shared cells or aligned coordinates from independent facts.',
     'A computational assignment is not independent biological validation. Do not infer biological '
     'confidence, significance, equivalence, superiority or causality from descriptive summaries.',
@@ -909,7 +929,7 @@ def review_response(model, responses, public, *, guidance=None):
             'explicitly hypothetical advice need consistency with that context, not evidence that a '
             'hypothetical experiment has occurred. Do not import new observations about this dataset.',
             'When a scientific comparison is asserted, require an offered comparison ID and its exact '
-            'compatible operands. Independently attributed facts, legitimate partial answers and explanations '
+            'compatible operands, or a citation to an owner-generated category_association table for its exact fields and entities. Independently attributed facts, legitimate partial answers and explanations '
             'of insufficient comparison evidence need no comparison ID. Reporting equal independent counts '
             'does not establish common cells or comparable measurements. Reject unsupported correspondence, '
             'equivalence, aligned coordinates, significance, superiority, causality or biological validation.',
@@ -960,16 +980,17 @@ def generate(model, question, focus, public, claims):
     return response
 
 
-def answer(sessions, session_id, interaction, model):
+def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
     try:
-        public, claims = context(sessions, session_id, interaction.admitted)
-        response = generate(model, interaction.utterance, interaction.admitted['focus'], public, claims)
+        public, claims = context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
+        response = generate(model, interaction.utterance if question is None else question,
+            interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims)
         # Generation may take time. Recheck consumed evidence and active status;
         # never move the captured targets to a newly active revision.
         stage = 'evidence_freshness'
-        refreshed, current_claims = context(sessions, session_id, interaction.admitted)
+        refreshed, current_claims = context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
         before, after = _serialize(public), _serialize(refreshed)
         for value in (before, after):
             for target in value['targets']:
@@ -996,3 +1017,97 @@ def answer(sessions, session_id, interaction, model):
     except (ValueError, TypeError, KeyError, RuntimeError, OSError):
         _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context')
         return TurnOutcome('answer', 'unavailable', text='I could not produce a response with valid evidence bindings.')
+
+
+def completion(sessions, session_id, turn_id, outcome, *, model=None):
+    """Deliver accepted science through the same facts and R5 answer path.
+
+    This runs after scientific acceptance, outside the scientific failure handler.
+    A missing model (including explicit recovery) never authorizes regeneration.
+    """
+    from dataclasses import replace
+    from .turn_context import revision_results
+    from .dialogue_execution import _received_origin
+    state = sessions.load(session_id)
+    turn = state.turn(turn_id)
+    revision = next(r for r in state.revisions if r.revision_id == turn.revision_id)
+    interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+    origin = None if interaction is None else _received_origin(interaction, state.interactions)
+    intent = {} if origin is None else origin.admitted or {}
+    requested = intent.get('delivery', ())
+    status = ('The accepted scientific results form the current revision.'
+              if revision.revision_id == state.active_revision_id else
+              'The accepted scientific results belong to this historical revision; another revision is current.')
+    limitations = []
+    from .dialogue_evidence import figure_inventory, delivered_visualization
+    figures, delivered = (), False
+    try:
+        figures = figure_inventory(sessions, turn, revision)
+        if interaction is not None and 'visualization' in requested:
+            delivered = delivered_visualization(sessions, session_id, interaction, figures)
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+        limitations.append('Accepted figure identity or the selected presentation is unavailable.')
+    delivery = dict(requested=list(requested), accepted_figures=len(figures),
+        visualization='delivered' if delivered else 'unavailable' if 'visualization' in requested else 'not_requested',
+        comparison='not_delivered' if 'comparison' in requested else 'not_requested',
+        unfulfilled=list(intent.get('unfulfilled', ())))
+    if 'comparison' in requested:
+        limitations.append('The requested comparison has not been completed. Ask a follow-up with the exact accepted results and comparison fields.')
+    if 'visualization' in requested and not delivered:
+        limitations.append('Accepted figures are available in the result view; additional requested visualization has not been produced.'
+            if figures else 'The requested visualization is unavailable; no accepted figure was produced.')
+    delivery_text = ('The requested categorical visualization is available. It reuses the explicitly selected accepted UMAP coordinates; coloring is not a new embedding fit.'
+                     if delivered and intent.get('visualization') is not None else
+                     'The requested visualization is available in the result view.' if delivered else
+                     'Figures and downloadable files are listed in the result view.')
+    if delivery['unfulfilled']:
+        limitations.append('Requirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.')
+    targets = ()
+    try:
+        groups = revision_results(sessions, state, revision)
+        targets = tuple(dict(revision_id=revision.revision_id, output_name=g['canonical']['output_name'],
+            accepted_step_sha256=g['canonical']['accepted_step_sha256'], subject=None) for g in groups)
+        admitted = dict(target=None, comparison=None, completion_delivery=delivery, completion_run_id=turn.run_id)
+        # The captured original request continues through prerequisite turns.
+        # Only existing explicit delivery intentions request extra language work.
+        if 'explanation' in requested and model is not None:
+            reading = replace(interaction, admitted=admitted)
+            result = answer(sessions, session_id, reading, model, evidence_targets=targets,
+                            question=origin.utterance)
+            if result.scientific is not None:
+                current = sessions.load(session_id)
+                status = ('The accepted scientific results form the current revision.'
+                    if revision.revision_id == current.active_revision_id else
+                    'The accepted scientific results belong to this historical revision; another revision is current.')
+                response = replace(result.scientific,
+                    limitations=tuple(dict.fromkeys(result.scientific.limitations + tuple(limitations))))
+                return replace(outcome, text=status + '\n\n' + result.text + '\n\n'
+                    + ' '.join(limitations + [delivery_text]), scientific=response)
+            raise IntentError('unavailable_context')
+        if 'explanation' in requested:
+            raise IntentError('unavailable_context')
+        public, claims = context(sessions, session_id, admitted, evidence_targets=targets)
+        # Report fields already define reviewed scientific summary priorities.
+        # Keep exact values; never select arbitrary numeric leaves or infer biology.
+        from agent.report.analysis_report import _REPORT_FIELDS, _TOOL_TITLES
+        lines, used = [], []
+        for index, group in enumerate(groups):
+            fields = _REPORT_FIELDS.get(group['tool'], ())
+            selected = [c for c in claims if c.target == f't{index}'
+                        and c.field.split('.')[0] in fields and not c.field.endswith(('_sha256', '_path'))
+                        and not isinstance(c.value, (dict, list, tuple)) and not hasattr(c.value, 'items')]
+            used.extend(selected)
+            values = '; '.join(c.field + ' = ' + json.dumps(_serialize(c.value), ensure_ascii=False)
+                               for c in selected)
+            lines.append(_TOOL_TITLES.get(group['tool'], group['tool']) + (': ' + values if values else ': accepted.'))
+        response = ScientificResponse(tuple(used), 'supported' if used else 'insufficient_evidence',
+            '\n'.join(lines), tuple(dict.fromkeys(public['limitations'] + limitations)), public['scope'], 'deterministic')
+        return replace(outcome, text=status + '\n\n' + response.explanation + '\n\n' + ' '.join(limitations
+            + [delivery_text]), scientific=response)
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+        # No semantic retry, scientific replay, or mutation of Run/Revision state.
+        message = 'Scientific computation completed and its accepted results and downloads remain available. The scientific explanation is unavailable; a follow-up can request it.'
+        response = ScientificResponse((), 'insufficient_evidence', message, tuple(limitations),
+                                      'accepted_execution_state', 'unavailable')
+        return replace(outcome, text=status + '\n\n' + message + '\n\n' + ' '.join(limitations + [delivery_text]),
+                       scientific=response)

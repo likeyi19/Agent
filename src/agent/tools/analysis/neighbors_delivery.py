@@ -148,6 +148,8 @@ def _identity_metadata(manifest, source_sha256, source_size_bytes, manifest_sha2
         source_cell_ids_sha256=manifest['sources']['cell_ids']['sha256'],
         source_cell_ids_size_bytes=manifest['sources']['cell_ids']['size_bytes'],
         payload_scope='ordered-cells-embedding-neighbor-graphs',
+        format='compact_analysis_result_h5ad',
+        scope='Ordered cells, embedding and neighbor graphs; X=None and no original feature axis.',
         provenance_policy='historical-source-locators-omitted',
         authority_scope='export-does-not-issue-scientific-authority')
     if manifest['contract_version'] == 'cell-neighbors-publication.v2':
@@ -198,8 +200,11 @@ def _inspect(file, manifest, metadata, max_bytes, *, exported):
     _group(file['uns'], fields)
     provenance = file['uns/agent_milestone6']
     fields = {'schema_version', 'stage', 'cell_order_sha256', 'parameters', 'software_versions'}
-    _group(provenance, fields if exported else fields | _PRIVATE_FIELDS | ({'embedding'} if generic else set()))
-    if generic and not exported:
+    # Older delivered v2 files omitted the embedding record entirely. Keep that
+    # reader while new exports retain its safe method/parameter provenance.
+    embedding = generic and (not exported or 'embedding' in provenance)
+    _group(provenance, fields | ({'embedding'} if embedding else set()) | (set() if exported else _PRIVATE_FIELDS))
+    if embedding:
         def check_mapping(group, expected):
             _group(group, expected)
             for key, value in expected.items():
@@ -210,7 +215,9 @@ def _inspect(file, manifest, metadata, max_bytes, *, exported):
                     _reject(group[key].shape != () or group[key].dtype.kind != 'b' or bool(group[key][()]) != value)
                 else:
                     _scalar(group[key], value, private=key in ('source_path','publication_path'))
-        check_mapping(provenance['embedding'], manifest['embedding'])
+        expected = {k:v for k,v in manifest['embedding'].items()
+                    if not exported or k not in ('source_path', 'publication_path')}
+        check_mapping(provenance['embedding'], expected)
     _scalar(provenance['schema_version'], 1)
     _scalar(provenance['stage'], 'neighbors')
     _scalar(provenance['cell_order_sha256'], manifest['cell_order_sha256'])
@@ -280,7 +287,9 @@ def _copy_group(source, destination):
     """Copy only the inspected logical objects, never source-file free space."""
     destination.attrs.update(dict(source.attrs))
     for name, item in source.items():
-        if source.name == '/uns/agent_milestone6' and name in _PRIVATE_FIELDS | {'embedding'}:
+        if source.name == '/uns/agent_milestone6' and name in _PRIVATE_FIELDS:
+            continue
+        if source.name == '/uns/agent_milestone6/embedding' and name in {'source_path', 'publication_path'}:
             continue
         if isinstance(item, h5py.Group):
             _copy_group(item, destination.create_group(name))
@@ -322,6 +331,8 @@ def validate_neighbors_export(stream, manifest, *, source_sha256, source_size_by
         metadata = _identity_metadata(manifest, source_sha256, source_size_bytes, manifest_sha256)
         _reject(type(max_bytes) is not int or not 0 < max_bytes <= MAX_EXPORT_BYTES)
         with h5py.File(stream, 'r') as file:
+            if EXPORT_KEY in file['uns'] and 'format' not in file['uns'][EXPORT_KEY]:
+                metadata = {k:v for k,v in metadata.items() if k not in ('format', 'scope')}
             _inspect(file, manifest, metadata, max_bytes, exported=True)
     except NeighborsPrivacyError:
         raise

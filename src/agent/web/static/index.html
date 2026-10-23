@@ -86,8 +86,8 @@
         <section id="result-panel" aria-labelledby="result-panel-heading">
           <h3 id="result-panel-heading" class="visually-hidden">Scientific summary</h3>
           <div class="summary-choice">
-            <label for="evidence-output">Summary</label>
-            <select id="evidence-output"></select>
+            <label for="result-selection">Result</label>
+            <select id="result-selection"></select>
           </div>
           <div id="result-facts" aria-live="polite"></div>
         </section>
@@ -98,7 +98,7 @@
             <summary>Full execution &amp; verification record</summary>
             <pre id="report-content" class="report-content" hidden></pre>
           </details>
-          <p id="figure-description" class="muted small" hidden>Figure from this result. Changing the summary selection does not change the figure.</p>
+          <p id="figure-description" class="muted small" hidden></p>
           <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
           <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
         </div>
@@ -124,6 +124,8 @@
         <details id="evidence-panel">
           <summary>Evidence &amp; provenance</summary>
           <button id="load-evidence" class="secondary" type="button">Show evidence</button>
+          <label for="evidence-output">Accepted field (details)</label>
+          <select id="evidence-output"></select>
           <div id="evidence-content"></div>
           <form id="detail-form" hidden>
             <h3>Supported detailed evidence</h3>
@@ -133,6 +135,14 @@
             <input id="detail-subject" maxlength="128" autocomplete="off" placeholder="Exact subject ID">
             <label for="detail-limit">Maximum records</label>
             <input id="detail-limit" type="number" min="1" max="32" value="8" required>
+            <label for="detail-field">Exact categorical field</label>
+            <input id="detail-field" type="text" maxlength="256" placeholder="result:field or source:field">
+            <label for="detail-other-field">Second categorical field</label>
+            <input id="detail-other-field" type="text" maxlength="256" placeholder="For a contingency table">
+            <label for="detail-comparison">Second accepted result</label>
+            <select id="detail-comparison"><option value="">Same result</option></select>
+            <label for="detail-offset">Record offset</label>
+            <input id="detail-offset" type="number" min="0" value="0" required>
             <button id="load-detail" class="secondary" type="submit">Show supported detail</button>
           </form>
           <div id="detail-content"></div>

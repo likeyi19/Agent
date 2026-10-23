@@ -220,6 +220,27 @@ def _build(tmp_path: Path, **source_options: object) -> tuple[object, ...]:
     return run, evidence, umap_path, confusion_path, result
 
 
+def test_explicit_cell_overlay_keeps_typed_categories_and_uses_existing_bundle(tmp_path):
+    run,evidence,_,_=_source(tmp_path,tools=('inspect_scATAC',))
+    payload=dict(cell_ids=('a','b','c','d'),coordinates=np.array([[0,0],[1,1],[2,2],[3,3]],dtype=np.float32),
+        labels=pd.Series(pd.Categorical([1,'1',None,1],categories=[1,'1','unused'],ordered=True)),
+        field='result:condition',correspondence=dict(basis='exact_original_source',n_cells=4,cell_order_sha256='a'*64),
+        sources=[dict(role=role,producing_step_id=step,tool_name=tool,artifact_path='/private/fixture',
+            integrity=dict(sha256='b'*64)) for role,step,tool in (
+            ('coordinates','old-umap','compute_cell_umap'),('categories','new-labels','cluster_cells'))])
+    read=lambda:payload
+    result=build_analysis_visualizations(run,evidence,tmp_path/'output',registry=_guarded_registry(),cell_overlay=read)
+    assert result['n_figures']==1 and result['figures'][0]['figure_kind']=='umap_categorical'
+    manifest=json.loads(Path(result['manifest_path']).read_bytes())
+    p=manifest['figures'][0]['presentation']
+    assert p['category_order']==[dict(value=1,missing=False),dict(value='1',missing=False),dict(value=None,missing=True)]
+    assert p['category_display']==['1','"1"','Missing label (not an assigned category)']
+    assert p['coordinate_reused'] and not p['coordinate_transform'] and not p['subsampling']
+    assert not manifest['validation']['explicit_evidence_artifacts_only']
+    assert manifest['validation']['explicit_accepted_sources_and_ordered_cells']
+    assert verify_analysis_visualizations(run,evidence,result,registry=_guarded_registry(),cell_overlay=read).passed
+
+
 def test_supported_visualization_kinds_are_ordered_and_do_not_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

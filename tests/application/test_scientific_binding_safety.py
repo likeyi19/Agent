@@ -9,7 +9,7 @@ import pytest
 from agent.application import ResearchAgentApplication
 from agent.application.dialogue_execution import (
     _bind_arguments, _check_parameter_plan, _parameter_input,
-    _validate_argument_record, _validate_resolution_record,
+    _validate_argument_record,
 )
 from agent.application.session_state import (
     AnalysisSession, Interaction, SessionConflictError, SessionError, digest,
@@ -154,7 +154,6 @@ def test_mixed_historical_and_generic_declarations_round_trip_through_shared_rec
             arguments_added_inputs=[name for name in ('resolution', 'min_dist') if name not in received])
     interaction = Interaction('mixed', utterance, None, 0, dict(relations={}, bases={}),
         status='admitted', submission=None if received is not None else dict(execution_inputs={}), admitted=admitted)
-    _validate_resolution_record(interaction)
     _validate_argument_record(interaction)
 
 

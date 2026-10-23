@@ -5,9 +5,24 @@ import json
 import pytest
 
 from agent.application.interactive_schemas import (
-    ArtifactHandle, ClientError, ModelChoice, PresentedResponse, RevisionView,
+    ArtifactHandle, ScientificArtifactHandle, ClientError, ModelChoice, PresentedResponse, RevisionView,
     SessionView, StepView, TurnView,
 )
+
+
+def test_only_unprepared_integrated_downloads_can_have_unknown_size():
+    integrated = ScientificArtifactHandle('a'*64, 'scientific_integrated', 'b'*64, 'revision', 'turn', None,
+        'integrated-analysis.h5ad', 'Original data with accepted analysis')
+    assert integrated.to_dict()['size_bytes'] is None
+    assert 'prepared when downloaded' in integrated.description
+    for kind, filename, label in (
+        ('scientific_analysis', 'analysis.h5ad', 'Embeddings and UMAP — safe export'),
+        ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
+    ):
+        known = ScientificArtifactHandle('a'*64, kind, 'b'*64, 'revision', 'turn', 1234, filename, label)
+        assert known.to_dict()['size_bytes'] == 1234
+        with pytest.raises(ValueError):
+            ScientificArtifactHandle('a'*64, kind, 'b'*64, 'revision', 'turn', None, filename, label)
 
 
 def test_exact_presentation_roundtrip_freezes_and_copies_structured_display():
@@ -31,6 +46,7 @@ def test_exact_presentation_roundtrip_freezes_and_copies_structured_display():
 
 def test_scientific_presentation_retains_metadata_without_duplicate_claims():
     shown = PresentedResponse('answer', 'answered', 'Accepted evidence explanation.',
+        version=1,
         scientific=dict(support='supported', limitations=['Bounded evidence.'],
                         evidence_scope='accepted_persisted_summary'))
     assert PresentedResponse.from_dict(shown.to_dict()) == shown
@@ -65,7 +81,7 @@ def test_presentation_storage_shape_rejects_unknown_fields(extra):
 
 
 @pytest.mark.parametrize('change', [
-    {'version': True}, {'version': 2}, {'kind': 'raw_provider_response'},
+    {'version': True}, {'version': 3}, {'kind': 'raw_provider_response'},
     {'text': 'a' * 131_073}, {'status': ''},
     {'scientific': {'support': 'guessed', 'limitations': [], 'evidence_scope': 'summary'}},
     {'scientific': {'support': 'supported', 'limitations': ['a' * 4_097],

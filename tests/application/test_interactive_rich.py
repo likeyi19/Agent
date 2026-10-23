@@ -146,7 +146,7 @@ def test_existing_supported_detail_owner_is_reused_without_science(app, monkeypa
     facade = read_only_boundary(forbid_work(app, monkeypatch))
     before = files(app)
     basic = facade.evidence('session', revision, 'output0')
-    assert basic.supported_details == (section,)
+    assert section in basic.supported_details
     detail = facade.evidence('session', revision, 'output0', detail_section=section, subject=subject, limit=1)
     assert detail.status == 'available' and detail.evidence_scope == 'accepted_summary_and_published_detail'
     assert detail.detail[0].artifact_sha256 and detail.detail[0].source_pointer

@@ -456,7 +456,7 @@ def test_invalid_result_field_reference_has_safe_structural_detail() -> None:
     assert diagnostic["output_key"] == "embedding_path"
 
 
-def test_explicit_unsupported_response_has_no_refusal_prose() -> None:
+def test_explicit_unsupported_response_redacts_sensitive_refusal_values() -> None:
     refusal = "provider refusal prose with PRIVATE-TOKEN"
     response = json.dumps(
         {
@@ -592,3 +592,24 @@ def test_noncanonical_direct_embedding_remains_preflight_valid() -> None:
     assert result.status is RunStatus.PLANNED
     assert result.verification is not None and result.verification.passed
     assert _last_attempt_diagnostic(result)["code"] == "FINAL_PLAN_ACCEPTED"
+
+
+def test_v4_unsupported_reason_is_bounded_sanitized_and_durable(tmp_path):
+    reason = ('The requested scientific method for human is unavailable; source /private/input.h5ad; '
+              'token=credential-value; endpoint https://private.example/key; "private content". ')
+    model = DiagnosticPlanningModel(json.dumps(dict(schema_version=4,
+        decision=dict(kind='unsupported', reason=reason))))
+    registry, guard = _guarded_registry()
+    store = FileRunStore(tmp_path / 'reason')
+    result = AgentRuntime(planner=LLMPlanner(model), registry=registry, run_store=store).run(
+        _request(inputs=dict(input_path='/private/input.h5ad', species='human')))
+    assert result.errors[0].code == 'UNSUPPORTED_REQUEST'
+    diagnostic = _last_attempt_diagnostic(result)
+    assert diagnostic['stage'] == 'unsupported' and not diagnostic['candidate_constructed']
+    assert 'scientific method for human is unavailable' in diagnostic['unsupported_reason']
+    for secret in ('/private/input.h5ad', 'credential-value', 'https://private.example', 'private content'):
+        assert secret not in diagnostic['unsupported_reason']
+    assert len(diagnostic['unsupported_reason']) <= 1024
+    assert model.calls == 1
+    assert store.load(result.run_id).errors[0].details['unsupported_reason'] == diagnostic['unsupported_reason']
+    guard.assert_not_called()

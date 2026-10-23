@@ -405,6 +405,17 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         }.get(exc.code, 400))
         if exc.code in {'MATRIX_DOWNLOAD_BUSY', 'SCIENTIFIC_DOWNLOAD_BUSY'}:
             response.headers['Retry-After'] = '2'
+        if 'text/html' in request.headers.get('accept', ''):
+            from html import escape
+            from fastapi.responses import HTMLResponse
+            response = HTMLResponse(
+                '<!doctype html><html lang="en"><meta charset="utf-8"><title>Scientific download</title>'
+                '<main><h1>Download could not be prepared</h1><p>' + escape(exc.message) + '</p>'
+                '<p>Return to the analysis tab and retry the download. Accepted scientific results remain available.</p>'
+                '<p>You may continue using the compact results if an integrated export is unavailable.</p></main></html>',
+                status_code=response.status_code, headers=dict(response.headers))
+            response.headers['content-type'] = 'text/html; charset=utf-8'
+            response.headers['content-length'] = str(len(response.body))
         return response
 
     @app.exception_handler(RequestValidationError)
@@ -567,10 +578,15 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
                  detail_section: str | None = Query(default=None, max_length=128),
                  subject: str | None = Query(default=None, max_length=128),
                  limit: int = Query(default=8, ge=1, le=32),
-                 candidate: str | None = Query(default=None, max_length=128)):
+                 candidate: str | None = Query(default=None, max_length=128),
+                 field: str | None = Query(default=None, max_length=256),
+                 other_field: str | None = Query(default=None, max_length=256),
+                 offset: int = Query(default=0, ge=0),
+                 comparison_output_name: str | None = Query(default=None, max_length=256)):
         return application.evidence(session_id, revision_id, output_name,
             fields=None if fields is None else tuple(fields), detail_section=detail_section,
-            subject=subject, limit=limit, candidate=candidate).to_dict()
+            subject=subject, limit=limit, candidate=candidate, field=field, other_field=other_field,
+            offset=offset, comparison_output_name=comparison_output_name).to_dict()
 
     @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/artifacts')
     def artifacts(session_id: str, revision_id: str):

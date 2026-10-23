@@ -118,6 +118,13 @@ def test_failed_preparation_emits_only_safe_json(monkeypatch, tmp_path, code, st
         assert str(tmp_path) not in response.text
         if status == 503:
             assert response.headers['retry-after'] == '2'
+            page = client.get('/api/v1/sessions/analysis/revisions/history/scientific-artifacts/' + 'a' * 64,
+                              headers={'Accept': 'text/html'})
+            assert page.status_code == 503 and page.headers['retry-after'] == '2'
+            assert page.headers['content-type'].startswith('text/html')
+            assert int(page.headers['content-length']) == len(page.content)
+            assert 'Return to the analysis tab and retry' in page.text
+            assert 'Accepted scientific results remain available' in page.text
     assert not fixture.models and not fixture.science_calls
 
 

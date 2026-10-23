@@ -151,6 +151,8 @@ class _UmapData:
     categories: tuple[str, ...]
     palette: tuple[str, ...]
     point_size: float
+    label_title: str | None = None
+    category_labels: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -787,6 +789,46 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
     return tuple(projections)
 
 
+def _cell_overlay_projection(read_sources) -> tuple[_FigureProjection, ...]:
+    """Categorical presentation of explicitly qualified, unchanged coordinates.
+
+    The application reader binds accepted sources; the existing categorical
+    owner supplies typed labels. This composer performs no scientific join.
+    """
+    from agent.tools.analysis.categorical import _labels
+    value = read_sources()
+    tokens, labels, ordered = _labels(value['labels'])
+    missing = '{"missing":true}'
+    values = tuple(missing if t is None else t for t in tokens)
+    observed = set(tokens)
+    categories = tuple(t for t in labels if t in observed)
+    display = [str(labels[t]) for t in categories]
+    if len(set(display)) != len(display):
+        display = [json.dumps(labels[t], ensure_ascii=False) for t in categories]
+    if None in tokens:
+        categories += (missing,)
+        display.append('Missing label (not an assigned category)')
+    palette = _categorical_palette(len(categories))
+    xy, ids = value['coordinates'], value['cell_ids']
+    data = _UmapData(ids, xy, values, categories, palette, _umap_point_size(len(ids)),
+                     value['field'], tuple(display))
+    columns = max(1, math.ceil(len(categories) / 20))
+    presentation = dict(n_cells=len(ids), coordinate_shape=tuple(xy.shape), coordinate_dtype=str(xy.dtype),
+        coordinate_transform=False, coordinate_reused=True, jitter=False, subsampling=False,
+        category_order=[dict(value=None if t == missing else labels[t], missing=t == missing)
+                        for t in categories], category_display=display,
+        categorical_field=value['field'], ordered_categories=ordered,
+        correspondence=value['correspondence'], palette=[dict(category=t, color=c)
+            for t,c in zip(categories,palette)], point_size=data.point_size,
+        alpha=_UMAP_ALPHA, legend_columns=columns,
+        delivery='accepted_cell_overlay')
+    digest = _umap_plot_digest(ids, xy, values)
+    return (_FigureProjection('cell-overlay-' + digest[:16], 'umap_categorical',
+        'cell-overlay-' + digest[:16] + '.png',
+        tuple(s['producing_step_id'] for s in value['sources'] if s['role'] == 'categories'),
+        tuple(value['sources']), digest, int((8 + 1.5*(columns-1))*_DPI), 6*_DPI, _DPI, presentation, data),)
+
+
 def get_supported_visualization_kinds(
     run_result: AgentRunResult,
     evidence: str | Path | AnalysisEvidenceResult,
@@ -855,9 +897,10 @@ def _render_umap(figure: Figure, data: _UmapData, *, legend_columns: int) -> Non
     axes.set_ylabel("UMAP 2")
     axes.set_xticks(())
     axes.set_yticks(())
-    axes.set_title("UMAP by Leiden cluster" if data.labels else "UMAP coordinates")
+    axes.set_title("UMAP by " + (data.label_title or "Leiden cluster") if data.labels else "UMAP coordinates")
     if not data.labels:
         return
+    legend_labels = data.category_labels or data.categories
     handles = [
         Line2D(
             (),
@@ -869,17 +912,17 @@ def _render_umap(figure: Figure, data: _UmapData, *, legend_columns: int) -> Non
             markersize=5.0,
             label=category,
         )
-        for category, color in zip(data.categories, data.palette, strict=True)
+        for category, color in zip(legend_labels, data.palette, strict=True)
     ]
     figure.legend(
         handles=handles,
-        labels=list(data.categories),
+        labels=list(legend_labels),
         loc="center left",
         bbox_to_anchor=(0.72, 0.5),
         frameon=False,
         ncol=legend_columns,
         fontsize=7.0,
-        title="Leiden",
+        title=data.label_title or "Leiden",
     )
 
 
@@ -1026,6 +1069,7 @@ def _manifest_payload(
     png_digests: Mapping[str, str],
     renderer: Mapping[str, JsonValue],
 ) -> Mapping[str, object]:
+    overlay = any(value.figure_kind == 'umap_categorical' for value in projections)
     return {
         "schema_version": ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
         "artifact_type": ANALYSIS_VISUALIZATION_ARTIFACT_TYPE,
@@ -1042,7 +1086,7 @@ def _manifest_payload(
         "figure_set": {
             "n_figures": len(projections),
             "expected_figure_ids": tuple(value.figure_id for value in projections),
-            "figure_order": "verified_workflow_topological_order",
+            "figure_order": "explicit_accepted_sources" if overlay else "verified_workflow_topological_order",
         },
         "figures": tuple(
             _figure_manifest_record(value, png_digests[value.figure_id])
@@ -1061,7 +1105,8 @@ def _manifest_payload(
         "validation": {
             "fresh_evidence_verified_before_extraction": True,
             "fresh_evidence_verified_before_publication": True,
-            "explicit_evidence_artifacts_only": True,
+            "explicit_evidence_artifacts_only": not overlay,
+            **({'explicit_accepted_sources_and_ordered_cells': True} if overlay else {}),
             "scientific_tools_invoked": False,
             "raw_scatac_matrix_accessed": False,
             "transferred_label_umap_included": False,
@@ -1316,6 +1361,7 @@ def build_analysis_visualizations(
     *,
     registry: ToolRegistry,
     overwrite: bool = False,
+    cell_overlay=None,
 ) -> AnalysisVisualizationResult:
     """Build a deterministic PNG bundle from freshly verified analysis evidence."""
 
@@ -1334,7 +1380,7 @@ def build_analysis_visualizations(
         )
 
     first = _verified_evidence_snapshot(run_result, evidence, registry)
-    projections = _derive_figure_projections(first)
+    projections = _derive_figure_projections(first) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
     renderer = _renderer_contract()
 
     staging = Path(
@@ -1372,7 +1418,7 @@ def build_analysis_visualizations(
                 "VISUALIZATION_EVIDENCE_CHANGED",
                 "Analysis evidence changed during visualization preparation.",
             )
-        second_projections = _derive_figure_projections(second)
+        second_projections = _derive_figure_projections(second) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         placeholder_digests = {
             projection.figure_id: "0" * 64 for projection in projections
         }
@@ -1453,6 +1499,7 @@ def verify_analysis_visualizations(
     visualization: str | Path | AnalysisVisualizationResult,
     *,
     registry: ToolRegistry,
+    cell_overlay=None,
 ) -> VerificationResult:
     """Freshly verify source evidence, plotting metadata, and persisted PNGs."""
 
@@ -1468,7 +1515,7 @@ def verify_analysis_visualizations(
         if not isinstance(registry, ToolRegistry):
             raise TypeError("`registry` must be a ToolRegistry.")
         snapshot = _verified_evidence_snapshot(run_result, evidence, registry)
-        projections = _derive_figure_projections(snapshot)
+        projections = _derive_figure_projections(snapshot) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         renderer = _renderer_contract()
     except (AnalysisVisualizationError, TypeError) as exc:
         code = getattr(exc, "code", "VISUALIZATION_SOURCE_INVALID")

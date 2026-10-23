@@ -45,10 +45,13 @@ class OutputSelection:
     name: str
     step_id: str
     output_key: str
+    use: str | None = None
 
     def __post_init__(self):
         for value in (self.name, self.step_id, self.output_key):
             text(value)
+        if self.use not in (None, 'visualization_labels'):
+            raise SessionError('Invalid presentation use of a selected output.')
 
 
 @dataclass(frozen=True)
@@ -243,12 +246,6 @@ class Interaction:
             object.__setattr__(self, 'prerequisite', frozen)
         if self.presentation is not None:
             frozen = freeze_json_mapping(self.presentation, 'interaction.presentation')
-            if (set(frozen) != {'version', 'kind', 'status', 'text', 'clarification',
-                               'scientific', 'guidance', 'error'}
-                    or type(frozen['version']) is not int or frozen['version'] != 1
-                    or any(type(frozen[k]) is not str for k in ('kind', 'status', 'text'))
-                    or len(canonical(_serialize(frozen))) > 262144):
-                raise SessionError('Invalid interaction presentation.')
             from .interactive_schemas import PresentedResponse
             try:
                 PresentedResponse.from_dict(_serialize(frozen))
@@ -358,6 +355,9 @@ class AnalysisSession:
                 if f.name not in {'guidance_candidates', 'submission', 'presentation', 'prerequisite'}
                 or getattr(i, f.name) is not None} for i in self.interactions)
         for turn in value['turns']:
+            for selection in turn['selections']:
+                if selection['use'] is None:
+                    del selection['use']
             if not turn['retained_outputs']:
                 del turn['retained_outputs']
         return value
@@ -371,6 +371,9 @@ class AnalysisSession:
     @classmethod
     def from_dict(cls, value):
         def decode(model, data, children=None):
+            if model is OutputSelection and type(data) is dict:
+                data = dict(data)
+                data.setdefault('use', None)
             if model is cls and type(data) is dict and 'interactions' not in data:
                 data = dict(data, interactions=[])
             if model is SessionTurn and type(data) is dict and 'retained_outputs' not in data:

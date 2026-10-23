@@ -201,10 +201,21 @@ def admitted_answer(sessions, session_id, admitted):
                           comparison_id=admitted['comparison_id'])
 
 
-def summarize(sessions, session_id, turn_id, outcome):
+def summarize(sessions, session_id, turn_id, outcome, *, model=None):
     """Add text only to the high-level interface; low-level run results are unchanged."""
     if outcome.presentation is not None:
         return outcome
+    if outcome.kind == 'execute' and outcome.status in {'activated', 'stale'}:
+        from .scientific_dialogue import completion
+        state = sessions.load(session_id)
+        interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if interaction is not None and (interaction.admitted or {}).get('operation') != 'plan':
+            try:
+                outcome = replace(outcome, facts=project(sessions, state, Answer('changes'),
+                    revision_id=state.turn(turn_id).revision_id))
+            except (ValueError, RuntimeError, OSError, KeyError, StopIteration):
+                pass  # Optional legacy structured facts never change acceptance.
+        return completion(sessions, session_id, turn_id, outcome, model=model)
     if outcome.text: return outcome
     if outcome.kind == 'clarify':
         return replace(outcome, text=clarification_text(outcome.clarification))
@@ -214,30 +225,7 @@ def summarize(sessions, session_id, turn_id, outcome):
         version = next(i + 1 for i, r in enumerate(state.revisions) if r.revision_id == target)
         current = 'is active' if state.active_revision_id == target else 'was activated; another version is now active'
         return replace(outcome, text=render_navigation(version, current))
-    if outcome.kind != 'execute' or outcome.status not in {'activated', 'stale'}:
-        return replace(outcome, text='The turn has not produced a newly activated analysis revision.')
-    try:
-        state = sessions.load(session_id)
-        turn = state.turn(turn_id)
-        facts = project(sessions, state, Answer('changes'), revision_id=turn.revision_id)
-    except (ValueError, RuntimeError, OSError, KeyError, StopIteration):
-        return replace(outcome, text=UNAVAILABLE)
-    return replace(outcome, text=render_execution(facts), facts=facts)
-
-
-def render_execution(facts):
-    """One deterministic rendering of a completed execution's exact facts."""
-    parts = [f'{LABELS[k]} is {_value(v)}.' for k, _, v in facts.parameter_changes if k in dict(facts.parameters)]
-    ran = [w.role for w in facts.work if w.tool_attempts]
-    if ran: parts.append('The run completed tool execution for ' + _joined(ran) + '.')
-    reused = [r.output.role for r in facts.reuse]
-    if reused: parts.append('Prior accepted ' + _joined(reused) + ' were consumed through authority-bound references.')
-    retained_only = [o.role for o in facts.retained_outputs if o.role not in reused]
-    if retained_only: parts.append('The output set also retains prior ' + _joined(retained_only) + '.')
-    if not any(o.role == 'matrix' for o in facts.outputs):
-        parts.append('This revision has no matrix; the historical matrix is not part of this output set.')
-    parts.append('The new revision is active.' if facts.is_active else 'This result is historical; it is not the active revision.')
-    return ' '.join(parts)
+    return replace(outcome, text='The turn has not produced a newly activated analysis revision.')
 
 
 def render_navigation(version, current):

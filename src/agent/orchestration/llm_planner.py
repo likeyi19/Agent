@@ -1604,6 +1604,18 @@ class LLMPlanner:
             )
             stage = exc.diagnostic_stage or PlanningDiagnosticStage.SCHEMA
             fields = exc.diagnostic_fields
+            from .planning_diagnostics import safe_unsupported_reason
+            private_values = []
+            def private_strings(value, name=''):
+                if isinstance(value, str) and ('/' in value or '\\' in value
+                        or re.search(r'(?i)key|token|secret|password|credential|authorization', name)):
+                    private_values.append(value)
+                elif isinstance(value, Mapping):
+                    for key, item in value.items(): private_strings(item, name + '.' + key)
+                elif isinstance(value, (tuple, list)):
+                    for item in value: private_strings(item, name)
+            if stage is PlanningDiagnosticStage.UNSUPPORTED:
+                private_strings(request.inputs)
             diagnostics.append(
                 context.diagnostic(
                     stage,
@@ -1631,6 +1643,8 @@ class LLMPlanner:
                     argument_names=tuple(name for name in fields.get("argument_names", ())
                         if _known_argument_name(registry, name) is not None),
                     reason_code=exc.diagnostic_reason_code,
+                    unsupported_reason=(safe_unsupported_reason(str(exc), private_values)
+                        if stage is PlanningDiagnosticStage.UNSUPPORTED else None),
                 )
             )
             raise PlannerError(

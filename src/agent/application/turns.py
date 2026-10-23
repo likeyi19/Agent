@@ -417,10 +417,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .shared_resources import discover
             input_sets = tuple(input_sets) + discover(reference_resources, session_id)
         visible = public_context(captured)
+        context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         from .scientific_dialogue import public as dialogue_public
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
                                               sessions=sessions, utterance=utterance,
-                                              execution_inputs=execution_inputs)
+                                              execution_inputs=execution_inputs, context=context)
         from .dialogue_execution import prerequisite_public
         pending_public = prerequisite_public(interaction, state.interactions)
         if pending_public is not None and reference_resources is not None:
@@ -485,14 +486,13 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
         from .annotation_groups import public_choices
         visible['dialogue']['annotation_group_results'] = public_choices(sessions, interaction)
-        context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
-        if context is not None:
+        if context is not None and context.items:
             visible['dialogue']['planning_context'] = list(context.public_items())
         # Project owner observations of the exact offered inputs, never a workflow.
         # Registered bindings retain source integrity; no observation becomes authority.
         offered = (submission or {}).get('candidate_input') or (role_submission or {}).get('registered_input', {})
         members = offered.get('members', ())
-        if members and (context is None or (submission or {}).get('attachments')):
+        if members and (context is None or not context.items or (submission or {}).get('attachments')):
             from .local_resources import LocalResourceAdmission
             from agent.tools.analysis.pca_embedding import observe_methods
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
@@ -510,7 +510,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if suitability:
                 visible['dialogue']['embedding_suitability'] = suitability
         decision = interpret(interpreter, utterance, visible)
-        if isinstance(decision, Execute) and (decision.argument is not None or decision.arguments) and decision.operation != 'plan':
+        if isinstance(decision, Execute) and decision.arguments and decision.operation != 'plan':
             raise IntentError('unsupported_intent')
         if interaction.base_revision_id is None:
             if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
@@ -615,8 +615,14 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             import json
             value = dict(kind='execute_plan', target=candidate.target,
                 arguments=[asdict(d) for d in candidate.arguments])
-            if candidate.argument is not None:
-                value['argument'] = asdict(candidate.argument)
+            if candidate.references:
+                value['references'] = list(candidate.references)
+            if candidate.delivery:
+                value['delivery'] = list(candidate.delivery)
+            if candidate.unfulfilled:
+                value['unfulfilled'] = list(candidate.unfulfilled)
+            if candidate.retain_parameters:
+                value['retain_parameters'] = [asdict(p) for p in candidate.retain_parameters]
             if candidate.roles:
                 value['roles'] = [asdict(r) for r in candidate.roles]
             if candidate.context is not None:

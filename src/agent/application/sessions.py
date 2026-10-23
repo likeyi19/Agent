@@ -55,7 +55,7 @@ class AnalysisSessions:
                        predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
                        submission=submission, epizoo_resources=epizoo_resources, input_sets=input_sets, reference_resources=reference_resources)
         from .responses import summarize
-        return summarize(self, session_id, turn_id, outcome)
+        return summarize(self, session_id, turn_id, outcome, model=interpreter if answerer is None else answerer)
 
     def store_presentation(self, session_id, turn_id, presentation):
         """Store one displayed response exactly; prose grants no scientific authority."""
@@ -413,8 +413,8 @@ class AnalysisSessions:
                 bindings.add(binding)
         return ActivePlanningContext(session_id, revision.revision_id, turn.base_generation, tuple(items))
 
-    def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True):
-        """Project exact captured executable outputs before a SessionTurn exists.
+    def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True, reuse=True):
+        """Project captured descriptions and, when requested, executable outputs.
 
         Metadata projection grants no scientific readiness. Execution requests
         additionally validate the existing publication closure, without rebuilding
@@ -424,15 +424,18 @@ class AnalysisSessions:
         from agent.orchestration.prior_outputs import (optional_binding_for_locator, validate_binding,
                                                       qualified_dependencies_for_locator)
         from agent.schemas.orchestration import _serialize
-        if type(integrity) is not bool:
-            raise TypeError('Planning context integrity policy must be boolean.')
+        if type(integrity) is not bool or type(reuse) is not bool:
+            raise TypeError('Planning context policies must be boolean.')
         state = self.load(session_id)
         matches = [item for item in state.interactions if item.turn_id == turn_id]
         if len(matches) != 1:
             raise SessionError('Unknown captured interaction for planning context.')
         interaction = matches[0]
+        from .dialogue_execution import planning_task
+        task = planning_task(interaction, state)
         if interaction.base_revision_id is None:
-            return None, MappingProxyType({})
+            return (ActivePlanningContext(session_id, None, interaction.base_generation, (), task=task)
+                    if task else None), MappingProxyType({})
         revision = next((item for item in state.revisions
                          if item.revision_id == interaction.base_revision_id), None)
         captured = _serialize(interaction.snapshot)
@@ -442,30 +445,47 @@ class AnalysisSessions:
                 or base is None or base.get('revision_id') != revision.revision_id
                 or base.get('outputs') != [asdict(output) for output in revision.outputs]):
             raise SessionError('Planning context differs from its captured Session revision.')
-        bindings = {}
-        for output in revision.outputs:
-            binding = optional_binding_for_locator(output, self._application.run_store,
-                                                   self._application.registry)
-            if binding is None:
-                for dependency in qualified_dependencies_for_locator(output,
-                        self._application.run_store, self._application.registry):
-                    if dependency not in bindings:
+        bindings, sources = {}, {}
+        if reuse:
+            for output in revision.outputs:
+                binding = optional_binding_for_locator(output, self._application.run_store,
+                                                       self._application.registry)
+                sources[output] = ((binding,) if binding is not None else qualified_dependencies_for_locator(
+                    output, self._application.run_store, self._application.registry))
+                for source in sources[output]:
+                    if source not in bindings:
                         if integrity:
-                            validate_binding(dependency, store=self._application.run_store,
+                            validate_binding(source, store=self._application.run_store,
                                 registry=self._application.registry, integrity=True)
-                        # Available for explicit consumption, never silently added
-                        # to the revision's selected/retained output inventory.
-                        bindings[dependency] = []
-                continue
-            if binding not in bindings:
-                if integrity:
-                    validate_binding(binding, store=self._application.run_store,
-                                     registry=self._application.registry, integrity=True)
-                bindings[binding] = []
-            bindings[binding].append(output)
-        if not bindings:
+                        # Upstream sources are offered without becoming selected
+                        # or retained outputs in the captured Revision.
+                        bindings[source] = []
+                if binding is not None:
+                    bindings[binding].append(output)
+        from .turn_context import result_descriptions
+        descriptions = captured.get('dialogue', {}).get('results')
+        if descriptions is None:
+            descriptions = result_descriptions(self, state, captured)
+        else:
+            # Read older W1 captures without rewriting their static metadata.
+            for description in descriptions:
+                description.pop('description', None)
+                description.pop('ports', None)
+            if reuse and integrity and result_descriptions(self, state, captured) != descriptions:
+                raise SessionError('Accepted result descriptions differ from captured scientific metadata.')
+        if not bindings and not descriptions:
             return None, MappingProxyType({})
         items = tuple(ActiveContextItem(f'ctx.{index}', binding)
                       for index, binding in enumerate(bindings))
         locators = MappingProxyType({item.handle: tuple(bindings[item.binding]) for item in items})
-        return ActivePlanningContext(session_id, revision.revision_id, interaction.base_generation, items), locators
+        from .turn_context import result_groups
+        groups = result_groups(captured, state)
+        for group, description in zip(groups, descriptions):
+            selected = next(r for r in state.revisions if r.revision_id == group['canonical']['revision_id'])
+            qualified = {source for output in selected.outputs
+                if output.name in {member['output_name'] for member in group['members']}
+                for source in sources.get(output, ())}
+            description['reusable_inputs'] = [item.handle for item in items
+                if item.binding in qualified]
+        return ActivePlanningContext(session_id, revision.revision_id, interaction.base_generation,
+                                     items, tuple(descriptions), task), locators

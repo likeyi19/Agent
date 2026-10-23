@@ -139,6 +139,7 @@ def _openrouter_factory(profile: PlanningModelProfile) -> PlanningModel:
     return OpenRouterPlanningModel(
         model=profile.model_id,
         timeout=profile.request_timeout_seconds,
+        **({} if profile.provider_max_price is None else {"provider_max_price": profile.provider_max_price}),
     )
 
 

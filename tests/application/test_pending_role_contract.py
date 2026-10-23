@@ -188,6 +188,35 @@ def test_pure_pending_admission_shares_registry_roles_without_opening_sources(to
     assert len(group_role_inputs(group, [asdict(r) for r in completed], registry)) == 2
 
 
+@pytest.mark.parametrize('attachment_candidates', [False, True])
+def test_pending_distinct_consumers_can_explicitly_share_one_exact_source(monkeypatch, attachment_candidates):
+    registry = build_default_tool_registry()
+    group = selection()
+    group = RegisteredInputGroup(group.members if attachment_candidates else group.members[:1], {},
+                                 attachment_candidates=attachment_candidates)
+    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'pca_embed_cells')]
+    assigned = [role | dict(source='source.0') for role in required]
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Pure pending role admission opened a scientific source.')
+    monkeypatch.setattr('builtins.open', forbidden)
+    partial = validate_group_roles(group, assigned[:1], registry, required)
+    assert partial == (InputRole(**assigned[0]),)
+    completed = validate_group_roles(group, assigned, registry, required, complete=True)
+    assert completed == tuple(InputRole(**role) for role in assigned)
+    assert group_role_inputs(group, [asdict(role) for role in completed], registry) == {
+        'input_path': group.members[0]['source_path']}
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_pending_explicit_shared_alias_rejects_different_source_bindings(complete):
+    registry, group = build_default_tool_registry(), selection()
+    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'pca_embed_cells')]
+    assigned = [role | dict(source=f'source.{index}') for index, role in enumerate(required)]
+    with pytest.raises(ResourceAdmissionError) as rejected:
+        validate_group_roles(group, assigned, registry, required, complete=complete)
+    assert rejected.value.code == 'MULTI_INPUT_ROLE_INVALID'
+
+
 @pytest.mark.parametrize('variant', ['missing', 'count', 'duplicate_required', 'unsupported_port',
                                     'shared_alias', 'foreign_role', 'same_source', 'unoffered_source'])
 def test_pending_role_compatibility_fails_closed(variant):

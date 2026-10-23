@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
+from decimal import Decimal, InvalidOperation
 import math
 import re
+from types import MappingProxyType
 from typing import Mapping, Protocol, runtime_checkable
 
 from agent.schemas import JsonValue
@@ -17,6 +19,30 @@ _MODEL_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _MAX_REQUEST_TIMEOUT_SECONDS = 3600.0
 
 
+def _validate_provider_max_price(prices: object) -> Mapping[str, float] | None:
+    """Validate the OpenRouter endpoint-rate policy shared by profile and adapter."""
+    if prices is None:
+        return None
+    if not isinstance(prices, Mapping) or set(prices) != {"prompt", "completion", "request"}:
+        raise ValueError("Provider price caps require prompt, completion and request limits.")
+    normalized = {}
+    for name in ("prompt", "completion", "request"):
+        value = prices[name]
+        if type(value) not in (str, int, float) or len(str(value)) > 32:
+            raise ValueError("Provider price caps must be finite nonnegative numbers.")
+        try:
+            amount = Decimal(str(value))
+        except InvalidOperation:
+            raise ValueError("Provider price caps must be finite nonnegative numbers.") from None
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("Provider price caps must be finite nonnegative numbers.")
+        number = float(amount)
+        if not math.isfinite(number) or amount != 0 and number == 0:
+            raise ValueError("Provider price caps must be representable finite numbers.")
+        normalized[name] = number
+    return MappingProxyType(normalized)
+
+
 @dataclass(frozen=True)
 class PlanningModelProfile:
     """Non-secret deployment configuration for one planning model."""
@@ -27,6 +53,7 @@ class PlanningModelProfile:
     enabled: bool = True
     supports_structured_output: bool = True
     request_timeout_seconds: float = 60.0
+    provider_max_price: Mapping[str, float | int | str] | None = field(default=None, hash=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.profile_id, str) or not _PROFILE_IDENTIFIER.fullmatch(
@@ -58,6 +85,16 @@ class PlanningModelProfile:
                 f"{_MAX_REQUEST_TIMEOUT_SECONDS:g}."
             )
         object.__setattr__(self, "request_timeout_seconds", float(timeout))
+        if self.provider_max_price is not None and self.provider_id != "openrouter":
+            raise ValueError("`provider_max_price` is supported only for OpenRouter profiles.")
+        object.__setattr__(self, "provider_max_price", _validate_provider_max_price(self.provider_max_price))
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize approved policy while preserving historical omitted-field bytes."""
+        result = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "provider_max_price"}
+        if self.provider_max_price is not None:
+            result["provider_max_price"] = dict(self.provider_max_price)
+        return result
 
 
 class PlanningModelError(RuntimeError):

@@ -161,6 +161,51 @@ def test_selected_dataset_may_flow_through_exact_inspection_output(selection):
         owner.validate_plan(submission(bound), SimpleNamespace(steps=(other, pca)))
 
 
+@pytest.mark.parametrize('inspection_output', [False, True])
+@pytest.mark.parametrize('attachment_candidates', [False, True])
+def test_one_exact_source_can_be_explicitly_bound_to_inspection_and_pca(
+        selection, inspection_output, attachment_candidates):
+    from agent.orchestration import PlanStep
+    owner, records, _ = selection
+    # Candidate selections may also contain an unrelated staged file.
+    selected = records if attachment_candidates else records[:1]
+    group = owner.compose_group([record.resource_id for record in selected],
+                                attachment_candidates=attachment_candidates)
+    declared = [dict(tool=tool, port='dataset', source='source.0')
+                for tool in ('inspect_scATAC', 'pca_embed_cells')]
+    bound = owner.bind_group(group, declared)
+    assert _serialize(bound.roles) == declared
+    assert _serialize(bound.execution_inputs) == {'input_path': records[0].source_path}
+    assert _serialize(group.roles) == [] and _serialize(group.execution_inputs) == {}
+    inspection = PlanStep('inspect', 'inspect_scATAC', dict(path=records[0].source_path))
+    path = StepOutputRef('inspect', 'input_path') if inspection_output else records[0].source_path
+    pca = PlanStep('pca', 'pca_embed_cells', dict(input_path=path),
+                  depends_on=('inspect',) if inspection_output else ())
+    owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, pca)))
+    resolved = [SimpleNamespace(tool_name='inspect_scATAC',
+                               resolved_arguments=dict(path=records[0].source_path)),
+                SimpleNamespace(tool_name='pca_embed_cells',
+                                resolved_arguments=dict(input_path=records[0].source_path))]
+    owner.validate_result(submission(bound), resolved)
+    # Every explicitly authorized consumer still has to consume its exact input.
+    with pytest.raises(ResourceAdmissionError) as rejected:
+        owner.validate_plan(submission(bound), SimpleNamespace(steps=(pca,)))
+    assert rejected.value.code == 'MULTI_INPUT_SOURCE_MISMATCH'
+
+
+@pytest.mark.parametrize('variant', ['different_sources', 'duplicate_consumer'])
+def test_explicit_shared_source_does_not_allow_conflicting_alias_or_duplicate_consumer(selection, variant):
+    owner, records, _ = selection
+    declared = [dict(tool='inspect_scATAC', port='dataset', source='source.0'),
+                dict(tool='pca_embed_cells', port='dataset', source='source.1')]
+    if variant == 'duplicate_consumer':
+        declared[1] = dict(declared[0])
+    group = owner.compose_group([record.resource_id for record in records], attachment_candidates=True)
+    with pytest.raises(ResourceAdmissionError) as rejected:
+        owner.bind_group(group, declared)
+    assert rejected.value.code == 'MULTI_INPUT_ROLE_INVALID'
+
+
 def test_completed_fastq_library_is_rejected_as_independent_h5ad_group(selection):
     from test_fastq_composition import register
     owner, records, _ = selection

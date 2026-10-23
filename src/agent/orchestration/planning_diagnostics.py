@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
+import json
 import math
+import os
 import re
+import threading
 from types import MappingProxyType
 from typing import Mapping
 
@@ -17,6 +21,85 @@ _SEMANTIC_PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 4
 _SCOPED_PLANNING_DIAGNOSTIC_SCHEMA_VERSION = 5
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
+
+
+def log_operation_event(logger, event, *, context=None, error=None, code=None,
+                        stage=None, kind=None, reason=None, prompt=None, schema=None,
+                        requested_model=None, observed_model=None, verified_model=None,
+                        transport=None):
+    """Best-effort operator log, never an execution diagnostic or authority.
+
+    Callers supply controlled event/stage/kind/reason values. Untrusted identities
+    are hashed, errors expose only allowlisted classes/codes, and logging failures
+    cannot change application behavior. PID/thread distinguish synchronous operator
+    records; they introduce no global context, model wrapper or persistent state.
+    """
+    try:
+        if not logger.isEnabledFor(30):
+            return
+        from .error_policy import BUILTIN_ERROR_CODES
+        row = dict(event=event, process=os.getpid(), thread=threading.get_ident())
+        for key, value in (('stage', stage), ('kind', kind), ('reason', reason)):
+            if type(value) is str and _SAFE_IDENTIFIER.fullmatch(value):
+                row[key] = value
+        def identity(key, value):
+            if type(value) is str and len(value) <= 4096:
+                row[key + '_sha256'] = hashlib.sha256(value.encode()).hexdigest()
+        if context is not None:
+            for key, value in zip(('session_id', 'turn_id'), context):
+                if type(value) is str and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', value):
+                    row[key] = value
+                else:
+                    identity(key, value)
+        if error is not None:
+            classes = frozenset(('IntentError', 'DeclarationGroundingError', 'ResourceAdmissionError',
+                'SessionError', 'SessionConflictError', 'OpenRouterPlanningError', 'PlanningModelError',
+                'JSONDecodeError', 'ValueError', 'TypeError', 'AttributeError', 'KeyError', 'NameError',
+                'ModuleNotFoundError', 'ImportError', 'OSError', 'RuntimeError', 'StopIteration',
+                'TimeoutError', 'ConnectionError', 'APITimeoutError', 'APIConnectionError',
+                'AuthenticationError', 'RateLimitError', 'APIStatusError', 'ReadTimeout',
+                'ConnectTimeout', 'ConnectError', 'AssertionError', 'RecursionError', 'Exception'))
+            def error_class(exc):
+                return next((cls.__name__ for cls in type(exc).__mro__ if cls.__name__ in classes), 'Exception')
+            row['exception_class'] = error_class(error)
+            if error.__cause__ is not None:
+                row['cause_class'] = error_class(error.__cause__)
+            if code is None:
+                code = getattr(error, 'code', None)
+        if type(code) is str and code in BUILTIN_ERROR_CODES:
+            row['code'] = code
+        if any(value is not None for value in (requested_model, observed_model, verified_model)):
+            for key, value in (('requested_model', requested_model), ('observed_model', observed_model),
+                               ('verified_model', verified_model)):
+                row[key + '_sha256'] = None
+                identity(key, value)
+        if transport is not None:
+            def field(name):
+                try:
+                    return transport.get(name) if isinstance(transport, Mapping) else getattr(transport, name, None)
+                except Exception:
+                    return None
+            status = field('status_code')
+            row['http_status'] = status if type(status) is int and 100 <= status <= 599 else None
+            request = field('request_id') or field('_request_id')
+            if type(request) is str:
+                identity('provider_request_id', request)
+                if re.fullmatch(r'(?:req_[A-Za-z0-9]{1,96}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})', request):
+                    row['provider_request_id'] = request
+        if type(prompt) is str:
+            encoded = prompt.encode()
+            row.update(prompt_bytes=len(encoded), prompt_sha256=hashlib.sha256(encoded).hexdigest())
+        if schema is not None:
+            try:
+                encoded = json.dumps(schema, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+                row.update(schema_bytes=len(encoded), schema_sha256=hashlib.sha256(encoded).hexdigest())
+            except Exception:
+                pass
+        # WARNING reaches the existing operator logger's default threshold without
+        # changing logging configuration. The event, not severity, states outcome.
+        logger.warning('Agent operation diagnostic %s', json.dumps(row, sort_keys=True, separators=(',', ':')))
+    except Exception:
+        pass
 
 
 class PlanningDiagnosticStage(str, Enum):

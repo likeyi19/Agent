@@ -91,6 +91,25 @@ def test_invalid_profile_configuration_is_rejected(
         _profile(**changes)
 
 
+def test_openrouter_profile_price_policy_is_copied_immutable_and_serialized():
+    values = {"prompt": "4", "completion": 20, "request": 0}
+    profile = _profile(provider_id="openrouter", provider_max_price=values)
+    values["prompt"] = 100
+    assert profile.provider_max_price == {"prompt": 4, "completion": 20, "request": 0}
+    with pytest.raises(TypeError):
+        profile.provider_max_price["prompt"] = 100
+    serialized = profile.to_dict()
+    serialized["provider_max_price"]["completion"] = 100
+    assert profile.provider_max_price["completion"] == 20
+    assert "provider_max_price" not in _profile().to_dict()
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini", "groq", "custom"])
+def test_openrouter_price_policy_is_not_silently_ignored_by_other_providers(provider):
+    with pytest.raises(ValueError, match="only for OpenRouter"):
+        _profile(provider_id=provider, provider_max_price={"prompt": 4, "completion": 20, "request": 0})
+
+
 @pytest.mark.parametrize(
     ("changes", "code"),
     [
@@ -309,4 +328,5 @@ def test_profile_and_registry_never_receive_environment_credentials(
         "enabled",
         "supports_structured_output",
         "request_timeout_seconds",
+        "provider_max_price",
     }

@@ -1389,21 +1389,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     resource_failure = None
     parameter_failure = None
 
-    def accept(effective, plan):
-        nonlocal resource_failure, parameter_failure
-        if admitted['tool'] not in {s.tool_name for s in plan.steps}:
-            raise IntentError('planning_failed')
-        try:
-            _check_parameter_plan(app.registry, plan, admitted, sessions.load(sid).interactions)
-        except IntentError as exc:
-            if exc.reason == 'ambiguous_parameter':
-                parameter_failure = exc
-                from agent.orchestration.planner import PlannerError
-                from agent.schemas import ErrorCategory
-                raise PlannerError('AMBIGUOUS_PARAMETER_SCOPE',
-                    'Please identify one unambiguous operation for the scoped scientific parameters.',
-                    category=ErrorCategory.USER_INPUT_ERROR) from exc
-            raise
+    def select_outputs(plan):
         offered = [dict(step_id=s.step_id, tool=s.tool_name,
                         outputs=list(app.registry.get(s.tool_name).result_contract.required_fields)) for s in plan.steps]
         schema = _object(dict(outputs={'type':'array','minItems':1,'maxItems':32,
@@ -1484,6 +1470,28 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             from agent.schemas import ErrorCategory
             raise PlannerError('PLANNER_OUTPUT_INVALID', 'The model returned an invalid output selection.',
                                category=ErrorCategory.INTERNAL_AGENT_ERROR) from exc
+        return tuple(selections), retained
+
+    def accept(effective, plan, *, reserve=True):
+        """Validate the prepared plan; reservation also selects scientific outputs."""
+        nonlocal resource_failure, parameter_failure
+        if type(reserve) is not bool:
+            raise TypeError("Plan reservation policy must be boolean.")
+        if admitted['tool'] not in {s.tool_name for s in plan.steps}:
+            raise IntentError('planning_failed')
+        try:
+            _check_parameter_plan(app.registry, plan, admitted, sessions.load(sid).interactions)
+        except IntentError as exc:
+            if exc.reason == 'ambiguous_parameter':
+                parameter_failure = exc
+                from agent.orchestration.planner import PlannerError
+                from agent.schemas import ErrorCategory
+                raise PlannerError('AMBIGUOUS_PARAMETER_SCOPE',
+                    'Please identify one unambiguous operation for the scoped scientific parameters.',
+                    category=ErrorCategory.USER_INPUT_ERROR) from exc
+            raise
+        if reserve:
+            selections, retained = select_outputs(plan)
         if selected:
             execution_context(sessions, interaction, admitted)
         elif context is not None:
@@ -1504,6 +1512,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 from agent.schemas import ErrorCategory
                 resource_failure = exc.error
                 raise PlannerError(exc.code, exc.message, category=ErrorCategory.RESOURCE_ERROR) from exc
+        if not reserve:
+            return
         def link(state):
             if 'continuation' in admitted and (
                     state.active_revision_id != interaction.base_revision_id

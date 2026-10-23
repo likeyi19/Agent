@@ -71,16 +71,38 @@ def test_interpreter_receives_bounded_scope_instructions_without_session_identit
         'current' if offered else 'none')
 
 
-def test_new_schema_uses_generic_parameters_and_separates_deferred_delivery():
+@pytest.mark.parametrize('accepted_results', [False, True])
+def test_new_schema_uses_generic_parameters_and_separates_deferred_delivery(accepted_results):
     public = public_context(offered=True)
     public['dialogue']['scientific_parameters'] = [dict(tool='cluster_cells', argument='resolution')]
-    public['dialogue']['result_groups'] = [dict(handle='g0', parameters=[dict(argument='random_seed')])]
-    variants = decision_schema(public)['properties']['decision']['anyOf']
+    if accepted_results:
+        public['dialogue']['result_groups'] = [dict(handle='g0', tool='cluster_cells',
+            parameters=[dict(argument='random_seed')])]
+    schema = decision_schema(public)
+    assert '"uniqueItems"' not in json.dumps(schema)
+    variants = schema['properties']['decision']['anyOf']
     execution = next(v['properties'] for v in variants if v['properties']['kind']['enum'] == ['execute_plan'])
     assert 'argument' not in execution and 'arguments' in execution
-    assert execution['references']['items']['enum'] == ['g0']
-    assert execution['retain_parameters']['items']['anyOf'][0]['properties']['argument']['enum'] == ['random_seed']
-    assert execution['delivery']['items']['enum'] == ['explanation', 'comparison', 'visualization']
+    assert execution['delivery'] == dict(type='array', maxItems=3,
+        items=dict(type='string', enum=['explanation', 'comparison', 'visualization']))
+    assert execution['unfulfilled'] == dict(type='array', maxItems=8,
+        items=dict(type='string', minLength=1, maxLength=512))
+    if accepted_results:
+        assert execution['references'] == dict(type='array', maxItems=32,
+            items=dict(type='string', enum=['g0']))
+        assert execution['retain_parameters']['items']['anyOf'][0]['properties']['argument']['enum'] == ['random_seed']
+    else:
+        assert 'references' not in execution and 'retain_parameters' not in execution
+
+
+@pytest.mark.parametrize('field,value', [
+    ('delivery', 'explanation'), ('unfulfilled', 'Infer cell lineages'), ('references', 'g0'),
+])
+def test_research_intention_uniqueness_remains_owned_by_typed_validation(field, value):
+    with pytest.raises(ValueError, match='Invalid bounded research intention'):
+        Execute('current', 'plan', 'cluster_cells', None, **{field: (value, value)})
+    with pytest.raises(IntentError, match='invalid_decision'):
+        parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', **{field: [value, value]})))
 
 
 def test_historical_singular_parameter_is_read_into_the_generic_writer():

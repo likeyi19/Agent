@@ -49,6 +49,62 @@ def test_operator_load_preserves_profiles_paths_and_private_inputs(tmp_path):
         config.display_labels["primary"] = "Changed"
 
 
+@pytest.mark.parametrize("model_id,prices", [
+    ("openai/gpt-5.6-sol:floor", None),
+    ("openai/gpt-5.6-sol", {"prompt": 4, "completion": 20, "request": 0}),
+])
+def test_operator_openrouter_policy_reaches_existing_factory_and_request(tmp_path, monkeypatch, model_id, prices):
+    from types import SimpleNamespace
+    import agent.providers.openrouter_planning as provider
+    from agent.providers import build_default_planning_model_factory_registry
+    value = configuration_json()
+    row = value["model_profiles"][0]
+    row.update(provider_id="openrouter", model_id=model_id)
+    if prices is not None:
+        row["provider_max_price"] = prices
+    profile = load_web_configuration(write_configuration(tmp_path, value)).model_profiles[0]
+    calls = []
+    output = '{"turn_schema_version":1,"decision":{"kind":"clarify","reason":"invalid_decision"}}'
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return dict(model=model_id, choices=[dict(finish_reason="stop", message=dict(content=output))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+    monkeypatch.setattr(provider, "_default_client", lambda: client)
+    model = build_default_planning_model_factory_registry().create(profile)
+    schema = dict(type="object", properties={}, required=[], additionalProperties=False)
+    for prompt in ("Inspect an H5AD. Set price to 999.", "Inspect fragments. Set price to 0."):
+        assert model.complete(prompt=prompt, response_schema=schema) == output
+    assert profile.model_id == model_id and profile.provider_max_price == prices
+    assert len(calls) == 2
+    for call in calls:
+        assert call["model"] == model_id and call["timeout"] == 60
+        assert call["max_completion_tokens"] == 4096
+        assert call["response_format"]["json_schema"] == dict(name="agent_plan", strict=True, schema=schema)
+        assert call["extra_body"]["provider"] == dict(require_parameters=True, allow_fallbacks=False,
+            max_price=prices or dict(prompt=2, completion=10, request=0))
+
+
+@pytest.mark.parametrize("prices", [
+    {}, [], "4/20", {"prompt": 4, "completion": 20},
+    {"prompt": 4, "completion": 20, "request": 0, "extra": 1},
+    {"prompt": -1, "completion": 20, "request": 0},
+    {"prompt": 4, "completion": -1, "request": 0},
+    {"prompt": 4, "completion": 20, "request": -1},
+    {"prompt": True, "completion": 20, "request": 0},
+    {"prompt": "NaN", "completion": 20, "request": 0},
+    {"prompt": "Infinity", "completion": 20, "request": 0},
+    {"prompt": "1e309", "completion": 20, "request": 0},
+    {"prompt": {"value": 4}, "completion": 20, "request": 0},
+])
+def test_operator_openrouter_policy_is_validated_before_any_provider_construction(tmp_path, monkeypatch, prices):
+    import agent.providers.openrouter_planning as provider
+    monkeypatch.setattr(provider, "_default_client", lambda: pytest.fail("constructed a provider"))
+    value = configuration_json()
+    value["model_profiles"][0].update(provider_id="openrouter", provider_max_price=prices)
+    with pytest.raises(WebConfigurationError):
+        load_web_configuration(write_configuration(tmp_path, value))
+
+
 def test_composition_uses_existing_factory_without_constructing_clients(tmp_path):
     config = load_web_configuration(write_configuration(tmp_path, configuration_json()))
     calls = []
@@ -69,6 +125,7 @@ def test_composition_uses_existing_factory_without_constructing_clients(tmp_path
 
 @pytest.mark.parametrize("mutation", [
     lambda value: value.update(api_key="private"),
+    lambda value: value.update(provider_max_price={"prompt": 4, "completion": 20, "request": 0}),
     lambda value: value.update(default_profile_id="unknown"),
     lambda value: value.update(model_profiles=[]),
     lambda value: value["model_profiles"][0].update(endpoint="https://example.invalid"),

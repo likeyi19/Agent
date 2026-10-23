@@ -24,6 +24,27 @@ from test_dialogue_evidence import app, accepted, passed
 PROFILES = tuple(PlanningModelProfile(key, 'scripted', 'model/' + key) for key in ('alpha', 'beta'))
 
 
+def test_price_policy_changes_configuration_identity_without_changing_historical_submission_shape():
+    from types import SimpleNamespace
+    profile = PlanningModelProfile('primary', 'openrouter', 'openai/example:floor')
+    planning = dict(planning_wire_mode=None, recovery_planning_profile=None, planning_recovery_policy=None)
+    facade = SimpleNamespace(_planning=planning)
+    old_profile = dict(profile_id='primary', provider_id='openrouter', model_id='openai/example:floor',
+        enabled=True, supports_structured_output=True, request_timeout_seconds=60.0)
+    original = InteractiveAgentApplication._submission(facade, profile, 0, {}, None)
+    assert original['configuration_sha256'] == digest(dict(profile=old_profile, wire_mode=None,
+        recovery_profile=None, recovery_policy=None))
+    prices = dict(prompt=4, completion=20, request=0)
+    configured = replace(profile, provider_max_price=prices)
+    updated = InteractiveAgentApplication._submission(facade, configured, 0, {}, None)
+    assert set(updated) == set(original)
+    assert updated['configuration_sha256'] != original['configuration_sha256']
+    planning['recovery_planning_profile'] = profile
+    recovery_default = InteractiveAgentApplication._submission(facade, profile, 0, {}, None)
+    planning['recovery_planning_profile'] = configured
+    assert InteractiveAgentApplication._submission(facade, profile, 0, {}, None)['configuration_sha256'] != recovery_default['configuration_sha256']
+
+
 class ScriptedModel:
     def __init__(self, profile, decision=None, *, started=None, release=None):
         self.model_id, self.calls = profile.model_id, []

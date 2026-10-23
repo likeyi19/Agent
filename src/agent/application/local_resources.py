@@ -506,8 +506,7 @@ def _group_roles(values, member_count):
                 or role['source'] not in {f'source.{i}' for i in range(member_count)}):
             raise ValueError('Unsupported source role.')
         roles.append(dict(role))
-    if (len({(r['tool'], r['port']) for r in roles}) != len(roles)
-            or len({r['source'] for r in roles}) != len(roles)):
+    if len({(r['tool'], r['port']) for r in roles}) != len(roles):
         raise ValueError('Duplicate or conflicting roles.')
     return sorted(roles, key=lambda r: (r['tool'], r['port']))
 
@@ -645,7 +644,7 @@ def group_role_inputs(binding, roles, registry):
             for member in source.members:
                 key = member.input_name
                 value = record['source_sha256'] if member.name == 'sha256' else record['source_path']
-                if key in companions:
+                if key in companions and companions[key] != value:
                     raise ValueError('Conflicting consumer source aliases.')
                 arguments[fields[member.name]].validate(key, value)
                 companions[key] = value
@@ -676,18 +675,23 @@ def validate_group_roles(binding, roles, registry, required_roles, *, complete=F
             required.append((value['tool'], value['port']))
         if len(set(required)) != len(required):
             raise ValueError('Duplicate scientific role requirements.')
-        aliases = []
         for tool, port in required:
-            _, source, _ = _group_port(registry, tool, port)
-            aliases.append(source.members[0].input_name)
-        if len(set(aliases)) != len(aliases):
-            raise ValueError('Conflicting required scientific source aliases.')
+            _group_port(registry, tool, port)
         if not isinstance(roles, (tuple, list)):
             raise ValueError('Invalid scientific role associations.')
         values = _group_roles([dict(tool=r.tool, port=r.port, source=r.source)
                               if isinstance(r, InputRole) else r for r in roles], len(binding.members))
         if not {(r['tool'], r['port']) for r in values} <= set(required):
             raise ValueError('Unoffered required scientific role.')
+        aliases = {}
+        for role in values:
+            _, source, _ = _group_port(registry, role['tool'], role['port'])
+            record = binding.members[int(role['source'].split('.')[1])]
+            for member in source.members:
+                value = record['source_sha256'] if member.name == 'sha256' else record['source_path']
+                if member.input_name in aliases and aliases[member.input_name] != value:
+                    raise ValueError('Conflicting consumer source aliases.')
+                aliases[member.input_name] = value
         if complete and (len(values) != len(required)
                 or not binding.attachment_candidates and
                 {r['source'] for r in values} != {f'source.{i}' for i in range(len(binding.members))}):

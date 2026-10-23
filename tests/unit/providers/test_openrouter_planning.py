@@ -106,6 +106,21 @@ def test_explicitly_tightened_request_policy_is_copied_and_immutable():
         "prompt": 1.5, "completion": 5, "request": 0}
 
 
+@pytest.mark.parametrize("prices", [
+    {"prompt": 4, "completion": 20, "request": 0},
+    {"prompt": 0, "completion": 0, "request": 0},
+    {"prompt": "2.01", "completion": 10.01, "request": 0.01},
+])
+def test_explicit_operator_rates_replace_default_rates_without_changing_other_request_fields(prices):
+    default, default_client = adapter()
+    configured, client = adapter(provider_max_price=prices)
+    for model in (default, configured):
+        assert model.complete(prompt="Exact context", response_schema=SCHEMA) == OUTPUT
+    expected = copy.deepcopy(default_client.chat.completions.calls[0])
+    expected["extra_body"]["provider"]["max_price"] = {key: float(value) for key, value in prices.items()}
+    assert client.chat.completions.calls == [expected]
+
+
 @pytest.mark.parametrize("maximum", [True, 0, -1, 4097, 4096.0, "4096", None, math.inf])
 def test_invalid_output_limit_fails_before_client_construction(maximum, monkeypatch):
     monkeypatch.setattr(module, "_default_client", lambda: pytest.fail("constructed a client"))
@@ -118,15 +133,16 @@ def test_invalid_output_limit_fails_before_client_construction(maximum, monkeypa
     {"prompt": 2, "completion": 10, "request": 0, "other": 0},
     {"prompt": True, "completion": 10, "request": 0},
     {"prompt": -1, "completion": 10, "request": 0},
-    {"prompt": 2.01, "completion": 10, "request": 0},
-    {"prompt": 2, "completion": 10.01, "request": 0},
-    {"prompt": 2, "completion": 10, "request": 0.01},
+    {"prompt": 2, "completion": -1, "request": 0},
+    {"prompt": 2, "completion": 10, "request": -0.01},
     {"prompt": "nan", "completion": 10, "request": 0},
     {"prompt": math.inf, "completion": 10, "request": 0},
     {"prompt": "invalid", "completion": 10, "request": 0},
     {"prompt": "9" * 33, "completion": 10, "request": 0},
+    {"prompt": "1e309", "completion": 10, "request": 0},
+    {"prompt": "1e-999", "completion": 10, "request": 0},
 ])
-def test_invalid_or_loosened_price_caps_fail_before_client_construction(prices, monkeypatch):
+def test_invalid_price_caps_fail_before_client_construction(prices, monkeypatch):
     monkeypatch.setattr(module, "_default_client", lambda: pytest.fail("constructed a client"))
     with pytest.raises(ValueError):
         OpenRouterPlanningModel(model=MODEL, provider_max_price=prices)
@@ -354,3 +370,101 @@ def test_optional_sdk_absence_has_a_lazy_clear_error(monkeypatch):
         OpenRouterPlanningModel(model=MODEL)
     assert raised.value.code == "PLANNING_PROVIDER_DEPENDENCY_MISSING"
     assert "private" not in "".join(traceback.format_exception(raised.value))
+
+
+def _operation_records(caplog):
+    import json
+    return [json.loads(r.getMessage().split('Agent operation diagnostic ', 1)[1])
+            for r in caplog.records if r.msg == 'Agent operation diagnostic %s']
+
+
+@pytest.mark.parametrize('identity', ['exact', 'floor', 'missing', 'rejected', 'routing'])
+def test_operator_diagnostics_observe_actual_model_and_keep_routing_contract(caplog, identity):
+    import hashlib
+    observed = MODEL if identity not in ('missing', 'rejected') else (None if identity == 'missing' else 'private/secret-payload')
+    selected = MODEL + ':floor' if identity == 'floor' else MODEL
+    value = response(model=observed, _request_id='req_123ABC')
+    if identity == 'floor':
+        value['openrouter_metadata'] = {'requested': selected}
+    if identity == 'routing':
+        value['openrouter_metadata'] = {'requested': MODEL, 'attempt': 2}
+    client = FakeClient(value)
+    model = OpenRouterPlanningModel(model=selected, _client=client)
+    if identity in ('missing', 'rejected', 'routing'):
+        with pytest.raises(OpenRouterPlanningError):
+            model.complete(prompt='secret scientific prompt', response_schema=SCHEMA)
+    else:
+        assert model.complete(prompt='secret scientific prompt', response_schema=SCHEMA) == OUTPUT
+    assert len(client.chat.completions.calls) == 1
+    rows = _operation_records(caplog)
+    assert rows[0]['http_status'] is None  # No response status was supplied by the fake SDK.
+    assert rows[0]['provider_request_id'] == 'req_123ABC'
+    if identity in ('exact', 'floor'):
+        verified = next(r for r in rows if r['event'] == 'openrouter.routing_validated')
+        assert verified['verified_model_sha256'] == hashlib.sha256(MODEL.encode()).hexdigest()
+        assert verified['requested_model_sha256'] == hashlib.sha256(selected.encode()).hexdigest()
+        assert verified['reason'] == ('metadata_checked' if identity == 'floor' else 'metadata_absent')
+    else:
+        rejected = next(r for r in rows if r['event'] == 'openrouter.response_validation_failed')
+        assert rejected['verified_model_sha256'] is None
+        assert not any(r['event'] == 'openrouter.routing_validated' for r in rows)
+    assert not any(r.exc_info for r in caplog.records)
+    assert 'secret scientific prompt' not in caplog.text and 'private/secret-payload' not in caplog.text
+    assert OUTPUT.strip() not in caplog.text
+
+
+def test_operator_provider_error_retains_safe_status_code_and_request_identity(caplog):
+    class PrivateError(Exception):
+        status_code = 429
+        request_id = 'Bearer sk-sensitive-request'
+    error = PrivateError('Authorization: sk-secret /private/input.h5ad')
+    model, client = adapter(error=error)
+    with pytest.raises(OpenRouterPlanningError) as caught:
+        model.complete(prompt='private user prompt', response_schema=SCHEMA)
+    assert caught.value.code == 'PROVIDER_RATE_LIMITED'
+    failed = next(r for r in _operation_records(caplog) if r['event'] == 'openrouter.sdk_failed')
+    assert failed['http_status'] == 429 and failed['code'] == 'PROVIDER_RATE_LIMITED'
+    assert failed['exception_class'] == 'Exception'
+    assert 'provider_request_id' not in failed and failed['provider_request_id_sha256']
+    assert failed['verified_model_sha256'] is None
+    for secret in ('sk-sensitive-request', 'sk-secret', '/private/input.h5ad', 'private user prompt', 'PrivateError'):
+        assert secret not in caplog.text
+    assert len(client.chat.completions.calls) == 1
+
+
+def test_operator_provider_error_never_reads_or_classifies_response_body(caplog):
+    body_reads = []
+
+    class PrivateError(Exception):
+        status_code = 400
+
+        @property
+        def body(self):
+            body_reads.append(True)
+            return {'error': {'code': 'invalid_json_schema', 'message': 'private provider body'}}
+
+    model, client = adapter(error=PrivateError('private provider message'))
+    with pytest.raises(OpenRouterPlanningError) as caught:
+        model.complete(prompt='private scientific prompt', response_schema=SCHEMA)
+
+    assert caught.value.code == 'PLANNING_PROVIDER_ERROR'
+    assert body_reads == [] and len(client.chat.completions.calls) == 1
+    failed = next(r for r in _operation_records(caplog) if r['event'] == 'openrouter.sdk_failed')
+    assert failed['http_status'] == 400 and failed['code'] == 'PLANNING_PROVIDER_ERROR'
+    assert not any(k.startswith(('rejection', 'rejected', 'provider_error')) for k in failed)
+    for secret in ('private provider body', 'private provider message', 'private scientific prompt'):
+        assert secret not in caplog.text
+
+
+def test_operator_logging_and_metadata_failures_do_not_change_adapter_results(monkeypatch):
+    class Returned(SimpleNamespace):
+        @property
+        def request_id(self):
+            raise ValueError('private metadata')
+    model, client = adapter(result=Returned(**response()))
+    assert model.complete(prompt='unchanged', response_schema=SCHEMA) == OUTPUT
+    def fail(*args, **kwargs):
+        raise RuntimeError('private logger failure')
+    monkeypatch.setattr(module.logger, 'warning', fail)
+    assert model.complete(prompt='unchanged', response_schema=SCHEMA) == OUTPUT
+    assert client.chat.completions.calls[0] == client.chat.completions.calls[1]

@@ -3,13 +3,14 @@
 The default request permits at most 4,096 completion tokens and provider prices
 of USD 2/10 per million prompt/completion tokens, with no per-request fee. These
 are output and unit-price bounds, not an absolute request, turn or service budget.
-Deployments may explicitly tighten them through adapter construction. No spending
+An operator profile may explicitly configure finite nonnegative provider rates;
+the completion-token maximum remains fixed. No spending
 ledger, catalog discovery, model substitution or adapter retry is performed.
 """
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+import logging
 import os
 from types import MappingProxyType
 from typing import Mapping
@@ -18,16 +19,20 @@ from agent.schemas import JsonValue
 from agent.orchestration.planning_model import (
     PlanningModelError,
     PlanningModelProfile,
+    _validate_provider_max_price,
     classify_provider_exception,
     normalized_retry_after_seconds,
 )
 
 from .openai_planning import _plain_json
+from agent.orchestration.planning_diagnostics import log_operation_event
+
+logger = logging.getLogger(__name__)
 
 
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _MAX_COMPLETION_TOKENS = 4096
-_MAX_PROVIDER_PRICES = MappingProxyType({"prompt": 2, "completion": 10, "request": 0})
+_DEFAULT_PROVIDER_PRICES = MappingProxyType({"prompt": 2, "completion": 10, "request": 0})
 
 
 class OpenRouterPlanningError(PlanningModelError):
@@ -63,26 +68,6 @@ def _default_client() -> object:
         ) from None
 
 
-def _validate_prices(prices: object) -> Mapping[str, float | int]:
-    if prices is None:
-        return _MAX_PROVIDER_PRICES
-    if not isinstance(prices, Mapping) or set(prices) != set(_MAX_PROVIDER_PRICES):
-        raise ValueError("Provider price caps require prompt, completion and request limits.")
-    normalized: dict[str, float | int] = {}
-    for name, ceiling in _MAX_PROVIDER_PRICES.items():
-        value = prices[name]
-        if type(value) not in (str, int, float) or len(str(value)) > 32:
-            raise ValueError("Provider price caps must be finite nonnegative numbers.")
-        try:
-            amount = Decimal(str(value))
-        except InvalidOperation:
-            raise ValueError("Provider price caps must be finite nonnegative numbers.") from None
-        if not amount.is_finite() or not 0 <= amount <= ceiling:
-            raise ValueError("Provider price caps may only tighten the accepted limits.")
-        normalized[name] = float(amount)
-    return MappingProxyType(normalized)
-
-
 def _field(value: object, name: str, default: object = None) -> object:
     return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
 
@@ -100,6 +85,8 @@ def _check_response_identity(response: object, model: str) -> None:
     if type(returned_model) is not str or (returned_model != model and not floor_base):
         raise OpenRouterPlanningError("OpenRouter returned an unexpected model identity.")
     if metadata is None:
+        log_operation_event(logger, 'openrouter.routing_validated', requested_model=model,
+                            observed_model=returned_model, verified_model=returned_model, reason='metadata_absent', transport=response)
         return  # Missing observations are not evidence of upstream routing behavior.
     if not isinstance(metadata, Mapping):
         raise OpenRouterPlanningError("OpenRouter returned invalid routing metadata.")
@@ -113,6 +100,8 @@ def _check_response_identity(response: object, model: str) -> None:
         or attempt is not None and (type(attempt) is not int or not 0 <= attempt <= 1)
     ):
         raise OpenRouterPlanningError("OpenRouter response violated the required routing policy.")
+    log_operation_event(logger, 'openrouter.routing_validated', requested_model=model,
+                        observed_model=returned_model, verified_model=returned_model, reason='metadata_checked', transport=response)
 
 
 def _completed_content(response: object, model: str) -> str:
@@ -162,7 +151,7 @@ class OpenRouterPlanningModel:
         self._model = profile.model_id
         self._timeout = profile.request_timeout_seconds
         self._max_completion_tokens = max_completion_tokens
-        self._provider_max_price = _validate_prices(provider_max_price)
+        self._provider_max_price = _validate_provider_max_price(provider_max_price) or _DEFAULT_PROVIDER_PRICES
         client = _default_client() if _client is None else _client
         if not callable(getattr(getattr(getattr(client, "chat", None), "completions", None), "create", None)):
             raise TypeError("OpenRouter planning client must provide chat.completions.create().")
@@ -214,10 +203,18 @@ class OpenRouterPlanningModel:
             )
         except Exception as exc:
             code, message = classify_provider_exception(exc)
+            log_operation_event(logger, 'openrouter.sdk_failed', requested_model=self._model,
+                                error=exc, code=code, transport=exc)
             raise OpenRouterPlanningError(
                 message, code=code, retry_after_seconds=normalized_retry_after_seconds(exc)
             ) from None
-        return _completed_content(response, self._model)
+        try:
+            content = _completed_content(response, self._model)
+        except Exception as exc:
+            log_operation_event(logger, 'openrouter.response_validation_failed', requested_model=self._model,
+                                error=exc, transport=response)
+            raise
+        return content
 
 
 __all__ = ["OpenRouterPlanningDependencyError", "OpenRouterPlanningError", "OpenRouterPlanningModel"]

@@ -1,6 +1,4 @@
 """Explicit planning policy metadata uses its existing canonical representation."""
-from dataclasses import asdict
-
 import pytest
 
 from agent.application import InteractiveAgentApplication, InteractiveBoundaryError
@@ -67,7 +65,7 @@ def test_explicit_policy_validates_then_executes_and_duplicate_replays_without_m
     assert service._planning['planning_recovery_policy'] is policy
     submission = service._application.sessions.load('session').interactions[-1].submission
     assert submission['configuration_sha256'] == digest(dict(
-        profile=asdict(PROFILE), wire_mode=None, recovery_profile=None,
+        profile=PROFILE.to_dict(), wire_mode=None, recovery_profile=None,
         recovery_policy=policy.to_dict(),
     ))
     assert service.submit_turn('session', 'inspect', 'Inspect the supplied matrix.', **arguments) == view

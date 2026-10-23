@@ -141,7 +141,7 @@ def load_web_configuration(path):
             raise WebConfigurationError("Operator model profiles must be a bounded list.")
         profiles, labels = [], {}
         profile_keys = {"profile_id", "provider_id", "model_id", "enabled", "supports_structured_output",
-                        "request_timeout_seconds", "display_label"}
+                        "request_timeout_seconds", "display_label", "provider_max_price"}
         for item in profile_values:
             if type(item) is not dict or set(item) - profile_keys:
                 raise WebConfigurationError("Operator profile fields are invalid.")

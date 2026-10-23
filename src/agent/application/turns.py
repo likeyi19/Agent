@@ -3,16 +3,22 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from .response_facts import TurnResponseFacts
 import re
+import logging
 
 from agent.schemas import AgentRequest, PriorOutputRef, StepOutputRef
 from agent.schemas.orchestration import _serialize
 from agent.orchestration.active_context import ActiveContextItem, ActivePlanningContext, planning_context
 from agent.orchestration.prior_outputs import binding_for_locator, validate_binding
 from agent.orchestration.planner import PlannerError
+from agent.orchestration.planning_model import PlanningModelError
+from agent.orchestration.error_policy import BUILTIN_ERROR_CODES, safe_message_for
 from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
 from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
+from agent.orchestration.planning_diagnostics import log_operation_event
 from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer, IntentDelta, IntentError, interpret, clauses,
                              resolve_relation, admit_delta)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -410,6 +416,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
     decision = None
+    diagnostic_context = (session_id, turn_id)
+    diagnostic_stage = 'preparation'
     try:
         from .epizoo_handoff import captured_models
         input_sets = tuple(input_sets) + captured_models(sessions, state)
@@ -509,7 +517,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 suitability.append(dict(source=f'source.{index}', **observation))
             if suitability:
                 visible['dialogue']['embedding_suitability'] = suitability
-        decision = interpret(interpreter, utterance, visible)
+        diagnostic_stage = 'interpretation'
+        decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
+        diagnostic_stage = 'admission'
         if isinstance(decision, Execute) and decision.arguments and decision.operation != 'plan':
             raise IntentError('unsupported_intent')
         if interaction.base_revision_id is None:
@@ -525,7 +535,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             prior = next((i for i in state.interactions if i.turn_id == origin), None)
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
-        if isinstance(decision, Clarify): return _terminal(sessions, interaction, decision)
+        if isinstance(decision, Clarify):
+            return _terminal(sessions, interaction, decision)
         if isinstance(decision, RequestResources):
             from .resource_continuation import request, offers
             admitted, prerequisite = request(sessions, interaction, decision, input_sets)
@@ -602,11 +613,23 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         else:
             admitted = admit(sessions, interaction, decision)
     except Exception as exc:
+        log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context, stage=diagnostic_stage, error=exc)
         from .local_resources import ResourceAdmissionError
         if isinstance(exc, ResourceAdmissionError):
             _update(sessions, turn_id, status='failed')
             return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
-        reason = exc.reason if isinstance(exc, IntentError) else 'invalid_decision'
+        if isinstance(exc, PlanningModelError):
+            from .interactive_schemas import ClientError
+            code = exc.code if exc.code in BUILTIN_ERROR_CODES else 'PLANNING_PROVIDER_ERROR'
+            error = ClientError(code, safe_message_for(code))
+            _update(sessions, turn_id, status='failed')
+            return TurnOutcome('execute', 'failed', text=error.message, error=error)
+        if not isinstance(exc, IntentError):
+            # Preparation and application failures are not model decisions.
+            # The interactive boundary owns their sanitized presentation.
+            _update(sessions, turn_id, status='failed')
+            raise
+        reason = exc.reason
         from .turn_decisions import DeclarationGroundingError
         raw_rejection = exc.raw if isinstance(exc, DeclarationGroundingError) else None
         candidate = decision

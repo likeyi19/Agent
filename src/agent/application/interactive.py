@@ -478,9 +478,9 @@ class InteractiveAgentApplication:
 
     def _submission(self, profile, generation, inputs, predecessor, registered_input=None):
         submission = dict(profile_id=profile.profile_id,
-            configuration_sha256=digest(dict(profile=asdict(profile),
+            configuration_sha256=digest(dict(profile=profile.to_dict(),
                 wire_mode=None if self._planning['planning_wire_mode'] is None else self._planning['planning_wire_mode'].value,
-                recovery_profile=None if self._planning['recovery_planning_profile'] is None else asdict(self._planning['recovery_planning_profile']),
+                recovery_profile=None if self._planning['recovery_planning_profile'] is None else self._planning['recovery_planning_profile'].to_dict(),
                 recovery_policy=None if self._planning['planning_recovery_policy'] is None else self._planning['planning_recovery_policy'].to_dict())),
             expected_generation=generation, execution_inputs=inputs, predecessor_turn_id=predecessor)
         if registered_input is not None:

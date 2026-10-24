@@ -139,6 +139,78 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
         assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
 
 
+@pytest.mark.parametrize('field,target,declarations', [
+    ('fastq', 'prepare_scATAC_fragments', (
+        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
+        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
+    ('bam', 'prepare_scATAC_bam_fragments', (
+        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
+        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
+    ('fragments', 'import_scATAC_fragments', (
+        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
+        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
+    ('annotation', 'annotate_scATAC_cell_types', (
+        ('annotate_scATAC_cell_types', 'count_slot', 'X', 'X'),
+        ('annotate_scATAC_cell_types', 'group_column', 'clusters', 'clusters'))),
+    ('epizoo', 'epizoo_embed_cells', (
+        ('cluster_cells', 'resolution', '0.5', .5),
+        ('compute_cell_umap', 'min_dist', '0.1', .1))),
+])
+def test_raw_declaration_arguments_continue_without_science(tmp_path, field, target, declarations):
+    """Admission retains typed intent and candidates; none are qualified inputs."""
+    from dataclasses import asdict, replace
+    from agent.application.raw_handoff import empty
+    from agent.schemas.orchestration import _serialize
+
+    class DeclarationModel(RoleModel):
+        def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            assert 'turn_schema_version' in value, 'Incomplete declarations entered planning'
+            self.calls.append(value)
+            continuation = bool(value['dialogue'].get('pending_prerequisite'))
+            tool, name, literal, _ = declarations[int(continuation)]
+            start = value['utterance'].index(literal)
+            declared = empty(field)
+            if field == 'epizoo' and not continuation:
+                declared = replace(declared, operation='inference')
+            decision = (dict(kind='answer_roles', pending='@roles', roles=[]) if continuation
+                else dict(kind='request_roles', target=target, required_roles=[], roles=[]))
+            decision.update({field: asdict(declared)}, arguments=[dict(tool=tool,
+                argument=name, literal=literal, start=start, end=start + len(literal))])
+            return json.dumps(dict(turn_schema_version=1, decision=decision))
+
+    backend, uploads = role_web(tmp_path, model_type=DeclarationModel)
+    with TestClient(create_app(backend.service, uploads=uploads)) as client:
+        client.post('/api/v1/sessions', json=dict(session_id='session'))
+        attachment = upload(client, 'unqualified.attachment', b'simulated candidate bytes').json()['resource_id']
+        record = uploads.resources.load(attachment)
+        pending, _ = send(client, text='Use ' + declarations[0][2] + '.', ids=(attachment,))
+        assert pending['status'] == 'clarification', pending
+        original = backend.service._application.sessions.load('session').interactions[0]
+        assert original.admitted[field + '_arguments'] == {declarations[0][1]: declarations[0][3]}
+        continued, _ = send(client, turn='answer', text='Also use ' + declarations[1][2] + '.')
+        assert continued['status'] == 'clarification', continued
+        state = backend.service._application.sessions.load('session')
+        assert state.interactions[0] == original
+        assert state.interactions[-1].prerequisite['field'] == field
+        admitted = state.interactions[-1].admitted
+        assert admitted[field + '_arguments'] == {name: expected for _, name, _, expected in declarations}
+        assert admitted['arguments'][0]['argument'] == declarations[1][1]
+        assert _serialize(admitted[field + '_sources']) == _serialize(original.admitted[field + '_sources'])
+        previous = state.interactions[-1]
+        repeated, _ = send(client, turn='reconfirm', text='Keep ' + declarations[1][2] + '.')
+        assert repeated['status'] == 'clarification', repeated
+        state = backend.service._application.sessions.load('session')
+        assert state.interactions[:2] == (original, previous)
+        assert state.interactions[-1].admitted[field + '_arguments'] == admitted[field + '_arguments']
+        assert state.interactions[-1].admitted['continuation']['binding_turn_id'] == 'answer'
+        assert uploads.resources.load(attachment) == record
+        assert not state.turns and not state.revisions and not backend.science_calls
+        assert sum(len(model.calls) for model in backend.models) == 3
+        assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
+        assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
+
+
 def test_candidate_roles_continue_original_objective_and_only_accept_bound_source(tmp_path):
     backend, uploads = role_web(tmp_path)
     with TestClient(create_app(backend.service, uploads=uploads)) as client:

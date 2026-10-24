@@ -729,12 +729,11 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     """The raw declaration variant of existing role request/answer admission."""
     from .turn_decisions import RequestRoles, IntentError
     from .resource_continuation import catalog
-    from .dialogue_execution import _arguments
     from .local_resources import LocalResourceAdmission
     field = 'epizoo' if decision.epizoo is not None else 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
     if field not in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo') or (decision.fastq is not None and field != 'fastq'):
         raise IntentError('invalid_prerequisite')
-    validate_arguments(_arguments(decision), field)
+    validate_arguments(decision.arguments, field)
     state = sessions.load(sessions._interaction_session_id)
     initial = isinstance(decision, RequestRoles)
     reference = interaction.snapshot.get('prerequisite')
@@ -782,7 +781,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 if group_choices:
                     source_evidence['accepted_groups'] = group_choices
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
-        getattr(decision, field) or empty(field), _arguments(decision), rows, sessions._application.registry, field, evidence, source_evidence)
+        getattr(decision, field) or empty(field), decision.arguments, rows, sessions._application.registry, field, evidence, source_evidence)
     owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
     owner.validate_binding(binding)
     # Candidate validation intentionally does not open unused attachments.
@@ -824,7 +823,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         **{field: declaration_dict(declared), field + '_addition': declaration_dict(getattr(decision, field) or empty(field)),
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
-        arguments=[asdict(a) for a in _arguments(decision)])
+        arguments=[asdict(a) for a in decision.arguments])
     if field == 'epizoo':
         admitted['epizoo_source_evidence'] = source_evidence
     if field == 'annotation':

@@ -45,13 +45,29 @@ class OutputSelection:
     name: str
     step_id: str
     output_key: str
-    use: str | None = None
+    use: str | tuple[str, ...] | None = None
 
     def __post_init__(self):
         for value in (self.name, self.step_id, self.output_key):
             text(value)
-        if self.use not in (None, 'visualization_labels'):
+        if type(self.use) is list:
+            object.__setattr__(self, 'use', tuple(self.use))
+        uses = selection_uses(self)
+        if (len(uses) > 3 or len(set(uses)) != len(uses)
+                or any(value not in ('visualization_labels', 'visualization_coordinates', 'comparison_result')
+                       for value in uses)):
             raise SessionError('Invalid presentation use of a selected output.')
+
+
+def selection_uses(selection):
+    """Read legacy single-purpose selections and current explicit purposes."""
+    if selection.use is None:
+        return ()
+    if type(selection.use) is str:
+        return (selection.use,)
+    if type(selection.use) is not tuple or any(type(value) is not str for value in selection.use):
+        raise SessionError('Invalid presentation use of a selected output.')
+    return selection.use
 
 
 @dataclass(frozen=True)

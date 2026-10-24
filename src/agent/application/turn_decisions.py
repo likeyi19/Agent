@@ -155,6 +155,64 @@ def _validate_role_requirements(requirements):
         raise ValueError('Invalid bounded scientific role requirements.')
 
 
+def _validate_visualization(value, *, planned=True):
+    _shape(_serialize(value), ('coordinates', 'labels', 'field'))
+    coordinates, labels, field = (value[k] for k in ('coordinates', 'labels', 'field'))
+    accepted = lambda v: type(v) is str and re.fullmatch(r'g[0-9]+', v) is not None
+    source = type(labels) is str and re.fullmatch(r'source\.(?:[0-9]|1[0-5])', labels) is not None
+    if (not (accepted(coordinates) or planned and coordinates == 'new')
+            or not (accepted(labels) or source or planned and labels == 'new')
+            or type(field) is not str or not 0 < len(field) <= 256
+            or not field.startswith(('source:', 'result:')) or not field.split(':', 1)[1]
+            or source and not field.startswith('source:')):
+        raise ValueError('Invalid explicit cell visualization operands.')
+
+
+def _validate_comparison(value):
+    value = _serialize(value)
+    _shape(value, ('left', 'right', 'detail'))
+    if any(type(value[k]) is not str or re.fullmatch(r'g[0-9]+|new', value[k]) is None
+           for k in ('left', 'right')):
+        raise ValueError('Invalid exact comparison operands.')
+    detail = value['detail']
+    if detail is not None:
+        validate_scientific_detail(detail, value['right'])
+        if (detail['section'] not in ('category_counts', 'category_association')
+                or any(type(detail[k]) is not str or not detail[k].startswith(('source:', 'result:'))
+                       or not detail[k].split(':', 1)[1] for k in ('field', 'other_field'))):
+            raise ValueError('Select both exact comparison fields.')
+    if value['left'] == value['right'] and (detail is None or detail['field'] == detail['other_field']):
+        raise ValueError('A same-result comparison requires two distinct exact fields.')
+
+
+def _normalize_research_intent(decision):
+    """The same bounded downstream intent survives execution prerequisites."""
+    if (type(decision.references) is not tuple or len(decision.references) > 32
+            or any(type(h) is not str or re.fullmatch(r'g[0-9]+', h) is None for h in decision.references)
+            or len(set(decision.references)) != len(decision.references)
+            or type(decision.delivery) is not tuple or len(set(decision.delivery)) != len(decision.delivery)
+            or any(k not in ('explanation', 'comparison', 'visualization') for k in decision.delivery)
+            or type(decision.unfulfilled) is not tuple or len(decision.unfulfilled) > 8
+            or any(type(t) is not str or not t.strip() or len(t) > 512 for t in decision.unfulfilled)
+            or len(set(decision.unfulfilled)) != len(decision.unfulfilled)
+            or type(decision.retain_parameters) is not tuple or len(decision.retain_parameters) > 8
+            or any(not isinstance(p, RetainedParameter) for p in decision.retain_parameters)
+            or len(set(decision.retain_parameters)) != len(decision.retain_parameters)):
+        raise ValueError('Invalid bounded research intention.')
+    requested = list(decision.delivery)
+    if decision.comparison is not None:
+        _validate_comparison(decision.comparison)
+        object.__setattr__(decision, 'comparison', freeze_json_mapping(decision.comparison, 'comparison'))
+        if 'comparison' not in requested:
+            requested.append('comparison')
+    if decision.visualization is not None:
+        _validate_visualization(decision.visualization)
+        object.__setattr__(decision, 'visualization', freeze_json_mapping(decision.visualization, 'visualization'))
+        if 'visualization' not in requested:
+            requested.append('visualization')
+    object.__setattr__(decision, 'delivery', tuple(requested))
+
+
 @dataclass(frozen=True)
 class RequestRoles:
     """Capture an identified scientific objective without an executable plan."""
@@ -170,9 +228,16 @@ class RequestRoles:
     fragments: 'FragmentsDeclaration | None' = None
     annotation: 'AnnotationDeclaration | None' = None
     epizoo: 'EpiZooDeclaration | None' = None
+    references: tuple[str, ...] = ()
+    delivery: tuple[str, ...] = ()
+    unfulfilled: tuple[str, ...] = ()
+    visualization: object = None
+    comparison: object = None
+    retain_parameters: tuple[RetainedParameter, ...] = ()
 
     def __post_init__(self):
         _normalize_arguments(self)
+        _normalize_research_intent(self)
         if self.epizoo is not None:
             from .epizoo_handoff import EpiZooDeclaration, target
             from .raw_handoff import validate_arguments
@@ -298,39 +363,19 @@ class Execute:
     retain_parameters: tuple[RetainedParameter, ...] = ()
     unfulfilled: tuple[str, ...] = ()
     visualization: object = None
+    comparison: object = None
 
     def __post_init__(self):
         _normalize_arguments(self)
+        _normalize_research_intent(self)
         if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
             raise ValueError('Invalid bounded execution context.')
         _validate_arguments(self.arguments)
         _validate_roles(self.roles)
         if self.roles and self.operation != 'plan':
             raise ValueError('Scientific input roles require ordinary planning.')
-        if (type(self.references) is not tuple or len(self.references) > 32
-                or any(type(h) is not str or re.fullmatch(r'g[0-9]+', h) is None for h in self.references)
-                or len(set(self.references)) != len(self.references)
-                or type(self.delivery) is not tuple or len(set(self.delivery)) != len(self.delivery)
-                or any(k not in ('explanation', 'comparison', 'visualization') for k in self.delivery)
-                or type(self.retain_parameters) is not tuple or len(self.retain_parameters) > 8
-                or any(not isinstance(p, RetainedParameter) for p in self.retain_parameters)
-                or len(set(self.retain_parameters)) != len(self.retain_parameters)
-                or type(self.unfulfilled) is not tuple or len(self.unfulfilled) > 8
-                or any(type(t) is not str or not t.strip() or len(t) > 512 for t in self.unfulfilled)
-                or len(set(self.unfulfilled)) != len(self.unfulfilled)
-                or self.operation != 'plan' and (self.references or self.delivery or self.retain_parameters or self.unfulfilled)):
+        if self.operation != 'plan' and (self.references or self.delivery or self.retain_parameters or self.unfulfilled):
             raise ValueError('Invalid bounded research intention.')
-        if self.visualization is not None:
-            value = self.visualization
-            _shape(_serialize(value), ('coordinates', 'labels', 'field'))
-            if (self.operation != 'plan' or 'visualization' not in self.delivery
-                    or any(type(value[k]) is not str for k in value)
-                    or re.fullmatch(r'g[0-9]+', value['coordinates']) is None
-                    or value['labels'] != 'new' and re.fullmatch(r'g[0-9]+', value['labels']) is None
-                    or not 0 < len(value['field']) <= 256
-                    or not value['field'].startswith(('source:', 'result:'))):
-                raise ValueError('Invalid explicit cell visualization operands.')
-            object.__setattr__(self, 'visualization', freeze_json_mapping(value, 'visualization'))
 
 
 @dataclass(frozen=True)
@@ -436,6 +481,7 @@ class ScientificQuestion:
     comparison: ScientificTarget | None = None
     focus: str = 'question'
     detail: dict | None = None
+    visualization: object = None
 
     def __post_init__(self):
         if (not isinstance(self.target, ScientificTarget)
@@ -444,6 +490,9 @@ class ScientificQuestion:
             raise ValueError('Invalid scientific question.')
         if self.detail is not None:
             validate_scientific_detail(self.detail, self.comparison)
+        if self.visualization is not None:
+            _validate_visualization(self.visualization, planned=False)
+            object.__setattr__(self, 'visualization', freeze_json_mapping(self.visualization, 'visualization'))
 
 
 def validate_scientific_detail(detail, comparison):
@@ -651,7 +700,10 @@ def parse_decision(raw, *, utterance=None):
             return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
         if kind == 'request_roles':
             _shape(value, ('kind', 'target', 'required_roles', 'roles') + tuple(
-                key for key in ('argument', 'arguments', 'context', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo') if key in value))
+                key for key in ('argument', 'arguments', 'context', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo',
+                                'references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters') if key in value))
+            if any(type(value[k]) is not list for k in ('references', 'delivery', 'unfulfilled', 'retain_parameters') if k in value):
+                raise IntentError('invalid_decision')
             from .raw_handoff import declaration
             return RequestRoles(value['target'], (() if (value.get('fastq') is not None or value.get('bam') is not None or value.get('fragments') is not None or value.get('annotation') is not None or value.get('epizoo') is not None) and value['required_roles'] == []
                                                     else _role_requirements(value['required_roles'])),
@@ -661,7 +713,11 @@ def parse_decision(raw, *, utterance=None):
                                 declaration(value['bam'], 'bam') if 'bam' in value else None,
                                 declaration(value['fragments'], 'fragments') if 'fragments' in value else None,
                                 declaration(value['annotation'], 'annotation') if 'annotation' in value else None,
-                                declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None)
+                                declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None,
+                                references=tuple(value.get('references', [])), delivery=tuple(value.get('delivery', [])),
+                                unfulfilled=tuple(value.get('unfulfilled', [])), visualization=value.get('visualization'),
+                                comparison=value.get('comparison'),
+                                retain_parameters=tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])))
         if kind == 'answer_roles':
             _shape(value, ('kind', 'pending', 'roles') + tuple(
                 key for key in ('arguments', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo') if key in value))
@@ -685,11 +741,12 @@ def parse_decision(raw, *, utterance=None):
             if 'intent' in value:
                 if value['intent'] != 'scientific': raise IntentError('invalid_decision')
             else:
-                _shape(value, ('kind', 'target', 'comparison', 'focus') + (('detail',) if 'detail' in value else ()))
+                _shape(value, ('kind', 'target', 'comparison', 'focus')
+                       + tuple(k for k in ('detail', 'visualization') if k in value))
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
                 if any(type(value[k]) is not list for k in ('references', 'delivery', 'retain_parameters', 'unfulfilled') if k in value):
@@ -700,7 +757,7 @@ def parse_decision(raw, *, utterance=None):
                                value.get('context', 'none'), _input_roles(value.get('roles', [])),
                                tuple(value.get('references', [])), tuple(value.get('delivery', [])),
                                tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])),
-                               tuple(value.get('unfulfilled', [])), value.get('visualization'))
+                               tuple(value.get('unfulfilled', [])), value.get('visualization'), value.get('comparison'))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -713,12 +770,14 @@ def parse_decision(raw, *, utterance=None):
             return Clarify(value['reason'], value_required=value['reason'] == 'missing_parameter_value')
         if kind == 'answer':
             if value.get('intent') == 'scientific':
-                _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus') + (('detail',) if 'detail' in value else ()))
+                _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus')
+                       + tuple(k for k in ('detail', 'visualization') if k in value))
                 def target(v):
                     _shape(v, ('output', 'subject'))
                     return ScientificTarget(**v)
                 return Answer('scientific', scientific=ScientificQuestion(target(value['target']),
-                    None if value['comparison'] is None else target(value['comparison']), value['focus'], value.get('detail')))
+                    None if value['comparison'] is None else target(value['comparison']), value['focus'],
+                    value.get('detail'), value.get('visualization')))
             _shape(value, ('kind', 'intent', 'relation', 'technical'))
             return Answer(value['intent'], value['relation'], value['technical'])
         if kind == 'navigate':
@@ -775,6 +834,21 @@ def decision_schema(public):
             operation=enum(o['handle'] for o in offered), target=enum(('selection','matrix')),
             delta={'anyOf':[delta, {'type':'null'}]})))
     if 'dialogue' in public:
+        groups = public['dialogue'].get('result_groups', ())
+        selected_sources = public['dialogue'].get('selected_sources', ())
+        sources = tuple(dict.fromkeys(row['source'] for row in
+            (*selected_sources, *public['dialogue'].get('annotation_sources', ()))))
+        coordinates = [row['handle'] for row in groups if row['tool'] == 'compute_cell_umap']
+        def visualization_schema(*, planned):
+            return {'anyOf': [_object(dict(
+                coordinates=enum((['new'] if planned else []) + coordinates),
+                labels=enum((['new'] if planned else []) + [row['handle'] for row in groups] + list(sources)),
+                field={'type':'string', 'minLength':1, 'maxLength':256})), {'type':'null'}]}
+        categorical_detail = _object(dict(
+            section=enum(('categorical_fields', 'category_counts', 'category_association')),
+            field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
+            other_field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
+            offset={'type':'integer', 'minimum':0}, limit={'type':'integer', 'minimum':1, 'maximum':32}))
         target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']]
                              + [g['handle'] for g in public['dialogue'].get('result_groups', ())]
                              + list(public['dialogue'].get('result_referents', {})) + ['@focus', '@previous']),
@@ -782,11 +856,9 @@ def decision_schema(public):
         scientific = dict(kind=enum(('answer_scientific',)), target=target,
             comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))
         if any('categorical' in g for g in public['dialogue'].get('result_groups', ())):
-            scientific['detail'] = {'anyOf': [{'type':'null'}, _object(dict(
-                section=enum(('categorical_fields', 'category_counts', 'category_association')),
-                field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
-                other_field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
-                offset={'type':'integer', 'minimum':0}, limit={'type':'integer', 'minimum':1, 'maximum':32}))]}
+            scientific['detail'] = {'anyOf': [{'type':'null'}, categorical_detail]}
+        if coordinates:
+            scientific['visualization'] = visualization_schema(planned=False)
         variants.append(_object(scientific))
         variants.append(_object(dict(kind=enum(('answer_guidance',)),
             targets={'type':'array', 'maxItems':4, 'items':target},
@@ -796,13 +868,16 @@ def decision_schema(public):
                       'items':enum(('explanation', 'comparison', 'visualization'))},
             unfulfilled={'type':'array', 'maxItems':8,
                          'items':{'type':'string', 'minLength':1, 'maxLength':512}})
-        groups = public['dialogue'].get('result_groups', ())
+        execution['visualization'] = visualization_schema(planned=True)
+        comparison_detail = _object(dict(categorical_detail['properties'],
+            section=enum(('category_counts', 'category_association')),
+            field={'type':'string', 'minLength':1, 'maxLength':256},
+            other_field={'type':'string', 'minLength':1, 'maxLength':256}))
+        execution['comparison'] = {'anyOf': [_object(dict(
+            left=enum(['new'] + [row['handle'] for row in groups]),
+            right=enum(['new'] + [row['handle'] for row in groups]),
+            detail={'anyOf':[{'type':'null'}, comparison_detail]})), {'type':'null'}]}
         if groups:
-            coordinates = [row['handle'] for row in groups if row['tool'] == 'compute_cell_umap']
-            if coordinates:
-                execution['visualization'] = {'anyOf': [_object(dict(coordinates=enum(coordinates),
-                    labels=enum(['new'] + [row['handle'] for row in groups]),
-                    field={'type':'string','minLength':1,'maxLength':256})), {'type':'null'}]}
             execution['references'] = {'type':'array', 'maxItems':32,
                                        'items':enum(row['handle'] for row in groups)}
             retained = [_object(dict(result=enum((row['handle'],)),
@@ -814,7 +889,6 @@ def decision_schema(public):
             execution['context'] = enum(('none', 'current'))
         if identities:
             execution['arguments'] = declarations
-        selected_sources = public['dialogue'].get('selected_sources', ())
         input_roles = public['dialogue'].get('input_roles', ())
         def role_schema(offers):
             return {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
@@ -824,8 +898,7 @@ def decision_schema(public):
         if input_roles:
             if selected_sources:
                 execution['roles'] = role_schema(input_roles)
-            variants.append(_object({k:v for k,v in execution.items()
-                if k not in ('delivery', 'references', 'retain_parameters', 'unfulfilled', 'visualization')} | dict(kind=enum(('request_roles',)),
+            variants.append(_object(execution | dict(kind=enum(('request_roles',)),
                 roles=role_schema(input_roles) if selected_sources else {'type': 'array', 'maxItems': 0, 'items': {'type': 'string'}},
                 required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') else 2, 'maxItems': 8,
                     'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
@@ -845,7 +918,8 @@ def decision_schema(public):
                                  if raw_parameters else empty)
                 variants.append(_object(dict(kind=enum(('request_roles',)),
                     target=enum(('epizoo_embed_cells', 'adapt_epizoo_species') if field == 'epizoo' else (target(field),)), required_roles=empty, roles=empty,
-                    **{field: raw}, arguments=raw_arguments)))
+                    **{field: raw}, arguments=raw_arguments,
+                    **{k:v for k,v in execution.items() if k in ('references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters')})))
                 if pending is not None and pending.get('field') == field:
                     variants.append(_object(dict(kind=enum(('answer_roles',)), pending=enum(('@roles',)),
                         roles=empty, **{field: raw}, arguments=raw_arguments)))
@@ -905,6 +979,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Current-turn refinements remain user planning intent, not edits to the original candidate. Keep its captured subjects/revision fixed; an additional comparison may refine the objective but must not silently replace its subject.',
             'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
+            'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status; they do not authorize composition. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
@@ -931,8 +1006,8 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=the registered tool. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
             'For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. Only planning_context handles with qualified semantic ports may supply executable inputs, with context=current. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.',
-            'execute_plan.delivery records distinct subsequent explanation, comparison or visualization intentions alongside the scientific computation. Select explanation when the user requests scientific explanation or interpretation after new computation; completion then uses accepted evidence and the existing scientific answer service. Other delivery intentions are disclosed as incomplete unless actually produced. Do not invent Registry tools or promise fulfillment. Do not duplicate figures already provided by registered science and the default figure composition in delivery. A visualization requiring registered computation must still be planned as science. A question without new computation remains answer_scientific. Do not reject supported science solely because it includes result delivery.',
-            'For categorical coloring of an accepted UMAP during a scientific continuation, execute_plan.visualization selects coordinates from one explicit captured UMAP result group, labels from another captured group or new for the planned result, and field as an exact result: or source: categorical column. Include existing source groups in references and visualization in delivery. The existing output selector identifies the specific new label result. This presentation reuses coordinates; do not add a UMAP fit just to recolor them. Never choose by latest/last/first, equal cell counts or filenames; clarify ambiguous sources or fields. With no new scientific computation, standalone figure publication is not supported by the current interaction; do not fabricate a scientific plan for it.',
+            'execute_plan and request_roles retain requested downstream outcomes alongside scientific computation. Use delivery=explanation for requested scientific interpretation. An exact comparison selects comparison.left and comparison.right from captured g handles or new for one explicitly selected planned result. Selecting the same result twice, including new/new, requires two distinct exact fields such as result:leiden and source:cell_type. detail=null requests recorded summary/method comparison of distinct results; category_counts requests independent distributions with exact field and other_field, while category_association requests a source-qualified contingency table. Use existing detail offset/limit bounds. Missing correspondence limits association, not independent facts. Precise comparison and visualization operands already declare those delivery intentions; redundant flags or references are unnecessary. Coarse flags without exact operands do not establish completed outcomes. Do not invent Registry tools or promise fulfillment. A visualization requiring new scientific calculation must still be planned as science. Preserve the same precise operands in request_roles when files or declarations are missing.',
+            'For a specific categorical figure, visualization selects coordinates from an explicit captured UMAP g handle or new for an explicitly selected planned UMAP result, labels from an accepted g handle, new for an explicitly selected planned label result, or an offered source.N attachment, and field as an exact result: or source: column. Source attachments require source: fields. The existing output selector identifies each planned-new purpose; never choose a step by name, order or tool guess. Reusing accepted coordinates does not require another UMAP fit. Never choose by latest/last/first, equal cell counts or filenames; clarify ambiguous sources or fields. Without new computation choose answer_scientific with accepted-only visualization operands (no new), preserving the exact requested figure even when its publication is unavailable. Do not fabricate a scientific plan for a presentation-only request. The existence of a different or uniformly colored PNG does not satisfy exact requested coloring.',
             'Preserve the whole scientific objective. Missing essential capabilities, ambiguous associations or incompatible scientific inputs cannot be silently omitted: clarify instead. Missing resolvable files/declarations use existing prerequisites. execute_plan.unfulfilled quotes exact clauses from this utterance for unsupported, independently separable requirements only when the user permits their omission without materially changing the objective. Agent records and discloses them; use [] otherwise. Never use this to skip essential science or resolvable prerequisites. If separability is unclear, clarify. Never add hidden fallback plans or retry a semantic refusal until success.',
             'Use retain_parameters only when the user asks to retain prior settings. Select exact offered result/argument pairs; Agent binds their recorded values and provenance. Never copy accepted values into explicit current arguments or manufacture literal evidence from prior defaults. Explicit current changes override only their own parameter; omitted unrelated parameters stay omitted, and unknown historical settings require clarification when essential.',
             'For selected scientific uploads or structured inputs, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. When dialogue.reference_supplementation is available, a missing genome for declared species/assembly and an uploaded regulatory H5AD can use request_resources with explicit reference_category peak_set or regulatory_regions. This asks for plain FASTA (optional FAI) and preserves the objective. Qualified pending reference choices can answer that original request. Otherwise an operator must provision missing resources. Never fabricate resources.',

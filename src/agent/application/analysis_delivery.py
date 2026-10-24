@@ -119,6 +119,57 @@ def integrated_analysis(service, artifact):
         manifest=dict(artifact.manifest, original_source=dict(source, size_bytes=size)))
 
 
+def export_descriptions(sessions, session_id, targets):
+    """Project existing eligible cell-analysis downloads without preparing bytes.
+
+    The normal artifact owners establish inventory membership. Payload integrity,
+    privacy, size admission and exact delivered bytes remain download-time work.
+    No source is promoted to scientific authority by this presentation.
+    """
+    state = sessions.load(session_id)
+    descriptions = []
+    checked = set()
+    for index, target in enumerate(targets):
+        revisions = [r for r in state.revisions if r.revision_id == target['revision_id']]
+        if len(revisions) != 1:
+            raise ValueError('The export target is not an accepted revision.')
+        revision = revisions[0]
+        if revision.revision_id not in checked:
+            sessions._validate_revision(revision)
+            checked.add(revision.revision_id)
+        outputs = [o for o in revision.outputs if o.name == target['output_name']
+                   and o.accepted_step_sha256 == target['accepted_step_sha256']]
+        if len(outputs) != 1:
+            raise ValueError('The export target does not identify an accepted output.')
+        output = outputs[0]
+        sessions._validate_locator(output)
+        origin = state.turn(revision.turn_id)
+        try:
+            compact = accepted_analysis(sessions, session_id, revision, origin, output)
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+            continue  # Optional delivery never removes independent accepted facts.
+        artifacts = [compact]
+        try:
+            integrated = integrated_analysis(sessions, compact)
+            if integrated is not None:
+                artifacts.append(integrated)
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+            pass
+        stage = compact.manifest['stage']
+        selected = dict(cell_embeddings=True,
+            leiden_assignments=stage == 'clustering' or stage == 'umap' and compact.manifest['clustering_present'],
+            umap_coordinates=stage == 'umap')
+        for artifact in artifacts:
+            reference = artifact.reference
+            integrated = artifact.role == INTEGRATED_ROLE
+            descriptions.append(dict(target=index, status='available_for_preparation',
+                **{name:getattr(reference, name) for name in (
+                    'handle', 'artifact_type', 'filename', 'title', 'purpose', 'description', 'size_bytes')},
+                original_measurements=integrated, original_feature_axis=integrated,
+                selected_result=dict(selected), payload_checks='performed_on_download'))
+    return tuple(descriptions)
+
+
 def _compact_result(source, manifest, max_bytes):
     from agent.tools.analysis.peak_h5ad import _PATH
     from agent.tools.analysis.neighbors_delivery import _safe_objects, _strings

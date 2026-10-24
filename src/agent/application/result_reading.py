@@ -206,35 +206,110 @@ def cell_overlay(sessions, coordinate, categories, field):
         correspondence=dict(basis=basis, n_cells=len(ids), cell_order_sha256=_cell_order_digest(ids)))
 
 
-def visualization_inputs(sessions, session_id, interaction):
-    """Resolve captured W1 roles and the existing output selector's new result."""
+def _captured_output(sessions, state, origin, handle):
+    """Resolve one offered W1 group through its existing accepted locator."""
     from dataclasses import asdict
-    from .dialogue_execution import _received_origin
     from .turn_context import result_groups
+    groups = {g['handle']:g['canonical'] for g in result_groups(origin.snapshot, state)}
+    if handle not in groups:
+        raise ValueError('Select an explicitly captured accepted result.')
+    item = groups[handle]
+    revision = next(r for r in state.revisions if r.revision_id == item['revision_id'])
+    output = next(o for o in revision.outputs if o.name == item['output_name'])
+    sessions._validate_locator(output)
+    return dict(asdict(output), revision_id=revision.revision_id)
+
+
+def _selected_output(sessions, state, interaction, purpose, *, accepted):
+    """Resolve an explicit output purpose without tool/order inference."""
+    from dataclasses import asdict
+    from .session_state import selection_uses
+    turn = state.turn(interaction.turn_id)
+    selected = [s for s in turn.selections if purpose in selection_uses(s)]
+    if len(selected) != 1:
+        raise ValueError('Select exactly one new result for the requested purpose.')
+    run = sessions._application.run_store.load(turn.run_id)
+    outputs = [o for o in sessions._locators(turn, run) if o.name == selected[0].name]
+    if len(outputs) != 1:
+        raise ValueError('The selected result is unavailable.')
+    output = outputs[0]
+    revision_id = None
+    if accepted:
+        revisions = [r for r in state.revisions if r.revision_id == turn.revision_id
+                     and r.turn_id == interaction.turn_id and r.run_id == turn.run_id]
+        if len(revisions) != 1 or output not in revisions[0].outputs:
+            raise ValueError('The requested new result has not been accepted.')
+        revision_id = revisions[0].revision_id
+    return dict(asdict(output), revision_id=revision_id)
+
+
+def comparison_inputs(sessions, session_id, interaction):
+    """Bind captured/new comparison operands to exact accepted targets.
+
+    This selects sources only. Existing evidence readers still own scientific
+    field eligibility, population correspondence and ordered-axis checks.
+    """
+    from .dialogue_execution import _received_origin
+    from agent.schemas.orchestration import _serialize
+    state = sessions.load(session_id)
+    origin = _received_origin(interaction, state.interactions)
+    request = (origin.admitted or {}).get('comparison')
+    if request is None:
+        return None
+    def target(operand):
+        output = (_selected_output(sessions, state, interaction, 'comparison_result', accepted=True)
+                  if operand == 'new' else _captured_output(sessions, state, origin, operand))
+        return dict(revision_id=output['revision_id'], output_name=output['name'],
+                    accepted_step_sha256=output['accepted_step_sha256'], subject=None)
+    return target(request['left']), target(request['right']), _serialize(request['detail'])
+
+
+def native_visualization(sessions, coordinate, categories, field):
+    """Qualify an existing native Leiden figure against its exact operands.
+
+    Native UMAP publication already owns label propagation. Reuse that recorded
+    dependency, then read only pinned selected observations at the categorical
+    owner; no new fit, result correspondence inference or rendering occurs.
+    """
+    if field != 'result:leiden':
+        return False
+    from agent.tools.analysis import categorical as owner
+    store = sessions._application.run_store
+    cs, _, _ = _accepted_step(store, coordinate['run_id'], coordinate['step_id'])
+    ls, _, _ = _accepted_step(store, categories['run_id'], categories['step_id'])
+    for locator, step in ((coordinate, cs), (categories, ls)):
+        if (accepted_step_digest(step) != locator['accepted_step_sha256']
+                or locator['output_key'] not in step.result):
+            raise ValueError('Changed accepted visualization input.')
+    if cs.tool_name != 'compute_cell_umap' or cs.result.get('clustering_present', True) is not True:
+        return False
+    same = ((coordinate['run_id'], coordinate['step_id'], coordinate['accepted_step_sha256']) ==
+            (categories['run_id'], categories['step_id'], categories['accepted_step_sha256']))
+    if not same and (ls.tool_name != 'cluster_cells' or not any(
+            source_run == categories['run_id'] and step.step_id == categories['step_id']
+            and accepted_step_digest(step) == categories['accepted_step_sha256']
+            for source_run, step, _ in analysis_lineage(store, coordinate['run_id'], coordinate['step_id']))):
+        return False
+    left_ids, left = owner.observations(cs.result['analysis_path'], cs.result['analysis_sha256'], 'leiden')
+    right_ids, right = owner.observations(ls.result['analysis_path'], ls.result['analysis_sha256'], 'leiden')
+    owner.require_same_cells(left_ids, right_ids)
+    return owner._labels(left)[0] == owner._labels(right)[0]
+
+
+def visualization_inputs(sessions, session_id, interaction):
+    """Resolve exact figure operands without publishing a new rendering path."""
+    from .dialogue_execution import _received_origin
     state = sessions.load(session_id)
     origin = _received_origin(interaction, state.interactions)
     drawing = (origin.admitted or {}).get('visualization')
     if drawing is None:
         return None
-    groups = {g['handle']:g['canonical'] for g in result_groups(origin.snapshot, state)}
-    def captured(handle):
-        item = groups[handle]
-        revision = next(r for r in state.revisions if r.revision_id == item['revision_id'])
-        output = next(o for o in revision.outputs if o.name == item['output_name'])
-        sessions._validate_locator(output)
-        return dict(asdict(output), revision_id=revision.revision_id)
-    coordinates = captured(drawing['coordinates'])
-    if drawing['labels'] == 'new':
-        turn = state.turn(interaction.turn_id)
-        selected = [s for s in turn.selections if s.use == 'visualization_labels']
-        if len(selected) != 1:
-            raise ValueError('Select exactly one new categorical result.')
-        run = sessions._application.run_store.load(turn.run_id)
-        output = next(o for o in sessions._locators(turn, run) if o.name == selected[0].name)
-        # The publishing SessionTurn will supply its exact Revision when read.
-        labels = dict(asdict(output), revision_id=None)
-    else:
-        labels = captured(drawing['labels'])
+    if drawing['labels'].startswith('source.'):
+        return None  # Captured precisely, but unsupported by this rendering path.
+    coordinates = (_selected_output(sessions, state, interaction, 'visualization_coordinates', accepted=False)
+                   if drawing['coordinates'] == 'new' else _captured_output(sessions, state, origin, drawing['coordinates']))
+    labels = (_selected_output(sessions, state, interaction, 'visualization_labels', accepted=False)
+              if drawing['labels'] == 'new' else _captured_output(sessions, state, origin, drawing['labels']))
     return coordinates, labels, drawing['field']
 
 
@@ -248,7 +323,8 @@ def publish_cell_overlay(sessions, session_id, interaction, result):
     import logging
     from .dialogue_execution import _received_origin
     origin = _received_origin(interaction, sessions.load(session_id).interactions)
-    if (origin.admitted or {}).get('visualization') is None:
+    drawing = (origin.admitted or {}).get('visualization')
+    if drawing is None or drawing['coordinates'] == 'new' or drawing['labels'].startswith('source.'):
         return
     try:
         from agent.report.visualization import build_analysis_visualizations

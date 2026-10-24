@@ -37,7 +37,8 @@ def test_strict_union_has_distinct_discriminators(with_operation):
         assert set(variant['required']) == set(variant['properties'])
     by_kind = {v['properties']['kind']['enum'][0]: v for v in variants}
     assert set(by_kind['answer_scientific']['properties']) == {'kind', 'target', 'comparison', 'focus'}
-    assert set(by_kind['execute_plan']['properties']) == {'kind', 'target', 'delivery', 'unfulfilled'}
+    assert set(by_kind['execute_plan']['properties']) == {
+        'kind', 'target', 'delivery', 'unfulfilled', 'comparison', 'visualization'}
     assert by_kind['execute_plan']['properties']['delivery']['items']['enum'] == [
         'explanation', 'comparison', 'visualization']
 

@@ -666,7 +666,7 @@ def _extend_catalog(previous, current):
 
 
 def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None):
-    from .dialogue_execution import _bind_arguments
+    from .dialogue_execution import _bind_arguments, _with_retained
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
     if not binding.attachment_candidates or binding.roles or binding.execution_inputs:
@@ -677,7 +677,8 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
     # checked separately below with the strict merge.
     declared = merge(previous, addition, annotation_corrections=field == 'annotation')
     values = _bind_arguments(registry, interaction.utterance,
-        {} if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
+        _with_retained(registry, {}, (origin.admitted or {}).get('retained_parameters', ()))
+        if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
         replace_existing=field in ('annotation', 'epizoo'))
     if (field == 'annotation' and source is not None and addition.grouping_provenance is None
             and 'group_column' in source.admitted[field + '_arguments']
@@ -741,7 +742,9 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
             or state.interactions[-1].turn_id != interaction.turn_id):
         raise IntentError('invalid_prerequisite')
     if initial:
-        origin, source = interaction, None
+        from .dialogue_execution import _research_intent
+        intent = _research_intent(interaction, decision)
+        origin, source = replace(interaction, admitted=intent), None
         rows = catalog(input_sets)
     else:
         if decision.pending != '@roles' or reference is None or reference['field'] != field:
@@ -824,6 +827,8 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
         arguments=[asdict(a) for a in decision.arguments])
+    if initial:
+        admitted.update(intent)
     if field == 'epizoo':
         admitted['epizoo_source_evidence'] = source_evidence
     if field == 'annotation':

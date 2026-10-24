@@ -168,8 +168,8 @@ def test_completion_discloses_distinct_undelivered_requirements(tmp_path, monkey
         'Inspect and explain the accepted result, compare and visualize it; omit marker analysis if unavailable.',
         expected_generation=0, execution_inputs={'input_path':str(source)})
     assert view.response.scientific['availability'] == 'generated'
-    assert 'comparison has not been completed' in view.response.text
-    assert 'visualization is unavailable' in view.response.text
+    assert 'exact comparison operands were not recorded' in view.response.text
+    assert 'requested visualization has not been produced' in view.response.text
     assert 'Requirements not fulfilled: marker analysis' in view.response.text
     assert calls == ['inspect_scATAC'] and models[0].phases.count('dialogue_schema_version') == 1
 
@@ -237,7 +237,7 @@ def test_figure_identity_comes_from_pinned_manifest_and_legacy_png_remains_reada
     with pytest.raises(InteractiveBoundaryError): facade.artifact_handles('session', rid)
 
 
-def overlay_service(tmp_path, monkeypatch, *, failure=None):
+def overlay_service(tmp_path, monkeypatch, *, failure=None, compare=False, explain=False, limit=8, compare_same=False):
     """Real dialogue/runtime/composer, scripted cluster owner + graph facts.
 
     As in W2's qualified-graph fixture, no native graph authority or scientific
@@ -261,11 +261,17 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None):
     xy = np.array([[0,0],[0,1],[2,2],[3,2],[4,4]], dtype=np.float32)
     coords = tmp_path/'coordinates.h5ad'
     layout = ad.AnnData(obs=pd.DataFrame(index=ids)); layout.obsm['X_umap'] = xy
+    layout.obs['cohort'] = pd.Categorical(['control', 'control', 'treated', 'treated', 'treated'])
     layout.uns[PROVENANCE_KEY] = dict(schema_version=PROVENANCE_SCHEMA_VERSION, clustering_present=False)
     layout.write_h5ad(coords)
     new_labels = tmp_path/'new-labels.h5ad'
     ad.AnnData(obs=pd.DataFrame(dict(cohort=pd.Categorical(['treated','control','treated',None,'control'],
-        categories=['control','treated','unused'], ordered=True)), index=ids)).write_h5ad(new_labels)
+        categories=['control','treated','unused'], ordered=True)),
+        index=list(reversed(ids)) if failure == 'axis' else ids)).write_h5ad(new_labels)
+    if compare_same:
+        same = ad.read_h5ad(new_labels)
+        same.obs['condition'] = pd.Categorical(['A', 'A', 'B', 'B', 'B'])
+        same.write_h5ad(new_labels)
     default = build_default_tool_registry(); calls = []; models = []
     spec = default.get('cluster_cells')
     def labels_owner(**arguments):
@@ -291,9 +297,16 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None):
             value=json.loads(prompt); self.calls.append(value)
             if 'turn_schema_version' in value:
                 group=next(g for g in value['dialogue']['result_groups'] if g['tool']=='compute_cell_umap')
-                return json.dumps(dict(turn_schema_version=1, decision=dict(kind='execute_plan',
-                    target='cluster_cells', references=[group['handle']], delivery=['visualization'],
-                    visualization=dict(coordinates=group['handle'],labels='new',field='result:cohort'))))
+                decision = dict(kind='execute_plan', target='cluster_cells', references=[group['handle']],
+                    delivery=['visualization'] + (['explanation'] if explain else []),
+                    visualization=dict(coordinates=group['handle'],labels='new',field='result:cohort'))
+                if compare:
+                    decision['comparison'] = dict(left='new' if compare_same else group['handle'], right='new',
+                        detail=dict(section='category_association', field='result:cohort',
+                                    other_field='result:condition' if compare_same else
+                                        'result:unknown' if failure == 'wrong_field' else 'result:cohort',
+                                    offset=0, limit=limit))
+                return json.dumps(dict(turn_schema_version=1, decision=decision))
             if 'semantic_prompt_version' in value:
                 assert value['research_context']['task']['visualization']['field']=='result:cohort'
                 return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(
@@ -301,7 +314,25 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None):
                     source=dict(kind='input',input='analysis_path'))],control_dependencies=[])])))
             if 'output_selection_schema_version' in value:
                 return json.dumps(dict(outputs=[dict(name='updated_labels',step_id='labels',output_key='analysis_path',
-                    use='visualization_labels'),dict(name='label_count',step_id='labels',output_key='n_clusters',use=None)]))
+                    use=['visualization_labels', 'comparison_result'] if compare else 'visualization_labels'),
+                    dict(name='label_count',step_id='labels',output_key='n_clusters',use=None)]))
+            if 'dialogue_schema_version' in value:
+                evidence = value['evidence']
+                table = next(c for c in evidence['claims'] if c['field'] == 'detail.category_association')
+                assert evidence['targets'][0]['completion_role'] == ('created_by_this_run' if compare_same else 'referenced_accepted_result')
+                assert evidence['targets'][1]['completion_role'] == 'created_by_this_run'
+                assert evidence['delivery']['comparison']['status'] == ('partial' if limit == 1 else 'available')
+                figure = evidence['delivery']['figure_relationships'][0]
+                assert figure['satisfies_request']
+                assert figure['coordinate_reused'] and figure['correspondence']['basis'] == 'same_qualified_neighbors'
+                assert {s['field'] for s in figure['sources']} == {'obsm:X_umap', 'result:cohort'}
+                assert '/secret' not in json.dumps(evidence)
+                return json.dumps(dict(support='supported', paragraphs=[dict(kind='finding',
+                    text='The requested descriptive association uses the selected accepted ordered cells. The figure reuses the accepted coordinates unchanged.',
+                    citations=[table['claim_id']], comparisons=[])]))
+            if 'grounding_review_version' in value:
+                assert value['evidence']['delivery']['figure_relationships'][0]['coordinate_reused']
+                return json.dumps(dict(verdicts={row['id']:'entailed' for row in value['paragraphs']}))
             raise AssertionError('Unexpected provider phase')
     def factory(profile):
         model=OverlayModel(profile); models.append(model); return model
@@ -370,7 +401,7 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
     revision=facade.revision('session',view.revision_id)
     figures=[a for a in revision.artifacts if a.figure]
     if failure:
-        assert not figures and 'visualization is unavailable' in view.response.text
+        assert not figures and 'requested visualization has not been produced' in view.response.text
         assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
     else:
         assert len(figures)==2 and len(seen)==1  # Existing download copies stay separate (W4).
@@ -401,7 +432,7 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
         with monkeypatch.context() as scoped:
             scoped.setattr(reader,'visualization_inputs',wrong_field)
             outcome=sd.completion(app.sessions,'session','recolor',TurnOutcome('execute','activated'))
-        assert 'additional requested visualization has not been produced' in outcome.text
+        assert 'requested visualization has not been produced' in outcome.text
         assert deliveries[-1]['accepted_figures']==1 and deliveries[-1]['visualization']=='unavailable'
     saved=files(app); restarted=read_only_boundary(app)
     assert restarted.turn('session','recolor')==view
@@ -422,3 +453,128 @@ def test_public_provenance_projects_only_known_source_fields():
     public=public_citation_source(value)
     assert public['output_locator']==locator and public['derivation']['sources'][0]['field']=='cohort'
     assert 'secret' not in json.dumps(public) and 'internal' not in json.dumps(public)
+
+
+@pytest.mark.parametrize('explain,limit', [(False, 8), (True, 8), (False, 1), (True, 1)])
+def test_precise_comparison_completes_with_existing_readers_and_same_figure_facts(tmp_path, monkeypatch, explain, limit):
+    facade, coords, _, old, calls, models = overlay_service(tmp_path, monkeypatch,
+        compare=True, explain=explain, limit=limit)
+    original = coords.read_bytes()
+    view = overlay_submit(facade, coords)
+    assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
+    assert coords.read_bytes() == original
+    assert 'requested comparison is included' in view.response.text.lower()
+    if limit == 1:
+        assert 'partial coverage' in view.response.text
+    assert 'not a new embedding fit' in view.response.text
+    scientific = view.response.scientific
+    association = [c for c in scientific['citations'] if c['field'] == 'detail.category_association']
+    assert len(association) == 1
+    sources = association[0]['source']['derivation']['sources']
+    assert len(sources) == 2 and sources[0]['artifact_sha256'] != sources[1]['artifact_sha256']
+    assert association[0]['source']['revision_id'] == old
+    phases = [next((k for k in ('turn_schema_version', 'semantic_prompt_version',
+        'output_selection_schema_version', 'dialogue_schema_version', 'grounding_review_version') if k in c), '')
+        for c in models[0].calls]
+    assert phases.count('dialogue_schema_version') == int(explain)
+    assert phases.count('grounding_review_version') == int(explain)
+    before = files(facade._application)
+    restarted = read_only_boundary(facade._application)
+    assert restarted.turn('session', 'recolor') == view
+    assert files(facade._application) == before
+
+
+@pytest.mark.parametrize('failure,counts', [('unqualified', 2), ('axis', 2), ('digest', 1), ('wrong_field', 1)])
+def test_unqualified_requested_comparison_keeps_independent_counts_without_matching(tmp_path, monkeypatch, failure, counts):
+    facade, coords, _, _, calls, models = overlay_service(tmp_path, monkeypatch,
+        compare=True, failure=failure)
+    if failure == 'digest':
+        from agent.application import result_reading
+        resolve = result_reading.comparison_inputs
+        def changed(*args):
+            result = resolve(*args)
+            coords.write_bytes(coords.read_bytes() + b' ')
+            return result
+        monkeypatch.setattr(result_reading, 'comparison_inputs', changed)
+    view = overlay_submit(facade, coords)
+    assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
+    assert 'comparison is unavailable' in view.response.text
+    assert 'Independent categorical counts' in view.response.text
+    fields = [c['field'] for c in view.response.scientific['citations']]
+    assert fields.count('detail.category_counts') == counts
+    assert 'detail.category_association' not in fields
+    assert len(models[0].calls) == 3
+
+
+@pytest.mark.parametrize('explain', [False, True])
+def test_precise_same_new_result_compares_distinct_fields_without_a_second_result(tmp_path, monkeypatch, explain):
+    facade, coords, _, _, calls, models = overlay_service(tmp_path, monkeypatch,
+        compare=True, compare_same=True, explain=explain)
+    view = overlay_submit(facade, coords)
+    assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
+    assert 'requested comparison is included' in view.response.text.lower()
+    claim = next(c for c in view.response.scientific['citations'] if c['field'] == 'detail.category_association')
+    sources = claim['source']['derivation']['sources']
+    assert sources[0]['artifact_sha256'] == sources[1]['artifact_sha256']
+    assert {s['field'] for s in sources} == {'cohort', 'condition'}
+    assert len(models[0].calls) == 3 + 2 * int(explain)
+
+
+def test_scientific_answer_retains_exact_presentation_request_without_execution(tmp_path, monkeypatch):
+    from test_scientific_dialogue import Model, ask
+    facade, _, _, old, calls, _ = overlay_service(tmp_path, monkeypatch)
+    app = forbid_work(facade._application, monkeypatch)
+    def decision(payload):
+        group = next(g['handle'] for g in payload['dialogue']['result_groups'] if g['tool'] == 'compute_cell_umap')
+        return dict(kind='answer_scientific', target=dict(output=group, subject=None), comparison=None,
+            focus='question', visualization=dict(coordinates=group, labels=group, field='result:cohort'))
+    def reply(payload):
+        assert payload['evidence']['delivery']['visualization'] == 'unavailable'
+        assert payload['evidence']['delivery']['requested_field'] == 'result:cohort'
+        return dict(support='insufficient_evidence', paragraphs=[dict(kind='limitation',
+            text='The accepted layout remains available; the requested new figure has not been produced.',
+            citations=[], comparisons=[])])
+    before = files(app)
+    result = ask(app, 'presentation', 'Color the accepted layout by cohort without recomputation.', Model(decision, response=reply))
+    assert result.status == 'answered' and calls == []
+    state = app.sessions.load('session')
+    assert state.active_revision_id == old and len(state.revisions) == 1
+    admitted = state.interactions[-1].admitted
+    assert admitted['visualization']['field'] == 'result:cohort' and admitted['references']
+    assert 'standalone presentation is not available' in result.text
+    assert all(files(app)[p] == value for p, value in before.items() if not p.startswith('sessions/'))
+
+
+@pytest.mark.parametrize('corrupt_figure', [False, True])
+def test_read_only_answer_uses_same_pinned_relationship_or_reports_its_unavailability(tmp_path, monkeypatch, corrupt_figure):
+    from test_scientific_dialogue import Model, ask
+    facade, coords, _, _, calls, _ = overlay_service(tmp_path, monkeypatch)
+    view = overlay_submit(facade, coords)
+    if corrupt_figure:
+        figure = next(a for a in facade.revision('session', view.revision_id).artifacts if a.figure)
+        accepted_file = next(f for f in facade._application.sessions.load('session').turn('recolor').completion_files
+            if f.sha256 == figure.sha256)
+        path = Path(accepted_file.path)
+        path.write_bytes(path.read_bytes() + b' ')
+    app = forbid_work(facade._application, monkeypatch)
+    before = files(app)
+    def decision(payload):
+        group = next(g['handle'] for g in payload['dialogue']['result_groups'] if g['tool'] == 'cluster_cells')
+        return dict(kind='answer_scientific', target=dict(output=group, subject=None), comparison=None, focus='question')
+    def reply(payload):
+        evidence = payload['evidence']
+        count = next(c for c in evidence['claims'] if c['field'] == 'n_clusters')
+        if corrupt_figure:
+            assert not evidence.get('delivery', {}).get('figure_relationships')
+            assert any('figure relationships are unavailable' in text for text in evidence['limitations'])
+            text = 'The accepted clustering count remains available; its figure relationship cannot currently be checked.'
+        else:
+            figure = evidence['delivery']['figure_relationships'][0]
+            assert figure['coordinate_reused'] and not figure['satisfies_request']
+            assert {s['version'] for s in figure['sources']} == {1, 2}
+            text = 'The accepted figure uses the exact retained coordinates; recoloring did not fit a new embedding.'
+        return dict(support='supported', paragraphs=[dict(kind='finding', text=text,
+            citations=[count['claim_id']], comparisons=[])])
+    outcome = ask(app, 'relationship', 'Explain the accepted figure sources without rerunning anything.', Model(decision, response=reply))
+    assert outcome.status == 'answered' and calls == ['scripted_cluster_owner']
+    assert all(files(app)[p] == value for p, value in before.items() if not p.startswith('sessions/'))

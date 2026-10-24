@@ -644,6 +644,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 value['delivery'] = list(candidate.delivery)
             if candidate.unfulfilled:
                 value['unfulfilled'] = list(candidate.unfulfilled)
+            for key in ('comparison', 'visualization'):
+                if getattr(candidate, key) is not None:
+                    value[key] = _serialize(getattr(candidate, key))
             if candidate.retain_parameters:
                 value['retain_parameters'] = [asdict(p) for p in candidate.retain_parameters]
             if candidate.roles:

@@ -499,6 +499,9 @@ def admit(sessions, interaction, question, *, evidence_set=False):
         predecessor=captured['predecessor'])
     if detail is not None:
         result['detail'] = dict(detail)
+    if getattr(question, 'visualization', None) is not None:
+        from .dialogue_execution import _research_intent
+        result.update(_research_intent(interaction, question))
     return result
 
 
@@ -590,21 +593,25 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                if evidence_targets is None else list(evidence_targets))
     if evidence_targets is not None and not 1 <= len(targets) <= 32:
         raise IntentError('unavailable_context')
-    comparing = evidence_targets is None and len(targets) == 2
+    # Completion places the explicitly requested pair first, followed by other
+    # accepted execution summaries. Both paths use the same two-source reader.
+    comparing = admitted.get('comparison') is not None
+    if comparing and (len(targets) < 2 or targets[:2] != [admitted['target'], admitted['comparison']]):
+        raise IntentError('unavailable_context')
     views = [_load(sessions, session_id, t) for t in targets]
-    if comparing and any(t['subject'] is not None for t in targets):
+    if comparing and any(t['subject'] is not None for t in targets[:2]):
         # Exact result identity, not equal labels, scopes subject correspondence.
-        a, b = views
+        a, b = views[:2]
         if (a.source.output_locator['run_id'], a.source.output_locator['step_id'],
                 targets[0]['accepted_step_sha256']) != (
                 b.source.output_locator['run_id'], b.source.output_locator['step_id'],
                 targets[1]['accepted_step_sha256']):
             raise IntentError('incompatible_comparison')
-    selected_detail = admitted.get('detail') if evidence_targets is None else None
+    selected_detail = admitted.get('detail')
     independent_counts = (selected_detail is not None and selected_detail['section'] == 'category_counts'
                           and selected_detail['other_field'] is not None)
-    comparison_fields = frozenset() if independent_counts else _comparison_fields(views, targets) if comparing else None
-    descriptive_fields = _descriptive_fields(views) if comparing and not independent_counts else frozenset()
+    comparison_fields = frozenset() if independent_counts else _comparison_fields(views[:2], targets[:2]) if comparing else None
+    descriptive_fields = _descriptive_fields(views[:2]) if comparing and not independent_counts else frozenset()
     claims, meanings, labels, limitations = [], {}, [], []
     association_delivered = False
     for index, (target, view) in enumerate(zip(targets, views)):
@@ -616,8 +623,15 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                            tool=view.source.tool_name,
                            coverage=[dict(field=f.field,status=f.status,value=_serialize(f.value)) for f in view.coverage]))
         if 'completion_run_id' in admitted:
+            published = next((r for r in state.revisions
+                if r.revision_id == admitted.get('completion_revision_id')), None)
+            locator = view.source.output_locator
+            retained = published is not None and any(
+                (o.run_id, o.step_id, o.accepted_step_sha256) ==
+                (locator['run_id'], locator['step_id'], target['accepted_step_sha256']) for o in published.outputs)
             labels[-1]['completion_role'] = ('created_by_this_run'
-                if view.source.output_locator['run_id'] == admitted['completion_run_id'] else 'retained_accepted_result')
+                if locator['run_id'] == admitted['completion_run_id'] else
+                'retained_accepted_result' if retained else 'referenced_accepted_result')
         if view.source.tool_name in RESULT_LIMITATIONS: meanings[f'm{index}'] = RESULT_LIMITATIONS[view.source.tool_name]
         if view.source.tool_name == 'compute_scATAC_qc':
             from agent.tools.data.scatac_qc_profile import PROFILE, PROFILE_SHA256
@@ -637,8 +651,9 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             base = next(f.source_pointer for f in view.facts if f.field == 'group_summary')
             values = [(k,v,f'{base}/{row_index}/{k}') for k,v in row.items() if k != 'group']
         from .dialogue_evidence import DetailRequest, detail_request
-        request = detail_request(view, target['subject']) if selected_detail is None else None
-        if selected_detail is not None:
+        selected = selected_detail if index < 2 else None
+        request = detail_request(view, target['subject']) if selected is None else None
+        if selected is not None:
             if index == 0 and selected_detail['section'] == 'category_association':
                 request = DetailRequest(**selected_detail,
                     comparison=admitted['comparison'])
@@ -661,12 +676,12 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                         'Missing signature genes are reported, never biological negatives.')
             else:
                 limitations.append(f'{label}: requested detail is {detailed.status} ({detailed.reason}).')
-                if request.section == 'category_association':
-                    limitations.append('Categorical correspondence is unavailable. Independently attributed counts remain usable; no agreement or biological validation is established.')
-                    independent = sessions.evidence(session_id, target['revision_id'], target['output_name'], fields=(),
-                        detail=DetailRequest('category_counts', field=request.field, limit=request.limit, offset=request.offset))
-                    if independent.status == 'available':
-                        detail_facts = independent.detail
+            if request.section == 'category_association' and not association_delivered:
+                limitations.append('Categorical correspondence is unavailable. Independently attributed counts remain usable; no agreement or biological validation is established.')
+                independent = sessions.evidence(session_id, target['revision_id'], target['output_name'], fields=(),
+                    detail=DetailRequest('category_counts', field=request.field, limit=request.limit, offset=request.offset))
+                if independent.status == 'available':
+                    detail_facts = independent.detail
         def leaves(key, val, pointer, depth=0):
             if hasattr(val, 'items') and depth < 3:
                 # Lists of records and nested structured results retain their
@@ -744,8 +759,6 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         public_claims.append(entry)
     public = dict(targets=labels, claims=public_claims, meanings=meanings,
                   limitations=list(dict.fromkeys(limitations)), scope='accepted_persisted_summary')
-    if evidence_targets is not None and 'completion_delivery' in admitted:
-        public['delivery'] = _serialize(admitted['completion_delivery'])
     if any(c.field.startswith('detail.') for c in claims):
         public['scope'] = 'accepted_summary_and_published_detail'
     if any(c.source.get('derivation') is not None or c.field == 'detail.categorical_fields' for c in claims):
@@ -770,7 +783,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 'Other facts retain their separate attribution. Descriptive agreement does not validate biological identities or establish significance or causality.')
         public['limitations'].append(boundary)
         public['meanings']['comparison_scope'] = boundary
-        if comparison_fields and all(v.source.tool_name == 'cluster_cells' for v in views):
+        if comparison_fields and all(v.source.tool_name == 'cluster_cells' for v in views[:2]):
             public['meanings']['comparison_basis'] = (
                 'These clustering summaries consumed the same qualified neighbors publication, '
                 'so their recorded resolutions and cluster counts describe the same graph population. '
@@ -793,9 +806,67 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                    for b in claims if b.target == 't1' and comparable(a, b)])
         for n, pair in enumerate(public['comparison']['pairs']):
             pair['id'] = f'p{n}'
+    if 'completion_delivery' in admitted:
+        delivery = _serialize(admitted['completion_delivery'])
+        if comparing:
+            delivery['comparison'] = _comparison_delivery(public, claims, selected_detail)
+        public['delivery'] = delivery
+    elif admitted.get('visualization') is not None:
+        public['delivery'] = dict(requested=['visualization'], visualization='unavailable',
+            reason='standalone_presentation_not_supported',
+            requested_field=admitted['visualization']['field'])
+    if 'completion_delivery' not in admitted:
+        from .dialogue_evidence import figure_inventory
+        state = sessions.load(session_id)
+        figures, read_runs = {}, set()
+        selected = {(v.source.output_locator['run_id'], v.source.output_locator['step_id']) for v in views}
+        for view in views:
+            run_id = view.source.output_locator['run_id']
+            if run_id in read_runs:
+                continue
+            read_runs.add(run_id)
+            origin = next(t for t in state.turns if t.run_id == run_id and t.completion_files)
+            revision = next(r for r in state.revisions if r.revision_id == origin.revision_id)
+            try:
+                available_figures = figure_inventory(sessions, origin, revision)
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+                public['limitations'].append('Accepted figure relationships are unavailable for a selected result.')
+                continue
+            for figure in available_figures:
+                metadata = figure['metadata']
+                if any((s['run_id'], s['step_id']) in selected for s in metadata['sources']):
+                    figures[metadata['manifest_sha256'], metadata['figure_id']] = figure
+        if figures:
+            public.setdefault('delivery', {})['figure_relationships'] = _figure_relationships(state, figures.values())
+    from .analysis_delivery import export_descriptions
+    exports = export_descriptions(sessions, session_id, targets)
+    if exports:
+        public.setdefault('delivery', {})['exports'] = [_serialize(row) for row in exports]
     if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return public, tuple(claims)
+
+
+def _comparison_delivery(public, claims, detail):
+    """Describe the existing selected read, without turning prose into authority."""
+    selected = [c for c in claims if c.target in ('t0', 't1')]
+    tables = [c for c in selected if c.field == 'detail.' + detail['section']] if detail else []
+    if detail is not None:
+        expected = 2 if detail['section'] == 'category_counts' else 1
+        available = len(tables) == expected
+        complete = available and all(c.value.get('complete', False) for c in tables)
+        return dict(status='unavailable' if not available else 'available' if complete else 'partial',
+            section=detail['section'], field=detail['field'], other_field=detail['other_field'],
+            claim_ids=[c.claim_id for c in tables],
+            coverage=[dict(target=c.target, **{k:_serialize(c.value[k]) for k in (
+                'n_entities', 'denominator', 'denominator_all', 'denominator_labeled', 'n_missing',
+                'n_left_missing', 'n_right_missing', 'total_records', 'returned_records', 'offset', 'complete')
+                if k in c.value}) for c in tables],
+            reason=None if available else 'requested_detail_unavailable')
+    pairs = public['comparison']['pairs']
+    return dict(status='available' if pairs else 'unavailable', section='summary',
+        claim_ids=list(dict.fromkeys(key for p in pairs for key in (p['left'], p['right']))),
+        mode=public['comparison']['mode'], reason=None if pairs else 'no_qualified_comparison_operands')
 
 
 class _AnswerFailure(ValueError):
@@ -836,9 +907,22 @@ ANSWER_INSTRUCTIONS = (
     'Each paragraph is a short statement with exact citations and kind finding, limitation or conditional.',
     'For focus=completion, concisely explain the accepted data, actual methods and parameters, useful results, '
     'provenance and relevant limits in response to the original request. Targets marked created_by_this_run '
-    'describe this execution; retained_accepted_result targets were retained, not rerun. Delivery intentions '
+    'describe this execution; retained_accepted_result targets are exact older outputs selected in this '
+    'published revision. referenced_accepted_result targets are historical sources read for this response, '
+    'not selected outputs of this revision. Neither older role means a new execution. Delivery intentions '
     'are requests, not achievements: disclose unavailable portions and do not claim an unperformed comparison '
-    'or visualization. Figure-file availability does not establish biological interpretation of a figure.',
+    'or visualization. Available comparison facts must be cited to deliver the requested comparison; preserve '
+    'their denominators, missingness and partial coverage. Pinned delivery.figure_relationships describe actual '
+    'accepted presentation sources: coordinate_reused confirms the explicitly selected old coordinates were '
+    'read unchanged, and correspondence applies only to those exact fields and cells. Do not doubt that '
+    'qualified relationship merely because a native-result summary omits it. Only satisfies_request=true '
+    'marks a figure matching this request; other available figures do not fulfill it. Figure-file availability does '
+    'not establish biological interpretation of a figure.',
+    'delivery.exports describes existing download variants and their exact accepted-result scope. '
+    'available_for_preparation is an eligible recipe, not proof that bytes were already prepared or downloaded; '
+    'payload checks occur on download. selected_result fields describe only that selected result, not all '
+    'possible fields in the original source. Do not combine separate variants into an invented file or '
+    'recommend a file as satisfying requested contents absent a matching descriptor.',
     'Cite the accepted facts supporting empirical assertions. Supplied target metadata, method context '
     'and field meanings can also support an explanation without repeated per-sentence citations. '
     'Preserve population, subject, original version and output attribution. Do not substitute values, '
@@ -924,10 +1008,13 @@ def review_response(model, responses, public, *, guidance=None):
             'support surrounding assertions. Check the actual assertions regardless of paragraph kind; '
             'conditional phrasing must not excuse fabricated observations or biological conclusions.',
             'Empirical findings must agree with their cited accepted facts. Supplied target metadata, '
-            'method context, field definitions and limitations also support an explanation without exhaustive '
+            'method context, field definitions, pinned delivery relationships and limitations also support an explanation without exhaustive '
             'per-sentence citations. Ordinary methodological descriptions, reasonable limitations and '
             'explicitly hypothetical advice need consistency with that context, not evidence that a '
             'hypothetical experiment has occurred. Do not import new observations about this dataset.',
+            'Pinned delivery.figure_relationships establish their exact presentation sources and coordinate '
+            'reuse, not biological validation. delivery.exports establishes described existing preparation '
+            'variants, not completed downloads or a union of separate files. Respect its payload-check scope.',
             'When a scientific comparison is asserted, require an offered comparison ID and its exact '
             'compatible operands, or a citation to an owner-generated category_association table for its exact fields and entities. Independently attributed facts, legitimate partial answers and explanations '
             'of insufficient comparison evidence need no comparison ID. Reporting equal independent counts '
@@ -980,11 +1067,13 @@ def generate(model, question, focus, public, claims):
     return response
 
 
-def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None):
+def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None,
+           evidence_context=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
     try:
-        public, claims = context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
+        public, claims = (context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
+                          if evidence_context is None else evidence_context)
         response = generate(model, interaction.utterance if question is None else question,
             interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims)
         # Generation may take time. Recheck consumed evidence and active status;
@@ -999,6 +1088,9 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
             raise IntentError('unavailable_context')
         prefix = '' if all(t['is_active'] for t in refreshed['targets']) else 'This discussion includes explicitly referenced historical results.\n\n'
         suffix = '\n\nI can report these accepted facts, but they do not establish any stronger conclusion.' if response.support == 'insufficient_evidence' else ''
+        delivery = refreshed.get('delivery', {})
+        if delivery.get('reason') == 'standalone_presentation_not_supported':
+            suffix += '\n\nThe requested figure has not been produced; standalone presentation is not available in this interaction.'
         return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix, scientific=response)
     except _AnswerFailure as exc:
         _diagnose(exc.stage, exc.reason)
@@ -1017,6 +1109,107 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
     except (ValueError, TypeError, KeyError, RuntimeError, OSError):
         _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context')
         return TurnOutcome('answer', 'unavailable', text='I could not produce a response with valid evidence bindings.')
+
+
+def _figure_relationships(state, figures, matching=()):
+    """Safe presentation facts from the existing pinned manifest inventory."""
+    result = []
+    identities = {(f['metadata']['manifest_sha256'], f['metadata']['figure_id']) for f in matching}
+    for figure in figures:
+        metadata = figure['metadata']
+        sources = []
+        for source in metadata['sources']:
+            output = source.get('output')
+            item = {k:source[k] for k in ('tool_name', 'role', 'field') if k in source}
+            if output is not None:
+                revision = next(r for r in state.revisions if r.revision_id == output['revision_id'])
+                item.update(version=state.revisions.index(revision) + 1, output=output['name'])
+            sources.append(item)
+        value = dict(kind=metadata['kind'], coordinate_reused=metadata.get('coordinate_reused', False),
+                     satisfies_request=(metadata['manifest_sha256'], metadata['figure_id']) in identities,
+                     sources=sources)
+        if 'correspondence' in metadata:
+            value['correspondence'] = {k:metadata['correspondence'][k] for k in ('basis', 'n_cells')}
+        result.append(value)
+    return result
+
+
+def _comparison_text(public, claims):
+    """Present selected owner records in a non-language completion, never recovery."""
+    selected = public.get('delivery', {}).get('comparison', {})
+    required = set(selected.get('claim_ids', ()))
+    used = [c for c in claims if c.claim_id in required]
+    independent = (not used and selected.get('section') == 'category_association')
+    if independent:
+        used = [c for c in claims if c.target in ('t0', 't1') and c.field == 'detail.category_counts']
+    if not used:
+        return '', ()
+    labels = {t['handle']:t['label'] for t in public['targets']}
+    lines = []
+    if selected['section'] == 'summary':
+        by_id = {c.claim_id:c for c in used}
+        for pair in public['comparison']['pairs']:
+            a, b = by_id[pair['left']], by_id[pair['right']]
+            lines.append(f'{a.field}: {labels[a.target]} = {json.dumps(_serialize(a.value), ensure_ascii=False)}; '
+                         f'{labels[b.target]} = {json.dumps(_serialize(b.value), ensure_ascii=False)}.')
+    else:
+        for claim in used:
+            table = _serialize(claim.value)
+            def cell(value):
+                return json.dumps(value, ensure_ascii=False).replace('|', '\\|')
+            fields = ', '.join(f"{f['location']}:{f['field']}" for f in table['fields'])
+            coverage = (f"Showing {table['returned_records']} of {table['total_records']} records "
+                        f"from offset {table['offset']}; " + ('complete.' if table['complete'] else
+                        'partial coverage; omitted records are not absence.'))
+            lines.append(labels[claim.target] + ' — ' + fields)
+            if claim.field == 'detail.category_counts':
+                lines.append(f"{table['n_entities']} cells; {table['n_missing']} missing labels. "
+                    f"Denominators: all cells = {table['denominator_all']}; labeled cells = {table['denominator_labeled']}. "
+                    + coverage)
+                columns = ('category', 'count', 'proportion_all', 'proportion_labeled')
+                lines.extend(('', '| Category | Cells | Proportion of all | Proportion of labeled |', '| --- | --- | --- | --- |'))
+            else:
+                lines.append(f"{table['n_paired']} paired cells of {table['n_entities']}; "
+                    f"missing left = {table['n_left_missing']}, right = {table['n_right_missing']}, "
+                    f"both = {table['n_both_missing']}. Paired denominator = {table['denominator']}. " + coverage)
+                columns = ('left', 'right', 'count', 'row_total', 'column_total', 'proportion_paired',
+                           'proportion_row', 'proportion_column')
+                lines.extend(('', '| Left category | Right category | Cells | Row total | Column total | Proportion paired | Proportion of row | Proportion of column |',
+                              '| --- | --- | --- | --- | --- | --- | --- | --- |'))
+            lines.extend('| ' + ' | '.join(cell(row[key]) for key in columns) + ' |' for row in table['records'])
+            lines.extend(('', 'Categories retain owner order; this is not a ranking. Source labels do not establish biological identities.'))
+    heading = ('Independent categorical counts; requested comparison unavailable:\n'
+               if independent or selected.get('status') == 'unavailable' else
+               'Requested comparison:\n')
+    return heading + '\n'.join(lines), tuple(used)
+
+
+def _delivery_text(delivery, public=None, used=()):
+    figure = ('The requested visualization is available in the result view.'
+              if delivery['visualization'] == 'delivered' else
+              'The requested visualization has not been produced.' if 'visualization' in delivery['requested'] else
+              'Figures and downloadable files are listed in the result view.')
+    if (delivery['visualization'] == 'delivered'
+            and any(f['satisfies_request'] and f['coordinate_reused'] for f in delivery['figure_relationships'])):
+        figure += ' It reuses the explicitly selected accepted coordinates; this presentation is not a new embedding fit.'
+    comparison = delivery.get('comparison', {})
+    if comparison.get('status') == 'not_requested':
+        return figure
+    cited = {c.claim_id for c in used}
+    required = set(comparison.get('claim_ids', ()))
+    presented = bool(required) and required <= cited
+    if comparison.get('section') == 'summary' and public is not None:
+        presented = any({p['left'], p['right']} <= cited for p in public.get('comparison', {}).get('pairs', ()))
+    if presented and comparison.get('status') in ('available', 'partial'):
+        text = ('The requested comparison is included with partial coverage; omitted records are not scientific absence.'
+                if comparison['status'] == 'partial' else 'The requested comparison is included.')
+    elif comparison.get('status') in ('available', 'partial'):
+        text = 'The requested comparison facts were read, but a grounded comparison explanation has not been delivered.'
+    elif comparison.get('reason') == 'exact_operands_not_recorded':
+        text = 'The exact comparison operands were not recorded; no comparison has been inferred.'
+    else:
+        text = 'The requested comparison is unavailable for the selected sources or fields; independent accepted facts remain usable.'
+    return text + ' ' + figure
 
 
 def completion(sessions, session_id, turn_id, outcome, *, model=None):
@@ -1039,27 +1232,23 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
               if revision.revision_id == state.active_revision_id else
               'The accepted scientific results belong to this historical revision; another revision is current.')
     limitations = []
-    from .dialogue_evidence import figure_inventory, delivered_visualization
-    figures, delivered = (), False
+    from .dialogue_evidence import figure_inventory, delivered_visualizations
+    figures, delivered, relationships = (), False, []
     try:
         figures = figure_inventory(sessions, turn, revision)
+        relationships = _figure_relationships(state, figures)
         if interaction is not None and 'visualization' in requested:
-            delivered = delivered_visualization(sessions, session_id, interaction, figures)
+            matching = delivered_visualizations(sessions, session_id, interaction, figures)
+            delivered = bool(matching)
+            relationships = _figure_relationships(state, figures, matching)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
         limitations.append('Accepted figure identity or the selected presentation is unavailable.')
     delivery = dict(requested=list(requested), accepted_figures=len(figures),
         visualization='delivered' if delivered else 'unavailable' if 'visualization' in requested else 'not_requested',
-        comparison='not_delivered' if 'comparison' in requested else 'not_requested',
-        unfulfilled=list(intent.get('unfulfilled', ())))
-    if 'comparison' in requested:
-        limitations.append('The requested comparison has not been completed. Ask a follow-up with the exact accepted results and comparison fields.')
-    if 'visualization' in requested and not delivered:
-        limitations.append('Accepted figures are available in the result view; additional requested visualization has not been produced.'
-            if figures else 'The requested visualization is unavailable; no accepted figure was produced.')
-    delivery_text = ('The requested categorical visualization is available. It reuses the explicitly selected accepted UMAP coordinates; coloring is not a new embedding fit.'
-                     if delivered and intent.get('visualization') is not None else
-                     'The requested visualization is available in the result view.' if delivered else
-                     'Figures and downloadable files are listed in the result view.')
+        comparison=dict(status='unavailable', reason='exact_operands_not_recorded') if 'comparison' in requested else dict(status='not_requested'),
+        unfulfilled=list(intent.get('unfulfilled', ())),
+        figure_relationships=relationships)
+    delivery_text = _delivery_text(delivery)
     if delivery['unfulfilled']:
         limitations.append('Requirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.')
     targets = ()
@@ -1067,13 +1256,29 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
         groups = revision_results(sessions, state, revision)
         targets = tuple(dict(revision_id=revision.revision_id, output_name=g['canonical']['output_name'],
             accepted_step_sha256=g['canonical']['accepted_step_sha256'], subject=None) for g in groups)
-        admitted = dict(target=None, comparison=None, completion_delivery=delivery, completion_run_id=turn.run_id)
+        admitted = dict(target=None, comparison=None, completion_delivery=delivery, completion_run_id=turn.run_id,
+                        completion_revision_id=revision.revision_id)
+        if intent.get('comparison') is not None:
+            from .result_reading import comparison_inputs
+            try:
+                left, right, detail = comparison_inputs(sessions, session_id, interaction)
+                selected = [left, right]
+                selected.extend(t for t in targets if t not in selected)
+                if len(selected) > 32:
+                    limitations.append('Additional accepted execution summaries were omitted from the bounded comparison context.')
+                targets = tuple(selected[:32])
+                admitted.update(target=left, comparison=right, detail=detail)
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+                delivery['comparison'] = dict(status='unavailable', reason='accepted_comparison_inputs_unavailable')
+        public, claims = context(sessions, session_id, admitted, evidence_targets=targets)
+        delivery = public['delivery']
+        delivery_text = _delivery_text(delivery, public)
         # The captured original request continues through prerequisite turns.
         # Only existing explicit delivery intentions request extra language work.
         if 'explanation' in requested and model is not None:
             reading = replace(interaction, admitted=admitted)
             result = answer(sessions, session_id, reading, model, evidence_targets=targets,
-                            question=origin.utterance)
+                            question=origin.utterance, evidence_context=(public, claims))
             if result.scientific is not None:
                 current = sessions.load(session_id)
                 status = ('The accepted scientific results form the current revision.'
@@ -1082,28 +1287,32 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
                 response = replace(result.scientific,
                     limitations=tuple(dict.fromkeys(result.scientific.limitations + tuple(limitations))))
                 return replace(outcome, text=status + '\n\n' + result.text + '\n\n'
-                    + ' '.join(limitations + [delivery_text]), scientific=response)
+                    + ' '.join(limitations + [_delivery_text(delivery, public, response.claims)]), scientific=response)
             raise IntentError('unavailable_context')
         if 'explanation' in requested:
             raise IntentError('unavailable_context')
-        public, claims = context(sessions, session_id, admitted, evidence_targets=targets)
         # Report fields already define reviewed scientific summary priorities.
         # Keep exact values; never select arbitrary numeric leaves or infer biology.
         from agent.report.analysis_report import _REPORT_FIELDS, _TOOL_TITLES
         lines, used = [], []
-        for index, group in enumerate(groups):
-            fields = _REPORT_FIELDS.get(group['tool'], ())
+        for index, target in enumerate(public['targets']):
+            fields = _REPORT_FIELDS.get(target['tool'], ())
             selected = [c for c in claims if c.target == f't{index}'
                         and c.field.split('.')[0] in fields and not c.field.endswith(('_sha256', '_path'))
                         and not isinstance(c.value, (dict, list, tuple)) and not hasattr(c.value, 'items')]
             used.extend(selected)
             values = '; '.join(c.field + ' = ' + json.dumps(_serialize(c.value), ensure_ascii=False)
                                for c in selected)
-            lines.append(_TOOL_TITLES.get(group['tool'], group['tool']) + (': ' + values if values else ': accepted.'))
+            lines.append(target['label'] + ' — ' + _TOOL_TITLES.get(target['tool'], target['tool'])
+                         + (': ' + values if values else ': accepted.'))
+        comparison_text, comparison_claims = _comparison_text(public, claims)
+        if comparison_text:
+            lines.append(comparison_text)
+            used.extend(c for c in comparison_claims if c not in used)
         response = ScientificResponse(tuple(used), 'supported' if used else 'insufficient_evidence',
             '\n'.join(lines), tuple(dict.fromkeys(public['limitations'] + limitations)), public['scope'], 'deterministic')
         return replace(outcome, text=status + '\n\n' + response.explanation + '\n\n' + ' '.join(limitations
-            + [delivery_text]), scientific=response)
+            + [_delivery_text(delivery, public, used)]), scientific=response)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
         # No semantic retry, scientific replay, or mutation of Run/Revision state.
         message = 'Scientific computation completed and its accepted results and downloads remain available. The scientific explanation is unavailable; a follow-up can request it.'

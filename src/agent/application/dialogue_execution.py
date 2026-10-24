@@ -5,6 +5,7 @@ here. Structured inputs come from the caller; output selection is explicit and
 validated against the actual plan before any execution is allowed.
 """
 from contextlib import nullcontext
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 import json
 import inspect
@@ -12,7 +13,7 @@ import re
 
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
-from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest
+from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
 from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument,
     _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape)
 
@@ -81,21 +82,49 @@ def scientific_parameters(registry):
 
 def _research_intent(interaction, decision):
     """Bind selected metadata to its captured result group, never to a filename."""
+    from .turn_decisions import _validate_comparison, _validate_visualization
+    get = decision.get if isinstance(decision, Mapping) else lambda key, default=None: getattr(decision, key, default)
     rows = interaction.snapshot.get('dialogue', {}).get('results', ())
     by_handle = {row['handle']: row for row in rows}
-    if any(handle not in by_handle for handle in decision.references):
-        raise IntentError('invalid_reference')
-    if decision.visualization is not None:
-        value = decision.visualization
-        handles = [value['coordinates']] + ([] if value['labels'] == 'new' else [value['labels']])
-        if (any(h not in decision.references for h in handles)
-                or by_handle[value['coordinates']]['tool'] != 'compute_cell_umap'):
+    references = list(get('references', ()))
+    drawing, comparison = get('visualization'), get('comparison')
+    # ScientificQuestion.comparison is an accepted answer target, not a request
+    # to bind one of the outputs of a newly planned calculation.
+    if not isinstance(comparison, Mapping) or 'left' not in comparison:
+        comparison = None
+    delivery = list(get('delivery', ()))
+    if drawing is not None:
+        _validate_visualization(drawing, planned=get('intent') != 'scientific')
+        if 'visualization' not in delivery:
+            delivery.append('visualization')
+        coordinate, labels = drawing['coordinates'], drawing['labels']
+        if coordinate != 'new' and (coordinate not in by_handle
+                or by_handle[coordinate]['tool'] != 'compute_cell_umap'):
             raise IntentError('invalid_reference')
-    if any(text not in interaction.utterance for text in decision.unfulfilled):
+        if labels.startswith('source.'):
+            from .local_resources import available_input_view, LocalResourceAdmission
+            viewed = available_input_view(interaction, allow_empty=True)
+            binding = LocalResourceAdmission._submission_binding(viewed.submission)
+            member_count = len(binding.members) if hasattr(binding, 'members') else 1
+            if int(labels.split('.')[1]) >= member_count:
+                raise IntentError('invalid_reference')
+        references.extend(h for h in (coordinate, labels) if h.startswith('g') and h not in references)
+    if comparison is not None:
+        _validate_comparison(comparison)
+        if 'comparison' not in delivery:
+            delivery.append('comparison')
+        references.extend(h for h in (comparison['left'], comparison['right'])
+                          if h != 'new' and h not in references)
+    if any(handle not in by_handle for handle in references):
+        raise IntentError('invalid_reference')
+    if len(references) > 32 or len(set(references)) != len(references):
+        raise IntentError('invalid_reference')
+    unfulfilled = get('unfulfilled', ())
+    if any(text not in interaction.utterance for text in unfulfilled):
         raise IntentError('ungrounded_operand')
     retained = []
-    explicit = {(d.tool, d.argument) for d in decision.arguments}
-    for reference in decision.retain_parameters:
+    explicit = {(d.tool, d.argument) for d in get('arguments', ())} if not isinstance(decision, Mapping) else set()
+    for reference in get('retain_parameters', ()):
         row = by_handle.get(reference.result)
         candidates = [] if row is None else [p for p in row['parameters'] if p['argument'] == reference.argument]
         if len(candidates) != 1:
@@ -103,9 +132,9 @@ def _research_intent(interaction, decision):
         if (row['tool'], reference.argument) in explicit:
             raise IntentError('ambiguous_parameter')
         retained.append(dict(result=reference.result, tool=row['tool'], **_serialize(candidates[0])))
-    return {k:v for k,v in dict(references=list(decision.references), delivery=list(decision.delivery),
-                               unfulfilled=list(decision.unfulfilled),
-                               retained_parameters=retained, visualization=decision.visualization).items() if v}
+    return {k:v for k,v in dict(references=references, delivery=delivery,
+                               unfulfilled=list(unfulfilled), retained_parameters=retained,
+                               visualization=drawing, comparison=comparison).items() if v}
 
 
 def _with_retained(registry, values, retained):
@@ -124,17 +153,24 @@ def _with_retained(registry, values, retained):
 def _validate_research_intent(interaction):
     from .turn_decisions import Execute, RetainedParameter
     admitted = interaction.admitted or {}
-    if not any(k in admitted for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization')):
+    keys = ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison')
+    if not any(k in admitted for k in keys[:-1]) and not ('left' in (admitted.get('comparison') or {})):
+        return
+    if admitted.get('intent') == 'scientific':
+        expected = _research_intent(interaction, admitted)
+        if any(_serialize(admitted.get(k, ())) != _serialize(expected.get(k, [])) for k in keys[:-1]):
+            raise ValueError('Captured research intention changed.')
         return
     retained = admitted.get('retained_parameters', ())
     decision = Execute('current', 'plan', admitted['tool'], None,
         arguments=_scientific_arguments(_serialize(admitted.get('arguments', ()))),
         references=tuple(admitted.get('references', ())), delivery=tuple(admitted.get('delivery', ())),
         retain_parameters=tuple(RetainedParameter(row['result'], row['argument']) for row in retained),
-        unfulfilled=tuple(admitted.get('unfulfilled', ())), visualization=admitted.get('visualization'))
+        unfulfilled=tuple(admitted.get('unfulfilled', ())), visualization=admitted.get('visualization'),
+        comparison=admitted.get('comparison'))
     expected = _research_intent(interaction, decision)
     if any(_serialize(admitted.get(k, ())) != expected.get(k, [])
-           for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization')):
+           for k in keys):
         raise ValueError('Captured research intention changed.')
 
 
@@ -721,7 +757,9 @@ def _role_completion(registry, origin, source, interaction, roles, declarations)
             raise IntentError('invalid_prerequisite')
         merged[key] = role
     captured_roles = validate_group_roles(binding, tuple(merged.values()), registry, required)
-    base = (_serialize(binding.execution_inputs) if source is None else _serialize(source.admitted['inputs']))
+    base = (_with_retained(registry, _serialize(binding.execution_inputs),
+                          (origin.admitted or {}).get('retained_parameters', ()))
+            if source is None else _serialize(source.admitted['inputs']))
     values = _bind_arguments(registry, interaction.utterance, base, declarations)
     missing = [r for r in required if (r['tool'], r['port']) not in merged]
     metadata = binding.attribution()
@@ -829,7 +867,10 @@ def missing_file_request(registry, interaction, decision, execution_inputs=None)
     ports = {p.name: p for p in registry.get(decision.target).semantic_planning.consumer_ports}
     required = tuple(RoleRequirement(r['tool'], r['port']) for r in group_choices(binding, registry)['roles']
         if r['tool'] == decision.target and ports[r['port']].required)
-    return (RequestRoles(decision.target, required, arguments=decision.arguments) if required else None)
+    return (RequestRoles(decision.target, required, arguments=decision.arguments,
+        references=decision.references, delivery=decision.delivery, unfulfilled=decision.unfulfilled,
+        visualization=decision.visualization, comparison=decision.comparison,
+        retain_parameters=decision.retain_parameters) if required else None)
 
 
 def admit_role_request(sessions, interaction, decision, resources):
@@ -845,6 +886,7 @@ def admit_role_request(sessions, interaction, decision, resources):
     owner.validate_binding(binding)
     admitted = dict(kind='request_roles', tool=decision.target, revision_id=interaction.base_revision_id,
         required_roles=[asdict(r) for r in decision.required_roles], roles=[asdict(r) for r in decision.roles])
+    admitted.update(_research_intent(interaction, decision))
     prototype = replace(interaction, admitted=admitted)
     values, roles, missing, metadata = _role_completion(registry, prototype, None, interaction,
         decision.roles, decision.arguments)
@@ -966,6 +1008,7 @@ def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    _validate_research_intent(interaction)
     reference = interaction.snapshot.get('prerequisite') or {}
     if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or 'annotation' in admitted or 'epizoo' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
         from .raw_handoff import validate
@@ -997,7 +1040,6 @@ def validate_prerequisite(interaction, preceding):
         elif not role_continuation and admitted.get('kind') != 'request_roles':
             _validate_input_role_record(interaction)
             _validate_argument_record(interaction)
-            _validate_research_intent(interaction)
         return
     if 'context' in admitted:
         captured = interaction.snapshot
@@ -1017,7 +1059,6 @@ def validate_prerequisite(interaction, preceding):
             raise SessionError('Pending execution context changed.')
     _validate_input_role_record(interaction)
     _validate_argument_record(interaction)
-    _validate_research_intent(interaction)
     captured = _serialize(interaction.snapshot)
     expected = capture_prerequisite(preceding, interaction.base_revision_id,
         interaction.base_generation, interaction.submission,
@@ -1248,7 +1289,7 @@ def planning_task(interaction, state):
     """Keep the original task through prerequisites; rebind only exact groups."""
     origin = _received_origin(interaction, state.interactions)
     admitted = origin.admitted or {}
-    task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization') if k in admitted}
+    task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
     if origin.turn_id == interaction.turn_id or not task:
         return task
     from .turn_context import result_groups
@@ -1265,9 +1306,14 @@ def planning_task(interaction, state):
         task['references'] = [rebind(h) for h in task['references']]
     if 'visualization' in task:
         drawing = task['visualization']
-        drawing['coordinates'] = rebind(drawing['coordinates'])
-        if drawing['labels'] != 'new':
+        if drawing['coordinates'] != 'new':
+            drawing['coordinates'] = rebind(drawing['coordinates'])
+        if drawing['labels'].startswith('g'):
             drawing['labels'] = rebind(drawing['labels'])
+    if 'comparison' in task:
+        for side in ('left', 'right'):
+            if task['comparison'][side] != 'new':
+                task['comparison'][side] = rebind(task['comparison'][side])
     if 'retained_parameters' in task:
         changed = {(d['tool'], d['argument']) for record in _parameter_records(interaction.admitted, state.interactions)
                    if record != origin.admitted for d in record.get('arguments', ())}
@@ -1396,9 +1442,16 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             'items':_object(dict(name={'type':'string'}, step_id={'type':'string'}, output_key={'type':'string'}))}))
         origin = _received_origin(interaction, sessions.load(sid).interactions)
         drawing = (origin.admitted or {}).get('visualization')
-        if drawing is not None and drawing['labels'] == 'new':
+        comparison = (origin.admitted or {}).get('comparison')
+        purposes = []
+        if drawing is not None:
+            purposes.extend('visualization_' + role for role in ('coordinates', 'labels') if drawing[role] == 'new')
+        if comparison is not None and 'new' in (comparison['left'], comparison['right']):
+            purposes.append('comparison_result')
+        if purposes:
             item = schema['properties']['outputs']['items']
-            item['properties']['use'] = {'anyOf':[{'type':'string','enum':['visualization_labels']},{'type':'null'}]}
+            item['properties']['use'] = {'type':'array', 'maxItems':len(purposes),
+                                         'items':{'type':'string', 'enum':purposes}}
             item['required'].append('use')
         retention = {}
         retained_offer = []
@@ -1424,12 +1477,18 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 'Each name is a nonblank string label and must be unique across all selections for the new revision, '
                 'including when different steps expose the same output_key. Names need not equal output keys; '
                 'use meaningful labels that distinguish the selected results. Do not infer or append scientific steps.'))
-        if drawing is not None and drawing['labels'] == 'new':
+        if purposes:
             selection_prompt['visualization'] = _serialize(drawing)
+            selection_prompt['comparison'] = _serialize(comparison)
+            selection_prompt['requested_output_uses'] = purposes
             selection_prompt['instructions'] += (
-                ' Mark exactly one selected new output use=visualization_labels to identify the actual operation '
-                'supplying the requested categorical field. Other outputs use=null. This selects a result, '
-                'not another scientific step or a new embedding fit. Never select by last-step or alias order.')
+                ' Each output use is a list of explicitly requested purposes. Assign every offered purpose '
+                'to exactly one selected output of the actual plan; one output may satisfy several purposes. '
+                'visualization_coordinates identifies the requested newly computed UMAP; visualization_labels '
+                'identifies the new result supplying the exact categorical field; comparison_result identifies '
+                'the explicitly requested new side of the comparison. Other outputs use=[]. '
+                'These are result selections, never new scientific steps or inferred workflow completion. '
+                'Never select by last-step or alias order.')
         if retained_offer:
             selection_prompt['retained_outputs'] = retained_offer
             selection_prompt['instructions'] += (
@@ -1445,13 +1504,18 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 raise IntentError('planning_failed')
             selections = []
             for item in choice['outputs']:
-                _shape(item, ('name','step_id','output_key') + (('use',) if drawing is not None and drawing['labels'] == 'new' else ()))
+                _shape(item, ('name','step_id','output_key') + (('use',) if purposes else ()))
                 options = [o for o in offered if o['step_id'] == item['step_id']]
                 if len(options) != 1 or item['output_key'] not in options[0]['outputs']:
                     raise IntentError('planning_failed')
                 selections.append(OutputSelection(**item))
             if len({o.name for o in selections}) != len(selections): raise IntentError('planning_failed')
-            if drawing is not None and drawing['labels'] == 'new' and sum(s.use == 'visualization_labels' for s in selections) != 1:
+            if (any(use not in purposes for s in selections for use in selection_uses(s))
+                    or any(sum(purpose in selection_uses(s) for s in selections) != 1 for purpose in purposes)):
+                raise IntentError('planning_failed')
+            if any('visualization_coordinates' in selection_uses(s)
+                    and next(o['tool'] for o in offered if o['step_id'] == s.step_id) != 'compute_cell_umap'
+                    for s in selections):
                 raise IntentError('planning_failed')
             retained = ()
             if retained_offer:

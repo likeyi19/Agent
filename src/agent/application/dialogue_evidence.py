@@ -937,21 +937,30 @@ def figure_inventory(sessions, turn, revision=None):
     return tuple(figures.values())
 
 
-def delivered_visualization(sessions, session_id, interaction, figures):
+def delivered_visualizations(sessions, session_id, interaction, figures):
+    """Return only the pinned figures satisfying the exact selected request."""
     from .result_reading import visualization_inputs
     inputs = visualization_inputs(sessions, session_id, interaction)
     if inputs is None:
-        from .dialogue_execution import _received_origin
-        origin = _received_origin(interaction, sessions.load(session_id).interactions)
-        tool = (origin.admitted or {}).get('tool')
-        return any(not f['metadata'].get('coordinate_reused') and f['metadata']['output_names']
-            and any(s['tool_name'] == tool for s in f['metadata']['sources']) for f in figures)
+        # A native PNG alone cannot establish requested fields or sources. Old
+        # captures remain readable, but cannot acquire absent exact operands.
+        return ()
     coordinate, labels, field = inputs
     def same(source, target):
         output = source.get('output', {})
         return (all(output.get(k) == target[k] for k in ('name','run_id','step_id','output_key','accepted_step_sha256'))
                 and (target['revision_id'] is None or output.get('revision_id') == target['revision_id']))
-    return any(figure['metadata'].get('coordinate_reused')
+    overlay = tuple(figure for figure in figures if figure['metadata'].get('coordinate_reused')
         and any(s.get('role') == 'coordinates' and same(s, coordinate) for s in figure['metadata']['sources'])
         and any(s.get('role') == 'categories' and same(s, labels) and s.get('field') == field
-                for s in figure['metadata']['sources']) for figure in figures)
+                for s in figure['metadata']['sources']))
+    if overlay:
+        return overlay
+    native = tuple(f for f in figures if f['metadata']['kind'] == 'umap_leiden'
+        and not f['metadata'].get('coordinate_reused')
+        and any(s['run_id'] == coordinate['run_id'] and s['step_id'] == coordinate['step_id']
+                and s['tool_name'] == 'compute_cell_umap' for s in f['metadata']['sources']))
+    if not native:
+        return ()
+    from .result_reading import native_visualization
+    return native if native_visualization(sessions, coordinate, labels, field) else ()

@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 import json
+import re
 
 from agent.schemas.orchestration import _JsonModel, freeze_json_mapping
 from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource
@@ -19,6 +20,7 @@ MAX_UTTERANCE_LENGTH = 16_384
 MAX_PRESENTATION_LENGTH = 131_072
 MAX_PRESENTATION_BYTES = 262_144
 MAX_HISTORY_ITEMS = 1_000
+MAX_PRESENTATION_ARTIFACTS = 32
 
 
 def _text(value, name, maximum, *, empty=False):
@@ -37,6 +39,11 @@ def _identifier(value, name):
 def _optional_identifier(value, name):
     if value is not None:
         _identifier(value, name)
+
+
+def _sha256(value, name):
+    if (type(value) is not str or re.fullmatch(r'[0-9a-f]{64}', value) is None):
+        raise ValueError(f'Invalid interactive {name} digest.')
 
 
 def _natural(value, name):
@@ -104,7 +111,7 @@ def _scientific(value, *, version=1):
             identities.append((target['revision_id'], target['output_name'], target['subject']))
         if len(set(identities)) != len(identities):
             raise ValueError('Duplicate scientific presentation target.')
-    if version == 2:
+    if version >= 2:
         if value['availability'] not in ('generated', 'deterministic', 'unavailable'):
             raise ValueError('Invalid scientific explanation availability.')
         citations = value['citations']
@@ -207,9 +214,10 @@ class PresentedResponse(_JsonModel):
     guidance: object = None
     error: ClientError | None = None
     version: int = 2
+    artifacts: object = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
-        if type(self.version) is not int or self.version not in (1, 2):
+        if type(self.version) is not int or self.version not in (1, 2, 3):
             raise ValueError('Unsupported interactive presentation version.')
         if self.kind not in ('answer', 'clarify', 'navigate', 'execute'):
             raise ValueError('Invalid interactive response kind.')
@@ -225,21 +233,42 @@ class PresentedResponse(_JsonModel):
                 ('guidance', _guidance, 'answer')):
             value = getattr(self, name)
             if value is not None:
-                if self.kind != kind and not (name == 'scientific' and self.version == 2 and self.kind == 'execute'):
+                if self.kind != kind and not (name == 'scientific' and self.version >= 2 and self.kind == 'execute'):
                     raise ValueError(f'Invalid {name} response kind.')
                 if name == 'scientific':
                     validator(value, version=self.version)
                 else:
                     validator(value)
                 object.__setattr__(self, name, freeze_json_mapping(value, name))
+        if self.version == 3:
+            if (not isinstance(self.artifacts, (tuple, list))
+                    or not 1 <= len(self.artifacts) <= MAX_PRESENTATION_ARTIFACTS):
+                raise ValueError('Invalid interactive presentation artifacts.')
+            pins = []
+            for artifact in self.artifacts:
+                _shape(artifact, ('artifact_id', 'manifest_sha256', 'png_sha256', 'figure_id'), 'presentation artifact')
+                for key in ('artifact_id', 'manifest_sha256', 'png_sha256'):
+                    _sha256(artifact[key], key)
+                figure_id = artifact['figure_id']
+                _identifier(figure_id, 'presentation figure identity')
+                if re.fullmatch(r'[A-Za-z0-9_-]+', figure_id) is None:
+                    raise ValueError('Invalid interactive presentation figure identity.')
+                pins.append(freeze_json_mapping(artifact, 'presentation artifact'))
+            if len({pin['artifact_id'] for pin in pins}) != len(pins):
+                raise ValueError('Duplicate interactive presentation artifact identity.')
+            object.__setattr__(self, 'artifacts', tuple(pins))
+        elif self.artifacts is not None:
+            raise ValueError('Presentation artifacts require version 3.')
         encoded = json.dumps(self.to_dict(), ensure_ascii=False, allow_nan=False).encode('utf-8')
         if len(encoded) > MAX_PRESENTATION_BYTES:
             raise ValueError('Interactive presentation exceeds its byte limit.')
 
     @classmethod
     def from_dict(cls, value):
-        _shape(value, ('version', 'kind', 'status', 'text', 'clarification',
-                      'scientific', 'guidance', 'error'), 'presentation')
+        keys = ('version', 'kind', 'status', 'text', 'clarification', 'scientific', 'guidance', 'error')
+        if isinstance(value, Mapping) and value.get('version') == 3:
+            keys += ('artifacts',)
+        _shape(value, keys, 'presentation')
         data = dict(value)
         if data['error'] is not None:
             data['error'] = ClientError.from_dict(data['error'])
@@ -406,16 +435,17 @@ class ArtifactHandle(_JsonModel):
     handle: str
     artifact_type: str
     sha256: str
-    revision_id: str
+    revision_id: str | None
     turn_id: str
     figure: object = dataclass_field(default=None, kw_only=True, metadata={'omit_none': True})
 
     def __post_init__(self):
-        for name in ('handle', 'artifact_type', 'revision_id', 'turn_id'):
+        for name in ('handle', 'artifact_type', 'turn_id'):
             _identifier(getattr(self, name), name)
-        if (type(self.sha256) is not str or len(self.sha256) != 64
-                or any(char not in '0123456789abcdef' for char in self.sha256)):
-            raise ValueError('Invalid interactive artifact digest.')
+        _optional_identifier(self.revision_id, 'revision_id')
+        if self.revision_id is None and self.artifact_type != 'analysis_figure':
+            raise ValueError('Only interaction figures can omit a scientific revision.')
+        _sha256(self.sha256, 'artifact')
         if self.figure is not None:
             if self.artifact_type != 'analysis_figure':
                 raise ValueError('Figure provenance belongs to a scientific figure.')
@@ -435,6 +465,8 @@ class ScientificArtifactHandle(ArtifactHandle):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.revision_id is None:
+            raise ValueError('Scientific artifacts require an accepted revision.')
         # An unprepared integrated derivative has no known delivered size.
         # Server-only payload sizes separately own snapshot/capacity admission.
         if self.size_bytes is not None or self.artifact_type != 'scientific_integrated':

@@ -875,6 +875,48 @@ def public_citation_source(source):
     return result
 
 
+def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publisher=None):
+    """One safe projection for historical Run and Interaction figure owners."""
+    sources = []
+    composite = record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
+    for item in record['source_artifacts']:
+        source = {k:item[k] for k in ('tool_name', 'artifact_kind', 'result_field', 'field', 'role',
+                  'source_sha256', 'neighbors_identity_sha256', 'observation_role') if k in item}
+        if 'accepted_output' in item:
+            locator = item['accepted_output']
+            source['output'] = {k:locator[k] for k in ('name', 'run_id', 'step_id', 'output_key',
+                                                     'accepted_step_sha256', 'revision_id')}
+            if source['output']['revision_id'] is None and revision is not None and locator['run_id'] == run_id:
+                source['output']['revision_id'] = revision.revision_id
+            source.update(run_id=locator['run_id'], step_id=locator['step_id'], sha256=item['integrity']['sha256'])
+        elif 'registered_source' in item:
+            source['registered_source'] = {k:item['registered_source'][k]
+                for k in ('resource_id', 'record_sha256', 'source_sha256')}
+            source['sha256'] = item['integrity']['sha256']
+        else:
+            source.update(run_id=run_id, step_id=item['producing_step_id'])
+        sources.append(source)
+    outputs = () if revision is None else revision.outputs
+    if composite:
+        label = next((s.get('output') for s in sources if s['role'] == 'categories'), None)
+        names = [] if label is None else [o.name for o in outputs if all(getattr(o, k) == label[k]
+            for k in ('run_id', 'step_id', 'accepted_step_sha256'))]
+    else:
+        names = [o.name for o in outputs if o.run_id == run_id and o.step_id in record['source_step_ids']]
+    public = dict(kind=record['figure_kind'], figure_id=record['figure_id'], manifest_sha256=manifest_sha256,
+        revision_id=None if revision is None else revision.revision_id,
+        step_ids=record['source_step_ids'], output_names=names, sources=sources)
+    if run_id is not None:
+        public['run_id'] = run_id
+    if publisher is not None:
+        public['publisher'] = {k:publisher[k] for k in ('kind', 'session_id', 'turn_id')}
+    if composite:
+        public['coordinate_reused'] = True
+        public['correspondence'] = {k:record['presentation']['correspondence'][k]
+            for k in ('basis', 'n_cells', 'cell_order_sha256')}
+    return public
+
+
 def figure_inventory(sessions, turn, revision=None):
     """Distinct accepted figures from pinned manifests, including report copies.
 
@@ -905,62 +947,7 @@ def figure_inventory(sessions, turn, revision=None):
             if (target.resolve() != target or pinned.get(str(target)) != record['png_sha256']
                     or _sha256_file(target) != record['png_sha256']):
                 raise ValueError('Changed accepted figure bytes.')
-            sources = []
-            composite = record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
-            for item in record['source_artifacts']:
-                source = {k:item[k] for k in ('tool_name','artifact_kind','result_field','field','role',
-                          'source_sha256','neighbors_identity_sha256') if k in item}
-                source.update(run_id=turn.run_id, step_id=item['producing_step_id'])
-                if composite:
-                    locator = item['accepted_output']
-                    source['output'] = {k:locator[k] for k in ('name','run_id','step_id','output_key','accepted_step_sha256','revision_id')}
-                    if source['output']['revision_id'] is None and revision is not None and locator['run_id'] == turn.run_id:
-                        source['output']['revision_id'] = revision.revision_id
-                    source.update(run_id=locator['run_id'], step_id=locator['step_id'], sha256=item['integrity']['sha256'])
-                sources.append(source)
-            outputs = () if revision is None else revision.outputs
-            if composite:
-                label = next(s['output'] for s in sources if s['role'] == 'categories')
-                names = [o.name for o in outputs if all(getattr(o,k) == label[k] for k in
-                         ('run_id','step_id','accepted_step_sha256'))]
-            else:
-                names = [o.name for o in outputs if o.run_id == turn.run_id and o.step_id in record['source_step_ids']]
-            public = dict(kind=record['figure_kind'], figure_id=record['figure_id'], manifest_sha256=file.sha256,
-                run_id=turn.run_id, revision_id=None if revision is None else revision.revision_id,
-                step_ids=record['source_step_ids'], output_names=names, sources=sources)
-            if composite:
-                public['coordinate_reused'] = True
-                public['correspondence'] = {k:record['presentation']['correspondence'][k]
-                    for k in ('basis','n_cells','cell_order_sha256')}
+            public = figure_metadata(record, manifest_sha256=file.sha256, run_id=turn.run_id, revision=revision)
             identity = (file.sha256, record['figure_id'])
             figures[identity] = dict(path=str(target), sha256=record['png_sha256'], metadata=public)
     return tuple(figures.values())
-
-
-def delivered_visualizations(sessions, session_id, interaction, figures):
-    """Return only the pinned figures satisfying the exact selected request."""
-    from .result_reading import visualization_inputs
-    inputs = visualization_inputs(sessions, session_id, interaction)
-    if inputs is None:
-        # A native PNG alone cannot establish requested fields or sources. Old
-        # captures remain readable, but cannot acquire absent exact operands.
-        return ()
-    coordinate, labels, field = inputs
-    def same(source, target):
-        output = source.get('output', {})
-        return (all(output.get(k) == target[k] for k in ('name','run_id','step_id','output_key','accepted_step_sha256'))
-                and (target['revision_id'] is None or output.get('revision_id') == target['revision_id']))
-    overlay = tuple(figure for figure in figures if figure['metadata'].get('coordinate_reused')
-        and any(s.get('role') == 'coordinates' and same(s, coordinate) for s in figure['metadata']['sources'])
-        and any(s.get('role') == 'categories' and same(s, labels) and s.get('field') == field
-                for s in figure['metadata']['sources']))
-    if overlay:
-        return overlay
-    native = tuple(f for f in figures if f['metadata']['kind'] == 'umap_leiden'
-        and not f['metadata'].get('coordinate_reused')
-        and any(s['run_id'] == coordinate['run_id'] and s['step_id'] == coordinate['step_id']
-                and s['tool_name'] == 'compute_cell_umap' for s in f['metadata']['sources']))
-    if not native:
-        return ()
-    from .result_reading import native_visualization
-    return native if native_visualization(sessions, coordinate, labels, field) else ()

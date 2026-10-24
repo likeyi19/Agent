@@ -163,46 +163,70 @@ def qualified_sources(left, right):
 
 
 def cell_overlay(sessions, coordinate, categories, field):
-    """Resolve explicit accepted locators, then reuse owner axis/category readers.
-
-    The new category source may be an accepted Run step awaiting its Revision;
-    coordinates must already belong to the captured accepted Revision.
-    """
+    """Read exact accepted coordinates and explicitly qualified categories."""
     from agent.tools.analysis import categorical as owner
     from agent.tools.analysis.embedding_analysis import _cell_order_digest
     store = sessions._application.run_store
     cs, _, cr = _accepted_step(store, coordinate['run_id'], coordinate['step_id'])
-    ls, _, lr = _accepted_step(store, categories['run_id'], categories['step_id'])
-    for locator, step in ((coordinate, cs), (categories, ls)):
-        if (accepted_step_digest(step) != locator['accepted_step_sha256']
-                or locator['output_key'] not in step.result):
-            raise ValueError('Changed accepted visualization input.')
+    if (accepted_step_digest(cs) != coordinate['accepted_step_sha256']
+            or coordinate['output_key'] not in cs.result):
+        raise ValueError('Changed accepted visualization input.')
     if cs.tool_name != 'compute_cell_umap':
         raise ValueError('Select an accepted UMAP coordinate result.')
     files = _files(sessions, cr, cs)
     file = files['result']
     ids, xy = owner.coordinates(file['path'], file['sha256'])
     identity = _identity(sessions, cr, cs, 'result', 'X_umap', file, files, associate=True)
-    if not inventory(sessions, lr, ls, field=field)['fields']:
-        raise ValueError('Select an exact eligible categorical field.')
-    other_ids, labels, other_identity = _column(sessions, lr, ls, field, associate=True)
+    coordinate_source = dict(producing_step_id=cs.step_id, tool_name=cs.tool_name,
+        result_field='analysis_path', artifact_kind='cell_umap_h5ad',
+        artifact_path=file['path'], integrity=dict(sha256=file['sha256']),
+        role='coordinates', accepted_output=dict(coordinate), field='obsm:X_umap',
+        source_sha256=identity['source_sha256'],
+        **({'neighbors_identity_sha256': identity['neighbors_identity_sha256']}
+           if identity.get('neighbors_identity_sha256') is not None else {}))
+    if 'registered_source' in categories:
+        if not field.startswith('source:'):
+            raise ValueError('A registered source selects an exact original observation field.')
+        from .local_resources import LocalResourceAdmission
+        selected = categories['registered_source']
+        record = LocalResourceAdmission(sessions._application._workspace).load(selected['resource_id'])
+        if record.record_sha256 != selected['record_sha256'] or record.source_sha256 != selected['source_sha256']:
+            raise ValueError('Changed registered visualization source.')
+        name = field.split(':', 1)[1]
+        from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+        if _unsafe_fact_field(name) or _unsafe_fact_value(name) or name not in owner.fields(record.source_path):
+            raise ValueError('Select an exact eligible categorical field.')
+        other_ids, labels = owner.observations(record.source_path, record.source_sha256, name)
+        other_identity = dict(artifact_sha256=record.source_sha256, source_sha256=record.source_sha256,
+                              run_id=None, step_id=None, accepted_step_sha256=None)
+        category_source = dict(role='categories', field=field, artifact_kind='categorical_observations',
+            artifact_path=record.source_path, integrity=dict(sha256=record.source_sha256),
+            registered_source=dict(selected), source_sha256=record.source_sha256,
+            observation_role='supplied_source_observation; biological validity not assessed')
+    else:
+        ls, _, lr = _accepted_step(store, categories['run_id'], categories['step_id'])
+        if (accepted_step_digest(ls) != categories['accepted_step_sha256']
+                or categories['output_key'] not in ls.result):
+            raise ValueError('Changed accepted visualization input.')
+        if not inventory(sessions, lr, ls, field=field)['fields']:
+            raise ValueError('Select an exact eligible categorical field.')
+        other_ids, labels, other_identity = _column(sessions, lr, ls, field, associate=True)
+        artifact = _files(sessions, lr, ls)[field.split(':', 1)[0]]
+        category_source = dict(producing_step_id=ls.step_id, tool_name=ls.tool_name,
+            **({'result_field': 'annotated_h5ad_path' if ls.tool_name == 'annotate_scATAC_cell_types'
+                 else 'analysis_path'} if field.startswith('result:') else {}),
+            artifact_kind='categorical_observations', artifact_path=artifact['path'],
+            integrity=dict(sha256=artifact['sha256']), role='categories',
+            accepted_output=dict(categories), field=field, source_sha256=other_identity['source_sha256'],
+            **({'neighbors_identity_sha256': other_identity['neighbors_identity_sha256']}
+               if other_identity.get('neighbors_identity_sha256') is not None else {}))
     basis = qualified_sources(identity, other_identity)
     owner.require_same_cells(ids, other_ids)
-    sources = []
-    for role, locator, step, item, artifact in (
-            ('coordinates', coordinate, cs, identity, file),
-            ('categories', categories, ls, other_identity, _files(sessions, lr, ls)[field.split(':', 1)[0]])):
-        artifact_field = ('analysis_path' if role == 'coordinates' else
-            'annotated_h5ad_path' if step.tool_name == 'annotate_scATAC_cell_types' else 'analysis_path')
-        sources.append(dict(producing_step_id=step.step_id, tool_name=step.tool_name,
-            **({'result_field': artifact_field} if role == 'coordinates' or field.startswith('result:') else {}),
-            artifact_kind='cell_umap_h5ad' if role == 'coordinates' else 'categorical_observations',
-            artifact_path=artifact['path'], integrity=dict(sha256=artifact['sha256']),
-            role=role, accepted_output=dict(locator), field='obsm:X_umap' if role == 'coordinates' else field,
-            source_sha256=item['source_sha256'],
-            **({'neighbors_identity_sha256': item['neighbors_identity_sha256']}
-               if item.get('neighbors_identity_sha256') is not None else {})))
-    return dict(cell_ids=ids, coordinates=xy, labels=labels, field=field, sources=sources,
+    from .dialogue_evidence import _unsafe_fact_value
+    if _unsafe_fact_value(labels.tolist()):
+        raise ValueError('Selected labels are ineligible for public figure delivery.')
+    return dict(cell_ids=ids, coordinates=xy, labels=labels, field=field,
+        sources=[coordinate_source, category_source],
         correspondence=dict(basis=basis, n_cells=len(ids), cell_order_sha256=_cell_order_digest(ids)))
 
 
@@ -220,7 +244,7 @@ def _captured_output(sessions, state, origin, handle):
     return dict(asdict(output), revision_id=revision.revision_id)
 
 
-def _selected_output(sessions, state, interaction, purpose, *, accepted):
+def _selected_output(sessions, state, interaction, purpose):
     """Resolve an explicit output purpose without tool/order inference."""
     from dataclasses import asdict
     from .session_state import selection_uses
@@ -233,14 +257,40 @@ def _selected_output(sessions, state, interaction, purpose, *, accepted):
     if len(outputs) != 1:
         raise ValueError('The selected result is unavailable.')
     output = outputs[0]
-    revision_id = None
-    if accepted:
-        revisions = [r for r in state.revisions if r.revision_id == turn.revision_id
-                     and r.turn_id == interaction.turn_id and r.run_id == turn.run_id]
-        if len(revisions) != 1 or output not in revisions[0].outputs:
-            raise ValueError('The requested new result has not been accepted.')
-        revision_id = revisions[0].revision_id
-    return dict(asdict(output), revision_id=revision_id)
+    revisions = [r for r in state.revisions if r.revision_id == turn.revision_id
+                 and r.turn_id == interaction.turn_id and r.run_id == turn.run_id]
+    if len(revisions) != 1 or output not in revisions[0].outputs:
+        raise ValueError('The requested new result has not been accepted.')
+    return dict(asdict(output), revision_id=revisions[0].revision_id)
+
+
+def _captured_source_binding(origin):
+    """Use the exact ordered source offer shown to the interpreter."""
+    from .local_resources import available_input_view, LocalResourceAdmission
+    if (origin.submission or {}).get('candidate_input') is not None:
+        from .raw_handoff import _candidate_view
+        viewed = _candidate_view(origin)
+    else:
+        viewed = available_input_view(origin, allow_empty=True)
+    return LocalResourceAdmission._submission_binding(viewed.submission)
+
+
+def _captured_source(sessions, session_id, origin, handle):
+    """Resolve the same captured registration offered by typed role admission."""
+    from .local_resources import LocalResourceAdmission
+    binding = _captured_source_binding(origin)
+    members = (binding.members if hasattr(binding, 'members') else
+               (dict(resource_id=binding.resource_id, record_sha256=binding.record_sha256),))
+    index = int(handle.split('.')[1])
+    if not 0 <= index < len(members):
+        raise ValueError('Select an explicitly captured source.')
+    member = members[index]
+    owner = LocalResourceAdmission(sessions._application._workspace)
+    record = owner.load(member['resource_id'])
+    if record.record_sha256 != member['record_sha256'] or record.session_id not in (None, session_id):
+        raise ValueError('Changed or unavailable captured visualization source.')
+    return dict(registered_source=dict(resource_id=record.resource_id,
+        record_sha256=record.record_sha256, source_sha256=record.source_sha256))
 
 
 def comparison_inputs(sessions, session_id, interaction):
@@ -257,87 +307,29 @@ def comparison_inputs(sessions, session_id, interaction):
     if request is None:
         return None
     def target(operand):
-        output = (_selected_output(sessions, state, interaction, 'comparison_result', accepted=True)
+        output = (_selected_output(sessions, state, interaction, 'comparison_result')
                   if operand == 'new' else _captured_output(sessions, state, origin, operand))
         return dict(revision_id=output['revision_id'], output_name=output['name'],
                     accepted_step_sha256=output['accepted_step_sha256'], subject=None)
     return target(request['left']), target(request['right']), _serialize(request['detail'])
 
 
-def native_visualization(sessions, coordinate, categories, field):
-    """Qualify an existing native Leiden figure against its exact operands.
-
-    Native UMAP publication already owns label propagation. Reuse that recorded
-    dependency, then read only pinned selected observations at the categorical
-    owner; no new fit, result correspondence inference or rendering occurs.
-    """
-    if field != 'result:leiden':
-        return False
-    from agent.tools.analysis import categorical as owner
-    store = sessions._application.run_store
-    cs, _, _ = _accepted_step(store, coordinate['run_id'], coordinate['step_id'])
-    ls, _, _ = _accepted_step(store, categories['run_id'], categories['step_id'])
-    for locator, step in ((coordinate, cs), (categories, ls)):
-        if (accepted_step_digest(step) != locator['accepted_step_sha256']
-                or locator['output_key'] not in step.result):
-            raise ValueError('Changed accepted visualization input.')
-    if cs.tool_name != 'compute_cell_umap' or cs.result.get('clustering_present', True) is not True:
-        return False
-    same = ((coordinate['run_id'], coordinate['step_id'], coordinate['accepted_step_sha256']) ==
-            (categories['run_id'], categories['step_id'], categories['accepted_step_sha256']))
-    if not same and (ls.tool_name != 'cluster_cells' or not any(
-            source_run == categories['run_id'] and step.step_id == categories['step_id']
-            and accepted_step_digest(step) == categories['accepted_step_sha256']
-            for source_run, step, _ in analysis_lineage(store, coordinate['run_id'], coordinate['step_id']))):
-        return False
-    left_ids, left = owner.observations(cs.result['analysis_path'], cs.result['analysis_sha256'], 'leiden')
-    right_ids, right = owner.observations(ls.result['analysis_path'], ls.result['analysis_sha256'], 'leiden')
-    owner.require_same_cells(left_ids, right_ids)
-    return owner._labels(left)[0] == owner._labels(right)[0]
-
-
 def visualization_inputs(sessions, session_id, interaction):
-    """Resolve exact figure operands without publishing a new rendering path."""
+    """Resolve one precise request against its accepted outputs and capture."""
     from .dialogue_execution import _received_origin
     state = sessions.load(session_id)
     origin = _received_origin(interaction, state.interactions)
     drawing = (origin.admitted or {}).get('visualization')
     if drawing is None:
         return None
-    if drawing['labels'].startswith('source.'):
-        return None  # Captured precisely, but unsupported by this rendering path.
-    coordinates = (_selected_output(sessions, state, interaction, 'visualization_coordinates', accepted=False)
+    coordinates = (_selected_output(sessions, state, interaction, 'visualization_coordinates')
                    if drawing['coordinates'] == 'new' else _captured_output(sessions, state, origin, drawing['coordinates']))
-    labels = (_selected_output(sessions, state, interaction, 'visualization_labels', accepted=False)
-              if drawing['labels'] == 'new' else _captured_output(sessions, state, origin, drawing['labels']))
+    if drawing['labels'].startswith('source.'):
+        labels = _captured_source(sessions, session_id, origin, drawing['labels'])
+    else:
+        labels = (_selected_output(sessions, state, interaction, 'visualization_labels')
+                  if drawing['labels'] == 'new' else _captured_output(sessions, state, origin, drawing['labels']))
     return coordinates, labels, drawing['field']
-
-
-def publish_cell_overlay(sessions, session_id, interaction, result):
-    """Optional delivery before first acceptance; failure never revokes science.
-
-    Use the composer's ordinary bundle under this turn's report-delivery root.
-    The already verified native report/figure bundle is never overwritten; the
-    existing completion-file pinning includes this additional requested figure.
-    """
-    import logging
-    from .dialogue_execution import _received_origin
-    origin = _received_origin(interaction, sessions.load(session_id).interactions)
-    drawing = (origin.admitted or {}).get('visualization')
-    if drawing is None or drawing['coordinates'] == 'new' or drawing['labels'].startswith('source.'):
-        return
-    try:
-        from agent.report.visualization import build_analysis_visualizations
-        from agent.orchestration.verification_authority import accepted_authorities
-        app = sessions._application
-        paths = app._workspace.run_paths(result.run_id)
-        coordinate, labels, field = visualization_inputs(sessions, session_id, interaction)
-        with app._workspace.composition_lease(paths), accepted_authorities(app.run_store, result.run_id):
-            build_analysis_visualizations(result.run_result, result.evidence.path,
-                paths.report / 'requested-visualization', registry=app.registry,
-                cell_overlay=lambda: cell_overlay(sessions, coordinate, labels, field))
-    except Exception:
-        logging.getLogger(__name__).warning('Requested cell visualization unavailable; accepted science preserved.')
 
 
 def read(sessions, state, run, step, request):

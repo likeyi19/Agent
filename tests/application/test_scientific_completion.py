@@ -174,6 +174,21 @@ def test_completion_discloses_distinct_undelivered_requirements(tmp_path, monkey
     assert calls == ['inspect_scATAC'] and models[0].phases.count('dialogue_schema_version') == 1
 
 
+def test_optional_figure_descriptions_do_not_displace_selected_scientific_facts(tmp_path,monkeypatch):
+    from agent.application import dialogue_evidence
+    facade,source,calls,models=service(tmp_path)
+    def oversized_inventory(sessions,turn,revision):
+        return (dict(metadata=dict(manifest_sha256='a'*64,figure_id='bounded-metadata-fixture',
+            kind='fixture',sources=[dict(run_id=turn.run_id,step_id='inspect',tool_name='inspect_scATAC',
+                field='x'*40000)])),)
+    monkeypatch.setattr(dialogue_evidence,'figure_inventory',oversized_inventory)
+    view=submit(facade,source)
+    assert view.response.scientific['availability']=='generated' and 'two cells' in view.response.text
+    assert any('Optional figure or download descriptions were omitted' in value
+        for value in view.response.scientific['limitations'])
+    assert calls==['inspect_scATAC'] and models[0].phases.count('dialogue_schema_version')==1
+
+
 def test_v1_history_roundtrips_without_reinterpretation():
     legacy = PresentedResponse('answer','answered','Exact historical bytes.\n', version=1,
         scientific=dict(support='supported', limitations=[], evidence_scope='accepted_persisted_summary'))
@@ -191,6 +206,7 @@ def test_distinct_operations_keep_result_identity_without_alias_fanout(app, monk
     assert len(groups) == 2 and {g['canonical_output'] for g in groups} == {'output0','output1'}
     result = completion(app.sessions, 'session', 'initial', TurnOutcome('execute','activated'))
     assert result.scientific.availability == 'deterministic'
+    assert not any('figure relationships are unavailable' in value for value in result.scientific.limitations)
     assert {c.target for c in result.scientific.claims} == {'t0','t1'}
     assert result.text.count('Dataset inspection:') == 2
 
@@ -332,7 +348,8 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None, compare=False, expla
                     citations=[table['claim_id']], comparisons=[])]))
             if 'grounding_review_version' in value:
                 assert value['evidence']['delivery']['figure_relationships'][0]['coordinate_reused']
-                return json.dumps(dict(verdicts={row['id']:'entailed' for row in value['paragraphs']}))
+                return json.dumps(dict(verdicts={row['id']:'unsupported' if failure=='review' else 'entailed'
+                    for row in value['paragraphs']}))
             raise AssertionError('Unexpected provider phase')
     def factory(profile):
         model=OverlayModel(profile); models.append(model); return model
@@ -357,7 +374,7 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None, compare=False, expla
     extra=tuple(CompletionFile(str(p),hashlib.sha256(p.read_bytes()).hexdigest()) for p in (png,manifest))
     app.sessions._store._write(replace(state,turns=(replace(turn,completion_files=turn.completion_files+extra),)))
     if failure=='renderer':
-        monkeypatch.setattr(viz,'_render_figure',lambda *a,**k: (_ for _ in ()).throw(AssertionError('Scripted renderer failure')))
+        monkeypatch.setattr(viz,'_render_figure',lambda *a,**k: (_ for _ in ()).throw(RuntimeError('Scripted renderer failure')))
     return facade, coords, xy, old, calls, models
 
 
@@ -373,19 +390,12 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
     app=facade._application; before=files(app); coord_bytes=coords.read_bytes()
     from agent.application import scientific_dialogue as sd
     from agent.application.turns import TurnOutcome
-    import shutil
-    deliveries=[]; context=sd.context; completion_files=AnalysisSessions._completion_files
+    deliveries=[]; context=sd.context
     def capture_delivery(*args,**kwargs):
         public,claims=context(*args,**kwargs)
         if 'delivery' in public: deliveries.append(public['delivery'])
         return public,claims
-    def report_copy(self,result):
-        root=self._application._workspace.run_paths(result.run_id).report
-        for png in root.glob('requested-visualization/analysis_visualizations/figures/*.png'):
-            shutil.copyfile(png,root/'report-copy.png')
-        return completion_files(self,result)
     monkeypatch.setattr(sd,'context',capture_delivery)
-    monkeypatch.setattr(AnalysisSessions,'_completion_files',report_copy)
     seen=[]; render=viz._render_figure
     def capture(projection,*args,**kwargs):
         if projection.figure_kind=='umap_categorical': seen.append(projection)
@@ -399,47 +409,67 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
     for p,sha in before.items():
         if not p.startswith('sessions/'): assert files(app)[p]==sha
     revision=facade.revision('session',view.revision_id)
-    figures=[a for a in revision.artifacts if a.figure]
+    assert not [a for a in revision.artifacts if a.figure]
+    figures=app.sessions.presentation_figure_inventory('session','recolor')
     if failure:
         assert not figures and 'requested visualization has not been produced' in view.response.text
         assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
+        assert view.response.version==2 and view.response.artifacts is None
     else:
-        assert len(figures)==2 and len(seen)==1  # Existing download copies stay separate (W4).
-        assert figures[0].figure==figures[1].figure
-        assert deliveries[-1]['accepted_figures']==1 and deliveries[-1]['visualization']=='delivered'
+        assert len(figures)==1 and len(seen)==1
+        assert view.response.version==3 and len(view.response.artifacts)==1
+        assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='delivered'
         import numpy as np
         np.testing.assert_array_equal(seen[0].data.coordinates,xy)
         assert seen[0].data.category_labels==('control','treated','Missing label (not an assigned category)')
         assert seen[0].presentation['category_order']==[dict(value='control',missing=False),dict(value='treated',missing=False),dict(value=None,missing=True)]
         assert 'not a new embedding fit' in view.response.text
-        meta=figures[0].figure
-        assert meta['output_names']==('updated_labels','label_count')
-        assert meta['revision_id']==view.revision_id and meta['coordinate_reused']
+        meta=figures[0]['metadata']
+        assert meta['output_names']==[] and meta['revision_id'] is None
+        assert meta['publisher']==dict(kind='interaction',session_id='session',turn_id='recolor')
+        assert meta['coordinate_reused']
         assert meta['sources'][0]['output']['revision_id']==old
         assert meta['sources'][0]['result_field']=='analysis_path'
         assert meta['sources'][1]['output']['revision_id']==view.revision_id
         assert meta['sources'][1]['field']=='result:cohort'
         assert meta['correspondence']['basis']=='same_qualified_neighbors'
         assert str(tmp_path) not in json.dumps(revision.to_dict())
-        content=facade.artifact_content('session',view.revision_id,figures[0].handle)
-        assert content.data.startswith(b'\x89PNG')
-        # A real accepted figure cannot satisfy another field's delivery.
-        from agent.application import result_reading as reader
-        inputs=reader.visualization_inputs
-        def wrong_field(*args):
-            coordinate,labels,_=inputs(*args)
-            return coordinate,labels,'result:unrequested'
-        with monkeypatch.context() as scoped:
-            scoped.setattr(reader,'visualization_inputs',wrong_field)
-            outcome=sd.completion(app.sessions,'session','recolor',TurnOutcome('execute','activated'))
+        handle=facade.presentation_artifact_handles('session','recolor')[0]
+        assert handle.revision_id is None and handle.figure['publisher']['turn_id']=='recolor'
+        assert facade.presentation_artifact_content('session','recolor',handle.handle).data.startswith(b'\x89PNG')
+        # Explicit completion without a live model never adopts or regenerates
+        # an existing Interaction bundle as a new delivered presentation.
+        outcome=sd.completion(app.sessions,'session','recolor',TurnOutcome('execute','activated'))
         assert 'requested visualization has not been produced' in outcome.text
-        assert deliveries[-1]['accepted_figures']==1 and deliveries[-1]['visualization']=='unavailable'
+        assert not outcome.artifacts
+        assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
     saved=files(app); restarted=read_only_boundary(app)
     assert restarted.turn('session','recolor')==view
     assert restarted.revision('session',view.revision_id).artifacts==revision.artifacts
     assert 'private-token' not in json.dumps(restarted.revision('session',old).to_dict())
     assert restarted.artifact_content('session',old, restarted.artifact_handles('session',old)[0].handle).data.startswith(b'\x89PNG')
     assert files(app)==saved
+
+
+def test_review_withholding_keeps_independently_published_figure_pins(tmp_path,monkeypatch):
+    facade,coords,_,_,calls,models=overlay_service(tmp_path,monkeypatch,compare=True,explain=True,failure='review')
+    view=overlay_submit(facade,coords)
+    assert view.status=='succeeded' and calls==['scripted_cluster_owner']
+    assert view.response.scientific['availability']=='unavailable'
+    assert view.response.scientific['citations']==()
+    assert 'scientific explanation is unavailable' in view.response.text
+    assert 'requested visualization is available' in view.response.text
+    assert view.response.version==3 and len(view.response.artifacts)==1
+    assert sum('dialogue_schema_version' in c for c in models[0].calls)==1
+    assert sum('grounding_review_version' in c for c in models[0].calls)==1
+    figure=facade.presentation_artifact_handles('session','recolor')[0]
+    data=facade.presentation_artifact_content('session','recolor',figure.handle).data
+    before=files(facade._application)
+    restarted=read_only_boundary(forbid_work(facade._application,monkeypatch))
+    assert restarted.recover_turn('session','recolor')==view
+    assert restarted.turn('session','recolor')==view
+    assert restarted.presentation_artifact_content('session','recolor',figure.handle).data==data
+    assert files(facade._application)==before
 
 
 def test_public_provenance_projects_only_known_source_fields():
@@ -529,11 +559,14 @@ def test_scientific_answer_retains_exact_presentation_request_without_execution(
         return dict(kind='answer_scientific', target=dict(output=group, subject=None), comparison=None,
             focus='question', visualization=dict(coordinates=group, labels=group, field='result:cohort'))
     def reply(payload):
-        assert payload['evidence']['delivery']['visualization'] == 'unavailable'
+        assert payload['evidence']['delivery']['visualization'] == 'delivered'
         assert payload['evidence']['delivery']['requested_field'] == 'result:cohort'
-        return dict(support='insufficient_evidence', paragraphs=[dict(kind='limitation',
-            text='The accepted layout remains available; the requested new figure has not been produced.',
-            citations=[], comparisons=[])])
+        figure=payload['evidence']['delivery']['figure_relationships'][0]
+        assert figure['satisfies_request'] and figure['coordinate_reused']
+        count=next(c for c in payload['evidence']['claims'] if c['field']=='n_cells')
+        return dict(support='supported', paragraphs=[dict(kind='finding',
+            text='The requested figure uses the accepted coordinates without fitting another embedding.',
+            citations=[count['claim_id']], comparisons=[])])
     before = files(app)
     result = ask(app, 'presentation', 'Color the accepted layout by cohort without recomputation.', Model(decision, response=reply))
     assert result.status == 'answered' and calls == []
@@ -541,8 +574,71 @@ def test_scientific_answer_retains_exact_presentation_request_without_execution(
     assert state.active_revision_id == old and len(state.revisions) == 1
     admitted = state.interactions[-1].admitted
     assert admitted['visualization']['field'] == 'result:cohort' and admitted['references']
-    assert 'standalone presentation is not available' in result.text
+    assert 'requested figure is available' in result.text and len(result.artifacts)==1
+    assert not app.sessions.presentation_figure_inventory('session','presentation')  # No final display commit at this low-level boundary.
     assert all(files(app)[p] == value for p, value in before.items() if not p.startswith('sessions/'))
+
+
+@pytest.mark.parametrize('withhold',[False,True])
+def test_standalone_source_coloring_preserves_registration_meaning_and_figure_when_prose_withheld(tmp_path,monkeypatch,withhold):
+    from test_scientific_dialogue import Model
+    from agent.application.local_resources import LocalResourceAdmission
+    from agent.application import result_reading
+    facade,coords,_,old,calls,_=overlay_service(tmp_path,monkeypatch)
+    app=facade._application
+    owner=LocalResourceAdmission(app._workspace,approved_source_roots=(tmp_path,))
+    record=owner.register('source-labels',coords,label='Supplied cohort observations',
+        attribution='Simulated original-source relationship; biological validity not assessed.',session_id='session')
+    binding=owner.compose_group([record.resource_id],attachment_candidates=True)
+    monkeypatch.setattr(result_reading,'original_source',lambda *a:dict(path=str(coords),sha256=record.source_sha256))
+    def decision(payload):
+        group=next(g['handle'] for g in payload['dialogue']['result_groups'] if g['tool']=='compute_cell_umap')
+        return dict(kind='answer_scientific',target=dict(output=group,subject=None),comparison=None,focus='question',
+            visualization=dict(coordinates=group,labels='source.0',field='source:cohort'))
+    def reply(payload):
+        evidence=payload['evidence']; figure=evidence['delivery']['figure_relationships'][0]
+        assert evidence['delivery']['visualization']=='delivered' and figure['satisfies_request']
+        source=next(s for s in figure['sources'] if s['role']=='categories')
+        assert source==dict(role='categories',field='source:cohort',origin='registered_source',
+            observation_role='supplied_source_observation; biological validity not assessed')
+        assert str(tmp_path) not in json.dumps(evidence)
+        count=next(c for c in evidence['claims'] if c['field']=='n_cells')
+        return dict(support='supported',paragraphs=[dict(kind='finding',
+            text='The figure uses the supplied cohort observations on the accepted coordinates.',
+            citations=[count['claim_id']],comparisons=[])])
+    class PresentationModel(Model):
+        def complete(self,*,prompt,response_schema):
+            payload=json.loads(prompt)
+            if 'grounding_review_version' in payload:
+                self.calls.append(payload)
+                return json.dumps(dict(verdicts={r['id']:'unsupported' if withhold else 'entailed'
+                    for r in payload['paragraphs']}))
+            return super().complete(prompt=prompt,response_schema=response_schema)
+    model=PresentationModel(decision,response=reply)
+    model.model_id=PROFILES[0].model_id
+    live=InteractiveAgentApplication(app.workspace_root,model_profiles=PROFILES,default_profile_id='alpha',
+        registry=app.registry,planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda profile:model}))
+    before=app.sessions.load('session')
+    view=live.submit_turn('session','source-color','Color this UMAP by the supplied cohort observations.',
+        expected_generation=1,registered_input=binding)
+    after=app.sessions.load('session')
+    assert view.status=='answered' and view.response.version==3 and len(view.response.artifacts)==1
+    assert after.turns==before.turns and after.revisions==before.revisions
+    assert after.generation==before.generation==1 and after.active_revision_id==old and calls==[]
+    assert len(model.calls)==3  # Interpretation, generation and existing R5 review, no retry.
+    assert ('could not ground' in view.response.text)==withhold
+    assert 'requested figure is available' in view.response.text
+    handle=live.presentation_artifact_handles('session','source-color')[0]
+    label_source=next(s for s in handle.figure['sources'] if s['role']=='categories')
+    assert dict(label_source['registered_source'])==dict(resource_id=record.resource_id,
+        record_sha256=record.record_sha256,source_sha256=record.source_sha256)
+    assert not {'output','tool_name','step_id','run_id'} & set(label_source)
+    png=live.presentation_artifact_content('session','source-color',handle.handle).data
+    saved=files(app); reopened=read_only_boundary(forbid_work(app,monkeypatch))
+    assert reopened.turn('session','source-color')==view
+    assert reopened.recover_turn('session','source-color')==view
+    assert reopened.presentation_artifact_content('session','source-color',handle.handle).data==png
+    assert files(app)==saved
 
 
 @pytest.mark.parametrize('corrupt_figure', [False, True])
@@ -551,10 +647,8 @@ def test_read_only_answer_uses_same_pinned_relationship_or_reports_its_unavailab
     facade, coords, _, _, calls, _ = overlay_service(tmp_path, monkeypatch)
     view = overlay_submit(facade, coords)
     if corrupt_figure:
-        figure = next(a for a in facade.revision('session', view.revision_id).artifacts if a.figure)
-        accepted_file = next(f for f in facade._application.sessions.load('session').turn('recolor').completion_files
-            if f.sha256 == figure.sha256)
-        path = Path(accepted_file.path)
+        figure = facade._application.sessions.presentation_figure_inventory('session','recolor')[0]
+        path = Path(figure['path'])
         path.write_bytes(path.read_bytes() + b' ')
     app = forbid_work(facade._application, monkeypatch)
     before = files(app)

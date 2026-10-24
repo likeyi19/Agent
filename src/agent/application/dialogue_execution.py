@@ -102,9 +102,8 @@ def _research_intent(interaction, decision):
                 or by_handle[coordinate]['tool'] != 'compute_cell_umap'):
             raise IntentError('invalid_reference')
         if labels.startswith('source.'):
-            from .local_resources import available_input_view, LocalResourceAdmission
-            viewed = available_input_view(interaction, allow_empty=True)
-            binding = LocalResourceAdmission._submission_binding(viewed.submission)
+            from .result_reading import _captured_source_binding
+            binding = _captured_source_binding(interaction)
             member_count = len(binding.members) if hasattr(binding, 'members') else 1
             if int(labels.split('.')[1]) >= member_count:
                 raise IntentError('invalid_reference')
@@ -1611,9 +1610,6 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         interaction.submission, tool, arguments)) if grouped else None
     with execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
         result = execution_app.run(request)
-    if result.status.value == 'SUCCEEDED':
-        from .result_reading import publish_cell_overlay
-        publish_cell_overlay(sessions, sid, interaction, result)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):
         try:

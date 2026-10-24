@@ -490,8 +490,9 @@ function renderRevision(revision) {
   }
 }
 
-function artifactPath(sessionId, revisionId, handle) {
-  return `${revisionPath(sessionId, revisionId)}/artifacts/${encodeURIComponent(handle)}`;
+function artifactPath(sessionId, revisionId, handle, turnId = null) {
+  const owner = revisionId === null ? turnPath(sessionId, turnId) : revisionPath(sessionId, revisionId);
+  return `${owner}/artifacts/${encodeURIComponent(handle)}`;
 }
 
 function distinctFigureArtifacts(artifacts) {
@@ -670,8 +671,10 @@ function scientificFileGroups(sessionId, artifacts) {
 }
 
 function appendScientificFiles(response, turn) {
-  if (turn.response.kind !== "execute" || !turn.revision_id
-      || !["succeeded", "activated", "stale"].includes(turn.status)) return;
+  const scientific = turn.response.kind === "execute" && turn.revision_id
+    && ["succeeded", "activated", "stale"].includes(turn.status);
+  const presentation = Boolean(turn.response.artifacts?.length);
+  if (!scientific && !presentation) return;
   const sessionId = state.session.session_id;
   const key = JSON.stringify([sessionId, turn.turn_id, turn.revision_id]);
   const cached = state.scientificFiles.get(key);
@@ -697,26 +700,33 @@ function appendScientificFiles(response, turn) {
       renderArtifacts(cached.revision, inventory, true);
       details.append(inventory);
     }
-    if (cached.artifacts.length || cached.revision?.artifacts.length) response.append(details);
+    if (cached.presentations.length) {
+      const inventory = document.createElement("ul"); inventory.className = "compact-list";
+      renderArtifacts({ revision_id: null, artifacts: cached.presentations }, inventory, true);
+      details.append(inventory);
+    }
+    if (cached.artifacts.length || cached.revision?.artifacts.length || cached.presentations.length) response.append(details);
     return;
   }
   const epoch = state.epoch;
-  const entry = { artifacts: [], revision: null };
+  const entry = { artifacts: [], revision: null, presentations: [] };
   state.scientificFiles.set(key, entry);
   // Inventory is metadata only and requested once per captured result. Regular
   // conversation polling reuses this display cache; refresh reads it afresh.
   Promise.allSettled([
-    api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`),
-    api(revisionPath(sessionId, turn.revision_id)),
-  ]).then(([inventory, revision]) => {
+    scientific ? api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`) : Promise.resolve({ artifacts: [] }),
+    scientific ? api(revisionPath(sessionId, turn.revision_id)) : Promise.resolve(null),
+    presentation ? api(`${turnPath(sessionId, turn.turn_id)}/artifacts`) : Promise.resolve({ artifacts: [] }),
+  ]).then(([inventory, revision, figures]) => {
     if (epoch !== state.epoch || state.scientificFiles.get(key) !== entry) return;
     if (inventory.status === "fulfilled") {
       entry.artifacts = inventory.value.artifacts.filter((artifact) => supportedScientificFile(artifact)
         && artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id);
     }
-    if (revision.status === "fulfilled" && revision.value.revision_id === turn.revision_id
+    if (revision.status === "fulfilled" && revision.value?.revision_id === turn.revision_id
         && revision.value.turn_id === turn.turn_id) entry.revision = revision.value;
-    entry.error = inventory.status === "rejected" || revision.status === "rejected";
+    if (figures.status === "fulfilled") entry.presentations = figures.value.artifacts;
+    entry.error = inventory.status === "rejected" || revision.status === "rejected" || figures.status === "rejected";
     renderHistory();
   }).catch(() => {
     // Missing or unqualified historical associations expose no download.
@@ -745,7 +755,7 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
     label.textContent = "File provenance";
     const identity = document.createElement("p");
     identity.className = "small";
-    identity.textContent = `Handle: ${artifact.handle}\nSource SHA-256: ${artifact.sha256}\nRevision: ${artifact.revision_id}`;
+    identity.textContent = `Handle: ${artifact.handle}\nSource SHA-256: ${artifact.sha256}\n${artifact.revision_id === null ? `Presentation turn: ${artifact.turn_id}` : `Revision: ${artifact.revision_id}`}`;
     metadata.append(label, identity);
     if (artifact.figure) metadata.append(evidenceValueNode(artifact.figure));
     item.append(title);
@@ -764,7 +774,7 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
       download.textContent = "Download";
       download.setAttribute("aria-label", `Download ${name}`);
       download.dataset.actionKey = `artifact-download:${artifact.handle}`;
-      download.href = `/api/v1${artifactPath(sessionId, revision.revision_id, artifact.handle)}?download=true`;
+      download.href = `/api/v1${artifactPath(sessionId, revision.revision_id, artifact.handle, artifact.turn_id)}?download=true`;
       download.target = "_blank";
       download.rel = "noopener";
       guardDownload(download);
@@ -790,10 +800,10 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
     showWorkspacePanel("results");
     element("artifact-panel").open = true;
   }
-  if (!state.revision || state.revision.revision_id !== revisionId) await loadRevision(revisionId);
+  if (revisionId !== null && (!state.revision || state.revision.revision_id !== revisionId)) await loadRevision(revisionId);
   if (epoch !== state.epoch) return;
   if (!state.session || state.session.session_id !== sessionId
-      || !state.revision || state.revision.revision_id !== revisionId) {
+      || (revisionId !== null && (!state.revision || state.revision.revision_id !== revisionId))) {
     if (state.session && state.session.session_id === sessionId) element("scientific-details").scrollIntoView({ block: "nearest" });
     return;
   }
@@ -801,11 +811,11 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
   const artifactEpoch = state.artifactEpoch;
   const revisionEpoch = state.revisionEpoch;
   element("artifact-viewer").hidden = false;
-  const figures = state.revision.artifacts.filter((entry) => entry.artifact_type === "analysis_figure");
+  const figures = revisionId === null ? [artifact] : state.revision.artifacts.filter((entry) => entry.artifact_type === "analysis_figure");
   element("artifact-title").textContent = artifact.artifact_type === "analysis_report" ? "Technical report"
     : artifact.figure ? readableLabel(artifact.figure.kind) : `Analysis figure${figures.length > 1 ? ` ${figures.findIndex((entry) => entry.handle === artifact.handle) + 1} of ${figures.length}` : ""}`;
   try {
-    const response = await fetch(`/api/v1${artifactPath(sessionId, revisionId, artifact.handle)}`, {
+    const response = await fetch(`/api/v1${artifactPath(sessionId, revisionId, artifact.handle, artifact.turn_id)}`, {
       credentials: "same-origin", cache: "no-store",
     });
     if (!response.ok) {
@@ -835,7 +845,8 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       if (artifact.figure?.coordinate_reused) {
         const coordinates = artifact.figure.sources.find((source) => source.role === "coordinates");
         const categories = artifact.figure.sources.find((source) => source.role === "categories");
-        element("figure-description").textContent = `Previously accepted UMAP coordinates reused from ${resultLabel(coordinates.output.revision_id)}. Categories: ${categories.field}, from ${resultLabel(categories.output.revision_id)}. Published for ${resultLabel(artifact.figure.revision_id)}. No new embedding fit for this presentation; exact sources are in File provenance.`;
+        const labelSource = categories.output ? resultLabel(categories.output.revision_id) : "the registered input";
+        element("figure-description").textContent = `Accepted UMAP coordinates from ${resultLabel(coordinates.output.revision_id)}. Categories: ${categories.field}, from ${labelSource}. No UMAP fit was performed to render this figure; exact sources are in File provenance.`;
       }
     }
     if (reveal) element("artifact-viewer").scrollIntoView({ block: "nearest" });

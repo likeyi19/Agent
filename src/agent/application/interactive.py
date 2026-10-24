@@ -177,9 +177,12 @@ def _present(outcome, state=None, *, turn_id=None):
         for n, candidate in enumerate(outcome.guidance.candidates):
             text = text.replace(f'Option {n + 1}: {candidate.reference["capability"]}\n',
                 f'Option {ordinal(candidate, n + 1)}: {candidate.reference["capability"]}\n')
-    return PresentedResponse(kind=outcome.kind, status=outcome.status, text=text,
+    artifacts = outcome.artifacts
+    status = 'answered' if outcome.kind == 'answer' and artifacts else outcome.status
+    return PresentedResponse(kind=outcome.kind, status=status, text=text,
                              clarification=clarification, scientific=scientific, guidance=guidance,
-                             error=None if outcome.error is None else ClientError(outcome.error.code, outcome.error.message))
+                             error=None if outcome.error is None else ClientError(outcome.error.code, outcome.error.message),
+                             version=3 if artifacts else 2, artifacts=artifacts or None)
 
 
 class InteractiveAgentApplication:
@@ -706,6 +709,8 @@ class InteractiveAgentApplication:
         run_id = turn.run_id if turn is not None else (
             admitted['request_id'] + ':run' if admitted.get('kind') == 'execute' else None)
         status = turn.status if turn is not None else interaction.status
+        if response is not None and response.artifacts and response.kind == 'answer':
+            status = response.status
         steps, state_revision, error = (), None, None
         if run_id is not None:
             try:
@@ -1309,6 +1314,31 @@ class InteractiveAgentApplication:
         """References only to the exact accepted application completion files."""
         return tuple(handle for handle, _ in self._artifacts(session_id, revision_id))
 
+    def presentation_artifact_handles(self, session_id, turn_id):
+        """Interaction-owned figures, visible only after immutable response save."""
+        try:
+            inventory = self._application.sessions.presentation_figure_inventory(session_id, turn_id)
+            return tuple(ArtifactHandle(item['artifact_id'], 'analysis_figure', item['sha256'],
+                None, turn_id, figure=item['metadata']) for item in inventory)
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
+
+    def presentation_artifact_content(self, session_id, turn_id, handle):
+        """Deliver the same pinned PNG contract with an Interaction anchor."""
+        _identifier(handle)
+        try:
+            inventory = self._application.sessions.presentation_figure_inventory(session_id, turn_id)
+            matches = [item for item in inventory if item['artifact_id'] == handle]
+            if len(matches) != 1:
+                raise ValueError('Unknown interaction figure.')
+            item = matches[0]
+            reference = ArtifactHandle(handle, 'analysis_figure', item['sha256'], None,
+                turn_id, figure=item['metadata'])
+            original = self._read_presentation_file(Path(item['path']), item['sha256'])
+            return self._png_content(reference, original)
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
+
     def _artifacts(self, session_id, revision_id):
         state = self._load(session_id)
         revision = next((r for r in state.revisions if r.revision_id == revision_id), None)
@@ -1360,19 +1390,38 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE')
         try:
             reference, file = matches[0]
-            path = Path(file.path)
-            self._application._workspace.require_regular_file(path)
-            if path.resolve() != path or path.stat().st_size > 16 * 1024 * 1024:
-                raise ValueError('Unsafe presentation file.')
-            with path.open('rb') as stream:
-                data = stream.read(16 * 1024 * 1024 + 1)
-            if len(data) > 16 * 1024 * 1024:
-                raise ValueError('Presentation size limit.')
-            if hashlib.sha256(data).hexdigest() != file.sha256:
-                raise ValueError('Changed presentation bytes.')
-            return reference, data
+            return reference, self._read_presentation_file(Path(file.path), file.sha256)
         except (ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
+
+    def _read_presentation_file(self, path, sha256):
+        from .matrix_delivery import _open_matrix_source
+        with _open_matrix_source(path, self._application._workspace.root) as stream:
+            data = stream.read(16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != sha256:
+            raise ValueError('Changed or unbounded presentation bytes.')
+        return data
+
+    @staticmethod
+    def _png_content(reference, original):
+        from PIL import Image
+        if (len(original) < 33 or not original.startswith(b'\x89PNG\r\n\x1a\n')
+                or original[12:16] != b'IHDR'):
+            raise ValueError('Unsupported figure content.')
+        width, height = (int.from_bytes(original[start:start + 4], 'big') for start in (16, 20))
+        if not 0 < width * height <= 40_000_000:
+            raise ValueError('Unsupported figure bounds.')
+        with Image.open(io.BytesIO(original)) as image:
+            if image.format != 'PNG' or not 0 < image.width * image.height <= 40_000_000:
+                raise ValueError('Unsupported figure bounds.')
+            if set(image.info) - {'Software', 'dpi', 'srgb', 'gamma', 'transparency'}:
+                raise ValueError('Unsupported figure metadata.')
+            if 'Software' in image.info and image.info['Software'] != 'Agent plotting spec v1':
+                raise ValueError('Unsupported figure metadata.')
+            image.verify()
+        return ArtifactContent(reference, 'image/png', f'agent-figure-{reference.handle[:16]}.png',
+            original, reference.sha256, 'accepted_png',
+            ('This is the accepted persisted figure, not fresh scientific reconstruction.',))
 
     def artifact_content(self, session_id, revision_id, handle):
         """Deliver pinned PNG or a labeled safe report projection, never paths.
@@ -1384,24 +1433,7 @@ class InteractiveAgentApplication:
         reference, original = self._read_artifact(session_id, revision_id, handle)
         try:
             if reference.artifact_type == 'analysis_figure':
-                from PIL import Image
-                if (len(original) < 33 or not original.startswith(b'\x89PNG\r\n\x1a\n')
-                        or original[12:16] != b'IHDR'):
-                    raise ValueError('Unsupported figure content.')
-                width, height = (int.from_bytes(original[start:start + 4], 'big') for start in (16, 20))
-                if not 0 < width * height <= 40_000_000:
-                    raise ValueError('Unsupported figure bounds.')
-                with Image.open(io.BytesIO(original)) as image:
-                    if image.format != 'PNG' or not 0 < image.width * image.height <= 40_000_000:
-                        raise ValueError('Unsupported figure bounds.')
-                    if set(image.info) - {'Software', 'dpi', 'srgb', 'gamma', 'transparency'}:
-                        raise ValueError('Unsupported figure metadata.')
-                    if 'Software' in image.info and image.info['Software'] != 'Agent plotting spec v1':
-                        raise ValueError('Unsupported figure metadata.')
-                    image.verify()
-                return ArtifactContent(reference, 'image/png', f'agent-figure-{handle[:16]}.png',
-                    original, reference.sha256, 'accepted_png',
-                    ('This is the accepted persisted figure, not fresh scientific reconstruction.',))
+                return self._png_content(reference, original)
             if reference.artifact_type != 'analysis_report':
                 raise ValueError('Unsupported artifact delivery.')
             revision = self.revision(session_id, revision_id)

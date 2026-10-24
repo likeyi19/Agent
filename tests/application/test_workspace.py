@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -91,3 +92,51 @@ def test_nonempty_stage_directory_is_an_output_conflict(tmp_path: Path) -> None:
         workspace.require_empty_directory(run.report)
 
     assert caught.value.code == "APP_OUTPUT_CONFLICT"
+
+
+def test_interaction_presentation_identity_is_scoped_and_read_only_until_created(tmp_path: Path) -> None:
+    workspace = ManagedWorkspace(tmp_path / 'workspace')
+    session, turn = '../a/session', '../a/turn'
+    expected = hashlib.sha256(json.dumps([session, turn], ensure_ascii=False,
+        separators=(',', ':')).encode('utf-8')).hexdigest()
+    root = workspace.interaction_presentation_root(session, turn)
+    assert root == workspace.root / 'presentations' / expected
+    assert not root.parent.exists()
+    assert workspace.interaction_presentation_root(session, turn, create=True) == root
+    assert root.is_dir() and root.stat().st_mode & 0o777 == 0o700
+    sentinel = root / 'uncommitted-bundle'
+    sentinel.write_bytes(b'No stored response grants no delivery authority.')
+    assert workspace.interaction_presentation_root(session, turn) == root
+    assert sentinel.read_bytes() == b'No stored response grants no delivery authority.'
+    assert workspace.interaction_presentation_root('different-session', turn) != root
+    assert workspace.interaction_presentation_root(session, 'different-turn') != root
+    assert workspace.interaction_presentation_root('ab', 'c') != workspace.interaction_presentation_root('a', 'bc')
+
+
+@pytest.mark.parametrize('level', ['parent', 'owner'])
+@pytest.mark.parametrize('create', [False, True])
+def test_interaction_presentation_rejects_symlink_directories(tmp_path: Path, level: str, create: bool) -> None:
+    workspace = ManagedWorkspace(tmp_path / 'workspace')
+    root = workspace.interaction_presentation_root('session', 'turn')
+    target = workspace.root / 'unrelated'
+    target.mkdir()
+    if level == 'owner':
+        root.parent.mkdir()
+    (root if level == 'owner' else root.parent).symlink_to(target, target_is_directory=True)
+    with pytest.raises(ApplicationWorkspaceError):
+        workspace.interaction_presentation_root('session', 'turn', create=create)
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize('level', ['parent', 'owner'])
+def test_interaction_presentation_rejects_wrong_directory_types(tmp_path: Path, level: str) -> None:
+    workspace = ManagedWorkspace(tmp_path / 'workspace')
+    root = workspace.interaction_presentation_root('session', 'turn')
+    if level == 'owner':
+        root.parent.mkdir()
+    target = root if level == 'owner' else root.parent
+    target.write_bytes(b'Conflicting file')
+    for create in (False, True):
+        with pytest.raises(ApplicationWorkspaceError):
+            workspace.interaction_presentation_root('session', 'turn', create=create)
+    assert target.read_bytes() == b'Conflicting file'

@@ -169,6 +169,76 @@ def test_model_and_artifact_metadata_do_not_carry_server_configuration_or_paths(
         ArtifactHandle('handle', 'report', 'A' * 64, 'revision', 'turn')
 
 
+def presentation_pin():
+    return dict(artifact_id='a' * 64, manifest_sha256='b' * 64,
+                png_sha256='c' * 64, figure_id='001_umap_categorical_012345abcdef')
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_historical_presentations_keep_their_exact_encoding_without_artifact_fields(version):
+    historical = dict(version=version, kind='answer', status='answered', text='Exact historical text.\n',
+                      clarification=None, scientific=None, guidance=None, error=None)
+    encoded = json.dumps(historical, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    decoded = PresentedResponse.from_dict(json.loads(encoded))
+    assert decoded.artifacts is None
+    assert json.dumps(decoded.to_dict(), ensure_ascii=False, sort_keys=True, separators=(',', ':')) == encoded
+    with pytest.raises(ValueError):
+        PresentedResponse.from_dict(historical | dict(artifacts=None))
+
+
+def test_interaction_presentation_pins_are_opaque_immutable_and_roundtrip():
+    pins = [presentation_pin()]
+    shown = PresentedResponse('answer', 'answered', 'Requested figure.', version=3, artifacts=pins)
+    pins[0]['png_sha256'] = 'd' * 64
+    pins.append(presentation_pin())
+    data = shown.to_dict()
+    assert data['artifacts'] == [presentation_pin()]
+    assert PresentedResponse.from_dict(json.loads(json.dumps(data))) == shown
+    assert not any('path' in key or 'filename' in key for key in data['artifacts'][0])
+    with pytest.raises(TypeError):
+        shown.artifacts[0]['figure_id'] = 'another'
+    with pytest.raises(ValueError):
+        PresentedResponse('answer', 'answered', 'Unsupported old writer.', version=2, artifacts=[presentation_pin()])
+
+
+@pytest.mark.parametrize('change', [
+    {'artifact_id': 'A' * 64}, {'manifest_sha256': '../manifest.json'}, {'png_sha256': None},
+    {'figure_id': '../figure'}, {'figure_id': '/server/private'}, {'figure_id': 'figure.png'},
+    {'figure_id': ''}, {'path': '/server/private/figure.png'},
+])
+def test_interaction_presentation_rejects_invalid_or_pathlike_pins(change):
+    with pytest.raises((ValueError, TypeError)):
+        PresentedResponse('answer', 'answered', 'text', version=3, artifacts=[presentation_pin() | change])
+
+
+@pytest.mark.parametrize('pins', [None, [], [presentation_pin()] * 2, [presentation_pin()] * 33])
+def test_interaction_presentation_requires_nonempty_bounded_unambiguous_pins(pins):
+    with pytest.raises(ValueError):
+        PresentedResponse('answer', 'answered', 'text', version=3, artifacts=pins)
+
+
+@pytest.mark.parametrize('kind', ['answer', 'execute'])
+def test_new_figure_presentation_keeps_existing_scientific_citation_contract(kind):
+    scientific = dict(support='insufficient_evidence', limitations=['Explanation unavailable.'],
+        evidence_scope='accepted_persisted_summary', targets=[], availability='unavailable', citations=[])
+    shown = PresentedResponse(kind, 'answered' if kind == 'answer' else 'activated',
+        'Figure available; explanation unavailable.', version=3, scientific=scientific, artifacts=[presentation_pin()])
+    assert PresentedResponse.from_dict(shown.to_dict()) == shown
+    with pytest.raises(ValueError):
+        PresentedResponse(kind, shown.status, 'text', version=3,
+            scientific=scientific | {'availability': 'unchecked'}, artifacts=[presentation_pin()])
+
+
+def test_interaction_figure_handles_do_not_invent_a_scientific_revision():
+    handle = ArtifactHandle('a' * 64, 'analysis_figure', 'b' * 64, None, 'presentation-turn')
+    assert handle.to_dict()['revision_id'] is None
+    assert handle.turn_id == 'presentation-turn'
+    with pytest.raises(ValueError):
+        ArtifactHandle('a' * 64, 'analysis_report', 'b' * 64, None, 'presentation-turn')
+    with pytest.raises(ValueError):
+        ScientificArtifactHandle('a' * 64, 'scientific_matrix', 'b' * 64, None, 'presentation-turn', 1234)
+
+
 def test_training_notice_is_optional_and_scoped_to_running_adaptation():
     step=StepView('train','adapt_epizoo_species','RUNNING',1,'Native configuration; runtime uncalibrated.')
     assert step.to_dict()['training_notice']==step.training_notice

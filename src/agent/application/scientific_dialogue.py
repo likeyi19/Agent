@@ -813,35 +813,24 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         public['delivery'] = delivery
     elif admitted.get('visualization') is not None:
         public['delivery'] = dict(requested=['visualization'], visualization='unavailable',
-            reason='standalone_presentation_not_supported',
             requested_field=admitted['visualization']['field'])
-    if 'completion_delivery' not in admitted:
-        from .dialogue_evidence import figure_inventory
-        state = sessions.load(session_id)
-        figures, read_runs = {}, set()
-        selected = {(v.source.output_locator['run_id'], v.source.output_locator['step_id']) for v in views}
-        for view in views:
-            run_id = view.source.output_locator['run_id']
-            if run_id in read_runs:
-                continue
-            read_runs.add(run_id)
-            origin = next(t for t in state.turns if t.run_id == run_id and t.completion_files)
-            revision = next(r for r in state.revisions if r.revision_id == origin.revision_id)
-            try:
-                available_figures = figure_inventory(sessions, origin, revision)
-            except (ValueError, TypeError, KeyError, RuntimeError, OSError):
-                public['limitations'].append('Accepted figure relationships are unavailable for a selected result.')
-                continue
-            for figure in available_figures:
-                metadata = figure['metadata']
-                if any((s['run_id'], s['step_id']) in selected for s in metadata['sources']):
-                    figures[metadata['manifest_sha256'], metadata['figure_id']] = figure
-        if figures:
-            public.setdefault('delivery', {})['figure_relationships'] = _figure_relationships(state, figures.values())
+    figures, matching = _presentation_context(sessions, session_id, admitted, views, public['limitations'])
+    if figures or admitted.get('presentation_artifacts'):
+        delivery = public.setdefault('delivery', {})
+        delivery['figure_relationships'] = _figure_relationships(sessions.load(session_id), figures, matching)
+        if admitted.get('presentation_artifacts'):
+            delivery['visualization'] = 'delivered' if matching else 'unavailable'
     from .analysis_delivery import export_descriptions
     exports = export_descriptions(sessions, session_id, targets)
     if exports:
         public.setdefault('delivery', {})['exports'] = [_serialize(row) for row in exports]
+    # Optional presentation metadata must not crowd out selected scientific facts.
+    # The figure and download bytes remain available through their own readers.
+    if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
+        delivery = public.get('delivery', {})
+        omitted = [key for key in ('exports', 'figure_relationships') if delivery.pop(key, None) is not None]
+        if omitted:
+            public['limitations'].append('Optional figure or download descriptions were omitted from this bounded answer context.')
     if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return public, tuple(claims)
@@ -913,8 +902,10 @@ ANSWER_INSTRUCTIONS = (
     'are requests, not achievements: disclose unavailable portions and do not claim an unperformed comparison '
     'or visualization. Available comparison facts must be cited to deliver the requested comparison; preserve '
     'their denominators, missingness and partial coverage. Pinned delivery.figure_relationships describe actual '
-    'accepted presentation sources: coordinate_reused confirms the explicitly selected old coordinates were '
-    'read unchanged, and correspondence applies only to those exact fields and cells. Do not doubt that '
+    'accepted presentation sources: coordinate_reused confirms the explicitly selected accepted coordinates were '
+    'read unchanged by the presentation composer, without another embedding fit. Those coordinates may have '
+    'been created in this same execution; use the target completion role to distinguish new and historical sources. '
+    'Correspondence applies only to those exact fields and cells. Do not doubt that '
     'qualified relationship merely because a native-result summary omits it. Only satisfies_request=true '
     'marks a figure matching this request; other available figures do not fulfill it. Figure-file availability does '
     'not establish biological interpretation of a figure.',
@@ -1067,10 +1058,32 @@ def generate(model, question, focus, public, claims):
     return response
 
 
+def _compose_presentation(sessions, session_id, interaction, model):
+    """Live optional presentation, outside scientific acceptance and R5 prose."""
+    if model is None or interaction is None or interaction.presentation is not None:
+        return (), ()
+    try:
+        return sessions.compose_visualization(session_id, interaction)
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+        logging.getLogger(__name__).warning('Requested scientific presentation unavailable; accepted results preserved.')
+        return (), ()
+
+
 def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None,
            evidence_context=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
+    artifacts = tuple(interaction.admitted.get('presentation_artifacts', ()))
+    if evidence_targets is None and interaction.admitted.get('visualization') is not None:
+        artifacts, _ = _compose_presentation(sessions, session_id, interaction, model)
+    from dataclasses import replace
+    interaction = replace(interaction, admitted=dict(interaction.admitted,
+        presentation_artifacts=artifacts, presentation_turn_id=interaction.turn_id))
+    def unavailable(message):
+        suffix = ('\n\nThe requested figure is available.' if artifacts else
+                  '\n\nThe requested figure has not been produced.' if interaction.admitted.get('visualization') else '')
+        return TurnOutcome('answer', 'answered' if artifacts else 'unavailable', text=message + suffix,
+                           artifacts=artifacts)
     try:
         public, claims = (context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
                           if evidence_context is None else evidence_context)
@@ -1089,14 +1102,16 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         prefix = '' if all(t['is_active'] for t in refreshed['targets']) else 'This discussion includes explicitly referenced historical results.\n\n'
         suffix = '\n\nI can report these accepted facts, but they do not establish any stronger conclusion.' if response.support == 'insufficient_evidence' else ''
         delivery = refreshed.get('delivery', {})
-        if delivery.get('reason') == 'standalone_presentation_not_supported':
-            suffix += '\n\nThe requested figure has not been produced; standalone presentation is not available in this interaction.'
-        return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix, scientific=response)
+        if interaction.admitted.get('visualization') is not None:
+            suffix += ('\n\nThe requested figure is available.' if delivery.get('visualization') == 'delivered' else
+                       '\n\nThe requested figure has not been produced.')
+        return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix,
+                           scientific=response, artifacts=artifacts)
     except _AnswerFailure as exc:
         _diagnose(exc.stage, exc.reason)
         message = ('I could not ground the generated explanation in the accepted evidence. The result and its scientific details remain available.'
                    if exc.stage.startswith('semantic_review') else 'I could not produce a response with valid evidence bindings.')
-        return TurnOutcome('answer', 'unavailable', text=message)
+        return unavailable(message)
     except IntentError as exc:
         reason = ('changed_accepted_evidence' if stage == 'evidence_freshness' else
                   'incompatible_scientific_context' if exc.reason == 'incompatible_comparison' else
@@ -1105,10 +1120,71 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         messages = {'subject_not_in_summary':'The current compact evidence does not contain that subject detail; this does not establish scientific absence.',
                     'incompatible_comparison':'These result scopes do not support this comparison without an explicit scientific correspondence.',
                     'invalid_decision':'I could not produce a response with valid evidence bindings.'}
-        return TurnOutcome('answer', 'unavailable', text=messages.get(exc.reason, 'The required accepted evidence is unavailable.'))
+        return unavailable(messages.get(exc.reason, 'The required accepted evidence is unavailable.'))
     except (ValueError, TypeError, KeyError, RuntimeError, OSError):
         _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context')
-        return TurnOutcome('answer', 'unavailable', text='I could not produce a response with valid evidence bindings.')
+        return unavailable('I could not produce a response with valid evidence bindings.')
+
+
+def _presentation_context(sessions, session_id, admitted, views, limitations):
+    """Read bounded pinned figures adjacent to the exact selected sources.
+
+    Live pins are explicit publication inputs. Other Interaction bundles are read
+    only through a committed response from a source origin or captured predecessor.
+    Neither directory discovery nor arbitrary history scanning grants authority.
+    """
+    from .dialogue_evidence import figure_inventory
+    state = sessions.load(session_id)
+    selected = {(v.source.output_locator['run_id'], v.source.output_locator['step_id'],
+                 v.source.output_locator['accepted_step_sha256']) for v in views}
+    native_sources = {(run_id, step_id) for run_id, step_id, _ in selected}
+    figures, matching, candidates = {}, (), set()
+    def include(records):
+        for figure in records:
+            metadata = figure['metadata']
+            def selected_source(source):
+                output = source.get('output')
+                if output is not None:
+                    return (output['run_id'], output['step_id'], output['accepted_step_sha256']) in selected
+                return (source.get('run_id'), source.get('step_id')) in native_sources
+            if any(selected_source(s) for s in metadata['sources']):
+                figures[metadata['manifest_sha256'], metadata['figure_id']] = figure
+    def unavailable():
+        message = 'Accepted figure relationships are unavailable for a selected result.'
+        if message not in limitations:
+            limitations.append(message)
+    for run_id in dict.fromkeys(key[0] for key in selected):
+        origin = next((t for t in state.turns if t.run_id == run_id and t.revision_id is not None), None)
+        if origin is None:
+            continue
+        if any(i.turn_id == origin.turn_id for i in state.interactions):
+            candidates.add(origin.turn_id)
+        revision = next(r for r in state.revisions if r.revision_id == origin.revision_id)
+        try:
+            include(figure_inventory(sessions, origin, revision))
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            unavailable()
+    turn_id = admitted.get('presentation_turn_id')
+    interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+    if interaction is not None:
+        predecessor = interaction.snapshot.get('dialogue', {}).get('predecessor')
+        if predecessor is not None:
+            candidates.add(predecessor)
+    for candidate in candidates:
+        try:
+            include(sessions.presentation_figure_inventory(session_id, candidate))
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            unavailable()
+    if admitted.get('presentation_artifacts'):
+        try:
+            matching = sessions.presentation_figure_inventory(session_id, turn_id,
+                artifacts=admitted['presentation_artifacts'])
+            include(matching)
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            unavailable()
+    ordered = {(f['metadata']['manifest_sha256'], f['metadata']['figure_id']): f for f in matching}
+    ordered.update(figures)
+    return tuple(ordered.values()), matching
 
 
 def _figure_relationships(state, figures, matching=()):
@@ -1124,6 +1200,9 @@ def _figure_relationships(state, figures, matching=()):
             if output is not None:
                 revision = next(r for r in state.revisions if r.revision_id == output['revision_id'])
                 item.update(version=state.revisions.index(revision) + 1, output=output['name'])
+            elif source.get('registered_source') is not None:
+                item['origin'] = 'registered_source'
+                item['observation_role'] = source['observation_role']
             sources.append(item)
         value = dict(kind=metadata['kind'], coordinate_reused=metadata.get('coordinate_reused', False),
                      satisfies_request=(metadata['manifest_sha256'], metadata['figure_id']) in identities,
@@ -1190,7 +1269,7 @@ def _delivery_text(delivery, public=None, used=()):
               'The requested visualization has not been produced.' if 'visualization' in delivery['requested'] else
               'Figures and downloadable files are listed in the result view.')
     if (delivery['visualization'] == 'delivered'
-            and any(f['satisfies_request'] and f['coordinate_reused'] for f in delivery['figure_relationships'])):
+            and any(f['satisfies_request'] and f['coordinate_reused'] for f in delivery.get('figure_relationships', ()))):
         figure += ' It reuses the explicitly selected accepted coordinates; this presentation is not a new embedding fit.'
     comparison = delivery.get('comparison', {})
     if comparison.get('status') == 'not_requested':
@@ -1232,19 +1311,18 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
               if revision.revision_id == state.active_revision_id else
               'The accepted scientific results belong to this historical revision; another revision is current.')
     limitations = []
-    from .dialogue_evidence import figure_inventory, delivered_visualizations
-    figures, delivered, relationships = (), False, []
+    from .dialogue_evidence import figure_inventory
+    figures, relationships = (), []
     try:
         figures = figure_inventory(sessions, turn, revision)
         relationships = _figure_relationships(state, figures)
-        if interaction is not None and 'visualization' in requested:
-            matching = delivered_visualizations(sessions, session_id, interaction, figures)
-            delivered = bool(matching)
-            relationships = _figure_relationships(state, figures, matching)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
-        limitations.append('Accepted figure identity or the selected presentation is unavailable.')
+        limitations.append('Accepted figure identity is unavailable.')
+    artifacts, composed = _compose_presentation(sessions, session_id, interaction, model)
+    if composed:
+        relationships.extend(_figure_relationships(state, composed, composed))
     delivery = dict(requested=list(requested), accepted_figures=len(figures),
-        visualization='delivered' if delivered else 'unavailable' if 'visualization' in requested else 'not_requested',
+        visualization='delivered' if artifacts else 'unavailable' if 'visualization' in requested else 'not_requested',
         comparison=dict(status='unavailable', reason='exact_operands_not_recorded') if 'comparison' in requested else dict(status='not_requested'),
         unfulfilled=list(intent.get('unfulfilled', ())),
         figure_relationships=relationships)
@@ -1257,7 +1335,8 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
         targets = tuple(dict(revision_id=revision.revision_id, output_name=g['canonical']['output_name'],
             accepted_step_sha256=g['canonical']['accepted_step_sha256'], subject=None) for g in groups)
         admitted = dict(target=None, comparison=None, completion_delivery=delivery, completion_run_id=turn.run_id,
-                        completion_revision_id=revision.revision_id)
+                        completion_revision_id=revision.revision_id, presentation_artifacts=artifacts,
+                        presentation_turn_id=turn_id)
         if intent.get('comparison') is not None:
             from .result_reading import comparison_inputs
             try:
@@ -1287,7 +1366,8 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
                 response = replace(result.scientific,
                     limitations=tuple(dict.fromkeys(result.scientific.limitations + tuple(limitations))))
                 return replace(outcome, text=status + '\n\n' + result.text + '\n\n'
-                    + ' '.join(limitations + [_delivery_text(delivery, public, response.claims)]), scientific=response)
+                    + ' '.join(limitations + [_delivery_text(delivery, public, response.claims)]), scientific=response,
+                    artifacts=artifacts)
             raise IntentError('unavailable_context')
         if 'explanation' in requested:
             raise IntentError('unavailable_context')
@@ -1312,11 +1392,11 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
         response = ScientificResponse(tuple(used), 'supported' if used else 'insufficient_evidence',
             '\n'.join(lines), tuple(dict.fromkeys(public['limitations'] + limitations)), public['scope'], 'deterministic')
         return replace(outcome, text=status + '\n\n' + response.explanation + '\n\n' + ' '.join(limitations
-            + [_delivery_text(delivery, public, used)]), scientific=response)
+            + [_delivery_text(delivery, public, used)]), scientific=response, artifacts=artifacts)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
         # No semantic retry, scientific replay, or mutation of Run/Revision state.
         message = 'Scientific computation completed and its accepted results and downloads remain available. The scientific explanation is unavailable; a follow-up can request it.'
         response = ScientificResponse((), 'insufficient_evidence', message, tuple(limitations),
                                       'accepted_execution_state', 'unavailable')
         return replace(outcome, text=status + '\n\n' + message + '\n\n' + ' '.join(limitations + [delivery_text]),
-                       scientific=response)
+                       scientific=response, artifacts=artifacts)

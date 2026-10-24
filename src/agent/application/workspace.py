@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import errno
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -105,6 +106,32 @@ class ManagedWorkspace:
                 "Application composition lock has an invalid filesystem type.",
             )
         return RunWorkspace(root, scientific, evidence, visualizations, report, lock)
+
+    def interaction_presentation_root(self, session_id: str, turn_id: str, *, create: bool = False) -> Path:
+        """Locate one Interaction's presentation without discovering bundles.
+
+        Reads create no directories. A bundle becomes visible only through its
+        pins in the existing immutable Interaction presentation record.
+        """
+        if (type(create) is not bool or any(type(value) is not str or not value.strip()
+                                           for value in (session_id, turn_id))):
+            raise ApplicationWorkspaceError(
+                "APP_REQUEST_INVALID", "Presentation ownership requires a Session and Interaction.",
+            )
+        identity = json.dumps([session_id, turn_id], ensure_ascii=False, separators=(",", ":"))
+        owner = self.run_digest(identity)
+        parent = self._root / "presentations"
+        root = parent / owner
+        for directory in (parent, root):
+            if create:
+                self._ensure_directory(directory)
+            else:
+                self._assert_contained(directory)
+                if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+                    raise ApplicationWorkspaceError(
+                        "APP_WORKSPACE_INVALID", "An interaction presentation directory has an invalid filesystem type.",
+                    )
+        return root
 
     def require_regular_file(self, path: Path) -> Path:
         self._assert_contained(path)

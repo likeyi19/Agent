@@ -44,6 +44,7 @@ from .evidence import (
 
 
 ANALYSIS_VISUALIZATION_SCHEMA_VERSION = 1
+INTERACTION_VISUALIZATION_SCHEMA_VERSION = 2
 ANALYSIS_VISUALIZATION_ARTIFACT_TYPE = "agent.analysis-visualizations"
 ANALYSIS_VISUALIZATION_BUNDLE_DIRNAME = "analysis_visualizations"
 ANALYSIS_VISUALIZATION_MANIFEST_FILENAME = "visualization_manifest.json"
@@ -53,6 +54,8 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _DPI = 200
 _FONT_FAMILY = "DejaVu Sans"
 _UMAP_ALPHA = 0.8
+_MAX_FIGURE_PIXELS = 40_000_000
+_MAX_PNG_BYTES = 16 * 1024 * 1024
 _CONFUSION_TEXT_CELL_LIMIT = 400
 _PRIMARY_PALETTE = (
     "#1f77b4",
@@ -825,7 +828,8 @@ def _cell_overlay_projection(read_sources) -> tuple[_FigureProjection, ...]:
     digest = _umap_plot_digest(ids, xy, values)
     return (_FigureProjection('cell-overlay-' + digest[:16], 'umap_categorical',
         'cell-overlay-' + digest[:16] + '.png',
-        tuple(s['producing_step_id'] for s in value['sources'] if s['role'] == 'categories'),
+        tuple(s['producing_step_id'] for s in value['sources']
+              if s['role'] == 'categories' and 'producing_step_id' in s),
         tuple(value['sources']), digest, int((8 + 1.5*(columns-1))*_DPI), 6*_DPI, _DPI, presentation, data),)
 
 
@@ -1063,26 +1067,15 @@ def _figure_manifest_record(
     }
 
 
-def _manifest_payload(
-    snapshot: _EvidenceSnapshot,
+def _bundle_payload(
     projections: Sequence[_FigureProjection],
     png_digests: Mapping[str, str],
     renderer: Mapping[str, JsonValue],
 ) -> Mapping[str, object]:
     overlay = any(value.figure_kind == 'umap_categorical' for value in projections)
     return {
-        "schema_version": ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
         "artifact_type": ANALYSIS_VISUALIZATION_ARTIFACT_TYPE,
         "status": "success",
-        "source": {
-            "run_id": snapshot.run_id,
-            "request_id": snapshot.request_id,
-            "plan_id": snapshot.plan_id,
-            "evidence_path": str(snapshot.path),
-            "evidence_sha256": snapshot.sha256,
-            "evidence_schema_version": ANALYSIS_EVIDENCE_SCHEMA_VERSION,
-            "evidence_artifact_type": ANALYSIS_EVIDENCE_ARTIFACT_TYPE,
-        },
         "figure_set": {
             "n_figures": len(projections),
             "expected_figure_ids": tuple(value.figure_id for value in projections),
@@ -1102,7 +1095,19 @@ def _manifest_payload(
             "strategy": "staged_directory_with_backup_rollback",
             "nonempty_directory_exchange_universally_atomic": False,
         },
-        "validation": {
+    }
+
+
+def _manifest_payload(snapshot, projections, png_digests, renderer):
+    """Keep native and historical Run-owned manifest meaning unchanged."""
+    overlay = any(value.figure_kind == 'umap_categorical' for value in projections)
+    return dict(_bundle_payload(projections, png_digests, renderer),
+        schema_version=ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
+        source=dict(run_id=snapshot.run_id, request_id=snapshot.request_id, plan_id=snapshot.plan_id,
+            evidence_path=str(snapshot.path), evidence_sha256=snapshot.sha256,
+            evidence_schema_version=ANALYSIS_EVIDENCE_SCHEMA_VERSION,
+            evidence_artifact_type=ANALYSIS_EVIDENCE_ARTIFACT_TYPE),
+        validation={
             "fresh_evidence_verified_before_extraction": True,
             "fresh_evidence_verified_before_publication": True,
             "explicit_evidence_artifacts_only": not overlay,
@@ -1111,8 +1116,18 @@ def _manifest_payload(
             "raw_scatac_matrix_accessed": False,
             "transferred_label_umap_included": False,
             "large_scientific_payloads_in_manifest": False,
-        },
-    }
+        })
+
+
+def _interaction_manifest_payload(publisher, projections, png_digests, renderer):
+    return dict(_bundle_payload(projections, png_digests, renderer),
+        schema_version=INTERACTION_VISUALIZATION_SCHEMA_VERSION,
+        publisher=dict(kind='interaction', **publisher),
+        validation=dict(explicit_accepted_sources_and_ordered_cells=True,
+            scientific_sources_verified_before_extraction=True,
+            scientific_sources_verified_before_publication=True,
+            scientific_tools_invoked=False, raw_scatac_matrix_accessed=False,
+            large_scientific_payloads_in_manifest=False))
 
 
 def _load_strict_manifest(path: Path) -> tuple[Mapping[str, object], bytes]:
@@ -1134,7 +1149,8 @@ def _load_strict_manifest(path: Path) -> tuple[Mapping[str, object], bytes]:
             "Visualization manifest must contain one JSON object.",
         )
     if (
-        parsed.get("schema_version") != ANALYSIS_VISUALIZATION_SCHEMA_VERSION
+        parsed.get("schema_version") not in (
+            ANALYSIS_VISUALIZATION_SCHEMA_VERSION, INTERACTION_VISUALIZATION_SCHEMA_VERSION)
         or parsed.get("artifact_type") != ANALYSIS_VISUALIZATION_ARTIFACT_TYPE
         or parsed.get("status") != "success"
     ):
@@ -1354,21 +1370,8 @@ def _visualization_reference(
     return Path(visualization).expanduser().resolve(), None
 
 
-def build_analysis_visualizations(
-    run_result: AgentRunResult,
-    evidence: str | Path | AnalysisEvidenceResult,
-    output_dir: str | Path,
-    *,
-    registry: ToolRegistry,
-    overwrite: bool = False,
-    cell_overlay=None,
-) -> AnalysisVisualizationResult:
-    """Build a deterministic PNG bundle from freshly verified analysis evidence."""
-
-    if not isinstance(run_result, AgentRunResult):
-        raise TypeError("`run_result` must be an AgentRunResult.")
-    if not isinstance(registry, ToolRegistry):
-        raise TypeError("`registry` must be a ToolRegistry.")
+def _build_bundle(output_dir, projections, recheck, manifest_builder, *, overwrite=False):
+    """Render and atomically install either publisher's qualified projections."""
     if not isinstance(overwrite, bool):
         raise TypeError("`overwrite` must be a boolean.")
     output = _resolve_output_dir(output_dir)
@@ -1379,8 +1382,9 @@ def build_analysis_visualizations(
             "Use overwrite=True to replace it."
         )
 
-    first = _verified_evidence_snapshot(run_result, evidence, registry)
-    projections = _derive_figure_projections(first) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
+    if any(p.width_px * p.height_px > _MAX_FIGURE_PIXELS for p in projections):
+        raise AnalysisVisualizationError('VISUALIZATION_DELIVERY_LIMIT',
+            'The requested figure exceeds the supported image dimensions; no cells or labels were omitted.')
     renderer = _renderer_contract()
 
     staging = Path(
@@ -1406,19 +1410,12 @@ def build_analysis_visualizations(
                     "VISUALIZATION_RENDER_FAILED",
                     "A rendered PNG has unexpected dimensions.",
                 )
+            if figure_path.stat().st_size > _MAX_PNG_BYTES:
+                raise AnalysisVisualizationError('VISUALIZATION_DELIVERY_LIMIT',
+                    'The requested PNG exceeds the supported delivery size.')
             png_digests[projection.figure_id] = _sha256_file(figure_path)
         _fsync_directory(figures_dir)
-        second = _verified_evidence_snapshot(run_result, evidence, registry)
-        if (
-            first.path != second.path
-            or first.sha256 != second.sha256
-            or first.payload != second.payload
-        ):
-            raise AnalysisVisualizationError(
-                "VISUALIZATION_EVIDENCE_CHANGED",
-                "Analysis evidence changed during visualization preparation.",
-            )
-        second_projections = _derive_figure_projections(second) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
+        second_projections = recheck()
         placeholder_digests = {
             projection.figure_id: "0" * 64 for projection in projections
         }
@@ -1445,7 +1442,7 @@ def build_analysis_visualizations(
                 "VISUALIZATION_SOURCE_CHANGED",
                 "A visualization source changed during visualization preparation.",
             )
-        manifest = _manifest_payload(first, projections, png_digests, renderer)
+        manifest = manifest_builder(projections, png_digests, renderer)
         manifest_bytes = _canonical_json_bytes(manifest)
         manifest_path = staging / ANALYSIS_VISUALIZATION_MANIFEST_FILENAME
         with manifest_path.open("wb") as handle:
@@ -1481,16 +1478,57 @@ def build_analysis_visualizations(
         "manifest_path": str(final_manifest),
         "manifest_sha256": _sha256_bytes(final_bytes),
         "bundle_path": str(destination),
-        "schema_version": ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
+        "schema_version": manifest['schema_version'],
         "artifact_type": ANALYSIS_VISUALIZATION_ARTIFACT_TYPE,
-        "evidence_path": str(first.path),
-        "evidence_sha256": first.sha256,
-        "run_id": first.run_id,
-        "request_id": first.request_id,
-        "plan_id": first.plan_id,
         "n_figures": len(projections),
         "figures": figure_results,
     }
+
+
+def build_analysis_visualizations(
+    run_result: AgentRunResult,
+    evidence: str | Path | AnalysisEvidenceResult,
+    output_dir: str | Path,
+    *,
+    registry: ToolRegistry,
+    overwrite: bool = False,
+) -> AnalysisVisualizationResult:
+    """Publish the native Run's figures from its actual verified evidence."""
+    if not isinstance(run_result, AgentRunResult):
+        raise TypeError('`run_result` must be an AgentRunResult.')
+    if not isinstance(registry, ToolRegistry):
+        raise TypeError('`registry` must be a ToolRegistry.')
+    first = _verified_evidence_snapshot(run_result, evidence, registry)
+    def recheck():
+        second = _verified_evidence_snapshot(run_result, evidence, registry)
+        if (first.path, first.sha256, first.payload) != (second.path, second.sha256, second.payload):
+            raise AnalysisVisualizationError('VISUALIZATION_EVIDENCE_CHANGED',
+                'Analysis evidence changed during visualization preparation.')
+        return _derive_figure_projections(second)
+    result = _build_bundle(output_dir, _derive_figure_projections(first), recheck,
+        lambda projections, pngs, renderer: _manifest_payload(first, projections, pngs, renderer),
+        overwrite=overwrite)
+    return dict(result, evidence_path=str(first.path), evidence_sha256=first.sha256,
+                run_id=first.run_id, request_id=first.request_id, plan_id=first.plan_id)
+
+
+def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher):
+    """Publish an Interaction's figure from existing qualified scientific inputs.
+
+    The application reader owns source selection and correspondence. This uses
+    the native figure renderer and bundle writer without any scientific Run,
+    plan, evidence file or new scientific verification authority.
+    """
+    if (not isinstance(publisher, Mapping) or set(publisher) != {'session_id', 'turn_id'}
+            or any(type(value) is not str or not value or len(value) > 256
+                   or any(not character.isprintable() for character in value)
+                   for value in publisher.values())):
+        raise ValueError('An exact Interaction publisher is required.')
+    publisher = dict(publisher)
+    result = _build_bundle(output_dir, _cell_overlay_projection(read_sources),
+        lambda: _cell_overlay_projection(read_sources),
+        lambda projections, pngs, renderer: _interaction_manifest_payload(publisher, projections, pngs, renderer))
+    return dict(result, publisher=dict(kind='interaction', **publisher))
 
 
 def verify_analysis_visualizations(
@@ -1652,11 +1690,13 @@ __all__ = [
     "ANALYSIS_VISUALIZATION_BUNDLE_DIRNAME",
     "ANALYSIS_VISUALIZATION_MANIFEST_FILENAME",
     "ANALYSIS_VISUALIZATION_SCHEMA_VERSION",
+    "INTERACTION_VISUALIZATION_SCHEMA_VERSION",
     "PLOTTING_SPEC_VERSION",
     "AnalysisVisualizationError",
     "AnalysisVisualizationResult",
     "VisualizationFigureResult",
     "build_analysis_visualizations",
+    "build_cell_overlay_visualizations",
     "get_supported_visualization_kinds",
     "verify_analysis_visualizations",
 ]

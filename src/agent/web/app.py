@@ -595,6 +595,9 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/artifacts/{handle}')
     def artifact(session_id: str, revision_id: str, handle: str, download: bool = False):
         content = application.artifact_content(session_id, revision_id, handle)
+        return artifact_response(content, download)
+
+    def artifact_response(content, download):
         disposition = 'attachment' if download else 'inline'
         return Response(content=content.data, media_type=content.content_type, headers={
             'Content-Disposition': f'{disposition}; filename="{content.filename}"',
@@ -602,6 +605,14 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             'X-Artifact-Content-SHA256': content.content_sha256,
             'X-Artifact-Presentation': content.presentation,
         })
+
+    @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/artifacts')
+    def presentation_artifacts(session_id: str, turn_id: str):
+        return {'artifacts': [a.to_dict() for a in application.presentation_artifact_handles(session_id, turn_id)]}
+
+    @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/artifacts/{handle}')
+    def presentation_artifact(session_id: str, turn_id: str, handle: str, download: bool = False):
+        return artifact_response(application.presentation_artifact_content(session_id, turn_id, handle), download)
 
     @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/scientific-artifacts')
     def turn_scientific_artifacts(session_id: str, turn_id: str):

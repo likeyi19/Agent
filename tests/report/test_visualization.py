@@ -220,25 +220,76 @@ def _build(tmp_path: Path, **source_options: object) -> tuple[object, ...]:
     return run, evidence, umap_path, confusion_path, result
 
 
-def test_explicit_cell_overlay_keeps_typed_categories_and_uses_existing_bundle(tmp_path):
-    run,evidence,_,_=_source(tmp_path,tools=('inspect_scATAC',))
+def _overlay_source():
     payload=dict(cell_ids=('a','b','c','d'),coordinates=np.array([[0,0],[1,1],[2,2],[3,3]],dtype=np.float32),
         labels=pd.Series(pd.Categorical([1,'1',None,1],categories=[1,'1','unused'],ordered=True)),
         field='result:condition',correspondence=dict(basis='exact_original_source',n_cells=4,cell_order_sha256='a'*64),
         sources=[dict(role=role,producing_step_id=step,tool_name=tool,artifact_path='/private/fixture',
             integrity=dict(sha256='b'*64)) for role,step,tool in (
             ('coordinates','old-umap','compute_cell_umap'),('categories','new-labels','cluster_cells'))])
-    read=lambda:payload
-    result=build_analysis_visualizations(run,evidence,tmp_path/'output',registry=_guarded_registry(),cell_overlay=read)
+    return payload
+
+
+def test_explicit_cell_overlay_keeps_typed_categories_and_uses_existing_bundle(tmp_path, monkeypatch):
+    payload = _overlay_source()
+    monkeypatch.setattr(visualization_module, '_verified_evidence_snapshot',
+        lambda *a, **k: pytest.fail('Interaction figure requested fabricated Run evidence.'))
+    result=visualization_module.build_cell_overlay_visualizations(lambda:payload,tmp_path/'output',
+        publisher=dict(session_id='session',turn_id='figure-request'))
     assert result['n_figures']==1 and result['figures'][0]['figure_kind']=='umap_categorical'
     manifest=json.loads(Path(result['manifest_path']).read_bytes())
     p=manifest['figures'][0]['presentation']
     assert p['category_order']==[dict(value=1,missing=False),dict(value='1',missing=False),dict(value=None,missing=True)]
     assert p['category_display']==['1','"1"','Missing label (not an assigned category)']
     assert p['coordinate_reused'] and not p['coordinate_transform'] and not p['subsampling']
-    assert not manifest['validation']['explicit_evidence_artifacts_only']
+    assert manifest['schema_version'] == 2
+    assert manifest['publisher'] == dict(kind='interaction',session_id='session',turn_id='figure-request')
+    assert 'source' not in manifest and not {'run_id','evidence_path','plan_id'} & set(result)
     assert manifest['validation']['explicit_accepted_sources_and_ordered_cells']
-    assert verify_analysis_visualizations(run,evidence,result,registry=_guarded_registry(),cell_overlay=read).passed
+    assert manifest['figures'][0]['plotting_data_sha256'] == visualization_module._cell_overlay_projection(lambda:payload)[0].plotting_data_sha256
+
+
+def test_interaction_figure_source_mutation_during_render_leaves_no_published_bundle(tmp_path, monkeypatch):
+    payload = _overlay_source()
+    render = visualization_module._render_figure
+    def mutate(projection, path):
+        render(projection, path)
+        payload['coordinates'] = payload['coordinates'] + 1
+    monkeypatch.setattr(visualization_module, '_render_figure', mutate)
+    with pytest.raises(AnalysisVisualizationError, match='source changed'):
+        visualization_module.build_cell_overlay_visualizations(lambda:payload,tmp_path/'output',
+            publisher=dict(session_id='session',turn_id='figure-request'))
+    assert list((tmp_path/'output').iterdir()) == []
+
+
+def test_interaction_figure_large_dimensions_fail_before_render_without_dropping_labels(tmp_path, monkeypatch):
+    payload = _overlay_source()
+    payload.update(cell_ids=tuple('cell-'+str(i) for i in range(3000)),
+        coordinates=np.zeros((3000,2),dtype=np.float32),labels=pd.Series(['label-'+str(i) for i in range(3000)]))
+    monkeypatch.setattr(visualization_module, '_render_figure',
+        lambda *a, **k: pytest.fail('Oversized projection entered the renderer.'))
+    with pytest.raises(AnalysisVisualizationError, match='image dimensions'):
+        visualization_module.build_cell_overlay_visualizations(lambda:payload,tmp_path/'output',
+            publisher=dict(session_id='session',turn_id='figure-request'))
+    assert len(payload['labels']) == 3000
+
+
+def test_historical_run_overlay_manifest_remains_readable_without_rewriting(tmp_path):
+    run,evidence,_,_=_source(tmp_path,tools=('inspect_scATAC',))
+    read = lambda:_overlay_source()
+    result = visualization_module.build_cell_overlay_visualizations(read,tmp_path/'output',
+        publisher=dict(session_id='session',turn_id='figure-request'))
+    # Construct the historical schema-1 fixture, using its genuine existing Run
+    # fixture identity. There is no active public Run-owned overlay writer.
+    projections = visualization_module._cell_overlay_projection(read)
+    snapshot = visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
+    manifest = visualization_module._manifest_payload(snapshot,projections,
+        {f['figure_id']:f['png_sha256'] for f in result['figures']},visualization_module._renderer_contract())
+    path = Path(result['manifest_path'])
+    path.write_bytes(visualization_module._canonical_json_bytes(manifest))
+    original = path.read_bytes()
+    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry(),cell_overlay=read).passed
+    assert path.read_bytes() == original
 
 
 def test_supported_visualization_kinds_are_ordered_and_do_not_render(

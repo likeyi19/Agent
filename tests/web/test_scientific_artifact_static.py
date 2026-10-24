@@ -32,8 +32,8 @@ def test_download_uses_server_descriptor_identity_and_normal_browser_attachment(
 def test_inventory_is_cached_per_exact_accepted_execute_message_and_refreshed_on_reopen():
     source = (STATIC / 'app.js').read_text()
     files = source[source.index('function appendScientificFiles'):source.index('function renderArtifacts')]
-    assert 'turn.response.kind !== "execute"' in files
-    assert '!["succeeded", "activated", "stale"].includes(turn.status)' in files
+    assert 'turn.response.kind === "execute"' in files
+    assert '["succeeded", "activated", "stale"].includes(turn.status)' in files
     assert 'JSON.stringify([sessionId, turn.turn_id, turn.revision_id])' in files
     assert files.index('if (cached)') < files.index('api(`${turnPath')
     assert 'epoch !== state.epoch' in files
@@ -67,7 +67,7 @@ def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
     messages = source[source.index('function appendScientificFiles'):source.index('function renderArtifacts')]
     assert 'renderArtifacts(cached.revision, inventory, true)' in messages
     assert 'api(revisionPath(sessionId, turn.revision_id))' in messages
-    assert 'revision.value.revision_id === turn.revision_id' in messages
+    assert 'revision.value?.revision_id === turn.revision_id' in messages
     assert 'revision.value.turn_id === turn.turn_id' in messages
     assert 'Promise.allSettled' in messages
     renderer = source[source.index('function renderArtifacts'):source.index('async function viewArtifact')]

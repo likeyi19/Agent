@@ -32,6 +32,7 @@ class TurnOutcome:
     guidance: object = None
     error: object = None
     presentation: object = None
+    artifacts: tuple = ()
 
 
 def _update(sessions, turn_id, **changes):

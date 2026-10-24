@@ -62,6 +62,10 @@ class AnalysisSessions:
         text(turn_id)
         if presentation is None:
             raise SessionError('A displayed presentation is required.')
+        if presentation.get('artifacts'):
+            # Bytes precede the atomic Session publication below. An orphan
+            # bundle alone never grants an ordinary read authority.
+            self.presentation_figure_inventory(session_id, turn_id, artifacts=presentation['artifacts'])
         def change(state):
             interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
             if interaction is None:
@@ -74,6 +78,104 @@ class AnalysisSessions:
             return replace(state, interactions=tuple(updated if i.turn_id == turn_id else i
                                                      for i in state.interactions))
         return self._store._update(session_id, change)
+
+    @staticmethod
+    def _presentation_artifact_id(session_id, turn_id, pin):
+        return digest(dict(session_id=session_id, turn_id=turn_id,
+            **{k: pin[k] for k in ('manifest_sha256', 'png_sha256', 'figure_id')}))
+
+    def compose_visualization(self, session_id, interaction):
+        """Render one exact request from accepted inputs, never scientific work.
+
+        This is called only for a live interpreted response. Existing bundles
+        without a committed response are conflicts, never recovery candidates.
+        """
+        from .result_reading import visualization_inputs, cell_overlay
+        from agent.report.visualization import build_cell_overlay_visualizations
+        current = next((i for i in self.load(session_id).interactions
+                        if i.turn_id == interaction.turn_id), None)
+        if (current is None or current.presentation is not None
+                or replace(current, status=interaction.status) != interaction):
+            raise SessionConflictError('Presentation is not a new captured interaction.')
+        inputs = visualization_inputs(self, session_id, interaction)
+        if inputs is None:
+            return (), ()
+        root = self._application._workspace.interaction_presentation_root(
+            session_id, interaction.turn_id, create=True)
+        result = build_cell_overlay_visualizations(lambda: cell_overlay(self, *inputs), root,
+            publisher=dict(session_id=session_id, turn_id=interaction.turn_id))
+        pins = []
+        for figure in result['figures']:
+            pin = dict(manifest_sha256=result['manifest_sha256'],
+                png_sha256=figure['png_sha256'], figure_id=figure['figure_id'])
+            pins.append(dict(artifact_id=self._presentation_artifact_id(
+                session_id, interaction.turn_id, pin), **pin))
+        pins = tuple(pins)
+        return pins, self.presentation_figure_inventory(session_id, interaction.turn_id, artifacts=pins)
+
+    def presentation_figure_inventory(self, session_id, turn_id, *, artifacts=None):
+        """Read only committed pins, or explicit pins during live publication.
+
+        No directory discovery, source reconstruction or image regeneration occurs.
+        The manifest separates the Interaction publisher from scientific sources.
+        """
+        import json
+        from .interactive_schemas import PresentedResponse
+        from .matrix_delivery import _open_matrix_source
+        from .dialogue_evidence import figure_metadata, MAX_EVIDENCE_BYTES
+        from agent.report.visualization import (_reject_duplicate_keys, _reject_constant,
+            ANALYSIS_VISUALIZATION_ARTIFACT_TYPE, ANALYSIS_VISUALIZATION_MANIFEST_FILENAME)
+        state = self.load(session_id)
+        interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if interaction is None:
+            raise SessionError('Unknown interaction.')
+        if artifacts is None:
+            artifacts = () if interaction.presentation is None else interaction.presentation.get('artifacts', ())
+        if not artifacts:
+            return ()
+        pins = PresentedResponse(kind='answer', status='answered', text='', version=3,
+                                 artifacts=artifacts).artifacts
+        workspace = self._application._workspace
+        root = workspace.interaction_presentation_root(session_id, turn_id)
+        bundle = root / 'analysis_visualizations'
+        manifest_path = bundle / ANALYSIS_VISUALIZATION_MANIFEST_FILENAME
+        with _open_matrix_source(manifest_path, root) as stream:
+            raw = stream.read(MAX_EVIDENCE_BYTES + 1)
+        manifest_sha256 = hashlib.sha256(raw).hexdigest()
+        if len(raw) > MAX_EVIDENCE_BYTES or any(p['manifest_sha256'] != manifest_sha256 for p in pins):
+            raise SessionError('Changed presentation manifest.')
+        manifest = json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
+        publisher = dict(kind='interaction', session_id=session_id, turn_id=turn_id)
+        if (type(manifest) is not dict or manifest.get('schema_version') != 2
+                or manifest.get('artifact_type') != ANALYSIS_VISUALIZATION_ARTIFACT_TYPE
+                or manifest.get('status') != 'success' or manifest.get('publisher') != publisher):
+            raise SessionError('Changed presentation publisher.')
+        records = manifest.get('figures', ())
+        if (type(records) is not list or any(type(r) is not dict for r in records)
+                or len(records) != len(pins) or len({r['figure_id'] for r in records}) != len(records)):
+            raise SessionError('Changed presentation figure set.')
+        inventory = []
+        for pin in pins:
+            if pin['artifact_id'] != self._presentation_artifact_id(session_id, turn_id, pin):
+                raise SessionError('Changed presentation artifact identity.')
+            matches = [r for r in records if r['figure_id'] == pin['figure_id']]
+            if len(matches) != 1:
+                raise SessionError('Missing presentation figure.')
+            record = matches[0]
+            relative = Path(record['relative_path'])
+            if (relative.is_absolute() or len(relative.parts) != 2 or relative.parts[0] != 'figures'
+                    or relative.suffix != '.png' or '..' in relative.parts
+                    or record['png_sha256'] != pin['png_sha256']):
+                raise SessionError('Invalid presentation figure location.')
+            path = bundle / relative
+            with _open_matrix_source(path, root) as stream:
+                data = stream.read(16 * 1024 * 1024 + 1)
+            if len(data) > 16 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != pin['png_sha256']:
+                raise SessionError('Changed presentation figure bytes.')
+            metadata = figure_metadata(record, manifest_sha256=manifest_sha256, publisher=publisher)
+            inventory.append(dict(path=str(path), sha256=pin['png_sha256'], metadata=metadata,
+                                  artifact_id=pin['artifact_id']))
+        return tuple(inventory)
 
     def answer(self, session_id, request):
         """Read-only structured answer; no interpreter, Planner, or scientific calls."""

@@ -161,7 +161,7 @@ def test_unasserted_pair_does_not_license_comparative_prose(app, monkeypatch, ca
             p = json.loads(prompt)
             if 'grounding_review_version' in p:
                 assert not p['paragraphs'][0]['comparisons']
-                return json.dumps(dict(verdicts={row['id']: 'unsupported' for row in p['paragraphs']}))
+                return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='unsupported', independent=True) for row in p['paragraphs']}))
             return super().complete(prompt=prompt, response_schema=response_schema)
     result = ask(forbid_work(app, monkeypatch), 'pairs', 'Compare with the parent.',
         Unsupported(question(comparison=dict(output='r1', subject=None)), response=different_fields))

@@ -171,7 +171,7 @@ def case(app, monkeypatch, *, failure=None):
                     text='No biological identity is established.',citations=[],comparisons=[])]))
             if 'grounding_review_version' in value:
                 self.phases.append('review')
-                return json.dumps(dict(verdicts={p['id']:'unsupported' for p in value['paragraphs']}))
+                return json.dumps(dict(integrity='intact', verdicts={p['id']:dict(verdict='unsupported', independent=True) for p in value['paragraphs']}))
             pytest.fail('Export entered Planner or another model phase')
     facade=InteractiveAgentApplication(guarded.workspace_root,model_profiles=PROFILES,default_profile_id='alpha',
         registry=guarded.registry,planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':Model}))

@@ -26,7 +26,7 @@ class ScriptedModel:
         self.calls.append((json.loads(prompt), response_schema))
         data = json.loads(prompt)
         if "grounding_review_version" in data:
-            return json.dumps(dict(verdicts={row['id']: "entailed" for row in data['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict="entailed", independent=True) for row in data['paragraphs']}))
         assert self.outcomes, "Qualification made an unexpected model call"
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):

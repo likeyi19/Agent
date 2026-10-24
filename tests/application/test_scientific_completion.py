@@ -51,7 +51,7 @@ class CompletionModel(ScriptedModel):
                 text='The accepted inspection describes two cells in a sparse matrix. This does not establish biological quality.',
                 kind='finding', citations=refs, comparisons=[])]))
         if phase == 'grounding_review_version' and self.failure == 'review':
-            return json.dumps(dict(verdicts={p['id']: 'unsupported' for p in payload['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={p['id']: dict(verdict='unsupported', independent=True) for p in payload['paragraphs']}))
         return super().complete(prompt=prompt, response_schema=response_schema)
 
 
@@ -348,7 +348,7 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None, compare=False, expla
                     citations=[table['claim_id']], comparisons=[])]))
             if 'grounding_review_version' in value:
                 assert value['evidence']['delivery']['figure_relationships'][0]['coordinate_reused']
-                return json.dumps(dict(verdicts={row['id']:'unsupported' if failure=='review' else 'entailed'
+                return json.dumps(dict(integrity='intact', verdicts={row['id']:dict(verdict='unsupported' if failure=='review' else 'entailed', independent=True)
                     for row in value['paragraphs']}))
             raise AssertionError('Unexpected provider phase')
     def factory(profile):
@@ -611,7 +611,7 @@ def test_standalone_source_coloring_preserves_registration_meaning_and_figure_wh
             payload=json.loads(prompt)
             if 'grounding_review_version' in payload:
                 self.calls.append(payload)
-                return json.dumps(dict(verdicts={r['id']:'unsupported' if withhold else 'entailed'
+                return json.dumps(dict(integrity='intact', verdicts={r['id']:dict(verdict='unsupported' if withhold else 'entailed', independent=True)
                     for r in payload['paragraphs']}))
             return super().complete(prompt=prompt,response_schema=response_schema)
     model=PresentationModel(decision,response=reply)

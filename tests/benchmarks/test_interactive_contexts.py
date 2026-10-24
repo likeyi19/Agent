@@ -25,7 +25,7 @@ class Witness:
         data = json.loads(prompt)
         self.calls.append((data, response_schema))
         if "grounding_review_version" in data:
-            return json.dumps(dict(verdicts={row['id']: "entailed" for row in data['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict="entailed", independent=True) for row in data['paragraphs']}))
         return json.dumps(self.response(data))
 
 

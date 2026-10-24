@@ -9,7 +9,7 @@ class Guidance:
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
         if 'grounding_review_version' in p:
-            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
         if 'turn_schema_version' in p:
             targets = [dict(output=o['handle'],subject=None) for o in p['dialogue']['outputs']
                        if 'current' in o['relations'] and o['output_name'] in ('qc','selection','matrix')]

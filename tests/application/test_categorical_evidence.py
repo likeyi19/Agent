@@ -306,7 +306,7 @@ def test_derived_table_does_not_bypass_r5_consistency_review(app):
             value=json.loads(prompt)
             if 'grounding_review_version' in value:
                 self.reviews+=1
-                return json.dumps(dict(verdicts={row['id']:'unsupported' for row in value['paragraphs']}))
+                return json.dumps(dict(integrity='intact', verdicts={row['id']:dict(verdict='unsupported', independent=True) for row in value['paragraphs']}))
             return super().complete(prompt=prompt,response_schema=response_schema)
     model=RejectingReview(dict(question('g0'),detail=selected()),['detail.category_counts'])
     result=ask(app,'review','Describe the supplied treatment distribution.',model)

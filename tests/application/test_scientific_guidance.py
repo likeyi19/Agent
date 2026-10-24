@@ -30,7 +30,7 @@ class Model:
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
         if 'grounding_review_version' in p:
-            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
         self.requests.append((prompt, response_schema))
         if 'guidance_schema_version' in p:
             p['context'] = expand_context(p['context'])

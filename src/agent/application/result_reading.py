@@ -217,6 +217,7 @@ def cell_overlay(sessions, coordinate, categories, field):
                  else 'analysis_path'} if field.startswith('result:') else {}),
             artifact_kind='categorical_observations', artifact_path=artifact['path'],
             integrity=dict(sha256=artifact['sha256']), role='categories',
+            observation_role=other_identity['role'],
             accepted_output=dict(categories), field=field, source_sha256=other_identity['source_sha256'],
             **({'neighbors_identity_sha256': other_identity['neighbors_identity_sha256']}
                if other_identity.get('neighbors_identity_sha256') is not None else {}))

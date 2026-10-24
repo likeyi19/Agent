@@ -39,7 +39,9 @@ def test_descriptive_parameters_need_no_population_correspondence(app, monkeypat
     after = guarded.sessions.load('session')
     assert after.revisions == before.revisions and after.generation == before.generation
     if tool == 'compute_cell_umap':
-        assert 'rotation' in result.text and 'biological' in result.text
+        from agent.application.dialogue_evidence import RESULT_LIMITATIONS
+        assert RESULT_LIMITATIONS[tool] in result.scientific.limitations
+        assert any('rotation' in limit and 'biological' in limit for limit in result.scientific.limitations)
 
 
 def test_explicit_older_revision_is_offered_without_navigation(app, monkeypatch):

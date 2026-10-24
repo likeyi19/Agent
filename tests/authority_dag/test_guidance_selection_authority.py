@@ -16,7 +16,7 @@ class InteractionModel:
     def complete(self, *, prompt, response_schema):
         p=json.loads(prompt)
         if 'grounding_review_version' in p:
-            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
         if 'turn_schema_version' in p:
             if self.candidate:
                 decision=dict(kind='execute_candidate',candidate=self.candidate,evidence='Run option 1.')

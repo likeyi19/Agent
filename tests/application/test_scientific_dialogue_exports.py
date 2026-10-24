@@ -35,7 +35,7 @@ class ExportModel(Model):
             self.calls.append(payload)
             selected = payload['evidence']['delivery']['selected_export']
             assert selected['actual_download_status'] == 'NOT_RECORDED'
-            return json.dumps(dict(verdicts={row['id']:'unsupported' if self.withhold else 'entailed'
+            return json.dumps(dict(integrity='intact', verdicts={row['id']:dict(verdict='unsupported' if self.withhold else 'entailed', independent=True)
                 for row in payload['paragraphs']}))
         return super().complete(prompt=prompt, response_schema=response_schema)
 

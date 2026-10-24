@@ -27,14 +27,14 @@ class Model:
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
         if 'grounding_review_version' in value:
-            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             choice = self.decision(value) if callable(self.decision) else self.decision
             return json.dumps(dict(turn_schema_version=1, decision=choice))
         if 'output_selection_schema_version' in value:
             return json.dumps(dict(outputs=[dict(name='inspection',step_id='inspect',output_key='n_cells')]))
-        assert value['dialogue_schema_version'] == 3
+        assert value['dialogue_schema_version'] == 4
         if self.started: self.started.set()
         if self.release: assert self.release.wait(10)
         if self.response is not None:
@@ -72,7 +72,9 @@ def test_annotation_multiturn_subject_pair_provenance_and_limitation(app, monkey
     assert 'group 3' in first.text and 'CD8 T' in first.text
     why = ask(app, 'b', 'Why?', Model(question('@focus'), ['primary_annotation'], support='insufficient_evidence'))
     assert why.status == 'answered' and why.scientific.support == 'insufficient_evidence'
-    assert 'marker rationale' in why.text
+    from agent.application.dialogue_evidence import RESULT_LIMITATIONS
+    assert RESULT_LIMITATIONS['annotate_scATAC_cell_types'] in why.scientific.limitations
+    assert any(c.field == 'primary_annotation' and c.value == 'CD8 T' for c in why.scientific.claims)
     other = ask(app, 'c', 'What about cluster 7?', Model(question('@focus','7',focus='continue'), ['primary_annotation']))
     assert other.status == 'answered' and 'B cell' in other.text and 'group 7' in other.text
     pair = ask(app, 'd', 'How are the two different?', Model(question('@focus', comparison=dict(output='@previous',subject=None)), ['primary_annotation','n_cells']))
@@ -216,7 +218,7 @@ class Model:
   if 'turn_schema_version' in p:
    return json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer',intent='scientific',target=dict(output='@focus',subject=None),comparison=None,focus='question')))
   if 'grounding_review_version' in p:
-   return json.dumps(dict(verdicts={row['id']: 'entailed' for row in p['paragraphs']}))
+   return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
   c=next(c['claim_id'] for c in p['evidence']['claims'] if c['field']=='primary_annotation')
   return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(text='The recorded assignment follows.', kind='finding', citations=[c], comparisons=[])]))
 app=ResearchAgentApplication(sys.argv[1])

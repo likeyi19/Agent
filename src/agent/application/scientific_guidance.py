@@ -221,6 +221,8 @@ def _model_context(public):
 def answer(sessions, session_id, interaction, model):
     from .turns import TurnOutcome
     stage = 'evidence_context'
+    diagnostic = {}
+    diagnostic_context = (session_id, interaction.turn_id)
     try:
         public, claims = context(sessions, session_id, interaction)
         fixed = interaction.guidance_candidates
@@ -273,7 +275,9 @@ def answer(sessions, session_id, interaction, model):
                          else _serialize(next(r for r in fixed if r['capability'] == tool)))
             candidates.append(GuidanceCandidate(reference, public['readiness'][tool], explanation))
         if fixed is not None and set(names) != set(tools): raise ValueError('Candidate references changed on retry.')
-        dialogue.review_response(model, explanations, public['evidence'], guidance=review_context)
+        diagnostic.update(candidate=explanations, evidence=public['evidence'])
+        dialogue.review_response(model, explanations, public['evidence'], guidance=review_context,
+                                 diagnostic=diagnostic)
         candidates.sort(key=lambda c:c.reference['capability'])
         stage = 'evidence_freshness'
         refreshed, current_claims = context(sessions, session_id, interaction)
@@ -303,14 +307,16 @@ def answer(sessions, session_id, interaction, model):
             + ', '.join(c.readiness['required_ports_without_supplied_request_source'])
             for n,c in enumerate(candidates))
         text += '\n\n' + '\n'.join(dict.fromkeys((*LIMITATIONS, *refreshed['evidence']['limitations'])))
+        dialogue._diagnose('semantic_review', 'reviewed_response', context=diagnostic_context, **diagnostic)
         return TurnOutcome('answer', 'answered', text=text, guidance=GuidanceResponse(tuple(candidates)))
     except (ValueError, TypeError, KeyError, RuntimeError, OSError) as exc:
         if isinstance(exc, dialogue._AnswerFailure):
-            dialogue._diagnose(exc.stage, exc.reason)
+            dialogue._diagnose(exc.stage, exc.reason, context=diagnostic_context, **diagnostic)
         else:
             dialogue._diagnose(stage, {'provider': 'provider_failure',
                 'parsing': 'malformed_provider_output', 'response_schema': 'malformed_provider_output',
-                'evidence_freshness': 'changed_accepted_evidence'}.get(stage, 'invalid_evidence_context'))
+                'evidence_freshness': 'changed_accepted_evidence'}.get(stage, 'invalid_evidence_context'),
+                context=diagnostic_context, **diagnostic)
         def fail(state):
             return replace(state, interactions=tuple(replace(i, status='failed')
                 if i.turn_id == interaction.turn_id and i.status == 'admitted' else i for i in state.interactions))

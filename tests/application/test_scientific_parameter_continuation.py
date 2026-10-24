@@ -68,7 +68,7 @@ class SelectionModel:
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
         if 'grounding_review_version' in value:
-            return json.dumps(dict(verdicts={row['id']: 'entailed' for row in value['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             return json.dumps(dict(turn_schema_version=1,

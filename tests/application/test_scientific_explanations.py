@@ -27,7 +27,7 @@ class Model:
         if 'grounding_review_version' in p:
             if self.review_callback:
                 self.review_callback()
-            return json.dumps(dict(verdicts={row['id']: self.verdict for row in p['paragraphs']}))
+            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict=self.verdict, independent=True) for row in p['paragraphs']}))
         return json.dumps(self.author(p['evidence']))
 
 
@@ -154,7 +154,7 @@ def test_guidance_uses_shared_review_and_does_not_publish_rejected_candidates(ap
             p = json.loads(prompt)
             if 'grounding_review_version' in p:
                 seen.append(p)
-                return json.dumps(dict(verdicts={row['id']: 'unsupported' for row in p['paragraphs']}))
+                return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='unsupported', independent=True) for row in p['paragraphs']}))
             return super().complete(prompt=prompt, response_schema=response_schema)
     result = guide(guard(app, monkeypatch), model=Rejected())
     assert result.status == 'unavailable' and result.guidance is None
@@ -255,19 +255,20 @@ def test_guidance_one_review_exact_mapping_and_failure_preservation(app, monkeyp
             for row in p['paragraphs']:
                 assert row['id'].startswith(row['candidate'] + ':')
                 assert row['candidate'] in p['guidance']
-            values = {row['id']: 'entailed' for row in reversed(p['paragraphs'])}
+            values = {row['id']: dict(verdict='entailed', independent=True)
+                      for row in reversed(p['paragraphs'])}
             assert set(response_schema['properties']['verdicts']['required']) == set(values)
             if attack == 'provider': raise RuntimeError('PRIVATE_PROVIDER_DATA')
-            if attack == 'unsupported': values['cluster_cells:2'] = 'unsupported'
+            if attack == 'unsupported': values['cluster_cells:2']['verdict'] = 'unsupported'
             if attack == 'missing': values.pop('cluster_cells:2')
-            if attack == 'extra': values['unoffered:0'] = 'entailed'
+            if attack == 'extra': values['unoffered:0'] = dict(verdict='entailed', independent=True)
             if attack == 'wrong_candidate': values['other:2'] = values.pop('cluster_cells:2')
             if attack == 'wrong_paragraph': values['cluster_cells:3'] = values.pop('cluster_cells:2')
-            if attack == 'unknown': values['cluster_cells:2'] = 'probably'
+            if attack == 'unknown': values['cluster_cells:2']['verdict'] = 'probably'
             if attack == 'list': values = list(values.values())
             if attack == 'duplicate_json_key':
                 return '{"verdicts":{"cluster_cells:0":"entailed","cluster_cells:0":"unsupported"}}'
-            return json.dumps(dict(verdicts=values))
+            return json.dumps(dict(integrity='intact', verdicts=values))
     model = Reviewed(tools=('inspect_scATAC', 'cluster_cells'))
     result = guide(app, model=model)
     assert len(reviews) == 1

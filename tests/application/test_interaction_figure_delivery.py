@@ -58,7 +58,7 @@ def case(tmp_path, monkeypatch):
                     kind='limitation', text='No biological identity is established.', citations=[], comparisons=[])]))
             if 'grounding_review_version' in value:
                 self.phases.append('review')
-                return json.dumps(dict(verdicts={p['id']: 'unsupported' for p in value['paragraphs']}))
+                return json.dumps(dict(integrity='intact', verdicts={p['id']: dict(verdict='unsupported', independent=True) for p in value['paragraphs']}))
             raise AssertionError('Read-only presentation entered a planning/provider phase')
 
     factory = PlanningModelFactoryRegistry({'scripted': Model})

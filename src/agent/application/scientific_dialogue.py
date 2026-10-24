@@ -3,7 +3,7 @@
 Accepted facts are projected with exact attribution. Natural statements undergo
 reference checks and semantic review; model-authored explanation is not authority.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import logging
 import re
@@ -12,7 +12,6 @@ from agent.schemas.orchestration import _JsonModel, _serialize, freeze_json_mapp
 from .turn_decisions import IntentError, _object, _shape
 from .session_state import SessionConflictError
 from .turn_context import stored_step, result_groups as _result_groups, result_descriptions
-from .dialogue_evidence import RESULT_LIMITATIONS
 
 MAX_CONTEXT_BYTES = 32768
 MAX_CLAIMS = 64
@@ -601,7 +600,10 @@ def _descriptive_fields(views):
 def context(sessions, session_id, admitted, *, evidence_targets=None):
     targets = ([admitted['target']] + ([] if admitted['comparison'] is None else [admitted['comparison']])
                if evidence_targets is None else list(evidence_targets))
-    if evidence_targets is not None and not 1 <= len(targets) <= 32:
+    # Catalog-only guidance already admits an explicit empty evidence set. It
+    # grants no scientific facts; scientific answers/completion still need one.
+    minimum_targets = 0 if admitted.get('intent') == 'guidance' else 1
+    if evidence_targets is not None and not minimum_targets <= len(targets) <= 32:
         raise IntentError('unavailable_context')
     # Completion places the explicitly requested pair first, followed by other
     # accepted execution summaries. Both paths use the same two-source reader.
@@ -642,7 +644,6 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             labels[-1]['completion_role'] = ('created_by_this_run'
                 if locator['run_id'] == admitted['completion_run_id'] else
                 'retained_accepted_result' if retained else 'referenced_accepted_result')
-        if view.source.tool_name in RESULT_LIMITATIONS: meanings[f'm{index}'] = RESULT_LIMITATIONS[view.source.tool_name]
         if view.source.tool_name == 'compute_scATAC_qc':
             from agent.tools.data.scatac_qc_profile import PROFILE, PROFILE_SHA256
             facts = {f.field:f.value for f in view.facts if f.status == 'available'}
@@ -843,7 +844,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
     else:
         state = sessions.load(session_id)
         predecessor = next((i for i in state.interactions if i.turn_id == admitted.get('predecessor')), None)
-        if (predecessor is not None and predecessor.presentation is not None
+        if (targets and predecessor is not None and predecessor.presentation is not None
                 and (predecessor.admitted or {}).get('export') is not None):
             previous_recipe = _selected_export_context(sessions, session_id,
                 dict(presentation_turn_id=predecessor.turn_id), matching_targets=targets)
@@ -894,9 +895,68 @@ class _AnswerFailure(ValueError):
         super().__init__(reason)
 
 
-def _diagnose(stage, reason):
-    logging.getLogger(__name__).warning('Scientific answer diagnostic: %s/%s', stage, reason,
-        extra={'scientific_answer_stage': stage, 'scientific_answer_reason': reason})
+def _diagnose(stage, reason, *, context=None, candidate=None, evidence=None,
+              units=None, retained=()):
+    """Best-effort private review observations, without scientific text.
+
+    Fingerprints identify the bounded material consumed by this language stage;
+    they do not establish why a semantic judgement was correct. Unit ordinals
+    and retention describe this review only, never a committed presentation.
+    """
+    try:
+        import hashlib
+        import os
+        import threading
+        logger = logging.getLogger(__name__)
+        if not logger.isEnabledFor(logging.WARNING):
+            return
+        stages = frozenset(('diagnostic', 'evidence_context', 'evidence_binding',
+            'comparison_binding', 'provider', 'parsing', 'response_schema',
+            'semantic_review_provider', 'semantic_review_schema', 'semantic_review',
+            'evidence_freshness'))
+        reasons = frozenset(('unclassified_failure', 'invalid_reference', 'missing_evidence',
+            'missing_operand', 'provider_failure', 'malformed_provider_output',
+            'invalid_review', 'unsupported_statement', 'no_independent_units',
+            'invalid_attribution', 'incoherent_response', 'dependent_content',
+            'reviewed_response', 'partially_reviewed_response',
+            'changed_accepted_evidence', 'incompatible_scientific_context',
+            'subject_not_in_summary', 'unavailable_accepted_evidence',
+            'invalid_evidence_context'))
+        stage = stage if type(stage) is str and stage in stages else 'diagnostic'
+        reason = reason if type(reason) is str and reason in reasons else 'unclassified_failure'
+        row = dict(stage=stage, reason=reason, process=os.getpid(), thread=threading.get_ident())
+        if type(context) in (tuple, list) and len(context) == 2:
+            for key, value in zip(('session_id', 'turn_id'), context):
+                if type(value) is str and len(value) <= 4096:
+                    row[key + '_sha256'] = hashlib.sha256(value.encode()).hexdigest()
+        for key, value, maximum in (('candidate', candidate, 16384),
+                                     ('evidence', evidence, MAX_TARGET_CONTEXT_BYTES)):
+            try:
+                value = _serialize(value)
+                if type(value) not in (dict, list):
+                    continue
+                encoded = json.dumps(value, sort_keys=True, separators=(',', ':'),
+                    ensure_ascii=False, allow_nan=False).encode()
+                if len(encoded) <= maximum:
+                    row[key + '_sha256'] = hashlib.sha256(encoded).hexdigest()
+                    row[key + '_bytes'] = len(encoded)
+            except (ValueError, TypeError, KeyError, RecursionError):
+                pass
+        if (type(units) in (tuple, list) and len(units) <= 24
+                and all(type(unit) is dict
+                    and unit.get('verdict') in ('entailed', 'unsupported')
+                    and type(unit.get('independent')) is bool for unit in units)):
+            row['review_units'] = [dict(index=index, verdict=unit['verdict'],
+                independent=unit['independent']) for index, unit in enumerate(units)]
+            if (type(retained) in (tuple, list) and len(retained) <= len(units)
+                    and all(type(index) is int and 0 <= index < len(units) for index in retained)
+                    and len(set(retained)) == len(retained)):
+                row['review_retained'] = list(retained)
+        logger.warning('Scientific answer diagnostic: %s/%s %s', stage, reason,
+            json.dumps(row, sort_keys=True, separators=(',', ':')),
+            extra={'scientific_answer_stage': stage, 'scientific_answer_reason': reason})
+    except Exception:
+        pass
 
 
 def _json(raw):
@@ -920,9 +980,18 @@ def response_schema(public, claims):
             comparisons=references(p['id'] for p in public.get('comparison', {}).get('pairs', ()))))}))
 
 
+PARTIAL_NOTICE = 'Some parts could not be independently supported by the accepted evidence and have been withheld.'
+
+
 ANSWER_INSTRUCTIONS = (
     'Write natural scientific prose, including accepted numbers, units and categories where useful. '
     'Each paragraph is a short statement with exact citations and kind finding, limitation or conditional.',
+    'In a scientific answer, make each paragraph a complete response unit that can be understood on its '
+    'own. Name the relevant result, population or version and include any assumptions or caveats necessary '
+    'for that unit to be true. Do not make a unit depend on another paragraph, an unexplained pronoun or a '
+    'qualification placed elsewhere. Separate independently supported outcomes from unavailable biological '
+    'conclusions. For guidance, the requested rationale, assumptions and limitations together form one '
+    'complete candidate; keep all three parts.',
     'For focus=completion, concisely explain the accepted data, actual methods and parameters, useful results, '
     'provenance and relevant limits in response to the original request. Targets marked created_by_this_run '
     'describe this execution; retained_accepted_result targets are exact older outputs selected in this '
@@ -1014,24 +1083,44 @@ def render_response(result, public, claims):
                               tuple(public['limitations']), public['scope'])
 
 
-def review_response(model, responses, public, *, guidance=None):
+def review_response(model, responses, public, *, guidance=None, diagnostic=None):
     """Review one bounded response set after deterministic binding, in one call.
 
     Keys are local answer/capability identities; paragraph IDs bind each verdict
     independently of response ordering. Neither identity is scientific authority.
     This language judgement cannot repair text, change facts or authorize work.
+    Scientific answers can retain only independently supported complete units;
+    guidance remains an atomic rationale/assumptions/limitations candidate set.
     """
     if not 1 <= len(responses) <= 4:
         raise ValueError('Invalid review response count.')
     paragraphs = [dict(row, id=f'{key}:{index}', candidate=key)
                   for key, result in responses.items()
                   for index, row in enumerate(result['paragraphs'])]
-    verdict_fields = {p['id']: {'type': 'string', 'enum': ['entailed', 'unsupported']} for p in paragraphs}
-    schema = _object(dict(verdicts=_object(verdict_fields)))
-    prompt = json.dumps(dict(grounding_review_version=2, evidence=public,
+    verdict_fields = {p['id']: _object(dict(
+        verdict={'type': 'string', 'enum': ['entailed', 'unsupported']},
+        independent={'type': 'boolean'})) for p in paragraphs}
+    schema = _object(dict(integrity={'type': 'string',
+        'enum': ['intact', 'invalid_attribution', 'incoherent']}, verdicts=_object(verdict_fields)))
+    prompt = json.dumps(dict(grounding_review_version=3, evidence=public,
+        retention_policy='atomic_guidance' if guidance is not None else 'independent_answer_units',
         paragraphs=paragraphs, guidance=guidance, instructions=[
             'Check factual consistency, not prose style or exhaustive citation coverage. Return a verdict '
             'for every exact paragraph ID. Guidance contracts are keyed by the paragraph candidate identity.',
+            'Return integrity=intact only when the candidate attribution and response coherence can be '
+            'established from this exact context. Use invalid_attribution if any paragraph substitutes a '
+            'source, population, subject or version; this invalidates the complete response set. Use '
+            'incoherent when essential assumptions, caveats or referents cannot be resolved safely for '
+            'the response. Ordinary unsupported claims can receive local unsupported verdicts under '
+            'intact integrity; do not mistake an unsupported biological conclusion for evidence corruption.',
+            'For every unit, separately assess factual entailment and independent coherence. independent=true '
+            'means the exact text is complete and scientifically meaningful if every other paragraph were '
+            'removed, with explicit referents and all qualifications it needs. A plausible consequence '
+            'depending on another paragraph or a rejected premise is not independent. Missing caveats or '
+            'ambiguous referents cannot be repaired by deleting other text. Do not rewrite the candidate. '
+            'For scientific answers with any unsupported unit, only entailed independent units may survive; '
+            'assess their coherence as a retained set too. For atomic_guidance, all three parts of every '
+            'candidate must be supported together; independence does not permit dropping its limitations.',
             'Reject unsupported empirical claims, incorrect accepted values or units, substituted methods, '
             'and wrong source, population, subject or version attribution. A valid citation alone does not '
             'support surrounding assertions. Check the actual assertions regardless of paragraph kind; '
@@ -1068,19 +1157,37 @@ def review_response(model, responses, public, *, guidance=None):
         raise _AnswerFailure('semantic_review_provider', 'provider_failure') from exc
     try:
         verdict = _json(raw)
-        _shape(verdict, ('verdicts',))
+        _shape(verdict, ('integrity', 'verdicts'))
+        if verdict['integrity'] not in ('intact', 'invalid_attribution', 'incoherent'):
+            raise ValueError('Invalid review integrity.')
         values = verdict['verdicts']
         _shape(values, verdict_fields)
-        if any(v not in ('entailed', 'unsupported') for v in values.values()):
-            raise ValueError('Invalid review verdict.')
+        for value in values.values():
+            _shape(value, ('verdict', 'independent'))
+            if value['verdict'] not in ('entailed', 'unsupported') or type(value['independent']) is not bool:
+                raise ValueError('Invalid review verdict.')
     except (ValueError, TypeError, KeyError, RuntimeError) as exc:
         raise _AnswerFailure('semantic_review_schema', 'invalid_review') from exc
-    if any(v != 'entailed' for v in values.values()):
+    units = [values[p['id']] for p in paragraphs]
+    if diagnostic is not None:
+        diagnostic.update(units=units, retained=())
+    if verdict['integrity'] != 'intact':
+        raise _AnswerFailure('semantic_review', 'invalid_attribution'
+            if verdict['integrity'] == 'invalid_attribution' else 'incoherent_response')
+    retained = tuple(index for index, value in enumerate(units) if value['verdict'] == 'entailed')
+    if not retained or guidance is not None and len(retained) != len(units):
         raise _AnswerFailure('semantic_review', 'unsupported_statement')
+    if len(retained) != len(units) and any(not units[index]['independent'] for index in retained):
+        raise _AnswerFailure('semantic_review', 'dependent_content')
+    if diagnostic is not None:
+        diagnostic['retained'] = retained
+    return retained
 
 
-def generate(model, question, focus, public, claims):
-    prompt = json.dumps(dict(dialogue_schema_version=3, question=question, focus=focus,
+def generate(model, question, focus, public, claims, *, diagnostic=None):
+    if diagnostic is not None:
+        diagnostic['evidence'] = public
+    prompt = json.dumps(dict(dialogue_schema_version=4, question=question, focus=focus,
                              evidence=public, instructions=ANSWER_INSTRUCTIONS), ensure_ascii=False)
     try:
         raw = model.complete(prompt=prompt, response_schema=response_schema(public, claims))
@@ -1090,14 +1197,24 @@ def generate(model, question, focus, public, claims):
         result = _json(raw)
     except (ValueError, TypeError, RecursionError) as exc:
         raise _AnswerFailure('parsing', 'malformed_provider_output') from exc
+    if diagnostic is not None:
+        diagnostic['candidate'] = result
     try:
         response = render_response(result, public, claims)
     except _AnswerFailure:
         raise
     except (ValueError, TypeError, KeyError) as exc:
         raise _AnswerFailure('response_schema', 'malformed_provider_output') from exc
-    review_response(model, {'answer': result}, public)
-    return response
+    retained = review_response(model, {'answer': result}, public, diagnostic=diagnostic)
+    if len(retained) == len(result['paragraphs']):
+        return response
+    # All bindings were checked before review. Keep complete reviewed units in
+    # their original order and only their already-bound citation union.
+    rows = [result['paragraphs'][index] for index in retained]
+    cited = {key for row in rows for key in row['citations']}
+    return replace(response, claims=tuple(c for c in response.claims if c.claim_id in cited),
+        support='insufficient_evidence', explanation='\n\n'.join(row['text'] for row in rows),
+        limitations=tuple(dict.fromkeys((*response.limitations, PARTIAL_NOTICE))))
 
 
 def _compose_presentation(sessions, session_id, interaction, model):
@@ -1184,6 +1301,8 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
            evidence_context=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
+    diagnostic = {}
+    diagnostic_context = (session_id, interaction.turn_id)
     selected_export = None
     artifacts = tuple(interaction.admitted.get('presentation_artifacts', ()))
     if evidence_targets is None and interaction.admitted.get('visualization') is not None:
@@ -1205,7 +1324,8 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
                           if evidence_context is None else evidence_context)
         selected_export = public.get('delivery', {}).get('selected_export')
         response = generate(model, interaction.utterance if question is None else question,
-            interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims)
+            interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims,
+            diagnostic=diagnostic)
         # Generation may take time. Recheck consumed evidence and active status;
         # never move the captured targets to a newly active revision.
         stage = 'evidence_freshness'
@@ -1217,17 +1337,19 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         if current_claims != claims or before != after:
             raise IntentError('unavailable_context')
         prefix = '' if all(t['is_active'] for t in refreshed['targets']) else 'This discussion includes explicitly referenced historical results.\n\n'
-        suffix = '\n\nI can report these accepted facts, but they do not establish any stronger conclusion.' if response.support == 'insufficient_evidence' else ''
+        suffix = '\n\n' + PARTIAL_NOTICE if PARTIAL_NOTICE in response.limitations else ''
         delivery = refreshed.get('delivery', {})
         if interaction.admitted.get('visualization') is not None:
             suffix += ('\n\nThe requested figure is available.' if delivery.get('visualization') == 'delivered' else
                        '\n\nThe requested figure has not been produced.')
         if interaction.admitted.get('export') is not None:
             suffix += '\n\n' + _export_text(delivery.get('selected_export'))
+        _diagnose('semantic_review', 'partially_reviewed_response' if PARTIAL_NOTICE in response.limitations
+            else 'reviewed_response', context=diagnostic_context, **diagnostic)
         return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix,
                            scientific=response, artifacts=artifacts)
     except _AnswerFailure as exc:
-        _diagnose(exc.stage, exc.reason)
+        _diagnose(exc.stage, exc.reason, context=diagnostic_context, **diagnostic)
         message = ('I could not ground the generated explanation in the accepted evidence. The result and its scientific details remain available.'
                    if exc.stage.startswith('semantic_review') else 'I could not produce a response with valid evidence bindings.')
         return unavailable(message)
@@ -1235,13 +1357,14 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         reason = ('changed_accepted_evidence' if stage == 'evidence_freshness' else
                   'incompatible_scientific_context' if exc.reason == 'incompatible_comparison' else
                   'subject_not_in_summary' if exc.reason == 'subject_not_in_summary' else 'unavailable_accepted_evidence')
-        _diagnose(stage, reason)
+        _diagnose(stage, reason, context=diagnostic_context, **diagnostic)
         messages = {'subject_not_in_summary':'The current compact evidence does not contain that subject detail; this does not establish scientific absence.',
                     'incompatible_comparison':'These result scopes do not support this comparison without an explicit scientific correspondence.',
                     'invalid_decision':'I could not produce a response with valid evidence bindings.'}
         return unavailable(messages.get(exc.reason, 'The required accepted evidence is unavailable.'))
     except (ValueError, TypeError, KeyError, RuntimeError, OSError):
-        _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context')
+        _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context',
+            context=diagnostic_context, **diagnostic)
         return unavailable('I could not produce a response with valid evidence bindings.')
 
 
@@ -1315,13 +1438,12 @@ def _figure_relationships(state, figures, matching=()):
         sources = []
         for source in metadata['sources']:
             output = source.get('output')
-            item = {k:source[k] for k in ('tool_name', 'role', 'field') if k in source}
+            item = {k:source[k] for k in ('tool_name', 'role', 'field', 'observation_role') if k in source}
             if output is not None:
                 revision = next(r for r in state.revisions if r.revision_id == output['revision_id'])
                 item.update(version=state.revisions.index(revision) + 1, output=output['name'])
             elif source.get('registered_source') is not None:
                 item['origin'] = 'registered_source'
-                item['observation_role'] = source['observation_role']
             sources.append(item)
         value = dict(kind=metadata['kind'], coordinate_reused=metadata.get('coordinate_reused', False),
                      satisfies_request=(metadata['manifest_sha256'], metadata['figure_id']) in identities,

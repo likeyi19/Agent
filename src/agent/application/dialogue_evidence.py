@@ -34,7 +34,7 @@ MAX_DETAIL_BYTES = 8 * 1024 * 1024
 RESULT_LIMITATIONS = {
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
-    'annotate_scATAC_cell_types': 'The compact summary records assignments and statuses. It does not contain marker rationale or calibrated confidence; omitted groups are not evidence of absent groups.',
+    'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
     'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'adapt_epizoo_species': 'Adaptation completion and structural qualification do not establish improved biological performance.',

@@ -6,6 +6,36 @@ review. The closing review below supersedes earlier unstaged-review dispositions
 R6 has not begun.
 Evidence directory: `/home/likeyi/agent-ua365-r5-woerjdq3` (outside Git).
 
+## Current OPT-2D follow-up — 2026-10-24
+
+The original R5 all-or-nothing paragraph review and its acceptance records below
+remain historical. OPT-2D refines the existing owner with generation wire version
+4 and review wire version 3. Every generated unit must first pass exact citation
+and comparison binding. One shared review then checks whole-response attribution
+and coherence, plus each unit's factual support and independent meaning. A mixed
+answer may retain only positively reviewed units that are all independently
+coherent, with their own necessary referents, assumptions and caveats. It keeps
+their original text and exact citation union and discloses that other content was
+withheld. Invalid attribution, incoherence, missing or invalid verdicts, binding
+failure, dependent retained content or changed accepted evidence still withhold
+the complete explanation.
+
+An entirely supported, coherent answer retains its original text, including
+legitimate connections between paragraphs. Guidance remains an atomic candidate
+set containing rationale, assumptions and limitations; this policy cannot remove
+its safeguards. The complete consumed evidence is still checked for freshness
+before publication. Accepted science, valid figures and qualified downloads
+remain independent of optional prose.
+
+This refines the existing generation and shared review calls without adding a
+model phase, retry, fallback generator, cache, scientific authority or persisted
+response format. Historical displayed text remains immutable. Independence and
+semantic integrity are probabilistic judgements by the configured model, not
+independent scientific proof. Current verification, authentic observation status
+and remaining limits belong to the
+[OPT-2D report](../../../agent-data/acceptance/ua3.6.5/uat-02/2026-10-24-opt-2d/REPORT.md);
+this follow-up does not extend the original R5 acceptance claims.
+
 ## Baseline and preservation
 
 HEAD, local main, origin/main and queried remote main all resolved to

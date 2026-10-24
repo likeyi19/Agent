@@ -147,7 +147,13 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
     assert production['production.epizoo'] == 0
     assert production['interpreter'] == production['planner'] == 1
     assert not {name: value for name, value in production.items() if name.startswith('source.')}
-    assert len(models) == 1 and len(models[0].calls) == 3
+    assert len(models) == 1
+    # Optional download metadata must not prevent the requested R5 explanation
+    # from reaching the existing generator after interpretation and planning.
+    phases = ('turn_schema_version', 'semantic_prompt_version',
+              'output_selection_schema_version', 'dialogue_schema_version')
+    assert [next(key for key in phases if key in value)
+            for value, _, _ in models[0].calls] == list(phases)
     model_calls = len(models[0].calls)
     child_revision = turn['revision_id']
     state = service._application.sessions.load('analysis')

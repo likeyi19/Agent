@@ -328,10 +328,20 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
                 fields=(), detail=page)
             if detail.status == 'available':
                 result['result_groups'][-1]['categorical'] = _serialize(detail.detail[0].value)
+        from .analysis_delivery import export_fields
+        try:
+            offered = export_fields(sessions, state.session_id, group['canonical'])
+            if offered:
+                result['result_groups'][-1]['export_fields'] = _serialize(offered)
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+            pass  # Optional delivery metadata does not remove accepted context.
     result['result_referents'] = _referent_choices(captured, state, groups, state.interactions)
     offered = {(o['revision_id'], o['output_name']) for o in value['outputs']}
     result['history_complete'] = all((r.revision_id, o.name) in offered
         for r in state.revisions[:value.get('context', {}).get('revision_count', 0)] for o in r.outputs)
+    if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
+        for group in result['result_groups']:
+            group.pop('export_fields', None)
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_TARGET_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return result
@@ -499,7 +509,7 @@ def admit(sessions, interaction, question, *, evidence_set=False):
         predecessor=captured['predecessor'])
     if detail is not None:
         result['detail'] = dict(detail)
-    if getattr(question, 'visualization', None) is not None:
+    if any(getattr(question, key, None) is not None for key in ('visualization', 'export')):
         from .dialogue_execution import _research_intent
         result.update(_research_intent(interaction, question))
     return result
@@ -821,9 +831,24 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         if admitted.get('presentation_artifacts'):
             delivery['visualization'] = 'delivered' if matching else 'unavailable'
     from .analysis_delivery import export_descriptions
-    exports = export_descriptions(sessions, session_id, targets)
+    try:
+        exports = export_descriptions(sessions, session_id, targets)
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+        exports = ()
+        public['limitations'].append('Optional download descriptions are unavailable for a selected result.')
     if exports:
         public.setdefault('delivery', {})['exports'] = [_serialize(row) for row in exports]
+    if admitted.get('export') is not None:
+        public.setdefault('delivery', {})['selected_export'] = _selected_export_context(sessions, session_id, admitted)
+    else:
+        state = sessions.load(session_id)
+        predecessor = next((i for i in state.interactions if i.turn_id == admitted.get('predecessor')), None)
+        if (predecessor is not None and predecessor.presentation is not None
+                and (predecessor.admitted or {}).get('export') is not None):
+            previous_recipe = _selected_export_context(sessions, session_id,
+                dict(presentation_turn_id=predecessor.turn_id), matching_targets=targets)
+            if previous_recipe is not None and previous_recipe['status'] == 'available_for_preparation':
+                public.setdefault('delivery', {}).setdefault('exports', []).append(previous_recipe)
     # Optional presentation metadata must not crowd out selected scientific facts.
     # The figure and download bytes remain available through their own readers.
     if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
@@ -831,6 +856,10 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         omitted = [key for key in ('exports', 'figure_relationships') if delivery.pop(key, None) is not None]
         if omitted:
             public['limitations'].append('Optional figure or download descriptions were omitted from this bounded answer context.')
+        selected = delivery.get('selected_export')
+        if selected is not None and len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
+            selected.pop('contents', None)
+            selected['contents_omitted'] = 'Selected recipe details exceed this bounded answer context.'
     if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
         raise IntentError('unavailable_context')
     return public, tuple(claims)
@@ -914,6 +943,15 @@ ANSWER_INSTRUCTIONS = (
     'payload checks occur on download. selected_result fields describe only that selected result, not all '
     'possible fields in the original source. Do not combine separate variants into an invented file or '
     'recommend a file as satisfying requested contents absent a matching descriptor.',
+    'delivery.selected_export describes one explicitly selected H5AD preparation recipe. Its original '
+    'measurements and every added field retain their own exact source version and destination mapping; '
+    'the primary target summary may describe different labels from the selected recipe components. '
+    'Only selected derived fields are added, while safe original content is retained. '
+    'available_for_preparation does not establish prepared bytes or a received download. '
+    'actual_download_status=NOT_RECORDED means this context cannot establish whether a previous transfer '
+    'completed; do not infer either successful delivery or that no download occurred. A scientific_composition '
+    'in delivery.exports is a previously selected recipe from the captured predecessor that includes an exact '
+    'selected scientific source; it is available for discussion, not fulfillment of a new export request.',
     'Cite the accepted facts supporting empirical assertions. Supplied target metadata, method context '
     'and field meanings can also support an explanation without repeated per-sentence citations. '
     'Preserve population, subject, original version and output attribution. Do not substitute values, '
@@ -1006,6 +1044,10 @@ def review_response(model, responses, public, *, guidance=None):
             'Pinned delivery.figure_relationships establish their exact presentation sources and coordinate '
             'reuse, not biological validation. delivery.exports establishes described existing preparation '
             'variants, not completed downloads or a union of separate files. Respect its payload-check scope.',
+            'delivery.selected_export qualifies only its explicitly selected original measurements and '
+            'source-to-destination fields. Respect each component version and recorded methods rather than '
+            'substituting the primary target summary. Eligibility is a preparation recipe, not prepared '
+            'or delivered bytes. NOT_RECORDED transfer status establishes no prior download outcome.',
             'When a scientific comparison is asserted, require an offered comparison ID and its exact '
             'compatible operands, or a citation to an owner-generated category_association table for its exact fields and entities. Independently attributed facts, legitimate partial answers and explanations '
             'of insufficient comparison evidence need no comparison ID. Reporting equal independent counts '
@@ -1069,10 +1111,80 @@ def _compose_presentation(sessions, session_id, interaction, model):
         return (), ()
 
 
+def _selected_export_context(sessions, session_id, admitted, *, matching_targets=None):
+    """Describe the selected W4 recipe without preparing or tracking a file."""
+    from .analysis_delivery import ExportSelectionError
+    unavailable = dict(status='unavailable', actual_download_status='NOT_RECORDED',
+                       reason='selected_sources_or_fields_unavailable')
+    try:
+        state = sessions.load(session_id)
+        interaction = next(i for i in state.interactions if i.turn_id == admitted.get('presentation_turn_id'))
+        artifact = sessions.composed_export(session_id, interaction)
+        if artifact is None:
+            return unavailable
+        reference = artifact.reference
+        contents = _serialize(reference.contents)
+        from .dialogue_evidence import _unsafe_fact_value
+        if _unsafe_fact_value(contents):
+            raise ValueError('Unsafe optional export metadata.')
+        if matching_targets is not None:
+            selected = set()
+            for target in matching_targets:
+                revision = next(r for r in state.revisions if r.revision_id == target['revision_id'])
+                output = next(o for o in revision.outputs if o.name == target['output_name']
+                    and o.accepted_step_sha256 == target['accepted_step_sha256'])
+                selected.add((output.run_id, output.step_id, output.accepted_step_sha256))
+            sources = [contents['measurement'].get('accepted_output')]
+            sources.extend(row['accepted_output'] for slot in ('observations', 'representations')
+                           for row in contents[slot])
+            if not any(source is not None and (source['run_id'], source['step_id'],
+                    source['accepted_step_sha256']) in selected for source in sources):
+                return None
+        def source(output):
+            revision = next(r for r in state.revisions if r.revision_id == output['revision_id'])
+            return dict(version=state.revisions.index(revision)+1, output=output['name'])
+        def selected(row):
+            result = {key:row[key] for key in ('field', 'destination', 'observation_role',
+                'method', 'methods', 'recorded_methods', 'parameters', 'software_versions') if key in row}
+            result['source'] = source(row['accepted_output'])
+            return result
+        measurement = contents['measurement']
+        original = {key:measurement[key] for key in ('origin', 'source_sha256') if key in measurement}
+        if 'accepted_output' in measurement:
+            original['source'] = source(measurement['accepted_output'])
+        public_contents = {key:contents[key] for key in ('policy', 'omitted_information',
+            'payload_checks', 'preparation') if key in contents}
+        public_contents.update(measurement=original,
+            observations=[selected(row) for row in contents['observations']],
+            representations=[selected(row) for row in contents['representations']])
+        return dict(status='available_for_preparation', actual_download_status='NOT_RECORDED',
+            payload_checks='performed_on_download', contents=public_contents,
+            **{key:getattr(reference, key) for key in ('handle', 'artifact_type', 'filename',
+                'title', 'purpose', 'description', 'size_bytes')})
+    except ExportSelectionError as exc:
+        reasons = dict(
+            destination_collision='A chosen destination already exists. Choose a distinct destination name.',
+            selected_field_unavailable='A selected observation field is unavailable or ineligible for this export.',
+            unqualified_measurement_source='The selected results do not establish one qualified original measurement source.')
+        if exc.reason in reasons:
+            return dict(unavailable, reason=exc.reason, message=reasons[exc.reason])
+        return unavailable
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
+        return unavailable
+
+
+def _export_text(selected):
+    return ('The requested H5AD recipe is available for preparation when downloaded.'
+            if selected is not None and selected.get('status') == 'available_for_preparation' else
+            'The requested H5AD recipe is unavailable for the selected sources or fields.'
+                + (' ' + selected['message'] if selected is not None and selected.get('message') else ''))
+
+
 def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None,
            evidence_context=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
+    selected_export = None
     artifacts = tuple(interaction.admitted.get('presentation_artifacts', ()))
     if evidence_targets is None and interaction.admitted.get('visualization') is not None:
         artifacts, _ = _compose_presentation(sessions, session_id, interaction, model)
@@ -1082,11 +1194,16 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
     def unavailable(message):
         suffix = ('\n\nThe requested figure is available.' if artifacts else
                   '\n\nThe requested figure has not been produced.' if interaction.admitted.get('visualization') else '')
-        return TurnOutcome('answer', 'answered' if artifacts else 'unavailable', text=message + suffix,
+        selected = selected_export if stage != 'evidence_freshness' else None
+        if interaction.admitted.get('export') is not None:
+            suffix += '\n\n' + _export_text(selected)
+        available = artifacts or selected is not None and selected.get('status') == 'available_for_preparation'
+        return TurnOutcome('answer', 'answered' if available else 'unavailable', text=message + suffix,
                            artifacts=artifacts)
     try:
         public, claims = (context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
                           if evidence_context is None else evidence_context)
+        selected_export = public.get('delivery', {}).get('selected_export')
         response = generate(model, interaction.utterance if question is None else question,
             interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims)
         # Generation may take time. Recheck consumed evidence and active status;
@@ -1105,6 +1222,8 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         if interaction.admitted.get('visualization') is not None:
             suffix += ('\n\nThe requested figure is available.' if delivery.get('visualization') == 'delivered' else
                        '\n\nThe requested figure has not been produced.')
+        if interaction.admitted.get('export') is not None:
+            suffix += '\n\n' + _export_text(delivery.get('selected_export'))
         return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix,
                            scientific=response, artifacts=artifacts)
     except _AnswerFailure as exc:

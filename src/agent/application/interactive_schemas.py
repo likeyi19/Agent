@@ -11,7 +11,7 @@ from dataclasses import field as dataclass_field
 import json
 import re
 
-from agent.schemas.orchestration import _JsonModel, freeze_json_mapping
+from agent.schemas.orchestration import _JsonModel, freeze_json_mapping, _serialize
 from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource
 
 
@@ -315,6 +315,7 @@ class TurnView(_JsonModel):
     state_revision: int | None = None
     base_revision_id: str | None = None
     attachments: tuple = ()
+    export_requested: bool | None = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
         if type(self.attachments) is not tuple or len(self.attachments) > 16:
@@ -341,6 +342,8 @@ class TurnView(_JsonModel):
         _collection(self.steps, StepView, 'step_id', 'steps')
         if self.state_revision is not None:
             _natural(self.state_revision, 'state_revision')
+        if self.export_requested is not None:
+            _boolean(self.export_requested, 'export requested')
 
 
 @dataclass(frozen=True)
@@ -443,8 +446,8 @@ class ArtifactHandle(_JsonModel):
         for name in ('handle', 'artifact_type', 'turn_id'):
             _identifier(getattr(self, name), name)
         _optional_identifier(self.revision_id, 'revision_id')
-        if self.revision_id is None and self.artifact_type != 'analysis_figure':
-            raise ValueError('Only interaction figures can omit a scientific revision.')
+        if self.revision_id is None and self.artifact_type not in ('analysis_figure', 'scientific_composition'):
+            raise ValueError('Only Interaction presentations and recipes can omit a scientific revision.')
         _sha256(self.sha256, 'artifact')
         if self.figure is not None:
             if self.artifact_type != 'analysis_figure':
@@ -462,14 +465,17 @@ class ScientificArtifactHandle(ArtifactHandle):
     title: str = dataclass_field(init=False)
     purpose: str = dataclass_field(init=False)
     description: str = dataclass_field(init=False)
+    contents: object = dataclass_field(default=None, kw_only=True, metadata={'omit_none': True})
 
     def __post_init__(self):
         super().__post_init__()
-        if self.revision_id is None:
+        if self.revision_id is None and self.artifact_type != 'scientific_composition':
             raise ValueError('Scientific artifacts require an accepted revision.')
+        if self.artifact_type == 'scientific_composition' and self.revision_id is not None:
+            raise ValueError('A composed export recipe belongs to its Interaction.')
         # An unprepared integrated derivative has no known delivered size.
         # Server-only payload sizes separately own snapshot/capacity admission.
-        if self.size_bytes is not None or self.artifact_type != 'scientific_integrated':
+        if self.size_bytes is not None or self.artifact_type not in ('scientific_integrated', 'scientific_composition'):
             _natural(self.size_bytes, 'scientific artifact size')
         reviewed = {
             ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
@@ -486,12 +492,23 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_integrated', 'integrated-embeddings.h5ad', 'Original data with accepted analysis'),
             ('scientific_integrated', 'integrated-clusters.h5ad', 'Original data with accepted analysis'),
             ('scientific_integrated', 'integrated-analysis.h5ad', 'Original data with accepted analysis'),
+            ('scientific_composition', 'composed-analysis.h5ad', 'Original data with selected accepted results'),
             ('scientific_model', 'epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
             ('scientific_model', 'epizoox-model.json', 'Model configuration and reuse requirements'),
         }
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):
             raise ValueError('Unsupported scientific artifact descriptor.')
+        if self.contents is not None:
+            from .dialogue_evidence import _unsafe_fact_value
+            contents = freeze_json_mapping(self.contents, 'export contents')
+            if (self.artifact_type != 'scientific_composition'
+                    or len(json.dumps(_serialize(contents), ensure_ascii=False).encode()) > 65_536
+                    or _unsafe_fact_value(contents)):
+                raise ValueError('Unsafe or unbounded composed export description.')
+            object.__setattr__(self, 'contents', contents)
+        elif self.artifact_type == 'scientific_composition':
+            raise ValueError('Composed exports require an exact content description.')
         for name, value in self._description().items():
             object.__setattr__(self, name, value)
 
@@ -501,7 +518,11 @@ class ScientificArtifactHandle(ArtifactHandle):
         These are transient delivery descriptions, never accepted result state.
         Existing labels and handles remain compatible with historical clients.
         """
-        if self.artifact_type == 'scientific_integrated':
+        if self.artifact_type == 'scientific_composition':
+            title, purpose, description = ('Selected results with original measurements (H5AD)',
+                'Integrated annotated H5AD', 'Prepared when downloaded. Original measurements and features '
+                'with only the explicitly selected accepted fields added; source metadata follows the existing privacy policy.')
+        elif self.artifact_type == 'scientific_integrated':
             stage = {'integrated-embeddings.h5ad': 'cell embeddings', 'integrated-clusters.h5ad': 'Leiden clusters',
                      'integrated-analysis.h5ad': 'UMAP analysis'}[self.filename]
             title, purpose, description = ('Original data with ' + stage + ' (H5AD)', 'Integrated annotated H5AD',

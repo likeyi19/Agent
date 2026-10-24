@@ -182,6 +182,26 @@ class AnalysisSessions:
         from .responses import answer_outcome
         return answer_outcome(self, session_id, request)
 
+    def composed_export(self, session_id, interaction):
+        """Resolve the immutable selected recipe without preparing file bytes.
+
+        Accepted identities and the existing download owner qualify its inputs;
+        this adds neither scientific state nor a persistent export record.
+        """
+        from .result_reading import export_inputs
+        from .analysis_delivery import composed_analysis
+        current = next((i for i in self.load(session_id).interactions
+                        if i.turn_id == interaction.turn_id), None)
+        if (current is None or current.admitted is None
+                or current.admitted.get('export') != (interaction.admitted or {}).get('export')
+                or any(getattr(current, key) != getattr(interaction, key) for key in (
+                    'utterance', 'base_revision_id', 'base_generation', 'snapshot', 'submission'))):
+            raise SessionConflictError('Export selection differs from its captured Interaction.')
+        selection = export_inputs(self, session_id, current)
+        if selection is None:
+            return None
+        return composed_analysis(self, session_id, selection, turn_id=current.turn_id)
+
     def evidence(self, session_id, revision_id, output_name, *, fields=None, detail=None):
         """Read bounded accepted evidence for an exact revision/output; no science."""
         from .dialogue_evidence import read_evidence

@@ -185,6 +185,38 @@ def _validate_comparison(value):
         raise ValueError('A same-result comparison requires two distinct exact fields.')
 
 
+def _validate_export(value):
+    """One bounded selection of accepted fields, never an export program."""
+    value = _serialize(value)
+    _shape(value, ('measurement', 'observations', 'representations'))
+    accepted = lambda item: type(item) is str and re.fullmatch(r'g[0-9]+', item) is not None
+    measurement = value['measurement']
+    if not (accepted(measurement) or type(measurement) is str
+            and re.fullmatch(r'source\.(?:[0-9]|1[0-5])', measurement) is not None):
+        raise ValueError('Select an exact accepted measurement source.')
+    total = 0
+    for slot, prefixes in (('observations', ('result:', 'source:')), ('representations', ('obsm:',))):
+        rows = value[slot]
+        if type(rows) is not list or len(rows) > 32:
+            raise ValueError('Invalid bounded accepted export fields.')
+        total += len(rows)
+        destinations = set()
+        for row in rows:
+            _shape(row, ('output', 'field', 'destination'))
+            field, destination = row['field'], row['destination']
+            if (not accepted(row['output']) or type(field) is not str or not 0 < len(field) <= 256
+                    or not field.startswith(prefixes) or not field.split(':', 1)[1]
+                    or type(destination) is not str or not destination.strip() or len(destination) > 256
+                    or destination in ('.', '..', '_index', '__categories')
+                    or '/' in destination or '\\' in destination
+                    or any(ord(c) < 32 or ord(c) == 127 for c in destination)
+                    or destination in destinations):
+                raise ValueError('Select exact export fields and distinct safe destination names.')
+            destinations.add(destination)
+    if not 1 <= total <= 32:
+        raise ValueError('Select between one and 32 accepted export fields.')
+
+
 def _normalize_research_intent(decision):
     """The same bounded downstream intent survives execution prerequisites."""
     if (type(decision.references) is not tuple or len(decision.references) > 32
@@ -482,6 +514,7 @@ class ScientificQuestion:
     focus: str = 'question'
     detail: dict | None = None
     visualization: object = None
+    export: object = None
 
     def __post_init__(self):
         if (not isinstance(self.target, ScientificTarget)
@@ -493,6 +526,9 @@ class ScientificQuestion:
         if self.visualization is not None:
             _validate_visualization(self.visualization, planned=False)
             object.__setattr__(self, 'visualization', freeze_json_mapping(self.visualization, 'visualization'))
+        if self.export is not None:
+            _validate_export(self.export)
+            object.__setattr__(self, 'export', freeze_json_mapping(self.export, 'export'))
 
 
 def validate_scientific_detail(detail, comparison):
@@ -742,7 +778,7 @@ def parse_decision(raw, *, utterance=None):
                 if value['intent'] != 'scientific': raise IntentError('invalid_decision')
             else:
                 _shape(value, ('kind', 'target', 'comparison', 'focus')
-                       + tuple(k for k in ('detail', 'visualization') if k in value))
+                       + tuple(k for k in ('detail', 'visualization', 'export') if k in value))
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
@@ -771,13 +807,13 @@ def parse_decision(raw, *, utterance=None):
         if kind == 'answer':
             if value.get('intent') == 'scientific':
                 _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus')
-                       + tuple(k for k in ('detail', 'visualization') if k in value))
+                       + tuple(k for k in ('detail', 'visualization', 'export') if k in value))
                 def target(v):
                     _shape(v, ('output', 'subject'))
                     return ScientificTarget(**v)
                 return Answer('scientific', scientific=ScientificQuestion(target(value['target']),
                     None if value['comparison'] is None else target(value['comparison']), value['focus'],
-                    value.get('detail'), value.get('visualization')))
+                    value.get('detail'), value.get('visualization'), value.get('export')))
             _shape(value, ('kind', 'intent', 'relation', 'technical'))
             return Answer(value['intent'], value['relation'], value['technical'])
         if kind == 'navigate':
@@ -859,6 +895,14 @@ def decision_schema(public):
             scientific['detail'] = {'anyOf': [{'type':'null'}, categorical_detail]}
         if coordinates:
             scientific['visualization'] = visualization_schema(planned=False)
+        if groups:
+            export_field = _object(dict(output=enum(g['handle'] for g in groups),
+                field={'type':'string', 'minLength':1, 'maxLength':256},
+                destination={'type':'string', 'minLength':1, 'maxLength':256}))
+            scientific['export'] = {'anyOf': [_object(dict(
+                measurement=enum([g['handle'] for g in groups] + list(sources)),
+                observations={'type':'array', 'maxItems':32, 'items':export_field},
+                representations={'type':'array', 'maxItems':32, 'items':export_field})), {'type':'null'}]}
         variants.append(_object(scientific))
         variants.append(_object(dict(kind=enum(('answer_guidance',)),
             targets={'type':'array', 'maxItems':4, 'items':target},
@@ -979,7 +1023,8 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Current-turn refinements remain user planning intent, not edits to the original candidate. Keep its captured subjects/revision fixed; an additional comparison may refine the objective but must not silently replace its subject.',
             'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
-            'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status; they do not authorize composition. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
+            'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
+            'For a reusable H5AD composed only from existing accepted results, choose answer_scientific.export. Select measurement as the exact accepted result g whose original measurements are requested, an accepted matrix g, or an explicitly offered source.N. Select observations and representations individually with their exact accepted output g, field and intended destination name. Observation fields use the exact result:/source: names offered in that result group\'s export_fields or categorical.fields; representations select the exact obsm: field in that group\'s export_fields, describing its actual accepted embedding representation or X_umap. Select 1 to 32 fields in total; include only requested fields, never every retained result. Destinations must be distinct within each slot and must not overwrite existing original fields; clarify missing or ambiguous destination choices. No new output, arbitrary obsm field, recency choice or scientific computation is authorized. Exact source lineage and ordered cells remain required at the export owner; an eligible figure or equal cell counts do not qualify original measurements. When sources or fields are unresolved, clarify rather than substituting a result or creating a scientific plan. Inventory describes a preparation recipe; it does not mean downloadable bytes have already been prepared or delivered.',
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',

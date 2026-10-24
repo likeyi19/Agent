@@ -288,6 +288,238 @@ def _snapshot_source(path, root, size, sha256, destination):
     destination.flush(); destination.seek(0)
 
 
+MATRIX_CONTRACTS = {
+    'build_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.v1'}),
+    'adopt_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.external.v1'}),
+    'build_scATAC_cell_by_features': frozenset({
+        'scatac-cell-by-features.v1', 'scatac-cell-by-features.qc-selected.v1'}),
+    'adopt_scATAC_cell_by_features': frozenset({'scatac-cell-by-features.external.v1'}),
+}
+
+def accepted_matrix(service, session_id, revision, origin, output, *, step_id=None):
+    from dataclasses import asdict
+    from agent.schemas.orchestration import _serialize
+    from .interactive_schemas import ScientificArtifactHandle
+    from .interactive import _ScientificMatrixArtifact
+    from .session_state import digest
+    from agent.orchestration.prior_outputs import accepted_step_digest
+    from agent.orchestration.verification_authority import _accepted
+    from agent.tools.data import scatac_matrix_contract as contract
+    from .matrix_delivery import _open_matrix_source
+
+    store = service._application.run_store
+    run_id = revision.run_id if output is None else output.run_id
+    step_id = step_id if output is None else output.step_id
+    step, authority, _, anchor = _accepted(store, run_id, step_id)
+    result, record = _serialize(step.result), authority.record
+    if (output is not None and accepted_step_digest(step) != output.accepted_step_sha256
+            or result['contract_version'] not in MATRIX_CONTRACTS[step.tool_name]
+            or record['schema_version'] != 2
+            or record['scope'] != 'scientific_correctness.v1'
+            or record['completion'] != 'succeeded'):
+        raise ValueError('Unsupported accepted matrix authority.')
+    spec = service._application.registry.get(step.tool_name)
+    spec.result_contract.validate(result)
+    output_key = 'manifest_path' if output is None else output.output_key
+    ports = [p for p in spec.semantic_planning.producer_ports
+             if output_key in {member.field_name for member in p.members}]
+    if len(ports) != 1 or ports[0].name not in {'matrix', 'dataset'}:
+        raise ValueError('Output does not select a reviewed matrix artifact port.')
+    manifest_path = Path(result['manifest_path'])
+    workspace = service._application._workspace
+    root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
+    output_dir = Path(step.resolved_arguments['output_dir'])
+    for path in (root, output_dir, manifest_path):
+        if not path.is_absolute() or path != path.resolve():
+            raise ValueError('Unsafe accepted matrix publication path.')
+    output_dir.relative_to(root)
+    manifest_path.relative_to(root)
+    if (manifest_path.name != 'manifest.json' or manifest_path.parent.name != 'artifact'
+            or manifest_path.parent.parent.parent != output_dir):
+        raise ValueError('Matrix publication differs from the managed output directory.')
+    # Inventory reads only the bounded pinned manifest. No matrix open,
+    # payload hash, authority-DAG reconstruction, or scientific IO occurs.
+    with _open_matrix_source(manifest_path, root) as stream:
+        raw = stream.read(contract.MAX_MANIFEST_BYTES + 1)
+    if (len(raw) > contract.MAX_MANIFEST_BYTES
+            or hashlib.sha256(raw).hexdigest() != result['manifest_sha256']):
+        raise ValueError('Changed matrix manifest.')
+    manifest = contract.load_manifest_bytes(raw)
+    if (record['publication_path'] != str(manifest_path)
+            or record['manifest_sha256'] != result['manifest_sha256']
+            or record['artifact_contract'] != manifest['contract_version']
+            or record['artifact_type'] != manifest['artifact_type']
+            or record['science_profile'] != manifest['profile_sha256']
+            or _serialize(record['resources']['manifest_identity']) != manifest):
+        raise ValueError('Matrix result, manifest and authority differ.')
+    if step.tool_name == 'build_scATAC_cell_by_ccre':
+        from agent.tools.data.scatac_matrix import _summary
+        expected = _summary(manifest, manifest_path, result['manifest_sha256'])
+    elif step.tool_name == 'build_scATAC_cell_by_features':
+        from agent.tools.data.fragment_feature_matrix import _summary
+        expected = _summary(manifest, manifest_path, result['manifest_sha256'])
+    else:
+        from agent.tools.data.scatac_matrix_adoption import _summary
+        from agent.tools.data.external_matrix_contract import contract_for
+        expected = _summary(manifest, manifest_path, result['manifest_sha256'],
+                            contract=contract_for(manifest))
+    if result != expected:
+        raise ValueError('Accepted result differs from the matrix owner summary.')
+    payload = manifest_path.parent / manifest['matrix']['path']
+    if str(payload) != result['matrix_path'] or result['matrix_sha256'] != manifest['matrix']['sha256']:
+        raise ValueError('Matrix payload locator or digest differs.')
+    files = {f['path']: f for f in record['files']}
+    if (_serialize(files.get(str(manifest_path))) != dict(path=str(manifest_path),
+            sha256=result['manifest_sha256'], size_bytes=len(raw))
+            or _serialize(files.get(str(payload))) != dict(path=str(payload),
+            sha256=manifest['matrix']['sha256'], size_bytes=manifest['matrix']['size_bytes'])):
+        raise ValueError('Authority does not pin the matrix payload and manifest.')
+    proof = record['resources']['result_metadata']
+    for key in ('identity_sha256', 'logical_matrix_sha256', 'nnz', 'total_count', 'zero_row_count'):
+        if proof[key] != manifest[key]:
+            raise ValueError('Scientific proof metadata differs from the matrix manifest.')
+    if 'diagnostic' in manifest and _serialize(proof['diagnostic']) != manifest['diagnostic']:
+        raise ValueError('Scientific proof diagnostic differs from the matrix manifest.')
+    if _accepted(store, run_id, step_id)[3] != anchor:
+        raise ValueError('Accepted matrix anchor changed during inventory.')
+    identity = dict(session_id=session_id, revision_id=revision.revision_id,
+        turn_id=origin.turn_id, output=None if output is None else asdict(output), artifact_role='scientific_matrix',
+        authority_sha256=authority.identity_sha256, manifest_sha256=result['manifest_sha256'],
+        payload_sha256=manifest['matrix']['sha256'], size_bytes=manifest['matrix']['size_bytes'])
+    if output is None:
+        identity['accepted_step'] = dict(run_id=run_id, step_id=step_id,
+            accepted_step_sha256=accepted_step_digest(step))
+    handle = digest(identity)
+    reference = ScientificArtifactHandle(handle, 'scientific_matrix', manifest['matrix']['sha256'],
+        revision.revision_id, origin.turn_id, manifest['matrix']['size_bytes'])
+    return _ScientificMatrixArtifact(reference, payload, root, reference.sha256,
+        reference.size_bytes, manifest['contract_version'], manifest)
+
+
+def _string_block(item, left, right):
+    # Most canonical identifiers are short. Fixed-width probing bounds every
+    # allocation; a saturated probe is reread individually at the owner limit.
+    # This preserves long identifiers without padding every feature to 64 KiB.
+    block = item.astype('S256')[left:right]
+    values = []
+    for offset, value in enumerate(block):
+        raw = bytes(value)
+        if len(raw) == 256:
+            raw = bytes(item.astype('S65537')[left + offset])
+        _reject(len(raw) > 65536)
+        values.append(raw.decode('utf-8', errors='strict'))
+    return values
+
+
+def _private_metadata(item):
+    """Inspect metadata only; scientific arrays are never interpreted as text."""
+    from agent.tools.analysis.peak_h5ad import _PATH, strings
+    def private(text):
+        return _PATH.search(text) or any(ord(c) < 32 for c in text)
+    # A typed provenance key such as dependencies/analysis_path is not itself
+    # a private locator. Inspect its values; omit explicit credential fields.
+    if private(item.name.rsplit('/', 1)[-1]) or item.name.rsplit('/', 1)[-1] in {'api_key', 'credentials'}:
+        return True
+    for key, value in item.attrs.items():
+        if key in {'api_key', 'credentials'}:
+            return True
+        if np.asarray(value).dtype.kind in 'OSU' and any(private(str(v)) for v in np.asarray(value).ravel()):
+            return True
+    if isinstance(item, h5py.Group):
+        return any(_private_metadata(child) for child in item.values())
+    if h5py.check_string_dtype(item.dtype) is not None:
+        selections = [()] if item.ndim == 0 else (
+            slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
+        return any(private(text) for selection in selections for text in strings(item, selection))
+    return False
+
+
+def _redactions(source, *, preserve_annotation=True):
+    omitted = set()
+    for name in ('obs', 'var', 'raw/var'):
+        if name not in source:
+            continue
+        frame = source[name]
+        for column in frame.attrs.get('column-order', ()):
+            if _private_metadata(frame[column]):
+                omitted.add(frame[column].name)
+    if 'uns' in source:
+        for name, item in source['uns'].items():
+            if (not preserve_annotation or name != 'cell_type_annotation') and _private_metadata(item):
+                omitted.add(item.name)
+    return omitted
+
+
+def _copy(source, destination, omitted=(), _references=None):
+    root = _references is None
+    if root:
+        _references = []
+    attributes = dict(source.attrs)
+    if 'column-order' in attributes:
+        attributes['column-order'] = np.array([v for v in attributes['column-order']
+            if source[v].name not in omitted], dtype=h5py.string_dtype())
+    for key in tuple(attributes):
+        dtype = source.attrs.get_id(key).dtype
+        reference = h5py.check_dtype(ref=dtype)
+        if reference is not None:
+            _reject(reference is not h5py.Reference)
+            _references.append((destination, key, attributes.pop(key), dtype))
+    destination.attrs.update(attributes)
+    for name, item in source.items():
+        if item.name in omitted:
+            continue
+        if item.name in ('/uns/cell_type_annotation/matrix_manifest_path','/uns/cell_type_annotation/source_path'): continue
+        if isinstance(item, h5py.Group):
+            _copy(item, destination.create_group(name), omitted, _references)
+            continue
+        layout = dict(chunks=item.chunks, compression=item.compression, compression_opts=item.compression_opts,
+            shuffle=item.shuffle, fletcher32=item.fletcher32)
+        if item.chunks is not None:
+            # Native matrix writers use resizable arrays whose chunk can exceed
+            # the current tiny shape. Retain that storage contract when copying.
+            layout['maxshape'] = item.maxshape
+        target = destination.create_dataset(name, shape=item.shape, dtype=item.dtype, **layout)
+        for key, value in item.attrs.items():
+            dtype = item.attrs.get_id(key).dtype
+            reference = h5py.check_dtype(ref=dtype)
+            if reference is not None:
+                _reject(reference is not h5py.Reference)
+                _references.append((target, key, value, dtype))
+            else:
+                target.attrs[key] = value
+        if item.shape == (): target[()] = item[()]
+        elif h5py.check_string_dtype(item.dtype) is not None:
+            for left in range(0, len(item), 4096):
+                right = min(left + 4096, len(item))
+                target[left:right] = _string_block(item, left, right)
+        else:
+            from itertools import product
+            budget = max(1, 1024**2 // item.dtype.itemsize)
+            block = []
+            for dimension in reversed(item.shape):
+                width = max(1, min(dimension, budget))
+                block.insert(0, width); budget = max(1, budget // width)
+            for start in product(*(range(0, length, width) for length, width in zip(item.shape, block))):
+                selection = tuple(slice(left, min(left + width, length))
+                    for left, width, length in zip(start, block, item.shape))
+                target[selection] = item[selection]
+    if root:
+        # AnnData's supported legacy dataframe encoding uses object-reference
+        # attributes for categories. HDF5 references belong to one file and must
+        # be rebound after all named objects have been copied, never byte-copied.
+        for target, key, values, dtype in _references:
+            mapped = np.empty(np.asarray(values).shape, dtype=dtype)
+            for index, value in np.ndenumerate(np.asarray(values)):
+                if value:
+                    name = source.file[value].name
+                    _reject(name is None or name not in destination.file)
+                    mapped[index] = destination.file[name].ref
+                else:
+                    mapped[index] = h5py.Reference()
+            target.attrs.create(key, mapped[()] if mapped.shape == () else mapped, dtype=dtype)
+
+
+
 class VerifiedMatrixSnapshot:
     """An anonymous private file and its single explicit capacity reservation."""
 
@@ -381,7 +613,9 @@ class MatrixDownloadPreparer:
                    and getattr(artifact, 'role', None) == analysis_delivery.ROLE)
         integrated = (artifact.contract == analysis_delivery.CONTRACT
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
-        export = processed or annotation or compact or integrated
+        composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
+                    and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
+        export = processed or annotation or compact or integrated or composed
         exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
@@ -392,7 +626,7 @@ class MatrixDownloadPreparer:
             filename = model_delivery.FILES[model_role][0]
             content_type = 'application/json' if model_metadata else 'application/octet-stream'
         elif export:
-            filename = (artifact.reference.filename if integrated else
+            filename = (artifact.reference.filename if integrated or composed else
                         analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
                         if compact else exporter.FILENAME)
             if filename is None:
@@ -429,11 +663,29 @@ class MatrixDownloadPreparer:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
             delivered_limit = min(original_size + size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES,
                                   MAX_MATRIX_BYTES)
+        extra_sources = artifact.manifest['sources'] if composed else ()
+        if (composed and (not 1 <= len(extra_sources) <= 32 or any(
+                type(s['size_bytes']) is not int or not 0 < s['size_bytes'] <= MAX_MATRIX_BYTES
+                or type(s['sha256']) is not str or re.fullmatch('[0-9a-f]{64}', s['sha256']) is None
+                for s in extra_sources))):
+            raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
+        extra_size = sum(s['size_bytes'] for s in extra_sources)
+        if composed:
+            components = artifact.manifest['components']
+            if (not 1 <= len(components) <= 32 or any(type(c['logical_bytes']) is not int
+                    or not 0 <= c['logical_bytes'] <= MAX_MATRIX_BYTES for c in components)):
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
+            delivered_limit = (size + sum(c['logical_bytes'] for c in components)
+                + analysis_delivery.COMPOSED_METADATA_BYTES
+                + len(components) * analysis_delivery.COMPOSED_FIELD_OVERHEAD_BYTES)
+            if delivered_limit > MAX_MATRIX_BYTES:
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
         reservation = size + (model_delivery.MAX_METADATA_BYTES if model_metadata else delivered_limit) if export or model_metadata else size
-        reservation += original_size
+        reservation += original_size + extra_size
         reserved, snapshot, derivative, original_snapshot = False, None, None, None
+        extra_snapshots = []
         try:
             self._reserve(reservation)
             reserved = True
@@ -456,7 +708,17 @@ class MatrixDownloadPreparer:
                 pass  # Exact accepted state-dict bytes; never deserialize weights for delivery.
             elif export:
                 derivative = tempfile.TemporaryFile(mode='w+b')
-                if integrated:
+                if composed:
+                    for source in extra_sources:
+                        stream = tempfile.TemporaryFile(mode='w+b')
+                        extra_snapshots.append(stream)
+                        _snapshot_source(source['path'], source['managed_root'], source['size_bytes'], source['sha256'], stream)
+                    analysis_delivery.create_composed_export(snapshot, extra_snapshots, derivative,
+                        artifact.manifest, max_bytes=delivered_limit)
+                    for stream in extra_snapshots:
+                        stream.close()
+                    extra_snapshots.clear()
+                elif integrated:
                     original_snapshot = tempfile.TemporaryFile(mode='w+b')
                     source_path = Path(original['path'])
                     _snapshot_source(source_path, source_path.parent, original_size, original['sha256'], original_snapshot)
@@ -497,7 +759,7 @@ class MatrixDownloadPreparer:
             if not matrix and exc.code == 'MATRIX_DOWNLOAD_BUSY':
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_BUSY') from exc
             raise
-        except (ValueError, TypeError, RuntimeError, OSError, ImportError, KeyError) as exc:
+        except (ValueError, TypeError, RuntimeError, OSError, ImportError, KeyError, SystemError) as exc:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE') from exc
         finally:
             try:
@@ -509,6 +771,8 @@ class MatrixDownloadPreparer:
                         derivative.close()
                     if original_snapshot is not None:
                         original_snapshot.close()
+                    for stream in extra_snapshots:
+                        stream.close()
             finally:
                 if reserved:
                     self._release(reservation)

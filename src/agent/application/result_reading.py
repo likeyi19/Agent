@@ -332,6 +332,26 @@ def visualization_inputs(sessions, session_id, interaction):
     return coordinates, labels, drawing['field']
 
 
+def export_inputs(sessions, session_id, interaction):
+    """Bind one captured export selection; W4 owns composition eligibility."""
+    from .dialogue_execution import _received_origin
+    from .turn_decisions import _validate_export
+    state = sessions.load(session_id)
+    origin = _received_origin(interaction, state.interactions)
+    request = (origin.admitted or {}).get('export')
+    if request is None:
+        return None
+    _validate_export(request)
+    measurement = request['measurement']
+    source = (_captured_source(sessions, session_id, origin, measurement)
+              if measurement.startswith('source.') else
+              dict(accepted_output=_captured_output(sessions, state, origin, measurement)))
+    return dict(measurement=source, **{slot: [dict(
+        accepted_output=_captured_output(sessions, state, origin, row['output']),
+        field=row['field'], destination=row['destination']) for row in request[slot]]
+        for slot in ('observations', 'representations')})
+
+
 def read(sessions, state, run, step, request):
     from .dialogue_evidence import EvidenceFact, _accepted, _one, _bytes, MAX_FACT_BYTES, _Unavailable
     from agent.tools.analysis import categorical as owner

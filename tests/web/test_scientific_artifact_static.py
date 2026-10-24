@@ -17,13 +17,13 @@ def test_download_is_inside_corresponding_assistant_message():
 def test_download_uses_server_descriptor_identity_and_normal_browser_attachment():
     source = (STATIC / 'app.js').read_text()
     files = source[source.index('function scientificArtifactPath'):source.index('function renderArtifacts')]
-    assert 'scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)' in files
+    assert 'scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle, artifact.turn_id)' in files
     assert 'download.download = artifact.filename' in files
     assert 'artifact.title || artifact.label' in files
     assert 'artifact.description ||' in files and 'artifact.purpose ||' in files
     assert '${artifact.filename}' in files
     assert 'formatBytes(artifact.size_bytes)' in files
-    assert 'artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id' in files
+    assert 'artifact.turn_id === turn.turn_id && (artifact.revision_id === turn.revision_id' in files
     assert 'active_revision_id' not in files
     assert 'fetch(' not in files and '.blob(' not in files and 'createObjectURL' not in files
     assert 'scientific-artifacts/${encodeURIComponent(handle)}' in files

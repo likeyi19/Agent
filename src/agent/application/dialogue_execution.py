@@ -82,7 +82,7 @@ def scientific_parameters(registry):
 
 def _research_intent(interaction, decision):
     """Bind selected metadata to its captured result group, never to a filename."""
-    from .turn_decisions import _validate_comparison, _validate_visualization
+    from .turn_decisions import _validate_comparison, _validate_visualization, _validate_export
     get = decision.get if isinstance(decision, Mapping) else lambda key, default=None: getattr(decision, key, default)
     rows = interaction.snapshot.get('dialogue', {}).get('results', ())
     by_handle = {row['handle']: row for row in rows}
@@ -114,9 +114,29 @@ def _research_intent(interaction, decision):
             delivery.append('comparison')
         references.extend(h for h in (comparison['left'], comparison['right'])
                           if h != 'new' and h not in references)
+    export = get('export')
+    if export is not None:
+        _validate_export(export)
+        if get('intent', 'scientific') != 'scientific':
+            raise IntentError('unsupported_intent')
+        if 'export' not in delivery:
+            delivery.append('export')
+        measurement = export['measurement']
+        if measurement.startswith('source.'):
+            from .result_reading import _captured_source_binding
+            from .local_resources import ResourceAdmissionError
+            try:
+                binding = _captured_source_binding(interaction)
+            except ResourceAdmissionError as exc:
+                raise IntentError('invalid_reference') from exc
+            member_count = len(binding.members) if hasattr(binding, 'members') else 1
+            if int(measurement.split('.')[1]) >= member_count:
+                raise IntentError('invalid_reference')
+        operands = [measurement, *(r['output'] for slot in ('observations', 'representations') for r in export[slot])]
+        references.extend(h for h in operands if h.startswith('g') and h not in references)
     if any(handle not in by_handle for handle in references):
         raise IntentError('invalid_reference')
-    if len(references) > 32 or len(set(references)) != len(references):
+    if len(references) > (33 if export is not None else 32) or len(set(references)) != len(references):
         raise IntentError('invalid_reference')
     unfulfilled = get('unfulfilled', ())
     if any(text not in interaction.utterance for text in unfulfilled):
@@ -133,7 +153,7 @@ def _research_intent(interaction, decision):
         retained.append(dict(result=reference.result, tool=row['tool'], **_serialize(candidates[0])))
     return {k:v for k,v in dict(references=references, delivery=delivery,
                                unfulfilled=list(unfulfilled), retained_parameters=retained,
-                               visualization=drawing, comparison=comparison).items() if v}
+                               visualization=drawing, comparison=comparison, export=export).items() if v}
 
 
 def _with_retained(registry, values, retained):
@@ -152,12 +172,12 @@ def _with_retained(registry, values, retained):
 def _validate_research_intent(interaction):
     from .turn_decisions import Execute, RetainedParameter
     admitted = interaction.admitted or {}
-    keys = ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison')
-    if not any(k in admitted for k in keys[:-1]) and not ('left' in (admitted.get('comparison') or {})):
+    keys = ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'export')
+    if not any(k in admitted for k in keys) and not ('left' in (admitted.get('comparison') or {})):
         return
     if admitted.get('intent') == 'scientific':
         expected = _research_intent(interaction, admitted)
-        if any(_serialize(admitted.get(k, ())) != _serialize(expected.get(k, [])) for k in keys[:-1]):
+        if any(_serialize(admitted.get(k, ())) != _serialize(expected.get(k, [])) for k in keys):
             raise ValueError('Captured research intention changed.')
         return
     retained = admitted.get('retained_parameters', ())
@@ -169,7 +189,7 @@ def _validate_research_intent(interaction):
         comparison=admitted.get('comparison'))
     expected = _research_intent(interaction, decision)
     if any(_serialize(admitted.get(k, ())) != expected.get(k, [])
-           for k in keys):
+           for k in (*keys, 'comparison')):
         raise ValueError('Captured research intention changed.')
 
 

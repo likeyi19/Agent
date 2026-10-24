@@ -590,15 +590,16 @@ function renderResultSelection() {
   selectResultFigure(selected);
 }
 
-function scientificArtifactPath(sessionId, revisionId, handle) {
-  return `${revisionPath(sessionId, revisionId)}/scientific-artifacts/${encodeURIComponent(handle)}`;
+function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
+  const owner = revisionId === null ? turnPath(sessionId, turnId) : revisionPath(sessionId, revisionId);
+  return `${owner}/scientific-artifacts/${encodeURIComponent(handle)}`;
 }
 
 function supportedScientificFile(artifact) {
   // The application validates the closed descriptors. Wording and file-purpose
   // policies belong there, shared by the conversation and result inventory.
   return ["scientific_matrix", "scientific_qc_table", "scientific_selection_table",
-    "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model"]
+    "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model", "scientific_composition"]
     .includes(artifact.artifact_type) && typeof artifact.filename === "string";
 }
 
@@ -631,7 +632,7 @@ function scientificFileNode(sessionId, artifact) {
   title.append(name, description);
   const download = document.createElement("a");
   download.textContent = "Download";
-  download.href = `/api/v1${scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle)}`;
+  download.href = `/api/v1${scientificArtifactPath(sessionId, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
   download.download = artifact.filename;
   download.target = "_blank";
   download.rel = "noopener";
@@ -640,6 +641,11 @@ function scientificFileNode(sessionId, artifact) {
   guardDownload(download);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
   row.append(title, download);
+  if (artifact.contents) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
+    details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
+  }
   if (artifact.artifact_type === "scientific_model") {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
@@ -674,7 +680,8 @@ function appendScientificFiles(response, turn) {
   const scientific = turn.response.kind === "execute" && turn.revision_id
     && ["succeeded", "activated", "stale"].includes(turn.status);
   const presentation = Boolean(turn.response.artifacts?.length);
-  if (!scientific && !presentation) return;
+  const recipe = turn.export_requested === true;
+  if (!scientific && !presentation && !recipe) return;
   const sessionId = state.session.session_id;
   const key = JSON.stringify([sessionId, turn.turn_id, turn.revision_id]);
   const cached = state.scientificFiles.get(key);
@@ -714,14 +721,15 @@ function appendScientificFiles(response, turn) {
   // Inventory is metadata only and requested once per captured result. Regular
   // conversation polling reuses this display cache; refresh reads it afresh.
   Promise.allSettled([
-    scientific ? api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`) : Promise.resolve({ artifacts: [] }),
+    scientific || recipe ? api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`) : Promise.resolve({ artifacts: [] }),
     scientific ? api(revisionPath(sessionId, turn.revision_id)) : Promise.resolve(null),
     presentation ? api(`${turnPath(sessionId, turn.turn_id)}/artifacts`) : Promise.resolve({ artifacts: [] }),
   ]).then(([inventory, revision, figures]) => {
     if (epoch !== state.epoch || state.scientificFiles.get(key) !== entry) return;
     if (inventory.status === "fulfilled") {
       entry.artifacts = inventory.value.artifacts.filter((artifact) => supportedScientificFile(artifact)
-        && artifact.turn_id === turn.turn_id && artifact.revision_id === turn.revision_id);
+        && artifact.turn_id === turn.turn_id && (artifact.revision_id === turn.revision_id
+          || recipe && artifact.artifact_type === "scientific_composition" && artifact.revision_id === null));
     }
     if (revision.status === "fulfilled" && revision.value?.revision_id === turn.revision_id
         && revision.value.turn_id === turn.turn_id) entry.revision = revision.value;

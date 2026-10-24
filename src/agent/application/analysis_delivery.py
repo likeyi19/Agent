@@ -1,5 +1,6 @@
 """Closed safe exports of pinned embeddings, Leiden and UMAP results."""
 import os
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,7 +14,19 @@ FILENAME = 'analysis.h5ad'
 FILENAMES = {'embedding': 'embeddings.h5ad', 'clustering': 'clusters.h5ad', 'umap': FILENAME}
 LABEL = 'Embeddings, Leiden and UMAP — safe export'
 INTEGRATED_ROLE = 'integrated_analysis_export'
+COMPOSED_ROLE = 'composed_analysis_export'
+COMPOSED_CONTRACT = 'qualified-multi-result-h5ad.v1'
+COMPOSED_FILENAME = 'composed-analysis.h5ad'
+COMPOSED_METADATA_BYTES = 256 * 1024
+COMPOSED_FIELD_OVERHEAD_BYTES = 8 * 1024
 EXPORT_KEY = 'agent_scientific_export'
+
+
+class ExportSelectionError(ValueError):
+    """A closed export prerequisite/collision reason, without private details."""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__('The selected scientific export is unavailable: ' + reason)
 
 
 def accepted_analysis(service, session_id, revision, origin, output, *, step_id=None):
@@ -170,6 +183,18 @@ def export_descriptions(sessions, session_id, targets):
     return tuple(descriptions)
 
 
+def _methods(handle, manifest):
+    from agent.tools.analysis.embedding_analysis import scientific_methods
+    methods = scientific_methods(handle)
+    for key, versions in manifest.get('method_software_versions', {}).items():
+        if key in methods:
+            methods[key]['software_versions'] = versions
+    for key, record in manifest.get('recorded_execution', {}).items():
+        if key in methods:
+            methods[key].update(record)
+    return methods
+
+
 def _compact_result(source, manifest, max_bytes):
     from agent.tools.analysis.peak_h5ad import _PATH
     from agent.tools.analysis.neighbors_delivery import _safe_objects, _strings
@@ -182,14 +207,7 @@ def _compact_result(source, manifest, max_bytes):
                     pass
         handle.visititems(bounded_strings)
         from anndata.io import read_elem
-        from agent.tools.analysis.embedding_analysis import scientific_methods
-        methods = scientific_methods(handle)
-        for key, versions in manifest.get('method_software_versions', {}).items():
-            if key in methods:
-                methods[key]['software_versions'] = versions
-        for key, record in manifest.get('recorded_execution', {}).items():
-            if key in methods:
-                methods[key].update(record)
+        methods = _methods(handle, manifest)
         data = ad.AnnData(obs=read_elem(handle['obs']), obsm={key: read_elem(handle['obsm'][key])
             for key in (methods['embedding']['representation'], 'X_umap') if key in handle['obsm']})
         # Only the selected observation/coordinate values and small provenance
@@ -270,7 +288,7 @@ def create_analysis_export(source, destination, manifest, *, source_sha256,
 def create_integrated_export(source, original, destination, manifest, *, source_sha256, max_bytes):
     """Copy a pinned source logically in bounded blocks, then add exact results."""
     from anndata.io import read_elem, write_elem
-    from .annotation_delivery import _copy, _redactions
+    from .matrix_delivery import _copy, _redactions
     from agent.tools.analysis.neighbors_delivery import _BoundedDestination
     from agent.tools.analysis.peak_h5ad import inspect
     from agent.tools.analysis.categorical import ordered_ids, require_same_cells
@@ -313,5 +331,435 @@ def create_integrated_export(source, original, destination, manifest, *, source_
             write_elem(uns, key, metadata)
     destination.flush(); destination.seek(0)
     # Storage/privacy check only: never replay the accepted scientific method.
+    inspect(destination, privacy=True)
+    destination.seek(0)
+
+
+def _json_values(value):
+    """Normalize small recorded method values for immutable client metadata."""
+    from collections.abc import Mapping
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_json_values(v) for v in value.tolist()]
+    if isinstance(value, Mapping):
+        return {k: _json_values(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_values(v) for v in value]
+    return value
+
+
+def _selected_output(sessions, state, locator):
+    """Validate the exact captured accepted locator, without selecting history."""
+    from dataclasses import asdict
+    revisions = [r for r in state.revisions if r.revision_id == locator['revision_id']]
+    if len(revisions) != 1:
+        raise ValueError('The export source is not an accepted revision.')
+    revision = revisions[0]
+    outputs = [o for o in revision.outputs if dict(asdict(o), revision_id=revision.revision_id) == dict(locator)]
+    if len(outputs) != 1:
+        raise ValueError('The export source no longer identifies its exact accepted output.')
+    sessions._validate_locator(outputs[0])
+    return revision, state.turn(revision.turn_id), outputs[0]
+
+
+def _source_record(path, sha256, root):
+    from .matrix_delivery import _open_matrix_source
+    path, root = Path(path), Path(root)
+    with _open_matrix_source(path, root) as stream:
+        size = os.fstat(stream.fileno()).st_size
+    return dict(path=str(path), managed_root=str(root), sha256=sha256, size_bytes=size)
+
+
+def _annotation_source(artifact):
+    """Read the annotation owner's recorded original measurement binding."""
+    from .matrix_delivery import _open_matrix_source
+    from agent.tools.analysis import annotation_contract
+    if annotation_contract.external(artifact.manifest):
+        binding = artifact.manifest['matrix_binding']
+        return dict(path=binding['source_path'], sha256=binding['source_sha256'])
+    import hashlib
+    from agent.tools.data import scatac_matrix_contract
+    binding = artifact.manifest['matrix_binding']
+    path = Path(binding['manifest_path'])
+    with _open_matrix_source(path, path.parent) as stream:
+        raw = stream.read(scatac_matrix_contract.MAX_MANIFEST_BYTES + 1)
+    if (len(raw) > scatac_matrix_contract.MAX_MANIFEST_BYTES
+            or hashlib.sha256(raw).hexdigest() != binding['manifest_sha256']):
+        raise ValueError('The recorded annotation measurement manifest changed.')
+    manifest = scatac_matrix_contract.load_manifest_bytes(raw)
+    if manifest['matrix']['sha256'] != binding['matrix_sha256']:
+        raise ValueError('The recorded annotation measurement identity changed.')
+    return dict(path=str(path.parent / manifest['matrix']['path']), sha256=binding['matrix_sha256'])
+
+
+def _component(sessions, session_id, state, locator):
+    from agent.orchestration.verification_authority import _accepted_step
+    from . import annotation_delivery
+    from .result_reading import original_source
+    revision, origin, output = _selected_output(sessions, state, locator)
+    step, _, _ = _accepted_step(sessions._application.run_store, output.run_id, output.step_id)
+    if step.tool_name == 'annotate_scATAC_cell_types':
+        artifact = annotation_delivery.accepted_annotation(sessions, session_id, revision, origin, output)
+        original = _annotation_source(artifact)
+    else:
+        artifact = accepted_analysis(sessions, session_id, revision, origin, output)
+        original = original_source(sessions._application.run_store, output.run_id, output.step_id)
+    if original is None:
+        raise ValueError('This accepted result does not establish its exact original measurement identity.')
+    return artifact, original
+
+
+def _component_methods(artifact, handle):
+    if artifact.role == ROLE:
+        return _methods(handle, artifact.manifest)
+    # Annotation retains its distinct policy and accepted method identity.
+    args = artifact.manifest['arguments']
+    return dict(annotation=dict(method=artifact.manifest['profile']['primary_profile'],
+        parameters={k: args[k] for k in ('annotation_method', 'count_slot', 'group_column') if k in args},
+        validation_state='not_assessed'))
+
+
+@contextmanager
+def _accepted_metadata(artifact):
+    """Read selected native metadata only after its exact byte pin is checked."""
+    import hashlib
+    from .matrix_delivery import _open_matrix_source, _source_state, MATRIX_CHUNK_BYTES, MAX_MATRIX_BYTES
+    if not 0 < artifact.size_bytes <= MAX_MATRIX_BYTES:
+        raise ValueError('Accepted export metadata exceeds the supported source size.')
+    with _open_matrix_source(artifact.path, artifact.managed_root) as stream:
+        before = os.fstat(stream.fileno())
+        if before.st_size != artifact.size_bytes:
+            raise ValueError('Accepted export metadata source size changed.')
+        checksum, copied = hashlib.sha256(), 0
+        while chunk := stream.read(MATRIX_CHUNK_BYTES):
+            copied += len(chunk)
+            if copied > artifact.size_bytes:
+                raise ValueError('Accepted export metadata source changed.')
+            checksum.update(chunk)
+        if (copied != artifact.size_bytes or checksum.hexdigest() != artifact.sha256
+                or _source_state(os.fstat(stream.fileno())) != _source_state(before)):
+            raise ValueError('Accepted export metadata source digest changed.')
+        stream.seek(0)
+        with h5py.File(stream, 'r') as handle:
+            yield handle
+        if _source_state(os.fstat(stream.fileno())) != _source_state(before):
+            raise ValueError('Accepted export metadata source changed while reading.')
+
+
+def _representation_fields(artifact, handle):
+    if artifact.role != ROLE:
+        return ()
+    methods = _component_methods(artifact, handle)
+    embedding = methods.get('embedding', {})
+    result = []
+    name = embedding.get('representation')
+    if name is not None and 'obsm/' + name in handle:
+        result.append(dict(field='obsm:' + name, role='accepted_representation', method=_json_values(embedding)))
+    if artifact.manifest['stage'] == 'umap' and 'obsm/X_umap' in handle:
+        result.append(dict(field='obsm:X_umap', role='accepted_coordinates',
+                           method=_json_values(methods.get('umap', {}))))
+    return tuple(result)
+
+
+def _observation_fields(artifact, handle, *, original=False):
+    """Export policy follows the producer; numeric covariates are not labels."""
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    names = handle['obs'].attrs['column-order']
+    if not original and artifact.role == ROLE:
+        names = [name for name in names if name == 'leiden' and (
+            artifact.manifest['stage'] == 'clustering' or artifact.manifest['stage'] == 'umap'
+            and artifact.manifest.get('clustering_present', True))]
+    return tuple(name for name in names if not _unsafe_fact_field(name) and not _unsafe_fact_value(name))
+
+
+def _field_logical_bytes(handle, slot, field):
+    """Bound each destination's selected values, including legacy categories."""
+    from agent.tools.analysis.peak_h5ad import strings
+    from .matrix_delivery import MAX_MATRIX_BYTES
+    seen = set()
+    def size(item):
+        address = h5py.h5o.get_info(item.id).addr
+        if address in seen:
+            return 0
+        seen.add(address)
+        if isinstance(item, h5py.Group):
+            if any(not isinstance(item.get(k, getlink=True), h5py.HardLink) for k in item):
+                raise ValueError('Indirect selected field storage is unsupported.')
+            return sum(size(value) for value in item.values())
+        if item.is_virtual or item.external:
+            raise ValueError('Indirect selected field storage is unsupported.')
+        if h5py.check_string_dtype(item.dtype) is not None:
+            if item.ndim > 1:
+                raise ValueError('Selected string field storage is unsupported.')
+            selections = ((),) if item.shape == () else (
+                slice(left, min(left + 4096, len(item))) for left in range(0, len(item), 4096))
+            amount = 0
+            for selection in selections:
+                amount += sum(len(value.encode('utf-8')) + 8 for value in strings(item, selection))
+                if amount > MAX_MATRIX_BYTES:
+                    raise ValueError('Selected field exceeds the export resource limit.')
+        elif item.dtype.kind in 'biuf':
+            amount = int(item.size) * item.dtype.itemsize
+        else:
+            raise ValueError('Selected field has unsupported scientific storage.')
+        if 'categories' in item.attrs:
+            amount += size(handle[item.attrs['categories']])
+        if amount > MAX_MATRIX_BYTES:
+            raise ValueError('Selected field exceeds the export resource limit.')
+        return amount
+    group = handle[slot]
+    if field not in group or not isinstance(group.get(field, getlink=True), h5py.HardLink):
+        raise ExportSelectionError('selected_field_unavailable')
+    return size(group[field])
+
+
+def export_fields(sessions, session_id, target):
+    """Offer accepted field names; selected reads verify the actual native bytes.
+
+    Representation names come from exact accepted producers, never native method
+    values. Observation discovery uses the existing bounded metadata owner and
+    does not decode columns. These offers do not establish payload readiness.
+    """
+    from dataclasses import asdict
+    from .matrix_delivery import _open_matrix_source
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    from .result_reading import analysis_lineage
+    from agent.tools.analysis.peak_h5ad import inspect
+    state = sessions.load(session_id)
+    revision = next(r for r in state.revisions if r.revision_id == target['revision_id'])
+    output = next(o for o in revision.outputs if o.name == target['output_name']
+                  and o.accepted_step_sha256 == target['accepted_step_sha256'])
+    artifact, original = _component(sessions, session_id, state, dict(asdict(output), revision_id=revision.revision_id))
+    rows = []
+    if artifact.role == ROLE:
+        provenance = artifact.manifest['provenance']
+        lineage = analysis_lineage(sessions._application.run_store, provenance['run_id'], provenance['step_id'])
+        # _component's original-source owner already qualifies this exact PCA
+        # ancestry. Do not substitute an arbitrary native obsm or a default key.
+        fields = [(lineage[-1][1].result['representation'], 'accepted_representation')]
+        if artifact.manifest['stage'] == 'umap':
+            fields.append((lineage[0][1].result['umap_key'], 'accepted_coordinates'))
+        for name, role in fields:
+            if _unsafe_fact_field(name) or _unsafe_fact_value(name):
+                raise ValueError('Accepted representation name is not eligible for public delivery.')
+            rows.append(dict(field='obsm:' + name, role=role))
+    with _open_matrix_source(artifact.path, artifact.managed_root) as stream, h5py.File(stream, 'r') as handle:
+        inspect(handle, observation_fields=())
+        rows.extend(dict(field='result:' + name, role='accepted_observation')
+            for name in _observation_fields(artifact, handle))
+    with _open_matrix_source(original['path'], Path(original['path']).parent) as stream, h5py.File(stream, 'r') as handle:
+        inspect(handle, observation_fields=())
+        rows.extend(dict(field='source:' + name, role='supplied_source_observation')
+            for name in _observation_fields(artifact, handle, original=True))
+    if _unsafe_fact_value(rows):
+        raise ValueError('Recorded representation metadata is not eligible for public delivery.')
+    return tuple(rows)
+
+
+def composed_analysis(sessions, session_id, resolved_export, *, turn_id):
+    """Describe one explicit qualified recipe; no derivative is prepared here."""
+    from .matrix_delivery import MATRIX_CONTRACTS, accepted_matrix, _open_matrix_source
+    from .local_resources import LocalResourceAdmission
+    from .interactive import _ScientificMatrixArtifact
+    from .interactive_schemas import ScientificArtifactHandle
+    from .session_state import digest
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    from agent.orchestration.verification_authority import _accepted_step
+    from agent.schemas.orchestration import _serialize
+    state = sessions.load(session_id)
+    measurement = resolved_export['measurement']
+    if 'registered_source' in measurement:
+        selected = measurement['registered_source']
+        record = LocalResourceAdmission(sessions._application._workspace).load(selected['resource_id'])
+        if (record.session_id not in (None, session_id) or record.record_sha256 != selected['record_sha256']
+                or record.source_sha256 != selected['source_sha256']):
+            raise ValueError('The captured original measurement registration changed.')
+        original = dict(path=record.source_path, sha256=record.source_sha256)
+        measurement_identity = dict(origin='registered_source', registered_source=dict(selected))
+    else:
+        locator = measurement['accepted_output']
+        revision, origin, output = _selected_output(sessions, state, locator)
+        step, _, _ = _accepted_step(sessions._application.run_store, output.run_id, output.step_id)
+        if step.tool_name in MATRIX_CONTRACTS:
+            artifact = accepted_matrix(sessions, session_id, revision, origin, output)
+            original = dict(path=str(artifact.path), sha256=artifact.sha256)
+        else:
+            _, original = _component(sessions, session_id, state, locator)
+        measurement_identity = dict(origin='accepted_output', accepted_output=dict(locator))
+    base = _source_record(original['path'], original['sha256'], Path(original['path']).parent)
+    measurement_identity['source_sha256'] = base['sha256']
+    components, sources, cached, metadata_cache, destinations = [], [], {}, {}, {'obs': set(), 'obsm': set()}
+    public = dict(observations=[], representations=[])
+    for name, slot in (('observations', 'obs'), ('representations', 'obsm')):
+        for selection in resolved_export[name]:
+            locator, field, destination = selection['accepted_output'], selection['field'], selection['destination']
+            if (type(destination) is not str or not destination.strip() or len(destination) > 256
+                    or destination in ('.', '..', '_index', '__categories') or '/' in destination or '\\' in destination
+                    or any(ord(c) < 32 or ord(c) == 127 for c in destination)
+                    or _unsafe_fact_field(destination) or _unsafe_fact_value(destination)
+                    or destination in destinations[slot]):
+                raise ValueError('Select distinct safe destination field names.')
+            destinations[slot].add(destination)
+            identity = digest(dict(locator))
+            if identity not in cached:
+                artifact, relationship = _component(sessions, session_id, state, locator)
+                if relationship['sha256'] != base['sha256']:
+                    raise ExportSelectionError('unqualified_measurement_source')
+                source = _source_record(artifact.path, artifact.sha256, artifact.managed_root)
+                if source not in sources:
+                    sources.append(source)
+                source_key = tuple(source[k] for k in ('path', 'managed_root', 'sha256', 'size_bytes'))
+                if source_key not in metadata_cache:
+                    with _accepted_metadata(artifact) as handle:
+                        methods = _json_values(_component_methods(artifact, handle))
+                        representations = _representation_fields(artifact, handle)
+                    metadata_cache[source_key] = methods, representations
+                methods, representations = metadata_cache[source_key]
+                if _unsafe_fact_value(methods):
+                    raise ValueError('Recorded scientific methods are not eligible for public delivery.')
+                cached[identity] = artifact, sources.index(source), methods, representations
+            artifact, source_index, methods, representations = cached[identity]
+            if slot == 'obsm' and field not in {row['field'] for row in representations}:
+                raise ValueError('Select the actual declared accepted representation or UMAP field.')
+            if slot == 'obs' and (not field.startswith(('result:', 'source:')) or not field.split(':', 1)[1]
+                    or _unsafe_fact_field(field.split(':', 1)[1]) or _unsafe_fact_value(field)):
+                raise ValueError('Select an exact eligible observation field.')
+            if slot == 'obs':
+                spec = base if field.startswith('source:') else sources[source_index]
+                with _open_matrix_source(spec['path'], spec['managed_root']) as stream, h5py.File(stream, 'r') as h:
+                    available = _observation_fields(artifact, h, original=field.startswith('source:'))
+                if field.split(':', 1)[1] not in available:
+                    raise ExportSelectionError('selected_field_unavailable')
+            row = dict(accepted_output=dict(locator), field=field, destination=destination, method=methods)
+            if slot == 'obs':
+                if field.startswith('source:'):
+                    row['observation_role'] = 'supplied_source_observation; biological validity not assessed'
+                elif artifact.role == ROLE:
+                    row['observation_role'] = 'computational_assignment'
+                else:
+                    from agent.tools.analysis.annotation_contract import OBS_COLUMNS
+                    row['observation_role'] = ('computational_assignment' if field.split(':', 1)[1] in OBS_COLUMNS
+                        else 'copied_supplied_source_observation; biological validity not assessed')
+            public[name].append(row)
+            spec = base if field.startswith('source:') else sources[source_index]
+            with _open_matrix_source(spec['path'], spec['managed_root']) as stream, h5py.File(stream, 'r') as h:
+                logical_bytes = _field_logical_bytes(h, slot, field.split(':', 1)[1])
+            components.append(dict(row, slot=slot, source_index=source_index, logical_bytes=logical_bytes))
+    if not 1 <= len(components) <= 32:
+        raise ValueError('Select between one and 32 accepted export fields.')
+    with _open_matrix_source(base['path'], base['managed_root']) as stream, h5py.File(stream, 'r') as supplied:
+        for row in components:
+            if row['destination'] in supplied.get(row['slot'], {}):
+                raise ExportSelectionError('destination_collision')
+    contents = dict(policy=COMPOSED_CONTRACT, measurement=measurement_identity, **public,
+        omitted_information=['Only explicitly selected derived fields are added; other accepted results, derived neighbor graphs and fit arrays are not added.',
+            'Original safe scientific content is retained; private metadata is omitted.',
+            'Unrecorded method information remains unavailable.'],
+        preparation='on_demand', payload_checks='performed_on_download')
+    recipe_identity = dict(session_id=session_id, turn_id=turn_id, policy=COMPOSED_CONTRACT,
+        measurement=measurement_identity, components=[{k:r[k] for k in (
+            'accepted_output', 'field', 'destination', 'slot')} for r in components])
+    handle = digest(recipe_identity)
+    reference = ScientificArtifactHandle(handle, 'scientific_composition', base['sha256'], None,
+        turn_id, None, COMPOSED_FILENAME, 'Original data with selected accepted results', contents=contents)
+    return _ScientificMatrixArtifact(reference, Path(base['path']), Path(base['managed_root']), base['sha256'],
+        base['size_bytes'], COMPOSED_CONTRACT, dict(original_source=base, sources=sources,
+        components=components, contents=contents, recipe_identity=recipe_identity, recipe_handle=handle), COMPOSED_ROLE)
+
+
+def create_composed_export(original, sources, destination, manifest, *, max_bytes):
+    """Copy exact original storage and only explicitly mapped accepted fields."""
+    from contextlib import ExitStack
+    from anndata.io import read_elem, write_elem
+    from .matrix_delivery import _copy, _redactions
+    from agent.tools.analysis.peak_h5ad import inspect
+    from agent.tools.analysis.categorical import ordered_ids, require_same_cells, _labels, _series
+    import pandas as pd
+    required = (manifest['original_source']['size_bytes']
+        + sum(row['logical_bytes'] for row in manifest['components'])
+        + COMPOSED_METADATA_BYTES + len(manifest['components']) * COMPOSED_FIELD_OVERHEAD_BYTES)
+    if type(max_bytes) is not int or not required <= max_bytes:
+        raise ValueError('Composed export exceeds the admitted preparation budget.')
+    with ExitStack() as stack:
+        supplied = stack.enter_context(h5py.File(original, 'r'))
+        inspect(supplied)
+        cells = ordered_ids(_series(supplied['obs'][supplied['obs'].attrs['_index']]), source='Original measurements')
+        selected = [stack.enter_context(h5py.File(stream, 'r')) for stream in sources]
+        for source in selected:
+            obs = source['obs']
+            inspect(source, observation_fields=(obs.attrs['_index'],))
+            require_same_cells(cells, ordered_ids(_series(obs[obs.attrs['_index']]), source='Accepted result'))
+        omitted = _redactions(supplied, preserve_annotation=False)
+        # Collisions are checked against original names even when privacy policy
+        # will omit one of those fields. No existing scientific field is renamed.
+        for row in manifest['components']:
+            if row['destination'] in supplied.get(row['slot'], {}):
+                raise ExportSelectionError('destination_collision')
+        # Keep the preparer's anonymous stream. Raising a custom size exception
+        # from HDF5's write callback can mask errors or crash during h5py close.
+        # Admit the resource budget before opening HDF5 instead, then enforce
+        # the actual byte cap before this derivative can be streamed.
+        with h5py.File(destination, 'w') as exported:
+            _copy(supplied, exported, omitted)
+            for row in manifest['components']:
+                source = selected[row['source_index']]
+                location, field = row['field'].split(':', 1)
+                group = exported.require_group(row['slot'])
+                if row['destination'] in group:
+                    raise ValueError('Selected export destination fields collide.')
+                if row['slot'] == 'obs':
+                    field_source = supplied if location == 'source' else source
+                    obs = field_source['obs']
+                    if field not in obs.attrs['column-order']:
+                        raise ValueError('The selected observation field is unavailable.')
+                    check = [obs.attrs['_index'], field]
+                    if 'categories' in obs[field].attrs:
+                        check.append(obs[obs[field].attrs['categories']].name)
+                    inspect(field_source, observation_fields=check)
+                    value = pd.Series(_series(obs[field]))
+                    if len(value) != len(cells):
+                        raise ValueError('The selected observation field and cell axis differ.')
+                    if row.get('observation_role') == 'computational_assignment' or not pd.api.types.is_numeric_dtype(value.dtype):
+                        _labels(value)
+                    elif pd.api.types.is_complex_dtype(value.dtype):
+                        raise ValueError('Selected observation storage is unsupported.')
+                    payload = value.to_numpy() if isinstance(value.dtype, np.dtype) else value.array
+                    write_elem(group, row['destination'], payload)
+                    group.attrs['column-order'] = np.array([*group.attrs['column-order'], row['destination']],
+                        dtype=h5py.string_dtype())
+                else:
+                    if location != 'obsm' or 'obsm/' + field not in source:
+                        raise ValueError('The selected accepted representation is unavailable.')
+                    values = np.asarray(read_elem(source['obsm'][field]))
+                    if (values.ndim != 2 or values.shape[0] != len(cells) or values.shape[1] < 1
+                            or values.dtype.kind not in 'fi' or not np.isfinite(values).all()
+                            or field == 'X_umap' and values.shape[1] != 2):
+                        raise ValueError('Invalid selected accepted representation.')
+                    if not group.attrs:
+                        group.attrs.update({'encoding-type': 'dict', 'encoding-version': '0.1.0'})
+                    write_elem(group, row['destination'], values)
+            uns = exported.require_group('uns')
+            if not uns.attrs:
+                uns.attrs.update({'encoding-type': 'dict', 'encoding-version': '0.1.0'})
+            if EXPORT_KEY in uns:
+                raise ValueError('Original and composed export provenance keys collide.')
+            from .session_state import canonical, digest
+            selection_json = canonical(manifest['contents']).decode('utf-8')
+            if len(selection_json.encode('utf-8')) > 65536:
+                raise ValueError('Composed export provenance exceeds its bound.')
+            # One portable bounded JSON value records all selected mappings and
+            # methods, without duplicating deep HDF5 groups per component.
+            metadata = dict(contract=COMPOSED_CONTRACT, selection_json=selection_json,
+                recipe_handle=manifest.get('recipe_handle', digest(manifest['recipe_identity'])),
+                original_source_sha256=manifest['original_source']['sha256'],
+                authority_scope='Delivery derivative; does not issue scientific authority.',
+                omitted_private_metadata_fields=len(omitted))
+            write_elem(uns, EXPORT_KEY, metadata)
+    destination.flush(); destination.seek(0)
+    destination.seek(0, 2)
+    if destination.tell() > max_bytes:
+        raise ValueError('Prepared composed H5AD exceeds its admitted byte limit.')
+    destination.seek(0)
     inspect(destination, privacy=True)
     destination.seek(0)

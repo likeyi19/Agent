@@ -26,6 +26,7 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
+from .matrix_delivery import MATRIX_CONTRACTS as _MATRIX_CONTRACTS
 from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value, public_citation_source, figure_inventory
 from .local_resources import (LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, RegisteredInputGroup, ResourceAdmissionError,
     qualified_epizoo_resources)
@@ -49,13 +50,6 @@ _MESSAGES = {
 MAX_RESULT_VIEW_BYTES = 262_144
 
 
-_MATRIX_CONTRACTS = {
-    'build_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.v1'}),
-    'adopt_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.external.v1'}),
-    'build_scATAC_cell_by_features': frozenset({
-        'scatac-cell-by-features.v1', 'scatac-cell-by-features.qc-selected.v1'}),
-    'adopt_scATAC_cell_by_features': frozenset({'scatac-cell-by-features.external.v1'}),
-}
 
 _TABLE_TOOLS = {
     'compute_scATAC_qc': ('scatac-barcode-qc.v1', 'barcode_qc',
@@ -69,7 +63,7 @@ _TABLE_TOOLS = {
 
 @dataclass(frozen=True)
 class _ScientificMatrixArtifact:
-    """Server-only accepted locator, never a client-supplied path selector."""
+    """Server-only pinned source or recipe, never a client path selector."""
 
     reference: ScientificArtifactHandle
     path: Path
@@ -794,7 +788,7 @@ class InteractiveAgentApplication:
             profile_id=None if interaction is None or interaction.submission is None else interaction.submission.get('profile_id'),
             run_id=run_id, revision_id=None if turn is None else turn.revision_id,
             status=status, response=response, error=error, steps=steps, state_revision=state_revision,
-            attachments=tuple(attachments))
+            attachments=tuple(attachments), export_requested=True if admitted.get('export') else None)
 
     def turn(self, session_id, turn_id):
         _identifier(turn_id)
@@ -879,13 +873,21 @@ class InteractiveAgentApplication:
                      self._scientific_artifacts(session_id, revision_id, turn_id=turn_id))
 
     def scientific_artifacts_for_turn(self, session_id, turn_id):
-        """Offer reviewed files produced by this exact accepted execution.
+        """Offer this execution's files or an exact saved Answer export recipe.
 
-        Navigation, questions, failed executions and retained upstream results
-        have no newly created downloadable file in their conversation message.
+        Recipes describe preparation from captured accepted sources; they do
+        not assert that new scientific output or derivative bytes already exist.
         """
         _identifier(turn_id)
         state = self._load(session_id)
+        interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if (interaction is not None and interaction.presentation is not None
+                and (interaction.admitted or {}).get('export') is not None):
+            try:
+                artifact = self._application.sessions.composed_export(session_id, interaction)
+                return () if artifact is None else (artifact.reference,)
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+                return ()  # Optional recipe eligibility never removes the saved answer.
         try:
             turn = state.turn(turn_id)
         except SessionError:
@@ -893,7 +895,6 @@ class InteractiveAgentApplication:
         if (turn.request_id is None or turn.status not in {'activated', 'stale'}
                 or turn.revision_id is None or turn.run_id is None):
             return ()
-        interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
         if (interaction is None or interaction.presentation is None or interaction.admitted is None
                 or interaction.admitted.get('kind') != 'execute'
                 or interaction.admitted.get('request_id') != turn.request_id):
@@ -907,6 +908,22 @@ class InteractiveAgentApplication:
                 or revisions[0].run_id != turn.run_id):
             raise _fail('INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE')
         return self.scientific_artifact_handles(session_id, turn.revision_id, turn_id=turn_id)
+
+    def prepare_turn_scientific_artifact(self, session_id, turn_id, handle):
+        """Prepare the exact saved Interaction recipe through the W4 owner."""
+        _identifier(turn_id)
+        _identifier(handle)
+        state = self._load(session_id)
+        interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if interaction is None or interaction.presentation is None:
+            raise _fail('INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE')
+        try:
+            artifact = self._application.sessions.composed_export(session_id, interaction)
+            if artifact is None or artifact.reference.handle != handle:
+                raise ValueError('Unknown composed export recipe.')
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError) as exc:
+            raise _fail('INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE') from exc
+        return self._matrix_downloads.prepare(artifact)
 
     def _scientific_artifacts(self, session_id, revision_id, *, turn_id=None):
         _identifier(revision_id)
@@ -1038,98 +1055,8 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_SCIENTIFIC_ARTIFACT_UNAVAILABLE') from exc
 
     def _accepted_matrix(self, session_id, revision, origin, output, *, step_id=None):
-        from agent.orchestration.prior_outputs import accepted_step_digest
-        from agent.orchestration.verification_authority import _accepted
-        from agent.tools.data import scatac_matrix_contract as contract
-        from .matrix_delivery import _open_matrix_source
-
-        store = self._application.run_store
-        run_id = revision.run_id if output is None else output.run_id
-        step_id = step_id if output is None else output.step_id
-        step, authority, _, anchor = _accepted(store, run_id, step_id)
-        result, record = _serialize(step.result), authority.record
-        if (output is not None and accepted_step_digest(step) != output.accepted_step_sha256
-                or result['contract_version'] not in _MATRIX_CONTRACTS[step.tool_name]
-                or record['schema_version'] != 2
-                or record['scope'] != 'scientific_correctness.v1'
-                or record['completion'] != 'succeeded'):
-            raise ValueError('Unsupported accepted matrix authority.')
-        spec = self._application.registry.get(step.tool_name)
-        spec.result_contract.validate(result)
-        output_key = 'manifest_path' if output is None else output.output_key
-        ports = [p for p in spec.semantic_planning.producer_ports
-                 if output_key in {member.field_name for member in p.members}]
-        if len(ports) != 1 or ports[0].name not in {'matrix', 'dataset'}:
-            raise ValueError('Output does not select a reviewed matrix artifact port.')
-        manifest_path = Path(result['manifest_path'])
-        workspace = self._application._workspace
-        root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
-        output_dir = Path(step.resolved_arguments['output_dir'])
-        for path in (root, output_dir, manifest_path):
-            if not path.is_absolute() or path != path.resolve():
-                raise ValueError('Unsafe accepted matrix publication path.')
-        output_dir.relative_to(root)
-        manifest_path.relative_to(root)
-        if (manifest_path.name != 'manifest.json' or manifest_path.parent.name != 'artifact'
-                or manifest_path.parent.parent.parent != output_dir):
-            raise ValueError('Matrix publication differs from the managed output directory.')
-        # Inventory reads only the bounded pinned manifest. No matrix open,
-        # payload hash, authority-DAG reconstruction, or scientific IO occurs.
-        with _open_matrix_source(manifest_path, root) as stream:
-            raw = stream.read(contract.MAX_MANIFEST_BYTES + 1)
-        if (len(raw) > contract.MAX_MANIFEST_BYTES
-                or hashlib.sha256(raw).hexdigest() != result['manifest_sha256']):
-            raise ValueError('Changed matrix manifest.')
-        manifest = contract.load_manifest_bytes(raw)
-        if (record['publication_path'] != str(manifest_path)
-                or record['manifest_sha256'] != result['manifest_sha256']
-                or record['artifact_contract'] != manifest['contract_version']
-                or record['artifact_type'] != manifest['artifact_type']
-                or record['science_profile'] != manifest['profile_sha256']
-                or _serialize(record['resources']['manifest_identity']) != manifest):
-            raise ValueError('Matrix result, manifest and authority differ.')
-        if step.tool_name == 'build_scATAC_cell_by_ccre':
-            from agent.tools.data.scatac_matrix import _summary
-            expected = _summary(manifest, manifest_path, result['manifest_sha256'])
-        elif step.tool_name == 'build_scATAC_cell_by_features':
-            from agent.tools.data.fragment_feature_matrix import _summary
-            expected = _summary(manifest, manifest_path, result['manifest_sha256'])
-        else:
-            from agent.tools.data.scatac_matrix_adoption import _summary
-            from agent.tools.data.external_matrix_contract import contract_for
-            expected = _summary(manifest, manifest_path, result['manifest_sha256'],
-                                contract=contract_for(manifest))
-        if result != expected:
-            raise ValueError('Accepted result differs from the matrix owner summary.')
-        payload = manifest_path.parent / manifest['matrix']['path']
-        if str(payload) != result['matrix_path'] or result['matrix_sha256'] != manifest['matrix']['sha256']:
-            raise ValueError('Matrix payload locator or digest differs.')
-        files = {f['path']: f for f in record['files']}
-        if (_serialize(files.get(str(manifest_path))) != dict(path=str(manifest_path),
-                sha256=result['manifest_sha256'], size_bytes=len(raw))
-                or _serialize(files.get(str(payload))) != dict(path=str(payload),
-                sha256=manifest['matrix']['sha256'], size_bytes=manifest['matrix']['size_bytes'])):
-            raise ValueError('Authority does not pin the matrix payload and manifest.')
-        proof = record['resources']['result_metadata']
-        for key in ('identity_sha256', 'logical_matrix_sha256', 'nnz', 'total_count', 'zero_row_count'):
-            if proof[key] != manifest[key]:
-                raise ValueError('Scientific proof metadata differs from the matrix manifest.')
-        if 'diagnostic' in manifest and _serialize(proof['diagnostic']) != manifest['diagnostic']:
-            raise ValueError('Scientific proof diagnostic differs from the matrix manifest.')
-        if _accepted(store, run_id, step_id)[3] != anchor:
-            raise ValueError('Accepted matrix anchor changed during inventory.')
-        identity = dict(session_id=session_id, revision_id=revision.revision_id,
-            turn_id=origin.turn_id, output=None if output is None else asdict(output), artifact_role='scientific_matrix',
-            authority_sha256=authority.identity_sha256, manifest_sha256=result['manifest_sha256'],
-            payload_sha256=manifest['matrix']['sha256'], size_bytes=manifest['matrix']['size_bytes'])
-        if output is None:
-            identity['accepted_step'] = dict(run_id=run_id, step_id=step_id,
-                accepted_step_sha256=accepted_step_digest(step))
-        handle = digest(identity)
-        reference = ScientificArtifactHandle(handle, 'scientific_matrix', manifest['matrix']['sha256'],
-            revision.revision_id, origin.turn_id, manifest['matrix']['size_bytes'])
-        return _ScientificMatrixArtifact(reference, payload, root, reference.sha256,
-            reference.size_bytes, manifest['contract_version'], manifest)
+        from .matrix_delivery import accepted_matrix
+        return accepted_matrix(self, session_id, revision, origin, output, step_id=step_id)
 
     def _accepted_neighbors(self, session_id, revision, origin, output, *, step_id=None):
         """Select the qualified source of a reviewed export, never its private original."""

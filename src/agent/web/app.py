@@ -619,6 +619,10 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         return {'artifacts': [a.to_dict() for a in
                 application.scientific_artifacts_for_turn(session_id, turn_id)]}
 
+    @app.get('/api/v1/sessions/{session_id}/turns/{turn_id}/scientific-artifacts/{handle}')
+    def turn_scientific_artifact(session_id: str, turn_id: str, handle: str):
+        return _ScientificFileResponse(application.prepare_turn_scientific_artifact(session_id, turn_id, handle))
+
     @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/scientific-artifacts')
     def scientific_artifacts(session_id: str, revision_id: str):
         return {'artifacts': [a.to_dict() for a in

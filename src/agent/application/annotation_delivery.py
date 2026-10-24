@@ -9,6 +9,7 @@ import numpy as np
 from agent.tools.analysis import annotation_contract as owner
 from agent.tools.analysis import neighbors_delivery as io
 from . import matrix_delivery as matrix
+from .matrix_delivery import _string_block, _private_metadata, _redactions, _copy
 
 CONTRACT = owner.CONTRACT
 ROLE = 'annotation_export'
@@ -16,21 +17,6 @@ FILENAME = 'annotated.h5ad'
 LABEL = 'Annotated cells — safe export'
 EXPORT_CONTRACT = 'scatac-cell-type-annotation-export.v1'
 DESTINATION_OVERHEAD_BYTES = 65536
-
-
-def _string_block(item, left, right):
-    # Most canonical identifiers are short. Fixed-width probing bounds every
-    # allocation; a saturated probe is reread individually at the owner limit.
-    # This preserves long identifiers without padding every feature to 64 KiB.
-    block = item.astype('S256')[left:right]
-    values = []
-    for offset, value in enumerate(block):
-        raw = bytes(value)
-        if len(raw) == 256:
-            raw = bytes(item.astype('S65537')[left + offset])
-        matrix._reject(len(raw) > 65536)
-        values.append(raw.decode('utf-8', errors='strict'))
-    return values
 
 
 def _strings(item):
@@ -138,110 +124,6 @@ def _inspect(file, manifest, *, exported=False):
     io._group(file['uns/cell_type_annotation'], provenance)
     for name, value in provenance.items():
         io._scalar(file['uns/cell_type_annotation'][name], value, private=name == 'matrix_manifest_path')
-
-
-def _private_metadata(item):
-    """Inspect metadata only; scientific arrays are never interpreted as text."""
-    from agent.tools.analysis.peak_h5ad import _PATH, strings
-    def private(text):
-        return _PATH.search(text) or any(ord(c) < 32 for c in text)
-    # A typed provenance key such as dependencies/analysis_path is not itself
-    # a private locator. Inspect its values; omit explicit credential fields.
-    if private(item.name.rsplit('/', 1)[-1]) or item.name.rsplit('/', 1)[-1] in {'api_key', 'credentials'}:
-        return True
-    for key, value in item.attrs.items():
-        if key in {'api_key', 'credentials'}:
-            return True
-        if np.asarray(value).dtype.kind in 'OSU' and any(private(str(v)) for v in np.asarray(value).ravel()):
-            return True
-    if isinstance(item, h5py.Group):
-        return any(_private_metadata(child) for child in item.values())
-    if h5py.check_string_dtype(item.dtype) is not None:
-        selections = [()] if item.ndim == 0 else (
-            slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
-        return any(private(text) for selection in selections for text in strings(item, selection))
-    return False
-
-
-def _redactions(source, *, preserve_annotation=True):
-    omitted = set()
-    for name in ('obs', 'var', 'raw/var'):
-        if name not in source:
-            continue
-        frame = source[name]
-        for column in frame.attrs.get('column-order', ()):
-            if _private_metadata(frame[column]):
-                omitted.add(frame[column].name)
-    if 'uns' in source:
-        for name, item in source['uns'].items():
-            if (not preserve_annotation or name != 'cell_type_annotation') and _private_metadata(item):
-                omitted.add(item.name)
-    return omitted
-
-
-def _copy(source, destination, omitted=(), _references=None):
-    root = _references is None
-    if root:
-        _references = []
-    attributes = dict(source.attrs)
-    if 'column-order' in attributes:
-        attributes['column-order'] = np.array([v for v in attributes['column-order']
-            if source[v].name not in omitted], dtype=h5py.string_dtype())
-    for key in tuple(attributes):
-        dtype = source.attrs.get_id(key).dtype
-        reference = h5py.check_dtype(ref=dtype)
-        if reference is not None:
-            matrix._reject(reference is not h5py.Reference)
-            _references.append((destination, key, attributes.pop(key), dtype))
-    destination.attrs.update(attributes)
-    for name, item in source.items():
-        if item.name in omitted:
-            continue
-        if item.name in ('/uns/cell_type_annotation/matrix_manifest_path','/uns/cell_type_annotation/source_path'): continue
-        if isinstance(item, h5py.Group):
-            _copy(item, destination.create_group(name), omitted, _references)
-            continue
-        target = destination.create_dataset(name, shape=item.shape, dtype=item.dtype,
-            chunks=item.chunks, compression=item.compression, compression_opts=item.compression_opts,
-            shuffle=item.shuffle, fletcher32=item.fletcher32)
-        for key, value in item.attrs.items():
-            dtype = item.attrs.get_id(key).dtype
-            reference = h5py.check_dtype(ref=dtype)
-            if reference is not None:
-                matrix._reject(reference is not h5py.Reference)
-                _references.append((target, key, value, dtype))
-            else:
-                target.attrs[key] = value
-        if item.shape == (): target[()] = item[()]
-        elif h5py.check_string_dtype(item.dtype) is not None:
-            for left in range(0, len(item), 4096):
-                right = min(left + 4096, len(item))
-                target[left:right] = _string_block(item, left, right)
-        else:
-            from itertools import product
-            budget = max(1, 1024**2 // item.dtype.itemsize)
-            block = []
-            for dimension in reversed(item.shape):
-                width = max(1, min(dimension, budget))
-                block.insert(0, width); budget = max(1, budget // width)
-            for start in product(*(range(0, length, width) for length, width in zip(item.shape, block))):
-                selection = tuple(slice(left, min(left + width, length))
-                    for left, width, length in zip(start, block, item.shape))
-                target[selection] = item[selection]
-    if root:
-        # AnnData's supported legacy dataframe encoding uses object-reference
-        # attributes for categories. HDF5 references belong to one file and must
-        # be rebound after all named objects have been copied, never byte-copied.
-        for target, key, values, dtype in _references:
-            mapped = np.empty(np.asarray(values).shape, dtype=dtype)
-            for index, value in np.ndenumerate(np.asarray(values)):
-                if value:
-                    name = source.file[value].name
-                    matrix._reject(name is None or name not in destination.file)
-                    mapped[index] = destination.file[name].ref
-                else:
-                    mapped[index] = h5py.Reference()
-            target.attrs.create(key, mapped[()] if mapped.shape == () else mapped, dtype=dtype)
 
 
 def create_annotation_export(source_stream, destination_stream, manifest, *, source_sha256,

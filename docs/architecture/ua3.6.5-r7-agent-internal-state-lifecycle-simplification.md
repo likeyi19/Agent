@@ -11,6 +11,32 @@ Acceptance evidence is isolated at `/home/likeyi/agent-ua365-r7-o3pqsmyz`.
 Final validation and disposition are recorded below; development checks are not
 additional independent acceptance totals.
 
+## Current OPT-2E follow-up — 2026-10-25
+
+Interactive status now projects response publication separately from scientific
+acceptance. A captured interactive request without a saved response uses its
+existing processing lease: native planning/running progress remains visible;
+other active response preparation projects `finalizing`. Without that lease it
+projects `interrupted`, after rereading the selected Interaction/SessionTurn to
+observe publication racing the lease check. Missing or invalid accepted Run
+identity remains an error. A terminal historical turn without an interactive
+publisher and without a saved display is `unavailable`.
+If acceptance races a reopened conversation's turn projection, the enclosing
+generation, active selection and revision list are reread together.
+
+Accepted Revisions and consumed attachments remain accepted during response
+preparation or interruption. Uncommitted Interaction figure bundles and export
+recipes are still not advertised as delivered. Saved displays retain their exact
+text, artifacts and existing explicit recovery semantics, including a saved
+application-report failure that requires completion. Polling performs no work or
+recovery. Web consumes this projection directly; its profile/error-based guesses
+about terminal turns awaiting presentation and separate polling cadence are
+removed. No persisted phase, lease format, queue or recovery engine is added.
+
+The [OPT-2E report](../../../agent-data/acceptance/ua3.6.5/uat-02/2026-10-25-opt-2e/REPORT.md)
+owns focused verification, genuine observation and remaining limits; earlier R7
+acceptance records below retain their historical scope.
+
 ## A. Baseline and protected state
 
 Before modification, HEAD, local main, origin/main and independently queried

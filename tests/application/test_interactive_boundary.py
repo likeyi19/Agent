@@ -361,7 +361,8 @@ def test_display_ack_failure_and_explicit_recovery_never_repeat_science(tmp_path
     assert calls==['inspect_scATAC'] and len(models)==1
     monkeypatch.setattr(AnalysisSessions,'store_presentation',original)
     retry=first(service,source)
-    assert retry.status=='succeeded' and retry.response is None
+    assert retry.status=='interrupted' and retry.response is None
+    assert retry.error.code=='INTERACTIVE_PROCESSING_INTERRUPTED'
     recovered=service.recover_turn('session','first')
     assert recovered.response.status=='activated' and recovered.response.text.startswith('The accepted scientific results')
     assert first(service,source)==recovered and len(models)==1 and calls==['inspect_scATAC']

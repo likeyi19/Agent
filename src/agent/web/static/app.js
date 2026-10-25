@@ -8,14 +8,9 @@ const RESOURCE_STORAGE_KEY = "agent.web.selected-resource.v1";
 const MULTI_RESOURCE_STORAGE_KEY = "agent.web.selected-resources.v1";
 const MAX_SELECTED_RESOURCES = 8;
 const POLL_INTERVAL_MS = 2000;
-const PRESENTATION_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATES = new Set([
   "answered", "clarification", "navigated", "succeeded", "failed", "cancelled",
   "interrupted", "unavailable", "stale", "activated", "planned",
-]);
-const PRESENTATION_PENDING_STATES = new Set([
-  "answered", "clarification", "navigated",
-  "succeeded", "planned", "activated", "stale", "failed", "cancelled",
 ]);
 const RESPONSE_LABELS = {
   answer: "Agent · Answer", clarify: "Agent · Clarification",
@@ -134,18 +129,8 @@ function showError(error) {
   banner.hidden = !error;
 }
 
-function awaitingPresentation(turn) {
-  if (turn.error && turn.error.code === "INTERACTIVE_PROCESSING_INTERRUPTED") return false;
-  // Answer and scientific completion precede immutable display publication.
-  // An explicit submission failure has no display to await.
-  const submissionFailure = ["failed", "cancelled"].includes(turn.status) && !turn.run_id
-    && turn.error && turn.error.code !== "INTERACTIVE_PRESENTATION_UNAVAILABLE";
-  return typeof turn.profile_id === "string" && !turn.response
-    && PRESENTATION_PENDING_STATES.has(turn.status) && !submissionFailure;
-}
-
 function terminal(turn) {
-  return Boolean(turn.response) || (!awaitingPresentation(turn) && TERMINAL_STATES.has(turn.status));
+  return Boolean(turn.response) || TERMINAL_STATES.has(turn.status);
 }
 
 function checkpointText(turn) {
@@ -870,7 +855,12 @@ function readableLabel(value) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function statusLabel(status, responseKind = null) {
+function statusLabel(status, responseKind = null, revisionId = null) {
+  if (status === "finalizing") {
+    if (responseKind) return "Saved progress requires recovery";
+    return revisionId ? "Scientific analysis completed. Preparing the results and explanation."
+      : "Preparing the scientific response.";
+  }
   if (status === "failed" && responseKind === "answer") return "Answer unavailable · Accepted result unchanged";
   const labels = {
     activated: "Analysis completed", succeeded: "Analysis completed",
@@ -1323,7 +1313,7 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
+    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     metadata.dataset.detailKey = "turn-details";
@@ -1387,7 +1377,7 @@ function renderHistory() {
       note.className = "turn-error";
       note.textContent = `${error.code}: ${error.message}`;
       article.append(note);
-      if (error.code === "INTERACTIVE_PROCESSING_INTERRUPTED" || (turn.status === "finalizing" && turn.response)) {
+      if ((!turn.response && turn.status === "interrupted") || error.code === "INTERACTIVE_PROCESSING_INTERRUPTED" || (turn.status === "finalizing" && turn.response)) {
         const recover = document.createElement("button");
         recover.type = "button"; recover.className = "secondary";
         recover.textContent = "Recover saved progress";
@@ -1452,7 +1442,7 @@ function updateControls() {
 
 function renderExecution() {
   element("turn-status").parentElement.hidden = !state.posting && !state.activeTurn;
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind) : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind, state.activeTurn.revision_id) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
@@ -1551,6 +1541,16 @@ function watchTurn(sessionId, turnId) {
       saveConveniences();
       element("connection-state").textContent = "Connected";
       showError(turn.error || turn.response && turn.response.error || null);
+      if (!terminal(turn) && turn.revision_id && state.session && !state.session.revisions.some((revision) => revision.revision_id === turn.revision_id)) {
+        // Scientific acceptance can precede the immutable response. Refresh its
+        // authoritative result view without publishing pending delivery bytes.
+        try {
+          await refreshCurrentSession(sessionId, epoch);
+        } catch (error) {
+          if (epoch === state.epoch) showError(error);
+        }
+        if (epoch !== state.epoch || pollEpoch !== state.pollEpoch) return;
+      }
       if (terminal(turn)) {
         stopPolling();
         state.submission = null;
@@ -1588,9 +1588,7 @@ function watchTurn(sessionId, turnId) {
         return;
       }
     }
-    const interval = state.activeTurn && awaitingPresentation(state.activeTurn)
-      ? PRESENTATION_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
-    state.timer = setTimeout(tick, interval);
+    state.timer = setTimeout(tick, POLL_INTERVAL_MS);
   };
   tick();
 }

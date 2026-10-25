@@ -82,7 +82,7 @@ def test_dead_interpreter_read_and_explicit_close_do_not_call_model(tmp_path):
     assert service.status('s', 'lost').status == 'interrupted'
     assert path.read_bytes() == before
     with sessions.processing_lease('s', 'lost'):
-        assert service.status('s', 'lost').status == 'interpreting'
+        assert service.status('s', 'lost').status == 'finalizing'
         code = '''
 import sys
 from agent.application.session_store import FileSessionStore

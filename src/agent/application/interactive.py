@@ -309,9 +309,16 @@ class InteractiveAgentApplication:
                 if before_turn_id not in ids:
                     raise _fail('INTERACTIVE_REFERENCE_INVALID')
                 ids = ids[:ids.index(before_turn_id)]
+            turns = tuple(self._view(state, key) for key in ids[-limit:])
+            latest = self._load(session_id)
+            if (latest.generation, latest.active_revision_id, latest.revisions) != (
+                    state.generation, state.active_revision_id, state.revisions):
+                # A turn projection may observe acceptance while checking its
+                # publisher. Keep the enclosing revision list and generation
+                # from that same accepted Session snapshot.
+                return self.reopen_session(session_id, limit=limit, before_turn_id=before_turn_id)
             return SessionView(state.session_id, state.generation, state.active_revision_id,
-                revisions, tuple(self._view(state, key) for key in ids[-limit:]),
-                len(ids) > limit)
+                revisions, turns, len(ids) > limit)
         except InteractiveBoundaryError:
             raise
         except (ValueError, TypeError, KeyError) as exc:
@@ -697,6 +704,19 @@ class InteractiveAgentApplication:
         turn = next((t for t in state.turns if t.turn_id == turn_id), None)
         if interaction is None and turn is None:
             raise _fail('INTERACTIVE_REFERENCE_INVALID')
+        processing = None
+        if (interaction is not None and interaction.presentation is None
+                and interaction.submission is not None
+                and interaction.submission.get('profile_id') is not None):
+            processing = self._application.sessions._store.is_processing(state.session_id, turn_id)
+            # Publication can race either lease observation. Recheck the exact
+            # selected records before classifying an unsaved response; unrelated
+            # Session changes do not restart this projection.
+            latest = self._load(state.session_id)
+            current_interaction = next((i for i in latest.interactions if i.turn_id == turn_id), None)
+            current_turn = next((t for t in latest.turns if t.turn_id == turn_id), None)
+            if (current_interaction, current_turn) != (interaction, turn):
+                return self._view(latest, turn_id)
         response = (None if interaction is None or interaction.presentation is None
                     else PresentedResponse.from_dict(_serialize(interaction.presentation)))
         admitted = {} if interaction is None or interaction.admitted is None else interaction.admitted
@@ -705,7 +725,7 @@ class InteractiveAgentApplication:
         status = turn.status if turn is not None else interaction.status
         if response is not None and response.artifacts and response.kind == 'answer':
             status = response.status
-        steps, state_revision, error = (), None, None
+        steps, state_revision, error, run = (), None, None, None
         if run_id is not None:
             try:
                 run = self._application.run_store.load(run_id)
@@ -731,9 +751,6 @@ class InteractiveAgentApplication:
                     error = _fail('INTERACTIVE_APPLICATION_FAILED').error
                 if run.errors:
                     error = ClientError(run.errors[0].code, safe_message_for(run.errors[0].code))
-        if response is None and ((interaction is not None and interaction.status in {'answered', 'clarification', 'navigated', 'failed'})
-                                or (turn is not None and turn.status in {'activated','stale','failed','cancelled','planned','clarification'})):
-            error = _fail('INTERACTIVE_PRESENTATION_UNAVAILABLE').error if error is None else error
         if (interaction is None and turn is not None and turn.request_id is None
                 and turn.status == 'activated' and turn.revision_id is not None):
             # Metadata-only navigation has no assistant wording to regenerate.
@@ -742,22 +759,28 @@ class InteractiveAgentApplication:
             error = response.error
         if interaction is not None and interaction.prerequisite is not None:
             status, error = 'clarification', None
-        if (interaction is not None and interaction.submission is not None
-                and interaction.submission.get('profile_id') is not None and response is None
-                and not self._application.sessions._store.is_processing(state.session_id, turn_id)):
-            # Recheck after observing a released lease: completion may have been
-            # published since the caller captured this snapshot.
-            latest = self._load(state.session_id)
-            if latest != state:
-                return self._view(latest, turn_id)
-            error = _fail('INTERACTIVE_PROCESSING_INTERRUPTED').error
-            if status not in {'succeeded', 'failed', 'cancelled', 'planned', 'clarification'}:
-                status = 'interrupted'
+        if response is None and status != 'unavailable':
+            if processing is not None:
+                if processing:
+                    # Native progress remains visible. Scientific acceptance or
+                    # a completed Answer is not final Interaction publication.
+                    if status not in {'planning', 'validated', 'running'}:
+                        status = 'finalizing'
+                else:
+                    status = 'interrupted'
+                    error = error or _fail('INTERACTIVE_PROCESSING_INTERRUPTED').error
+            elif ((interaction is not None and interaction.status in {'answered', 'clarification', 'navigated', 'failed'})
+                    or (turn is not None and turn.status in {'activated','stale','failed','cancelled','planned','clarification'})):
+                # Unprofiled history has no active interactive publisher to wait
+                # for. Metadata-only navigation intentionally has no response.
+                if interaction is not None or status != 'navigated':
+                    status = 'unavailable'
+                    error = _fail('INTERACTIVE_PRESENTATION_UNAVAILABLE').error if error is None else error
         # Terminal scientific acceptance already passed the resource owner's
         # validate_result guard in sessions._complete. Project that recorded use;
         # do not reopen sources or repeat scientific verification on a read.
-        accepted_use = (status == 'succeeded' and error is None and turn is not None
-                        and turn.status in {'activated', 'stale'})
+        accepted_use = (turn is not None and turn.status in {'activated', 'stale'}
+                        and run is not None and run.lifecycle_status.value == 'SUCCEEDED')
         attachments = []
         captured_attachments = (() if interaction is None or interaction.submission is None
                                 else interaction.submission.get('attachments', ()))

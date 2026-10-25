@@ -77,7 +77,7 @@ def test_session_submission_poll_and_cancellation_are_wired():
     assert '/status`)' in code
     assert '/cancel`, "POST", {})' in code
     assert '["planning", "validated", "running"].includes(state.activeTurn.status)' in code
-    assert 'setTimeout(tick, interval)' in code
+    assert 'setTimeout(tick, POLL_INTERVAL_MS)' in code
     assert 'POLL_INTERVAL_MS = 2000' in code
 
 
@@ -114,29 +114,22 @@ def test_terminal_poll_stops_and_transient_failure_remains_visible():
     assert 'No durable turn was found. Reopen the session to continue.' in code
 
 
-def test_scientific_completion_waits_for_persisted_display_without_replay():
+def test_browser_uses_application_status_without_reconstructing_presentation_lifecycle():
     code = (STATIC / 'app.js').read_text()
-    pending = code[code.index('const PRESENTATION_PENDING_STATES'):]
-    pending = pending[:pending.index(']);')]
-    assert set(re.findall(r'"([a-z]+)"', pending)) == {
-        'succeeded', 'planned', 'activated', 'stale', 'failed', 'cancelled',
-        'answered', 'clarification', 'navigated',
-    }
-    gate = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
-    assert 'typeof turn.profile_id === "string"' in gate
-    assert '!turn.response' in gate
-    assert 'PRESENTATION_PENDING_STATES.has(turn.status) && !submissionFailure' in gate
-    assert '!awaitingPresentation(turn) && TERMINAL_STATES.has(turn.status)' in gate
-    assert 'PRESENTATION_POLL_INTERVAL_MS = 5000' in code
-    assert '? PRESENTATION_POLL_INTERVAL_MS : POLL_INTERVAL_MS' in code
+    assert 'PRESENTATION_PENDING_STATES' not in code
+    assert 'awaitingPresentation' not in code
+    assert 'PRESENTATION_POLL_INTERVAL_MS' not in code
+    gate = code[code.index('function terminal'):code.index('function checkpointText')]
+    assert 'Boolean(turn.response) || TERMINAL_STATES.has(turn.status)' in gate
+    assert 'profile_id' not in gate and 'turn.error' not in gate and 'run_id' not in gate
 
 
 def _javascript_predicates(code, turns):
     """Evaluate the actual shared predicates in an optional system JS runtime."""
     constants = code[code.index('const TERMINAL_STATES'):code.index('const RESPONSE_LABELS')]
-    functions = code[code.index('function awaitingPresentation'):code.index('function checkpointText')]
+    functions = code[code.index('function terminal'):code.index('function checkpointText')]
     script = ('(() => {\n' + constants + '\n' + functions + '\nreturn ' + json.dumps(turns) +
-              '.map(turn => [awaitingPresentation(turn), terminal(turn)]);})()')
+              '.map(turn => terminal(turn));})()')
     return _javascript_value(script)
 
 
@@ -181,17 +174,18 @@ print(ctypes.string_at(result).decode())
     pytest.skip('Optional JavaScriptCore runtime is unavailable')
 
 
-def test_dialogue_completion_waits_for_display_but_legacy_turns_remain_terminal():
+def test_application_finalizing_is_pending_and_saved_or_historical_outcomes_are_terminal():
     code = (STATIC / 'app.js').read_text()
-    turns = []
-    for status in ('answered', 'clarification', 'navigated'):
-        pending = dict(profile_id='captured-profile', status=status, response=None)
-        turns.extend([pending, dict(pending, response={'kind': 'answer'}),
-                      dict(pending, profile_id=None)])
-    assert _javascript_predicates(code, turns) == [[True, False], [False, True], [False, True]] * 3
+    pending = dict(profile_id='captured-profile', status='finalizing', response=None)
+    turns = [pending, dict(pending, profile_id=None),
+             dict(pending, response={'kind': 'execute', 'error': {'code': 'APP_REPORT_FAILED'}})]
+    for status in ('answered', 'clarification', 'navigated', 'succeeded', 'failed',
+                   'cancelled', 'interrupted', 'unavailable', 'stale', 'planned'):
+        turns.append(dict(pending, status=status))
+    assert _javascript_predicates(code, turns) == [False, False] + [True] * 11
 
 
-def test_no_run_failed_answer_waits_for_display_without_waiting_on_submission_errors():
+def test_failed_and_interrupted_states_are_not_overridden_by_profile_or_error_inference():
     code = (STATIC / 'app.js').read_text()
     pending = dict(profile_id='captured-profile', status='failed', run_id=None,
                    response=None, error={'code': 'INTERACTIVE_PRESENTATION_UNAVAILABLE'})
@@ -211,10 +205,172 @@ def test_no_run_failed_answer_waits_for_display_without_waiting_on_submission_er
         dict(pending, run_id='run'),
     ]
     assert _javascript_predicates(code, turns) == [
-        [True, False], [False, True], [True, False], [True, False], [True, False],
-        [False, True], [False, True], [False, True], [False, True], [False, True],
-        [True, False],
+        True, True, True, True, True, True, True, True, True, True, True,
     ]
+
+
+def test_finalizing_labels_distinguish_accepted_science_response_and_saved_failure():
+    code = (STATIC / 'app.js').read_text()
+    label = code[code.index('function statusLabel'):code.index('function evidenceValueNode')]
+    result = _javascript_value('(() => {\n' + label + '''
+      return [statusLabel("finalizing", null, "accepted-revision"),
+        statusLabel("finalizing"), statusLabel("finalizing", "execute", "accepted-revision")];
+    })()''')
+    assert result == [
+        'Scientific analysis completed. Preparing the results and explanation.',
+        'Preparing the scientific response.', 'Saved progress requires recovery',
+    ]
+
+
+def _javascript_poll(turn, *, offered=(), refresh_error=None, reopen=False):
+    """Run the production poll/control functions with a bounded DOM/HTTP transport.
+
+    JavaScriptCore drains the async Promise jobs after evaluation. setTimeout is
+    captured rather than run, so a pending response cannot finish by test timing.
+    The Session endpoint supplies the independently authoritative accepted result.
+    """
+    code = (STATIC / 'app.js').read_text()
+    constants = code[code.index('const POLL_INTERVAL_MS'):code.index('const RESPONSE_LABELS')]
+    predicates = code[code.index('function terminal'):code.index('function shortIdentity')]
+    labels = code[code.index('function readableLabel'):code.index('function evidenceValueNode')]
+    controls = code[code.index('function updateControls'):code.index('function mergeTurn')]
+    polling = code[code.index('function stopPolling'):code.index('// Display choice only:')]
+    polling += code[code.index('async function refreshCurrentSession'):code.index('async function openSession')]
+    if reopen:
+        polling += code[code.index('async function openSession'):code.index('function newTurnId')]
+    session = dict(session_id='session', generation=1, turns=[turn], active_revision_id=turn.get('revision_id'),
+                   revisions=[dict(revision_id=turn['revision_id'])] if turn.get('revision_id') else [])
+    setup = '''
+      const result = {calls: [], errors: [], delays: [], displayed: [], merged: []};
+      const dom = {};
+      const element = id => dom[id] || (dom[id] = {
+        options: [], parentElement: {}, replaceChildren() {},
+      });
+      const document = {querySelectorAll() {return [];}, createElement() {return {};}};
+      const canAddScientificInput = () => true;
+      const selectedResourceType = () => null;
+      const clearTimeout = () => {};
+      const setTimeout = (callback, delay) => {result.delays.push(delay); return "pending-timer";};
+      const showError = error => {result.errors.push(error);};
+      const saveConveniences = () => {};
+      const sessionPath = () => "/session";
+      const turnPath = () => "/turn";
+      const mergeTurn = turn => {result.merged.push(turn);};
+      const displaySession = view => {state.session = view; result.displayed.push(view); updateControls();};
+      element("retry-turn").hidden = true;
+    '''
+    setup += '\nconst turn = ' + json.dumps(turn) + ';'
+    setup += '\nconst refreshed = ' + json.dumps(session) + ';'
+    setup += '\nconst refreshError = ' + json.dumps(refresh_error) + ';'
+    setup += '\nconst state = ' + json.dumps(dict(
+        session=dict(session_id='session', revisions=[dict(revision_id=value) for value in offered]),
+        models=[{}], activeTurn=None, submission={}, epoch=1, pollEpoch=0, posting=False,
+        attachments=[], resources=[], fastqMembers=[], epizooResources=[])) + ';'
+    setup += '''
+      state.durableTurnIds = new Set(["turn"]);
+      state.scientificFiles = new Map();
+      const api = async path => {
+        result.calls.push(path);
+        if (path === "/turn/status") return turn;
+        if (refreshError) throw refreshError;
+        return refreshed;
+      };
+      result.dom = dom;
+      result.state = state;
+    '''
+    invocation = 'openSession("session", "turn")' if reopen else 'watchTurn("session", "turn")'
+    return _javascript_value('(() => {\n' + constants + predicates + labels + controls + polling
+                             + setup + '\n' + invocation + '; return result;})()')
+
+
+def test_pending_poll_exposes_accepted_revision_and_keeps_submission_disabled():
+    turn = dict(session_id='session', turn_id='turn', status='finalizing', revision_id='new-result',
+                response=None, error=None, steps=[])
+    pending = _javascript_poll(turn)
+    assert pending['calls'] == ['/turn/status', '/session']
+    assert pending['displayed'][0]['active_revision_id'] == 'new-result'
+    assert pending['state']['activeTurn'] == turn and pending['state']['submission'] == {}
+    assert pending['delays'] == [2000] and pending['errors'] == [None]
+    assert pending['dom']['submit-turn']['disabled'] is True
+    assert pending['dom']['cancel-turn']['hidden'] is True
+    assert pending['dom']['retry-turn'].get('hidden') is not False
+    assert pending['dom']['turn-status']['textContent'].startswith('Scientific analysis completed.')
+    already_visible = _javascript_poll(turn, offered=('new-result',))
+    assert already_visible['calls'] == ['/turn/status']
+    assert already_visible['dom']['submit-turn']['disabled'] is True
+
+
+def test_read_only_answer_poll_remains_pending_without_a_scientific_run():
+    turn = dict(session_id='session', turn_id='turn', status='finalizing', revision_id=None,
+                run_id=None, response=None, error=None, steps=[])
+    result = _javascript_poll(turn)
+    assert result['calls'] == ['/turn/status'] and result['delays'] == [2000]
+    assert result['errors'] == [None] and result['dom']['submit-turn']['disabled'] is True
+    assert result['dom']['turn-status']['textContent'] == 'Preparing the scientific response.'
+
+
+def test_reopen_during_finalization_resumes_read_only_polling_without_submission():
+    turn = dict(session_id='session', turn_id='turn', status='finalizing', revision_id='accepted-result',
+                run_id='accepted-run', response=None, error=None, utterance='Explain this result.', steps=[])
+    result = _javascript_poll(turn, reopen=True)
+    assert result['calls'] == ['/session', '/turn/status'] and result['delays'] == [2000]
+    assert result['state']['activeTurn'] == turn and result['state']['submission'] is None
+    assert result['displayed'][0]['active_revision_id'] == 'accepted-result'
+    assert result['dom']['submit-turn']['disabled'] is True
+    assert all(error is None for error in result['errors'])
+
+
+@pytest.mark.parametrize('status,error', [
+    ('interrupted', 'INTERACTIVE_PROCESSING_INTERRUPTED'),
+    ('unavailable', 'INTERACTIVE_PRESENTATION_UNAVAILABLE'),
+    ('failed', 'INTERACTIVE_APPLICATION_FAILED'),
+])
+def test_actual_terminal_errors_stop_polling_and_remain_visible(status, error):
+    turn = dict(session_id='session', turn_id='turn', status=status, revision_id=None,
+                response=None, error=dict(code=error, message='Recorded failure.'), steps=[])
+    result = _javascript_poll(turn)
+    assert result['errors'] == [turn['error']]
+    assert result['delays'] == [] and result['state']['activeTurn'] is None
+    assert result['state']['submission'] is None
+    assert result['dom']['submit-turn']['disabled'] is False
+
+
+def test_saved_response_and_artifacts_complete_exactly_without_pending_inference():
+    shown = dict(kind='answer', text='The exact saved response.', artifacts=[
+        dict(artifact_id='pinned-figure', png_sha256='a' * 64)])
+    turn = dict(session_id='session', turn_id='turn', status='answered', revision_id='result',
+                response=shown, error=None, steps=[])
+    result = _javascript_poll(turn)
+    assert result['calls'] == ['/turn/status', '/session']
+    assert result['merged'][0]['response'] == shown
+    assert result['displayed'][0]['turns'][0]['response'] == shown
+    assert result['state']['activeTurn'] is None and result['delays'] == []
+    assert result['dom']['submit-turn']['disabled'] is False
+
+
+def test_result_refresh_failure_does_not_stop_an_active_response_poll():
+    turn = dict(session_id='session', turn_id='turn', status='finalizing', revision_id='result',
+                response=None, error=None, steps=[])
+    result = _javascript_poll(turn, refresh_error=dict(code='RESPONSE_UNAVAILABLE', message='Retry reading results.'))
+    assert result['calls'] == ['/turn/status', '/session'] and result['delays'] == [2000]
+    assert result['state']['activeTurn'] == turn
+    assert result['errors'][-1]['code'] == 'RESPONSE_UNAVAILABLE'
+    assert result['dom']['submit-turn']['disabled'] is True
+
+
+def test_authoritative_interruption_offers_recovery_with_the_original_native_error():
+    code = (STATIC / 'app.js').read_text()
+    history = code[code.index('function renderHistory'):code.index('function updateControls')]
+    condition = next(line.strip()[4:-3] for line in history.splitlines()
+                     if line.strip().startswith('if ((!turn.response && turn.status === "interrupted")'))
+    turns = [
+        dict(status='interrupted', response=None, error=dict(code='NATIVE_RUN_FAILED')),
+        dict(status='finalizing', response=None, error=dict(code='NATIVE_RUN_FAILED')),
+        dict(status='unavailable', response=None, error=dict(code='INTERACTIVE_PRESENTATION_UNAVAILABLE')),
+        dict(status='finalizing', response=dict(kind='execute'), error=dict(code='APP_REPORT_FAILED')),
+    ]
+    script = '(() => { return ' + json.dumps(turns) + '.map(turn => {const error=turn.error; return Boolean(' + condition + ');});})()'
+    assert _javascript_value(script) == [True, False, False, True]
 
 
 class HierarchyPage(Page):
@@ -321,7 +477,7 @@ def test_history_restores_details_and_focus_by_exact_turn_and_action_identity():
     assert 'target.focus({ preventScroll: true })' in capture
     assert 'restoreConversationUi(history, captured)' in code
     history = code[code.index('function renderHistory'):code.index('function updateControls')]
-    assert 'status.textContent = statusLabel(turn.status, turn.response && turn.response.kind)' in history
+    assert 'status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id)' in history
     assert 'checkpointText(turn)' in history
 
 

@@ -13,6 +13,71 @@ from agent.schemas.run_state import (PersistedRunState, RecoveryPolicySnapshot, 
 from test_dialogue_evidence import app, accepted, files, forbid_work, passed
 
 
+@pytest.mark.parametrize('mode', ['offered', 'literal'])
+def test_mixed_source_field_and_numeric_provenance_reuse_captured_scope_without_io(app, monkeypatch, mode):
+    """Attribution-only fixture; native acceptance is covered by the HTTP test."""
+    from types import SimpleNamespace
+    import h5py
+    from agent.application.dialogue_evidence import _explicit_user_parameter_facts
+    from agent.application.local_resources import RegisteredInputGroup
+    from agent.application.session_state import Interaction
+    field = 'Reference identity β'
+    literal = field if mode == 'literal' else 'provided annotations'
+    text = f'Use resolution 0.6 and compare with {literal}.'
+    start = text.index(literal)
+    member = dict(resource_id='local-' + 'a'*64, record_sha256='b'*64,
+        source_sha256='c'*64, source_path='/accepted/reference.h5ad', input_type='h5ad', label='Reference')
+    unbound = RegisteredInputGroup((member,), {}, attachment_candidates=True)
+    roles = [dict(tool='evaluate_cell_clustering', port='ground_truth_dataset', source='source.0')]
+    values = dict(resolution=.6, label_key=field, reference_h5ad_path=member['source_path'])
+    arguments = [dict(tool='cluster_cells',argument='resolution',literal='0.6',start=15,end=18),
+        dict(tool='evaluate_cell_clustering',argument='label_key',source='source.0',mode=mode,
+             value=field,literal=literal,start=start,end=start+len(literal))]
+    arguments[0]['start'] = text.index('0.6'); arguments[0]['end'] = arguments[0]['start'] + 3
+    snapshot = dict(dialogue=dict(source_view=dict(execution_inputs={},registered_input=unbound.attribution()),
+        source_fields=[dict(source='source.0',resource_id=member['resource_id'],source_sha256=member['source_sha256'],
+                            fields=[field] if mode == 'offered' else [],complete=mode == 'offered')]))
+    admitted = dict(kind='execute',operation='plan',request_id='science',inputs=values,roles=roles,
+        registered_input=RegisteredInputGroup((member,),values,roles=roles,attachment_candidates=True).attribution(),
+        arguments=arguments)
+    interaction = Interaction('turn',text,None,0,snapshot,status='admitted',admitted=admitted)
+    planned = (PlanStep('cluster','cluster_cells',dict(resolution=.6)),
+               PlanStep('evaluate','evaluate_cell_clustering',dict(label_key=field)))
+    run = SimpleNamespace(run_id='science:run',request_id='science',
+                          plan=SimpleNamespace(steps=planned))
+    state = SimpleNamespace(turns=(SimpleNamespace(run_id=run.run_id,turn_id='turn'),),interactions=(interaction,))
+    monkeypatch.setattr(h5py,'File',lambda *a,**k: pytest.fail('Evidence attribution reopened a scientific source.'))
+    before = files(app)
+    for target, name in zip(planned,('resolution','label_key')):
+        step = SimpleNamespace(tool_name=target.tool_name,step_id=target.step_id,resolved_arguments=target.arguments)
+        fact, = _explicit_user_parameter_facts(app.sessions,state,run,step,target)
+        assert fact.value['parameters'] == {name:'explicit_user_instruction'}
+        assert fact.artifact_name == 'accepted_session_interactions'
+    assert files(app) == before
+
+    # The same scope owner must still reject wrong source and admitted/accepted
+    # values; adding field support cannot weaken parameter provenance.
+    from agent.application.dialogue_evidence import _Unavailable
+    target = planned[1]
+    step = SimpleNamespace(tool_name=target.tool_name,step_id=target.step_id,resolved_arguments=target.arguments)
+    for mutation in ('source','admitted','planned','resolved'):
+        changed = dict(admitted)
+        bad_target, bad_step = target, step
+        if mutation == 'source':
+            changed['arguments'] = [arguments[0],dict(arguments[1],source='source.1')]
+        elif mutation == 'admitted':
+            changed['inputs'] = dict(values,label_key='different')
+        elif mutation == 'planned':
+            bad_target = PlanStep('evaluate','evaluate_cell_clustering',dict(label_key='different'))
+        else:
+            bad_step = SimpleNamespace(tool_name=target.tool_name,step_id=target.step_id,
+                                       resolved_arguments=dict(label_key='different'))
+        bad_interaction = replace(interaction,admitted=changed)
+        bad_state = SimpleNamespace(turns=state.turns,interactions=(bad_interaction,))
+        with pytest.raises(_Unavailable,match='session_parameter_binding_mismatch'):
+            _explicit_user_parameter_facts(app.sessions,bad_state,run,bad_step,bad_target)
+
+
 def analysis(app, *, resolution=.7, binding='exact', mutation=None):
     """Accept two distinct clustering steps and retain only the final UMAP."""
     request = AgentRequest('analysis', 'Accepted processed-analysis metadata fixture.', {})

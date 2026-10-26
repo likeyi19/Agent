@@ -6,6 +6,58 @@ review. The closing review below supersedes earlier unstaged-review dispositions
 R6 has not begun.
 Evidence directory: `/home/likeyi/agent-ua365-r5-woerjdq3` (outside Git).
 
+## Current OPT-3A follow-up — 2026-10-26
+
+Exact offered result aliases now resolve through the existing captured-result
+owner for answers and delivery. Admission no longer makes a second language
+decision from internal tool/output wording. Annotation-summary subject offers
+reflect their actual domain; categorical values belong to the existing detail
+reader. Explicitly distinct fields on one accepted result may be compared, while
+source correspondence, exact axes, evidence integrity and R5 review remain with
+their existing owners.
+
+Registry argument metadata can identify the dataset port owning an observation
+column. Source-qualified field declarations select an exact captured source and
+either an offered name or an explicitly stated literal. Each source has its own
+offered domain; there is no global field-name union or automatic literal fallback.
+This declaration explicitly selects that one existing Registry input role;
+conflicting role assignments fail closed. Native owners retain content and axis
+checks. Exact names outside the bounded offer and names stated before a later
+upload remain supported. Discovery establishes neither biological truth nor
+measurement eligibility; captured offers replay without reopening source H5ADs.
+Accepted explicit-parameter evidence reuses that same captured field scope before
+checking admitted, planned and resolved values. It does not repeat unscoped field
+admission or reconstruct science when reading completed results.
+
+One neutral captured file view supplies the same source ordinals to interpretation
+and binding after uploads. It reuses registered file identities and strips old
+task settings; candidate availability grants no selection or execution authority.
+Current-source markers, primary identity and embedding suitability use that same
+order. The obsolete live annotation-source branch is removed; received single-file
+primary identity and slot-absent historical captures keep their original readers.
+
+Invalid typed bindings are failed interactions rather than automatically becoming
+user ambiguity. The existing diagnostic event records a bounded rejection reason
+and operand slot, without raw prompts or values. Model-authored clarifications and
+actual scientific prerequisites retain their separate meaning. Pending-task advice
+uses the existing guidance generation/review path even before a first result;
+direct advice does not require capability candidates or exactly three paragraphs.
+Both forms use existing bounded R5 prose and shared atomic review. Declarations and
+unresolved requirements remain explicitly non-authoritative. Unavailable guidance
+does not imply an accepted result exists.
+
+The [OPT-3A final convergence report](../../../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3a/final-convergence/REPORT.md)
+owns the five-area closeout and bounded COMPLETE disposition. Final affected-domain
+validation passes 1,222 tests. A real natural description selects the exact supplied
+`subclass` field for accepted Leiden/evaluation; independent metrics and an actual
+compact H5AD download match. A no-result fragments task receives useful direct
+prerequisite advice and keeps its original pending scope. The live-discovered
+parameter-evidence reader omission is fixed and both accepted summaries display
+correctly. The original unavailable explanation remains immutable; an optional new
+prose question fails at provider connection before interpretation, so post-result
+natural prose is not qualified by this run. Seven completion attempts consume
+$0.490968 additional key usage. Changes remain uncommitted; OPT-3B/3C are not started.
+
 ## Current OPT-2D follow-up — 2026-10-24
 
 The original R5 all-or-nothing paragraph review and its acceptance records below

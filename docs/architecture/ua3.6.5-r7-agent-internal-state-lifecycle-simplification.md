@@ -11,6 +11,35 @@ Acceptance evidence is isolated at `/home/likeyi/agent-ua365-r7-o3pqsmyz`.
 Final validation and disposition are recorded below; development checks are not
 additional independent acceptance totals.
 
+## Current OPT-3A continuation follow-up — 2026-10-26
+
+An answered prerequisite question or a failed typed continuation can retain the
+exact captured pending reference without becoming an execution checkpoint.
+Guidance and failed binding keep their actual answer/error status; a pending
+pointer alone does not imply clarification. A later explicit reply still uses
+the original objective and last valid association. It is never automatic retry
+authority, and an unrelated new command does not inherit pending scientific
+settings or execution permissions.
+
+Pending scientific metadata may be explicitly corrected or retracted to unknown;
+null omission does not erase prior declarations. Captured files, source roles and
+operations remain protected, and scientific owners still qualify new consumption.
+Typed declaration validation owns duplicate unknown fields; the provider schema
+does not duplicate that invariant with `uniqueItems`. Direct prerequisite advice
+retains the existing empty candidate inventory without execution authority.
+Accepted Revision status now remains scientifically successful after its existing
+integrity check, independently of an unavailable or unfinished Turn presentation.
+No new lifecycle state, queue or recovery engine is introduced. Historical records
+and exact displayed text retain their original identities. The
+[OPT-3A final convergence report](../../../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3a/final-convergence/REPORT.md)
+records bounded COMPLETE acceptance: 1,222 final affected tests, real accepted
+source-field clustering/evaluation with independently checked metrics/download,
+and useful zero-result advice with exact pending-state preservation. A corrected
+parameter-evidence reader restores accepted summaries without replaying science or
+rewriting the original unavailable explanation. An optional read-only prose request
+fails at provider connection and is not retried; it creates no scientific state.
+No commit or push is authorized, and OPT-3B/3C have not begun.
+
 ## Current OPT-2E follow-up — 2026-10-25
 
 Interactive status now projects response publication separately from scientific

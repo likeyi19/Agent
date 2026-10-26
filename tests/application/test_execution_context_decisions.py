@@ -119,9 +119,11 @@ def test_historical_singular_parameter_is_read_into_the_generic_writer():
     ('compute_cell_umap', 'min_dist', .3, 'spread', 1.2, 'spread'),
 ])
 def test_retained_settings_bind_separately_from_current_values_and_defaults(tool, name, value, new_name, new_value, new_input):
+    from dataclasses import replace
     from types import SimpleNamespace
     from agent.application.dialogue_execution import (admit, _validate_argument_record,
         _validate_research_intent, _check_parameter_plan)
+    from agent.application.session_state import Interaction
     from agent.application.turn_decisions import RetainedParameter, ScopedArgument
     from agent.orchestration import build_default_tool_registry
     from agent.schemas import AgentPlan, PlanStep
@@ -130,14 +132,14 @@ def test_retained_settings_bind_separately_from_current_values_and_defaults(tool
     literal = str(new_value)
     start = utterance.index(literal)
     row = dict(handle='g0', tool=tool, parameters=[dict(argument=name, value=value, origin='owner_effective_value')])
-    interaction = SimpleNamespace(snapshot=dict(dialogue=dict(results=[row])), submission=None,
-        utterance=utterance, base_revision_id='captured', turn_id='change')
+    interaction = Interaction('change', utterance, 'captured', 0,
+                              dict(dialogue=dict(results=[row])))
     sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry), _interaction_session_id='session')
     decision = Execute('current', 'plan', tool, None,
         arguments=(ScopedArgument(tool, new_name, literal, start, start+len(literal)),),
         references=('g0',), delivery=('explanation',), retain_parameters=(RetainedParameter('g0', name),))
     admitted = admit(sessions, interaction, decision, {})
-    interaction.admitted = admitted
+    interaction = replace(interaction, admitted=admitted)
     assert admitted['inputs'] == {name:value, new_input:new_value}
     assert admitted['arguments'][0]['argument'] == new_name
     assert admitted['retained_parameters'] == [dict(result='g0', tool=tool, argument=name,
@@ -151,7 +153,8 @@ def test_retained_settings_bind_separately_from_current_values_and_defaults(tool
         PlanStep('another', tool, {name:value, new_name:new_value}),))
     with pytest.raises(IntentError, match='ambiguous_parameter'):
         _check_parameter_plan(registry, repeated, admitted, ())
-    interaction.admitted = dict(admitted, retained_parameters=[dict(admitted['retained_parameters'][0], value=999)])
+    interaction = replace(interaction, admitted=dict(admitted,
+        retained_parameters=[dict(admitted['retained_parameters'][0], value=999)]))
     with pytest.raises(ValueError, match='intention changed'):
         _validate_research_intent(interaction)
 

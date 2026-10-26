@@ -255,7 +255,8 @@ def test_changed_web_input_set_cannot_retarget_pending_role_answer(tmp_path):
         changed = multi_body(selected, turn='changed', utterance=ROLE_ANSWER) | dict(input_set_id=second.input_set_id)
         with multi_input_work() as calls:
             result = execute(client, changed)
-        assert result['revision_id'] is None and result['response']['kind'] == 'clarify'
+        assert result['revision_id'] is None and result['response']['status'] == 'failed'
+        assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
         assert_no_owner(calls)
         assert not harness.service._application.sessions.load('session').revisions
         assert harness.service._application.sessions.load('session').interactions[0] == origin

@@ -231,14 +231,20 @@ def cell_overlay(sessions, coordinate, categories, field):
         correspondence=dict(basis=basis, n_cells=len(ids), cell_order_sha256=_cell_order_digest(ids)))
 
 
-def _captured_output(sessions, state, origin, handle):
-    """Resolve one offered W1 group through its existing accepted locator."""
-    from dataclasses import asdict
+def captured_group(state, captured, handle):
+    """Resolve a captured group or one of its exact offered output aliases."""
     from .turn_context import result_groups
-    groups = {g['handle']:g['canonical'] for g in result_groups(origin.snapshot, state)}
-    if handle not in groups:
+    matches = [g for g in result_groups(captured, state)
+               if handle == g['handle'] or any(handle == m['handle'] for m in g['members'])]
+    if len(matches) != 1:
         raise ValueError('Select an explicitly captured accepted result.')
-    item = groups[handle]
+    return matches[0]
+
+
+def _captured_output(sessions, state, origin, handle):
+    """Resolve the shared captured result selection to its accepted locator."""
+    from dataclasses import asdict
+    item = captured_group(state, origin.snapshot, handle)['canonical']
     revision = next(r for r in state.revisions if r.revision_id == item['revision_id'])
     output = next(o for o in revision.outputs if o.name == item['output_name'])
     sessions._validate_locator(output)

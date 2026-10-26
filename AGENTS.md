@@ -120,6 +120,32 @@ the full boundary audit, changed workflows, measured calls and remaining limits.
 
 ## Architecture and engineering rules
 
+OPT-3A consolidates exact offered-result resolution and source-column binding in
+their existing owners. Registry metadata identifies a column's dataset port;
+bounded captured field offers contain names, never biological qualification.
+Source-qualified declarations explicitly select that port's source and distinguish
+offered fields from exact literal names; roles must agree. Canonical source order
+also owns primary/current-file and embedding-suitability projections. Direct
+prerequisite advice needs no capability candidate and uses the existing R5 review.
+Historical replay does not reopen input files. Pending declarations are user
+intent that may be corrected or explicitly made unknown, while captured sources,
+operations and accepted authority stay protected. Existing guidance may explain
+prerequisites before the first scientific result. An answered question or failed
+typed continuation can carry only its exact pending reference; this grants no
+execution/retry authority and does not turn its status into clarification.
+Internal typed-binding failures remain distinct from model clarifications and
+actual scientific-source refusals. Current scope and validation belong to the
+[OPT-3A final convergence report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3a/final-convergence/REPORT.md)
+and the R5/R7 follow-up records. OPT-3A is COMPLETE within its bounded scope:
+1,222 final affected-domain tests pass; real source-field binding produces verified
+Leiden/evaluation results and a checked download, and first-result prerequisite
+advice is delivered without science or loss of pending intent. A confirmed accepted
+parameter-evidence reader omission is fixed; saved historical failure text remains
+exact. An optional post-result prose request failed at provider connection before
+interpretation and was not retried. This is not universal provider/prose qualification.
+Seven completion attempts cost $0.490968 additional key usage. Changes remain
+uncommitted for review; OPT-3B/3C have not begun.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

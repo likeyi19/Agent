@@ -223,4 +223,4 @@ def scripted_guidance(public, capability="inspect_scATAC"):
     explanation["paragraphs"].extend([
         dict(text="This assumes an appropriate experimental design.", kind="conditional", citations=[], comparisons=[]),
         dict(text="Further inputs and scientific checks would be required.", kind="conditional", citations=[], comparisons=[])])
-    return dict(candidates=[dict(capability=capability, explanation=explanation)])
+    return dict(advice=None, candidates=[dict(capability=capability, explanation=explanation)])

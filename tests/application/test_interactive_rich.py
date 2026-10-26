@@ -37,6 +37,10 @@ def test_revision_projection_navigation_and_exact_parent_metadata(app, monkeypat
     assert current.session_generation == 2 and current.run_id == 'later:run'
     assert current.outputs == ('output0',) and current.evidence_outputs == current.outputs
     assert current.steps[0].tool_name == 'inspect_scATAC' and current.status == 'succeeded'
+    assert current.steps[0].status == 'SUCCEEDED' and current.result is None
+    originating_turn = facade.turn('session', 'later')
+    assert originating_turn.status == 'unavailable' and originating_turn.response is None
+    assert originating_turn.error.code == 'INTERACTIVE_PRESENTATION_UNAVAILABLE'
     assert str(app.workspace_root) not in json.dumps(current.to_dict())
     assert files(app) == before
     switched = facade.activate_revision('session', 'return-earlier', earlier, expected_generation=2)

@@ -209,16 +209,18 @@ def test_failed_and_interrupted_states_are_not_overridden_by_profile_or_error_in
     ]
 
 
-def test_finalizing_labels_distinguish_accepted_science_response_and_saved_failure():
+def test_status_labels_distinguish_saved_work_without_claiming_an_absent_result():
     code = (STATIC / 'app.js').read_text()
     label = code[code.index('function statusLabel'):code.index('function evidenceValueNode')]
     result = _javascript_value('(() => {\n' + label + '''
       return [statusLabel("finalizing", null, "accepted-revision"),
-        statusLabel("finalizing"), statusLabel("finalizing", "execute", "accepted-revision")];
+        statusLabel("finalizing"), statusLabel("finalizing", "execute", "accepted-revision"),
+        statusLabel("failed", "answer"), statusLabel("failed", "answer", "accepted-revision")];
     })()''')
     assert result == [
         'Scientific analysis completed. Preparing the results and explanation.',
         'Preparing the scientific response.', 'Saved progress requires recovery',
+        'Answer unavailable', 'Answer unavailable',
     ]
 
 

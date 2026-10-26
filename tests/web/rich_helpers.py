@@ -88,7 +88,7 @@ class RichModel:
                 choice = dict(kind='answer_scientific', target=dict(output=current['handle'], subject=None), comparison=None, focus='question')
             return json.dumps(dict(turn_schema_version=1, decision=choice))
         if 'guidance_schema_version' in p:
-            return json.dumps(dict(candidates=[dict(capability='select_scATAC_cells', explanation=dict(
+            return json.dumps(dict(advice=None, candidates=[dict(capability='select_scATAC_cells', explanation=dict(
                 support='insufficient_evidence', paragraphs=[dict(text=t, kind='conditional', citations=[], comparisons=[]) for t in (
                     'Selection could help address the stated objective.',
                     'The selection criteria require explicit input.',

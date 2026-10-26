@@ -19,7 +19,7 @@ class Guidance:
         assert 'comparison' not in e
         claims = [c for c in e['claims'] if c['field'].startswith('detail.length_histogram.')]
         assert claims, e
-        return json.dumps(dict(candidates=[dict(capability='inspect_scATAC', explanation=dict(
+        return json.dumps(dict(advice=None, candidates=[dict(capability='inspect_scATAC', explanation=dict(
             support='supported',paragraphs=[dict(text='The accepted histogram describes observed fragment lengths.', kind='finding', citations=[claims[0]['claim_id']], comparisons=[]),
                 dict(text='Assuming the declared objective remains applicable.', kind='conditional', citations=[], comparisons=[]),
                 dict(text='Further inputs may be needed; this is conditional advice.', kind='conditional', citations=[], comparisons=[])]))]))

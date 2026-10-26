@@ -543,6 +543,20 @@ def available_input_view(interaction, *, allow_empty=False):
     """
     from dataclasses import replace
     submission = _serialize(interaction.submission or {})
+    # New interactions capture one offered membership before interpretation.
+    # Its replay is checked against received inputs and exact prior pointers by
+    # the Session owner. Consumers never independently renumber those handles.
+    view = getattr(interaction, 'snapshot', {}).get('dialogue', {}).get('source_view')
+    if view is not None:
+        if not isinstance(view, Mapping) or set(view) != {'execution_inputs', 'registered_input'}:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        binding = LocalResourceAdmission._submission_binding(view)
+        if type(binding) is not RegisteredInputGroup:
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        submission.pop('available_input', None)
+        submission.pop('candidate_input', None)
+        return replace(interaction, submission=dict(submission,
+            execution_inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution()))
     metadata = submission.get('available_input')
     if metadata is None:
         if (allow_empty and interaction.submission is not None
@@ -572,11 +586,86 @@ def group_choices(binding, registry):
         raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
     roles = []
     for tool, name in _GROUP_PORTS:
+        if tool not in registry.names():
+            continue
         _, source, argument = _group_port(registry, tool, name)
         role = source.lineage or argument.planning.provenance_role
         roles.append(dict(tool=tool, port=name, role=role.value if role is not None else None))
     return dict(sources=[dict(source=f'source.{i}', position=i + 1,
         label=m['label'], input_type=m['input_type']) for i, m in enumerate(binding.members)], roles=roles)
+
+
+def source_field_choices(binding):
+    """Shallow obs-name offers for captured files, never scientific qualification.
+
+    Registration/consumption owns byte integrity. No values, categories or matrix
+    arrays are read here; the selected scientific consumer checks their meaning.
+    """
+    from agent.tools.analysis.categorical import fields
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    if type(binding) is not RegisteredInputGroup:
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    rows = []
+    for index, member in enumerate(binding.members):
+        row = dict(source=f'source.{index}', resource_id=member['resource_id'],
+                   source_sha256=member.get('source_sha256'), fields=[], complete=False)
+        if member['input_type'] == 'h5ad' and row['source_sha256'] is not None:
+            try:
+                descriptor = os.open(member['source_path'], os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(descriptor, 'rb') as stream:
+                    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                        raise ValueError('Observation source is not a regular file.')
+                    names = fields(stream)
+                eligible = [name for name in names if type(name) is str and name.strip() and len(name) <= 80
+                            and not _unsafe_fact_field(name) and not _unsafe_fact_value(name)]
+                row.update(fields=eligible[:64], complete=len(names) == len(eligible) <= 64)
+            except (ValueError, TypeError, OSError, KeyError):
+                pass
+        rows.append(row)
+    return rows
+
+
+def source_field_inputs(registry, binding, roles, choices):
+    """Resolve captured field names by exact Registry source role without I/O."""
+    from .turn_decisions import InputRole
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    if type(binding) is not RegisteredInputGroup:
+        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+    try:
+        selected = _group_roles([dict(tool=r.tool, port=r.port, source=r.source)
+                                if isinstance(r, InputRole) else r for r in roles], len(binding.members))
+        if not isinstance(choices, (tuple, list)) or len(choices) > len(binding.members):
+            raise ValueError('Invalid captured observation offers.')
+        by_source = {}
+        for row in choices:
+            if (not isinstance(row, Mapping) or set(row) != {
+                    'source', 'resource_id', 'source_sha256', 'fields', 'complete'}
+                    or row['source'] not in {f'source.{i}' for i in range(len(binding.members))}
+                    or row['source'] in by_source or type(row['complete']) is not bool
+                    or not isinstance(row['fields'], (tuple, list)) or len(row['fields']) > 64):
+                raise ValueError('Invalid captured observation offer.')
+            member = binding.members[int(row['source'].split('.')[1])]
+            if (row['resource_id'] != member['resource_id']
+                    or row['source_sha256'] != member.get('source_sha256')
+                    or any(type(name) is not str or not name.strip() or len(name) > 80
+                           or _unsafe_fact_field(name) or _unsafe_fact_value(name) for name in row['fields'])
+                    or len(set(row['fields'])) != len(row['fields'])
+                    or row['fields'] and (member['input_type'] != 'h5ad'
+                                          or member.get('source_sha256') is None)):
+                raise ValueError('Observation offers do not match the captured source.')
+            by_source[row['source']] = row
+        inputs = {}
+        for role in selected:
+            row = by_source.get(role['source'])
+            if row is None:
+                continue
+            spec = registry.get(role['tool'])
+            for name, argument in (*spec.required_arguments.items(), *spec.optional_arguments.items()):
+                if argument.planning is not None and argument.planning.observation_source == role['port']:
+                    inputs[(role['tool'], name)] = tuple(row['fields'])
+        return inputs
+    except (ValueError, TypeError, KeyError, LookupError) as exc:
+        raise _fail('MULTI_INPUT_ROLE_INVALID') from exc
 
 
 def _group_declarations(registry):

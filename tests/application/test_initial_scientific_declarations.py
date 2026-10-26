@@ -253,7 +253,7 @@ def test_choice_only_context_preserves_pending_schema_without_empty_numeric_unio
     answer, = [row for row in variants if row['properties']['kind']['enum'] == ['answer_prerequisite']]
     assert 'arguments' not in answer['properties']
     assert answer['properties']['species']['enum'] == ['human', 'mouse']
-    assert 'argument' in answer['properties']
+    assert 'argument' not in answer['properties']
     context['dialogue']['pending_prerequisite'] = dict(handle='@parameters', field='parameters',
         objective='Select cells.', missing=['min_tss_enrichment'])
     assert all(row['properties']['kind']['enum'] != ['answer_parameters']
@@ -418,7 +418,10 @@ def test_fresh_semantic_species_refusal_preserves_reason_without_fabricating_pen
 def test_fresh_missing_species_or_unoffered_answer_cannot_create_a_durable_prerequisite(tmp_path, decision):
     h = harness(tmp_path, objective=OMITTED, declarations=(), initial_decision=decision)
     result = submit(h, OMITTED)
-    assert result.status == 'clarification' and result.response.clarification['reason'] == 'invalid_prerequisite'
+    if decision['kind'] == 'clarify':
+        assert result.status == 'clarification' and result.response.clarification['reason'] == 'invalid_prerequisite'
+    else:
+        assert result.status == 'failed' and result.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
     assert result.run_id is None and result.revision_id is None
     state = assert_no_publication(h)
     assert state.interactions[0].prerequisite is None

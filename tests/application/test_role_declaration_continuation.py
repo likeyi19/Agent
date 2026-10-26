@@ -167,7 +167,10 @@ def test_partial_role_answer_is_durable_and_contradiction_cannot_reassign_it(tmp
     assert not executor.plans
     assert _serialize(partial.admitted['roles']) == [REFERENCE]
     bad = submit(app, turn='contradictory', utterance=CONTRADICTORY)
-    assert bad['response']['kind'] == 'clarify' and bad['revision_id'] is None
+    assert bad['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and bad['revision_id'] is None
+    rejected = app._application.sessions.load('session').interactions[-1]
+    assert rejected.status == 'failed' and rejected.admitted is None
+    assert rejected.prerequisite['binding_turn_id'] == 'reference'
     assert not executor.plans and app._application.sessions.load('session').interactions[0] == origin
     done = submit(app, turn='query', utterance=QUERY_ANSWER)
     assert_withheld(done, executor, records, companions)
@@ -180,7 +183,8 @@ def test_initial_explicit_role_is_preserved_while_only_missing_association_is_an
     origin = pending(app, submit(app, group=group), missing=[{key: QUERY[key] for key in ('tool','port')}])
     assert _serialize(origin.admitted['roles']) == [REFERENCE]
     rejected = submit(app, turn='contradictory', utterance=CONTRADICTORY)
-    assert rejected['response']['kind'] == 'clarify' and not executor.plans
+    assert rejected['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and not executor.plans
+    assert app._application.sessions.load('session').interactions[-1].prerequisite['binding_turn_id'] == 'first'
     result = submit(app, turn='query', utterance=QUERY_ANSWER)
     assert_withheld(result, executor, records, companions)
     assert app._application.sessions.load('session').interactions[0] == origin
@@ -258,7 +262,9 @@ def test_unrelated_new_task_does_not_inherit_role_pending_objective_or_sources(t
     interaction = app._application.sessions.load('session').interactions[-1]
     admitted = interaction.admitted
     assert admitted['inputs'] == {}
-    assert not admitted['roles'] and not admitted['registered_input']['members']
+    assert not admitted['roles']
+    assert _serialize(admitted['registered_input']['members']) == group.attribution()['members']
+    assert not admitted['registered_input']['roles']
     assert 'continuation' not in admitted
     assert interaction.prerequisite['origin_turn_id'] == 'unrelated'
     assert interaction.prerequisite['tool'] == 'inspect_scATAC'
@@ -267,7 +273,8 @@ def test_unrelated_new_task_does_not_inherit_role_pending_objective_or_sources(t
 def test_role_answer_without_any_pending_request_cannot_create_a_task(tmp_path):
     app, _, group, executor, _, _ = transfer_continuation_harness(tmp_path)
     result = submit(app, turn='answer', utterance=ROLE_ANSWER, group=group)
-    assert result['response']['kind'] == 'clarify' and result['revision_id'] is None, result
+    assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and result['revision_id'] is None, result
+    assert app._application.sessions.load('session').interactions[-1].prerequisite is None
     assert not executor.plans and not app._application.sessions.load('session').revisions
 
 
@@ -323,7 +330,7 @@ def test_conflicting_concurrent_role_answers_and_changed_retry_fail_closed(tmp_p
             submit(app, turn='answer', utterance=CONTRADICTORY)
         assert changed.value.error.code == 'INTERACTIVE_TURN_CONFLICT'
         concurrent = submit(app, turn='other-answer', utterance=CONTRADICTORY)
-        assert concurrent['response']['kind'] == 'clarify' and concurrent['revision_id'] is None
+        assert concurrent['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and concurrent['revision_id'] is None
         assert not executor.plans
     finally:
         release.set()
@@ -332,7 +339,7 @@ def test_conflicting_concurrent_role_answers_and_changed_retry_fail_closed(tmp_p
     assert len(result) == 1
     # The existing leases are per turn. The second answer cannot capture an
     # interpreting predecessor, and the first loses its latest-turn anchor.
-    assert result[0]['response']['kind'] == 'clarify' and result[0]['revision_id'] is None
+    assert result[0]['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and result[0]['revision_id'] is None
     assert not executor.plans and not app._application.sessions.load('session').revisions
     before = len(calls), len(executor.plans)
     assert submit(app, turn='answer', utterance=ROLE_ANSWER) == result[0]

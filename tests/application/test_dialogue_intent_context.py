@@ -53,8 +53,9 @@ def test_direct_handle_of_durable_focus_is_not_ambiguous(app):
     # A live provider chose the exact focused handle instead of spelling @focus.
     result=ask(app,'why','Why?',Model(question('r0'),['n_observed_barcodes']))
     assert result.scientific is not None
-    wrong=ask(app,'wrong','Why?',Model(question('r1'),['n_observed_barcodes']))
-    assert wrong.clarification.reason=='ambiguous_subject'
+    other=ask(app,'other','Explain the other saved observation.',Model(question('r1'),['n_observed_barcodes']))
+    assert other.status == 'answered'
+    assert other.scientific.claims[0].source['output_locator']['step_id'] == 'step1'
 
 
 def test_annotation_subject_inventory_and_continuation(app):
@@ -69,9 +70,10 @@ def test_annotation_subject_inventory_and_continuation(app):
     assert result.scientific.claims[0].subject=='7'
 
 
-def test_ambiguous_selection_is_not_guessed_even_if_provider_picks_first(app):
+def test_interpreter_ambiguity_does_not_choose_an_independent_result(app):
     accepted(app,'inspect_scATAC',copies=2)
-    result=ask(app,'ambiguous','What does the result show?',Model(question()))
+    result=ask(app,'ambiguous','What does the result show?',
+        Model(dict(kind='clarify', reason='ambiguous_subject')))
     assert result.status=='clarification' and result.clarification.reason=='ambiguous_subject'
 
 

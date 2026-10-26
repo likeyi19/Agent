@@ -128,7 +128,7 @@ def test_group_alias_evidence_mismatch_fails_closed(app, monkeypatch):
     monkeypatch.setattr(AnalysisSessions, 'evidence', changed)
     model = Model(question('g0'))
     result = ask(app, 'mismatch', 'Explain this result.', model)
-    assert result.status == 'clarification' and result.clarification.reason == 'unavailable_context'
+    assert result.status == 'unavailable' and result.error.code == 'INTERACTIVE_REFERENCE_INVALID'
     assert not model.calls and result.scientific is None
 
 
@@ -232,7 +232,9 @@ def test_previous_result_availability_is_pinned_across_completion(app, monkeypat
         elif prior_kind == 'created_then_failed': finish_interaction(app, 'prior', 'failed')
         elif prior_kind == 'late_creation': accepted(app, 'inspect_scATAC', name='prior')
     result, _ = role_answer(app, 'captured', '@previous_turn_result', callback=complete)
-    assert result.status == ('answered' if available else 'clarification')
+    assert result.status == ('answered' if available else 'unavailable')
+    if not available:
+        assert result.error.code == 'INTERACTIVE_REFERENCE_INVALID'
     restored = app.sessions.load('session')
     context = restored.interactions[-1].snapshot['dialogue']['context']
     assert context['previous_created_result'] is available
@@ -245,9 +247,9 @@ def test_unrelated_previous_turn_does_not_scan_back_and_stale_unknown_fail(app, 
     assert ask(app, 'legacy', 'Explain this result.', Model(question(), ['n_cells'])).status == 'answered'
     ask(app, 'unrelated', 'Discuss something else.', Model(dict(kind='clarify', reason='unsupported_intent')))
     missing, _ = role_answer(app, 'previous', '@previous_turn_result')
-    assert missing.status == 'clarification' and missing.clarification.reason == 'unavailable_context'
+    assert missing.status == 'unavailable' and missing.error.code == 'INTERACTIVE_REFERENCE_INVALID'
     unknown, _ = role_answer(app, 'unknown', 'g99')
-    assert unknown.status == 'clarification'
+    assert unknown.status == 'failed' and unknown.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
     model = Model(question('@current_result'))
     with pytest.raises(SessionConflictError):
         ask(app, 'stale', 'Explain this result.', model, expected_generation=0)
@@ -281,6 +283,8 @@ def test_persisted_legacy_dialogue_snapshot_load_and_display_retry_do_no_work(ap
     envelope = json.loads(copied_path.read_bytes())
     dialogue = envelope['record']['interactions'][0]['snapshot']['dialogue']
     del dialogue['context']
+    del dialogue['results']
+    dialogue.pop('source_fields', None)
     assert set(dialogue) == {'outputs', 'predecessor', 'requested_predecessor', 'ambiguous'}
     envelope['sha256'] = digest(envelope['record'])
     copied_path.write_bytes(canonical(envelope))

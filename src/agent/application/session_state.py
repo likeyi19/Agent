@@ -257,7 +257,15 @@ class Interaction:
                     raise SessionError('Invalid missing scientific parameters.')
                 for name in missing:
                     text(name)
-            if self.status != 'clarification':
+            carrier = (self.status == 'failed' and self.admitted is None or
+                       self.status in {'admitted', 'answered', 'failed'} and self.admitted is not None
+                       and self.admitted.get('kind') == 'answer' and self.admitted.get('intent') == 'guidance')
+            if carrier:
+                captured = self.snapshot.get('prerequisite') or {}
+                if _serialize(frozen) != {k: _serialize(v) for k, v in captured.items()
+                                          if k != 'predecessor_turn_id'}:
+                    raise SessionError('Pending context cannot change a captured scientific prerequisite.')
+            if self.status != 'clarification' and not carrier:
                 raise SessionError('Pending declaration requires a clarification.')
             object.__setattr__(self, 'prerequisite', frozen)
         if self.presentation is not None:

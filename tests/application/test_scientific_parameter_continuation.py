@@ -186,6 +186,13 @@ def assert_pending(view, *missing):
     assert view['revision_id'] is None and not view['steps']
 
 
+def assert_failed_binding(view):
+    assert view['status'] == 'failed' and view['response']['status'] == 'failed', view
+    assert view['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID', view
+    assert view['response']['clarification'] is None
+    assert view['revision_id'] is None and not view['steps']
+
+
 def accepted_step(harness, view, *, depth=1, tss='0.5'):
     assert view['status'] == 'succeeded' and view['response']['status'] == 'activated', view
     run = harness.service._application.run_store.load(view['run_id'])
@@ -422,9 +429,15 @@ def test_invalid_or_unauthorized_parameter_answer_has_zero_science(
     harness = legacy_selection_harness(tmp_path / 'application', decisions={DEPTH: answer(DEPTH, declarations)})
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
+    pending = harness.service._application.sessions.load('session').interactions[-1].prerequisite
     with selection_work() as calls:
         invalid = submit(harness, 'invalid', DEPTH)
-    assert invalid['response']['kind'] == 'clarify', invalid
+    if changes == dict(argument='unregistered_threshold'):
+        assert_failed_binding(invalid)
+        interaction = harness.service._application.sessions.load('session').interactions[-1]
+        assert interaction.admitted is None and interaction.prerequisite == pending
+    else:
+        assert invalid['response']['kind'] == 'clarify', invalid
     assert not calls and not harness.service._application.sessions.load('session').revisions
     with selection_work() as calls:
         completed = submit(harness, 'valid', BOTH)
@@ -484,11 +497,16 @@ def test_changed_input_cannot_redirect_pending_threshold_answer(tmp_path, select
     harness = legacy_selection_harness(tmp_path / 'application')
     harness.service.create_session('session')
     submit(harness, inputs=selection_inputs)
+    original = harness.service._application.sessions.load('session').interactions[-1]
     with selection_work() as calls:
         changed = submit(harness, 'changed', BOTH,
             inputs=selection_inputs | dict(barcode_qc_manifest_sha256='f' * 64))
-    assert changed['response']['kind'] == 'clarify', changed
-    assert changed['response']['clarification']['reason'] == 'invalid_prerequisite'
+    assert_failed_binding(changed)
+    state = harness.service._application.sessions.load('session')
+    assert state.interactions[0] == original
+    interaction = state.interactions[-1]
+    assert interaction.admitted is None and interaction.prerequisite is None
+    assert interaction.snapshot.get('prerequisite') is None
     assert not calls and not harness.service._application.sessions.load('session').revisions
 
 
@@ -677,6 +695,7 @@ def test_exact_string_pending_cannot_change_source_generation_or_operation(tmp_p
     harness = string_harness(tmp_path / 'workspace', plan_variant='repeated' if failure == 'repeated' else None)
     harness.service.create_session('session')
     assert_pending(submit_string(harness, inputs=string_inputs), CLUSTER_KEY)
+    original = harness.service._application.sessions.load('session').interactions[-1]
     if failure == 'source':
         changes = dict(inputs=string_inputs | dict(reference_h5ad_path='/other/truth.h5ad'))
     elif failure == 'wrong_operation':
@@ -696,10 +715,17 @@ def test_exact_string_pending_cannot_change_source_generation_or_operation(tmp_p
             assert counts == (len(harness.calls), len(harness.constructions))
         else:
             rejected = submit_string(harness, 'invalid', STRING_ANSWER, **changes)
-            assert rejected['response']['kind'] == 'clarify', rejected
+            if failure == 'source':
+                assert_failed_binding(rejected)
+                state = harness.service._application.sessions.load('session')
+                assert state.interactions[0] == original
+                interaction = state.interactions[-1]
+                assert interaction.admitted is None and interaction.prerequisite is None
+                assert interaction.snapshot.get('prerequisite') is None
+            else:
+                assert rejected['response']['kind'] == 'clarify', rejected
+                assert rejected['response']['clarification']['reason'] == 'ambiguous_parameter'
             assert rejected['revision_id'] is None
-            assert rejected['response']['clarification']['reason'] == (
-                'invalid_prerequisite' if failure == 'source' else 'ambiguous_parameter')
     assert not calls and not harness.service._application.sessions.load('session').revisions
 
 
@@ -766,6 +792,7 @@ def test_pending_string_answer_rejects_changed_captured_resource_catalog_without
     harness = string_harness(tmp_path / 'workspace')
     harness.service.create_session('session')
     assert_pending(submit_string(harness, inputs=string_inputs), CLUSTER_KEY)
+    pending = harness.service._application.sessions.load('session').interactions[-1].prerequisite
     # Pure catalog metadata simulates a policy change. No checkpoint is created,
     # hashed or consumed; clustering evaluation uses neither this model nor it.
     changed = QualifiedEpiZooResource('synthetic-context', 'Synthetic catalog context', 'mouse',
@@ -777,8 +804,9 @@ def test_pending_string_answer_rejects_changed_captured_resource_catalog_without
         rejected = harness.service.submit_turn('session', 'changed-context', STRING_ANSWER,
             expected_generation=0).to_dict()
     assert not calls
-    assert rejected['response']['clarification']['reason'] == 'invalid_prerequisite', rejected
+    assert_failed_binding(rejected)
     state = harness.service._application.sessions.load('session')
     assert not state.revisions
-    assert state.interactions[-1].prerequisite['binding_turn_id'] == 'first'
+    assert state.interactions[-1].admitted is None
+    assert state.interactions[-1].prerequisite == pending
     assert CLUSTER_KEY not in state.interactions[0].admitted['inputs']

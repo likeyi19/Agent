@@ -39,6 +39,18 @@ objective without a clarification-only Run. Interpreter intent, Registry plannin
 exact compilation and native scientific qualification retain distinct owners.
 Retired capability-selection experiments now live only in the benchmark harness.
 
+Researchers can describe supplied annotation fields naturally when their safe
+names are available, and ask about scientific prerequisites before producing a
+first result. Exact source and result binding still govern computation and
+comparison. Unknown processing history stays unknown; source annotations do not
+become independently validated biological labels. The R5/R7 OPT-3A follow-ups and
+its [final convergence report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3a/final-convergence/REPORT.md)
+record bounded completion: 1,222 final affected tests pass; real field binding
+produces verified clustering/evaluation results and a checked download, and
+first-result prerequisite advice preserves the pending task. An optional follow-up
+explanation encountered a provider connection failure and was not retried; broad
+provider and post-result prose reliability remain unqualified.
+
 [UA3.6.5-R5](docs/architecture/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects

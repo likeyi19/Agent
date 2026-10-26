@@ -861,7 +861,7 @@ function statusLabel(status, responseKind = null, revisionId = null) {
     return revisionId ? "Scientific analysis completed. Preparing the results and explanation."
       : "Preparing the scientific response.";
   }
-  if (status === "failed" && responseKind === "answer") return "Answer unavailable · Accepted result unchanged";
+  if (status === "failed" && responseKind === "answer") return "Answer unavailable";
   const labels = {
     activated: "Analysis completed", succeeded: "Analysis completed",
     stale: "Analysis completed · Historical result", failed: "Analysis failed",

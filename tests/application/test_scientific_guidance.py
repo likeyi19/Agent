@@ -22,10 +22,12 @@ def decision(*outputs, subject=None, candidate=None):
 
 
 class Model:
-    def __init__(self, choice=None, tools=('inspect_scATAC',), attack=None, callback=None):
+    def __init__(self, choice=None, tools=('inspect_scATAC',), attack=None, callback=None,
+                 direct=False, paragraphs=3):
         self.choice = decision('r0') if choice is None else choice
         self.tools, self.attack, self.callback, self.calls = tools, attack, callback, []
         self.requests = []
+        self.direct, self.paragraphs = direct, paragraphs
 
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
@@ -37,7 +39,7 @@ class Model:
         self.calls.append(p)
         if 'turn_schema_version' in p:
             return json.dumps(dict(turn_schema_version=1, decision=self.choice))
-        assert p['guidance_schema_version'] == 1
+        assert p['guidance_schema_version'] == 2
         if self.callback: self.callback()
         claims = p['context']['evidence']['claims']
         # One exact scientific fact per supplied result; no manufactured prose facts.
@@ -49,7 +51,9 @@ class Model:
             dict(text='This could help characterize the stated objective.', kind='conditional', citations=ids, comparisons=[]),
             dict(text='Assuming the intended experimental design is appropriate.', kind='conditional', citations=[], comparisons=[]),
             dict(text='This is conditional advice and requires further input.', kind='conditional', citations=[], comparisons=[])])
-        result = dict(candidates=[dict(capability=t, explanation=explanation) for t in self.tools])
+        explanation['paragraphs'] = [dict(explanation['paragraphs'][index % 3]) for index in range(self.paragraphs)]
+        result = (dict(advice=explanation, candidates=[]) if self.direct else
+                  dict(advice=None, candidates=[dict(capability=t, explanation=explanation) for t in self.tools]))
         if self.attack: self.attack(result)
         return json.dumps(result)
 
@@ -127,7 +131,7 @@ def test_objective_subject_and_followup_restart_stable_candidate(app, monkeypatc
     assert follow.guidance.candidates[0].reference == ref
     assert model.calls[-1]['objective'] == 'Why does cluster 3 differ? What could I analyze?'
     assert model.calls[-1]['context']['evidence']['targets'][0]['subject'] == '3'
-    assert 'conditional advice' not in json.dumps(model.calls)
+    assert 'conditional advice' not in json.dumps(model.calls[-1]['context']['evidence'])
     # Also load durable reference metadata in an independent process.
     code = 'from agent.application import ResearchAgentApplication; import sys; s=ResearchAgentApplication(sys.argv[1]).sessions.load("session"); print(s.interactions[-1].guidance_candidates[0]["candidate_id"])'
     result = subprocess.run([sys.executable,'-B','-c',code,str(app.workspace_root)],capture_output=True,text=True,check=True)
@@ -148,21 +152,27 @@ def test_heterogeneous_context_is_not_comparison(app, monkeypatch):
     assert any('correspondence' in x for x in result.guidance.limitations)
 
 
-@pytest.mark.parametrize('choice,text', [
-    (decision('r99'), 'What next?'),
-    (decision('r99'), 'Inspect possible next analyses.'),
-    (decision('r0',subject='99'), 'What about cluster 99 next?'),
-    (decision('r0',subject='3'), 'What about cluster 7 next?'),
-    (decision('r0',subject='3'), 'Compute a recommendation for cluster 7.'),
-    (decision('r0','r0'), 'What next?'),
-    (decision(candidate='first option'), 'What next?'),
+@pytest.mark.parametrize('choice,text,status', [
+    (decision('r99'), 'What next?', 'failed'),
+    (decision('r99'), 'Inspect possible next analyses.', 'failed'),
+    (decision('r0',subject='99'), 'What about cluster 99 next?', 'failed'),
+    (decision('r0','r0'), 'What next?', 'clarification'),
+    (decision(candidate='first option'), 'What next?', 'clarification'),
 ])
-def test_invalid_references_fail_closed(app, monkeypatch, choice, text):
+def test_invalid_references_fail_closed(app, monkeypatch, choice, text, status):
     annotation(app)
     model = Model(choice)
     result = ask(guard(app, monkeypatch), utterance=text, model=model)
-    assert result.status == 'clarification'
+    assert result.status == status
     assert len(model.calls) == 1
+
+
+def test_offered_subject_choice_is_semantic_not_a_second_language_parser(app, monkeypatch):
+    annotation(app)
+    model = Model(decision('r0', subject='3'))
+    result = ask(guard(app, monkeypatch), utterance='What could characterize these cells?', model=model)
+    assert result.status == 'answered'
+    assert result.guidance.candidates[0].reference['targets'][0]['subject'] == '3'
 
 
 @pytest.mark.parametrize('attack', [
@@ -229,11 +239,12 @@ def test_evidence_mutation_during_answer_rejected(app, monkeypatch):
     assert result.status == 'unavailable'
 
 
-def test_historical_evidence_needs_explicit_reference(app, monkeypatch):
-    accepted(app,'inspect_scATAC')
+def test_offered_historical_evidence_needs_no_literal_internal_reference(app, monkeypatch):
+    original, _, _ = accepted(app,'inspect_scATAC')
     accepted(app,'inspect_scATAC',name='second')
     result = ask(guard(app,monkeypatch),model=Model(decision('r1')))
-    assert result.status == 'clarification'
+    assert result.status == 'answered'
+    assert result.guidance.candidates[0].reference['targets'][0]['revision_id'] == original
 
 
 def test_navigation_does_not_rebase_candidate(app, monkeypatch):
@@ -258,7 +269,7 @@ def test_candidate_execution_is_not_implemented(app,monkeypatch,text,choice):
     app=guard(app,monkeypatch)
     assert ask(app).status=='answered'
     result=ask(app,'run',text,Model(choice))
-    assert result.status=='clarification' and result.clarification.reason=='unsupported_intent'
+    assert result.status=='failed' and result.error.code=='INTERACTIVE_INTENT_BINDING_INVALID'
 
 
 def test_guidance_to_scientific_followup_uses_same_focus(app,monkeypatch):
@@ -305,7 +316,7 @@ def test_missing_and_changed_evidence_fail_before_generation(app,monkeypatch,utt
     path.unlink()
     model=Model()
     result=ask(app,utterance=utterance,model=model)
-    assert result.status=='clarification' and len(model.calls)==1
+    assert result.status=='unavailable' and len(model.calls)==1
 
 
 def test_multiple_candidates_require_exact_followup_reference(app,monkeypatch):
@@ -348,7 +359,8 @@ def test_guidance_schema_remains_strict_and_source_scoped(app,monkeypatch):
                 candidate=response_schema['properties']['candidates']['items']['properties']
                 assert set(candidate)=={'capability','explanation'}
                 assert 'inspect_scATAC' in candidate['capability']['enum']
-                assert candidate['explanation']['properties']['paragraphs']['minItems']==3
+                assert candidate['explanation']['properties']['paragraphs']['minItems']==1
+                assert candidate['explanation']['properties']['paragraphs']['maxItems']==6
             return response
     assert ask(app,model=ValidatingModel()).status=='answered'
     state=app.sessions.load('session')
@@ -382,7 +394,7 @@ def test_unknown_scientific_subject_is_not_inferred_across_outputs(app,monkeypat
     accepted(app,'inspect_scATAC')
     app=guard(app,monkeypatch)
     outcome=ask(app,utterance='What could I analyze for cluster 4?',model=Model(decision('r0',subject='4')))
-    assert outcome.status=='clarification'
+    assert outcome.status=='failed' and outcome.error.code=='INTERACTIVE_INTENT_BINDING_INVALID'
 
 
 def test_changed_registry_semantics_invalidate_existing_candidate(app,monkeypatch):
@@ -393,7 +405,7 @@ def test_changed_registry_semantics_invalidate_existing_candidate(app,monkeypatc
         description='Changed registered semantics.')) if n=='inspect_scATAC' else app.registry.get(n) for n in app.registry.names()))
     changed=ResearchAgentApplication(app.workspace_root,registry=registry)
     result=ask(guard(changed,monkeypatch),'follow','Why would the first option help?',Model(decision(candidate='first option')))
-    assert result.status=='clarification' and result.clarification.reason=='unavailable_context'
+    assert result.status=='unavailable' and result.error.code=='INTERACTIVE_REFERENCE_INVALID'
 
 
 def test_corrupt_followup_cannot_change_selected_context(app):

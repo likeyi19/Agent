@@ -214,10 +214,10 @@ def test_independent_sources_keep_counts_without_correspondence(app, monkeypatch
     assert any('correspondence is unavailable' in x for x in result.scientific.limitations)
 
 
-def test_unoffered_field_clarifies_and_invalid_requests_reject(app):
+def test_unoffered_field_fails_binding_and_invalid_requests_reject(app):
     publication(app)
     result=ask(app,'bad','Describe an unknown field.',Model(dict(question('g0'),detail=selected(field='source:invented'))))
-    assert result.status=='clarification'
+    assert result.status == 'failed' and result.error is not None
     for kwargs in (dict(section='category_counts'), dict(section='category_counts',field='x',limit=33),
                    dict(section='category_counts',field='x',other_field='y'),
                    dict(section='category_association',field='x',other_field='y',offset=-1)):
@@ -377,7 +377,8 @@ def test_later_fields_are_paged_and_exact_user_selection_is_not_first_page_limit
     for i,field in enumerate(('source:invented','source:measurement','source:credentials','source:/X')):
         denied=ask(guarded,f'invalid-field-{i}',f'Count {field}.',Model(
             dict(question('g0'),detail=selected(field=field)),response=reply))
-        assert denied.status=='clarification' and denied.scientific is None
+        assert denied.status == 'failed' and denied.scientific is None
+        assert denied.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
     assert all(files(app)[p]==v for p,v in before.items() if not p.startswith('sessions/'))
 
 

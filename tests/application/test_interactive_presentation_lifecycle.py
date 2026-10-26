@@ -63,7 +63,9 @@ def test_accepted_science_waits_for_immutable_response_without_historical_error(
             assert pending.response is None and pending.error is None
             assert pending.revision_id == state.active_revision_id
             assert pending.attachments[0]['use'] == 'consumed'
-            assert service.revision('session', pending.revision_id).revision_id == pending.revision_id
+            revision = service.revision('session', pending.revision_id)
+            assert revision.revision_id == pending.revision_id and revision.status == 'succeeded'
+            assert revision.result is None and revision.steps[0].status == 'SUCCEEDED'
             assert service.reopen_session('session').turns[-1] == pending
             assert submit_request() == pending  # A duplicate reads, never creates another worker.
             assert all(service.status('session', 'first') == pending for _ in range(3))

@@ -150,11 +150,18 @@ def test_missing_file_upload_retains_exact_intent_and_selects_one_result_for_bot
 def test_unoffered_captured_result_or_source_cannot_enter_pending_intent(tmp_path, monkeypatch, invalid):
     case = setup(tmp_path, monkeypatch, invalid=invalid)
     outcome = initial(case)
-    assert outcome.revision_id is None and outcome.status != 'succeeded'
-    assert outcome.response.clarification['reason'] == 'invalid_reference'
+    assert outcome.revision_id is None and outcome.status == 'failed'
+    assert outcome.response.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert outcome.response.clarification is None
     state = case.facade._application.sessions.load('session')
+    assert state.interactions[-1].admitted is None
+    assert state.interactions[-1].prerequisite is None
     assert len(state.revisions) == len(state.turns) == 1
     assert not case.executor.plans and not case.scientific_calls
+    calls = len(case.calls)
+    assert initial(case).to_dict() == outcome.to_dict()
+    assert len(case.calls) == calls
+    assert case.facade._application.sessions.load('session') == state
 
 
 @pytest.mark.parametrize('mutation', ['result', 'source'])

@@ -139,10 +139,11 @@ def test_ambiguity_truncation_unavailable_and_incompatible(app, monkeypatch):
     ambiguous = ask(guarded, 'other', 'What about the other cluster?', Model(question('@focus','@other')))
     assert ambiguous.clarification.reason == 'ambiguous_subject'
     missing = ask(guarded, 'absent', 'What about cluster 99?', Model(question('@focus','99')))
-    assert missing.status == 'clarification' and missing.clarification.reason == 'ambiguous_subject'
-    # An unquoted subject substitution is rejected before generation.
-    forged = ask(guarded, 'forged', 'Why?', Model(question('@focus','7')))
-    assert forged.clarification.reason == 'ambiguous_subject'
+    assert missing.status == 'failed' and missing.error is not None
+    # Exact offered identities do not need a second language interpretation.
+    selected = ask(guarded, 'selected', 'Explain the other saved population.',
+        Model(question('g0','7'), ['primary_annotation']))
+    assert selected.status == 'answered' and selected.scientific.claims[0].subject == '7'
     locator = guarded.sessions.load('session').revisions[0].outputs[0]
     path = guarded._workspace.runs / guarded._workspace.run_digest(locator.run_id) / 'evidence' / 'analysis_evidence.json'
     path.write_bytes(path.read_bytes()+b' ')
@@ -291,12 +292,12 @@ def test_command_like_scientific_answer_keeps_exact_target_and_subject(app, monk
     assert len(model.calls) == 2
 
 
-def test_command_like_scientific_answer_cannot_substitute_subject(app, monkeypatch):
+def test_command_like_scientific_answer_rejects_unoffered_subject(app, monkeypatch):
     annotation(app)
-    model = Model(question(subject='7'), ['primary_annotation'])
+    model = Model(question(subject='99'), ['primary_annotation'])
     result = ask(forbid_work(app, monkeypatch), 'wrong-subject',
         'Compute an explanation of the accepted result for cluster 3.', model)
-    assert result.status == 'clarification' and result.clarification.reason == 'ambiguous_subject'
+    assert result.status == 'failed' and result.error is not None
     assert len(model.calls) == 1
 
 
@@ -310,13 +311,11 @@ def test_command_like_scientific_answer_requires_accepted_evidence(app, monkeypa
     assert len(model.calls) == 1
 
 
-def test_historical_target_requires_explicit_reference(app, monkeypatch):
+def test_historical_target_uses_exact_offered_identity_without_lexical_gate(app, monkeypatch):
     accepted(app,'inspect_scATAC',overrides={'n_cells':2})
     accepted(app,'inspect_scATAC',name='next',overrides={'n_cells':4})
     app = forbid_work(app,monkeypatch)
-    incorrect = ask(app,'bad','What does this result show?',Model(question('r1'),['n_cells']))
-    assert incorrect.clarification.reason == 'ambiguous_revision'
-    correct = ask(app,'old','Explain the parent result.',Model(question('r1'),['n_cells']))
+    correct = ask(app,'old','Explain the earlier assay result.',Model(question('r1'),['n_cells']))
     assert correct.status == 'answered' and 'historical' in correct.text
     follow = ask(app,'old-follow','Why?',Model(question('@focus'),['n_cells']))
     assert follow.status == 'answered' and follow.scientific.claims[0].value == 2

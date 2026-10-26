@@ -46,9 +46,16 @@ def test_duplicate_identity_is_not_salvaged_into_pending(tmp_path, selection_inp
     harness = selection_harness(tmp_path / 'application', decisions={text:
         dict(kind='execute_plan', target=TOOL, arguments=[item, item])})
     harness.service.create_session('session')
-    result = submit(harness, utterance=text, inputs=selection_inputs)
-    assert result['response']['clarification']['reason'] == 'invalid_decision'
-    assert harness.service._application.sessions.load('session').interactions[0].prerequisite is None
+    with selection_work() as calls:
+        result = submit(harness, utterance=text, inputs=selection_inputs)
+    assert result['status'] == 'failed'
+    assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert result['response']['clarification'] is None
+    state = harness.service._application.sessions.load('session')
+    interaction, = state.interactions
+    assert interaction.admitted is None and interaction.prerequisite is None
+    assert not calls and not state.turns and not state.revisions
+    assert not list(harness.service._application.run_store.root.glob('*.json'))
 
 
 def test_invalid_numeric_declaration_can_be_corrected_without_repeating_goal(tmp_path, selection_inputs):

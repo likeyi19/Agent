@@ -302,7 +302,8 @@ def test_arbitrary_scientific_strings_and_query_operands_do_not_gain_declaration
     from agent.application.turn_decisions import is_exact_string_argument
 
     spec = registry.get('evaluate_cell_clustering').required_arguments['label_key']
-    assert not is_exact_string_argument(replace(spec, planning=replace(spec.planning, **changes)))
+    assert not is_exact_string_argument(replace(spec,
+        planning=replace(spec.planning, observation_source=None, **changes)))
 
 
 @pytest.mark.parametrize('tool,name', [
@@ -472,7 +473,7 @@ def test_exact_strings_cannot_use_choice_normalization_to_substitute_another_col
     candidate = declaration(utterance, 'Cell Type', 'evaluate_cell_clustering', 'label_key')
     parsed = parse_decision(wire(dict(kind='execute_plan', target=candidate.tool,
         arguments=[asdict(candidate) | {'value': 'cell_type'}])))
-    with pytest.raises(IntentError, match='unsupported_intent'):
+    with pytest.raises(IntentError, match='invalid_reference'):
         _bind_arguments(registry, utterance, {}, parsed.arguments)
 
 

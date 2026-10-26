@@ -14,7 +14,7 @@ import re
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
-from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument,
+from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument, SourceFieldArgument, InputRole,
     _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape)
 
 
@@ -57,6 +57,132 @@ def _parameter_input(registry, tool_name, argument_name):
     return inputs.pop(), argument
 
 
+def captured_input_group(interaction, preceding=()):
+    """One exact offered file view, without inheriting a pending task's inputs.
+
+    Pending attachment candidates retain their captured order and may append new
+    files. Only current received companion values belong to a fresh task; typed
+    continuation separately retains its original declarations and associations.
+    """
+    from .local_resources import LocalResourceAdmission, available_input_view
+    view = interaction.snapshot.get('dialogue', {}).get('source_view')
+    if view is not None:
+        return LocalResourceAdmission._submission_binding(view)
+    current = available_input_view(interaction, allow_empty=True)
+    if (current.submission or {}).get('candidate_input') is not None:
+        from .raw_handoff import _candidate_view
+        current = _candidate_view(current)
+    pending = interaction.snapshot.get('prerequisite') or {}
+    binding = None
+    if pending.get('field') == 'roles':
+        origin, source = _role_source(pending, preceding)
+        received = current if (interaction.submission or {}).get('candidate_input') is not None else interaction
+        binding = _role_binding(origin, source, received)
+    elif pending.get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
+        from .raw_handoff import source_binding
+        origin, source = _role_source(pending, preceding)
+        binding = source_binding(origin, source, interaction, pending['field'])
+    elif pending.get('field') == 'parameters':
+        origin, source, values = _parameter_source(pending, preceding)
+        metadata = (source.admitted or {}).get('registered_input') or (execution_submission(origin) or {}).get('registered_input', {})
+        if metadata.get('composition') == 'scientific-role-selection.v1':
+            binding = LocalResourceAdmission._submission_binding(dict(
+                registered_input=_serialize(metadata), execution_inputs=values))
+    metadata = (current.submission or {}).get('registered_input', {})
+    if metadata.get('composition') == 'scientific-role-selection.v1':
+        received = LocalResourceAdmission._submission_binding(current.submission)
+        if binding is None:
+            return received
+        return replace(binding, execution_inputs=received.execution_inputs,
+                       roles=(), resource_choice=received.resource_choice,
+                       attachment_candidates=received.attachment_candidates)
+    return (None if binding is None else replace(binding,
+        execution_inputs=(current.submission or {}).get('execution_inputs', {}),
+        roles=(), resource_choice=None, attachment_candidates=True))
+
+
+def validate_source_fields(interaction, preceding=()):
+    """Replay exact offered membership and shallow fields without file I/O."""
+    from agent.orchestration.registry import build_default_tool_registry
+    from .local_resources import source_field_inputs
+    from .session_state import SessionError
+    dialogue = interaction.snapshot.get('dialogue', {})
+    choices, view = dialogue.get('source_fields'), dialogue.get('source_view')
+    if choices is None and view is None:
+        return
+    try:
+        if view is not None:
+            snapshot = _serialize(interaction.snapshot)
+            for key in ('source_view', 'source_fields'):
+                snapshot['dialogue'].pop(key, None)
+            expected = captured_input_group(replace(interaction, snapshot=snapshot), preceding)
+            if (expected is None or _serialize(view) != dict(
+                    execution_inputs=_serialize(expected.execution_inputs),
+                    registered_input=expected.attribution())):
+                raise ValueError('Captured source view changed.')
+        binding = captured_input_group(interaction, preceding)
+        if binding is None:
+            raise ValueError('Observation fields have no captured file selection.')
+        if choices is not None:
+            source_field_inputs(build_default_tool_registry(), binding, (), choices)
+    except (ValueError, TypeError, KeyError, StopIteration) as exc:
+        raise SessionError('Invalid captured observation fields.') from exc
+
+
+def _argument_fields(registry, interaction, binding=None, roles=None, *, declarations=()):
+    from .local_resources import LocalResourceAdmission, source_field_inputs
+    if not any(isinstance(d, ScalarChoiceArgument) and
+               _parameter_input(registry, d.tool, d.argument)[1].planning.observation_source is not None
+               for d in declarations):
+        return {}
+    if 'source_fields' not in interaction.snapshot.get('dialogue', {}):
+        return {}
+    admitted = interaction.admitted or {}
+    if binding is None:
+        metadata = admitted.get('registered_input')
+        if metadata is not None and metadata.get('composition') == 'scientific-role-selection.v1':
+            binding = LocalResourceAdmission._submission_binding(dict(
+                execution_inputs=_serialize(admitted['inputs']), registered_input=_serialize(metadata)))
+    if binding is None:
+        return {}
+    selected = admitted.get('roles', ()) if roles is None else roles
+    selected = [asdict(role) if isinstance(role, InputRole) else _serialize(role) for role in selected]
+    expected = _source_field_roles(registry, _input_roles(selected), declarations)
+    if [asdict(role) for role in expected] != selected:
+        raise IntentError('invalid_reference', diagnostic_reason='source_field_role_conflict',
+                          operand='parameter.field')
+    for declaration in declarations:
+        if isinstance(declaration, SourceFieldArgument):
+            index = int(declaration.source.split('.')[1])
+            if index >= len(binding.members) or binding.members[index]['input_type'] != 'h5ad':
+                raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
+                                  operand='parameter.field')
+    return source_field_inputs(registry, binding, selected,
+        interaction.snapshot.get('dialogue', {}).get('source_fields', ()))
+
+
+def _source_field_roles(registry, roles, declarations):
+    """A source-qualified field explicitly selects its one registered input port."""
+    from .local_resources import _group_port
+    merged = {(role.tool, role.port): role for role in roles}
+    for declaration in declarations:
+        if not isinstance(declaration, SourceFieldArgument):
+            continue
+        _, argument = _parameter_input(registry, declaration.tool, declaration.argument)
+        port = argument.planning.observation_source
+        if port is None:
+            raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
+                              operand='parameter.field')
+        _group_port(registry, declaration.tool, port)
+        role = InputRole(declaration.tool, port, declaration.source)
+        key = (role.tool, role.port)
+        if key in merged and merged[key] != role:
+            raise IntentError('invalid_reference', diagnostic_reason='source_field_role_conflict',
+                              operand='parameter.field')
+        merged[key] = role
+    return tuple(merged.values())
+
+
 def scientific_parameters(registry):
     """Offer registered scientific choices and native defaults, never input values."""
     offered = []
@@ -76,6 +202,10 @@ def scientific_parameters(registry):
                 item['choices'] = list(spec.choices)
             elif is_exact_string_argument(spec):
                 item.update(exact_string=True, provenance_role=(spec.planning.provenance_role.value if spec.planning.provenance_role is not None else None))
+                if spec.planning.observation_source is not None:
+                    from .local_resources import _GROUP_PORTS
+                    if (tool_name, spec.planning.observation_source) in _GROUP_PORTS:
+                        item['observation_source'] = spec.planning.observation_source
             offered.append(item)
     return offered
 
@@ -193,18 +323,21 @@ def _validate_research_intent(interaction):
         raise ValueError('Captured research intention changed.')
 
 
-def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existing=False):
+def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existing=False,
+                    field_choices=None):
     from .turn_decisions import admit_scientific_argument
     values = dict(inputs)
     names = set()
     for declaration in declarations:
         name, specification = _parameter_input(registry, declaration.tool, declaration.argument)
-        if specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
+        column = specification.planning.observation_source is not None
+        if not column and specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
             raise IntentError('unsupported_intent')
         if name in names:
             raise IntentError('ambiguous_parameter')
         names.add(name)
-        value = admit_scientific_argument(declaration, utterance, specification)
+        value = admit_scientific_argument(declaration, utterance, specification,
+            observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)))
         if name in values:
             try:
                 specification.validate(declaration.argument, values[name])
@@ -240,7 +373,8 @@ def _replay_initial_inputs(registry, interaction, declarations):
         binding = LocalResourceAdmission._submission_binding(interaction.submission)
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
-            _with_retained(registry, group_role_inputs(binding, roles, registry), admitted.get('retained_parameters', ())), declarations)
+            _with_retained(registry, group_role_inputs(binding, roles, registry), admitted.get('retained_parameters', ())), declarations,
+            field_choices=_argument_fields(registry, interaction, binding, roles, declarations=declarations))
         receipt = admitted.get('resource_selection')
         if receipt is not None:
             _shape(receipt, ('catalog', 'resource_context_sha256'))
@@ -285,6 +419,13 @@ def _validate_argument_record(interaction):
     """Recheck current-turn typed declarations without providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    if 'parameter_continuation' in admitted:
+        # Partial and complete replies share the dedicated parameter owner,
+        # which validates scope, declarations, source identity and exact inputs.
+        return
+    if admitted.get('roles') and 'continuation' not in admitted and 'parameter_continuation' not in admitted:
+        from .local_resources import available_input_view
+        interaction = available_input_view(interaction)
     if not any(k in admitted for k in ('argument', 'arguments', 'retained_parameters')):
         if any(k in admitted for k in ('argument_received_inputs_sha256', 'arguments_received_inputs_sha256')):
             raise SessionError('Missing persisted scientific arguments.')
@@ -313,7 +454,8 @@ def _validate_argument_record(interaction):
             raise ValueError('Invalid scoped declarations.')
         values = _serialize(admitted['inputs'])
         expected = _bind_arguments(registry, interaction.utterance,
-            _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations)
+            _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations,
+            field_choices=_argument_fields(registry, interaction, declarations=declarations))
         if expected != values:
             raise ValueError('Arguments differ from admitted values.')
         if 'continuation' not in admitted and 'parameter_continuation' not in admitted:
@@ -531,7 +673,8 @@ def _validate_parameter_prerequisite(interaction, preceding):
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
         if any(d.tool != reference['tool'] for d in declarations):
             raise ValueError('Parameter changed operation.')
-        expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True)
+        expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True,
+            field_choices=_argument_fields(registry, replace(interaction, admitted=origin.admitted), declarations=declarations))
         if expected != _serialize(admitted['inputs']):
             raise ValueError('Parameter continuation changed inputs.')
         expected_metadata = (execution_submission(origin) or {}).get('registered_input')
@@ -595,9 +738,12 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
                 raise IntentError('conflicting_scientific_parameter')
     # Current received values must agree with the answer; prior accepted values
     # may be corrected only by an exact scoped declaration in this utterance.
-    _bind_arguments(sessions._application.registry, interaction.utterance, current, decision.arguments)
+    field_choices = _argument_fields(sessions._application.registry, replace(interaction, admitted=origin.admitted),
+                                    declarations=decision.arguments)
+    _bind_arguments(sessions._application.registry, interaction.utterance, current, decision.arguments,
+                    field_choices=field_choices)
     values = _bind_arguments(sessions._application.registry, interaction.utterance, values,
-                            decision.arguments, replace_existing=True)
+                            decision.arguments, replace_existing=True, field_choices=field_choices)
     original_submission = execution_submission(origin) or {}
     if 'registered_input' in original_submission:
         from .local_resources import LocalResourceAdmission
@@ -728,6 +874,7 @@ def _role_binding(origin, source, interaction):
     """Only explicit append of registered files may fill captured missing roles."""
     from .local_resources import LocalResourceAdmission, available_input_view
     origin = available_input_view(origin, allow_empty=True)
+    received_selection = (interaction.submission or {}).get('registered_input')
     interaction = available_input_view(interaction)
     captured = origin.submission if source is None else dict(
         execution_inputs=_serialize(source.admitted['inputs']),
@@ -737,6 +884,12 @@ def _role_binding(origin, source, interaction):
     if selected is None:
         return original
     current = LocalResourceAdmission._submission_binding(interaction.submission)
+    if (received_selection is None and
+            getattr(interaction, 'snapshot', {}).get('dialogue', {}).get('source_view') is not None):
+        # A fresh-task offer carries no previous resource choice. Continuing a
+        # captured task with no new explicit selection retains its old choice.
+        current = replace(current, resource_choice=original.resource_choice,
+                          attachment_candidates=original.attachment_candidates)
     if original.attachment_candidates and getattr(current, 'attachment_candidates', False):
         captured_ids = {m['resource_id']: m for m in original.members}
         for member in current.members:
@@ -768,6 +921,7 @@ def _role_completion(registry, origin, source, interaction, roles, declarations)
         validate_group_roles, group_role_inputs)
     binding = _role_binding(origin, source, interaction)
     required = _serialize(origin.admitted['required_roles'])
+    roles = _source_field_roles(registry, roles, declarations)
     previous = () if source is None else _input_roles(_serialize(source.admitted['roles']))
     merged = { (r.tool, r.port): r for r in previous }
     for role in roles:
@@ -779,7 +933,8 @@ def _role_completion(registry, origin, source, interaction, roles, declarations)
     base = (_with_retained(registry, _serialize(binding.execution_inputs),
                           (origin.admitted or {}).get('retained_parameters', ()))
             if source is None else _serialize(source.admitted['inputs']))
-    values = _bind_arguments(registry, interaction.utterance, base, declarations)
+    values = _bind_arguments(registry, interaction.utterance, base, declarations,
+        field_choices=_argument_fields(registry, interaction, binding, captured_roles, declarations=declarations))
     missing = [r for r in required if (r['tool'], r['port']) not in merged]
     metadata = binding.attribution()
     metadata['roles'] = [asdict(r) for r in captured_roles]
@@ -878,7 +1033,12 @@ def missing_file_request(registry, interaction, decision, execution_inputs=None)
         return None
     if interaction.submission.get('available_input_overflow'):
         raise IntentError('ambiguous_subject')
-    viewed = available_input_view(interaction, allow_empty=True)
+    received = interaction
+    if 'source_view' in interaction.snapshot.get('dialogue', {}):
+        snapshot = _serialize(interaction.snapshot)
+        snapshot['dialogue'].pop('source_view')
+        received = replace(interaction, snapshot=snapshot)
+    viewed = available_input_view(received, allow_empty=True)
     metadata = viewed.submission.get('registered_input', {})
     if metadata.get('composition') != 'scientific-role-selection.v1' or metadata.get('members'):
         return None
@@ -962,7 +1122,8 @@ def admit_roles(sessions, interaction, decision, resources):
     return admitted, pending
 
 
-def capture_prerequisite(preceding, revision_id, generation, submission, predecessor=None, *, execution_inputs=None):
+def capture_prerequisite(preceding, revision_id, generation, submission, predecessor=None, *,
+                         execution_inputs=None, canonical_sources=False):
     """Offer only the immediately pending request in the same captured scope."""
     if not preceding or predecessor is not None:
         return None
@@ -983,12 +1144,23 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
     if pending['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         _, source = _role_source(pending, preceding)
         try:
-            from types import SimpleNamespace
+            if canonical_sources:
+                from .session_state import Interaction
+                received = Interaction(prior.turn_id, prior.utterance, revision_id,
+                                       generation, {}, submission=current)
+                if pending['field'] == 'roles' and current.get('candidate_input') is not None:
+                    from .raw_handoff import _candidate_view
+                    received = _candidate_view(received)
+            else:
+                # Historical captures used a submission-only projection. Keep
+                # their recorded prerequisite availability unchanged on replay.
+                from types import SimpleNamespace
+                received = SimpleNamespace(submission=current)
             if pending['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
                 from .raw_handoff import source_binding
-                source_binding(origin, source, SimpleNamespace(submission=current))
+                source_binding(origin, source, received)
             else:
-                _role_binding(origin, source, SimpleNamespace(submission=current))
+                _role_binding(origin, source, received)
         except (ValueError, TypeError, KeyError, AttributeError):
             return None
         return dict(**pending, predecessor_turn_id=prior.turn_id)
@@ -1027,9 +1199,26 @@ def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    if (interaction.prerequisite is not None and
+            (admitted.get('kind') == 'answer' and admitted.get('intent') == 'guidance'
+             or interaction.status == 'failed' and interaction.admitted is None)):
+        expected = capture_prerequisite(preceding, interaction.base_revision_id,
+            interaction.base_generation, interaction.submission,
+            interaction.snapshot.get('dialogue', {}).get('requested_predecessor'),
+            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}))
+        if (expected is None or _serialize(interaction.snapshot.get('prerequisite')) != expected
+                or _serialize(interaction.prerequisite) != {
+                    k: v for k, v in expected.items() if k != 'predecessor_turn_id'}):
+            raise SessionError('Pending context changed its captured scientific prerequisite.')
+        return
     _validate_research_intent(interaction)
     reference = interaction.snapshot.get('prerequisite') or {}
-    if ('fastq' in admitted or 'bam' in admitted or 'fragments' in admitted or 'annotation' in admitted or 'epizoo' in admitted or reference.get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
+    raw_fields = {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}
+    fresh_task = ('source_view' in interaction.snapshot.get('dialogue', {})
+        and admitted.get('kind') in {'execute', 'request_roles', 'request_resources'}
+        and admitted.get('continuation', {}).get('field') not in raw_fields)
+    if (raw_fields.intersection(admitted)
+            or reference.get('field') in raw_fields and not fresh_task):
         from .raw_handoff import validate
         validate(interaction, preceding)
         if (interaction.prerequisite or {}).get('field') == 'parameters':
@@ -1050,7 +1239,8 @@ def validate_prerequisite(interaction, preceding):
         captured = _serialize(interaction.snapshot)
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
-            captured.get('dialogue', {}).get('requested_predecessor'))
+            captured.get('dialogue', {}).get('requested_predecessor'),
+            canonical_sources='source_view' in captured.get('dialogue', {}))
         if captured.get('prerequisite') != expected:
             raise SessionError('Pending declaration capture changed.')
         _validate_role_prerequisite(interaction, preceding)
@@ -1081,7 +1271,8 @@ def validate_prerequisite(interaction, preceding):
     captured = _serialize(interaction.snapshot)
     expected = capture_prerequisite(preceding, interaction.base_revision_id,
         interaction.base_generation, interaction.submission,
-        captured.get('dialogue', {}).get('requested_predecessor'))
+        captured.get('dialogue', {}).get('requested_predecessor'),
+        canonical_sources='source_view' in captured.get('dialogue', {}))
     reference = captured.get('prerequisite')
     if reference is not None and reference != expected:
         raise SessionError('Pending declaration capture changed.')
@@ -1342,9 +1533,11 @@ def planning_task(interaction, state):
 
 
 def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
-    if decision.roles:
+    roles = _source_field_roles(sessions._application.registry, decision.roles, decision.arguments)
+    if roles:
         from .local_resources import available_input_view
         interaction = available_input_view(interaction)
+        inputs = (interaction.submission or {}).get('execution_inputs', inputs)
     if (decision.base != 'current' or decision.delta is not None
             or decision.target not in sessions._application.registry.names()):
         raise IntentError('unsupported_intent')
@@ -1357,17 +1550,17 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
         and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
     if grouped:
         from .local_resources import LocalResourceAdmission, ResourceAdmissionError
-        if not decision.roles:
+        if not roles:
             raise IntentError('ambiguous_subject')
         owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
         original = owner._submission_binding(interaction.submission)
         if _serialize(original.execution_inputs) != values:
             raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
-        roles = [asdict(item) for item in decision.roles]
+        roles = [asdict(item) for item in roles]
         completed = owner.bind_group(original, roles, verify_source=True)
         values = _serialize(completed.execution_inputs)
         admitted.update(inputs=values, roles=roles, registered_input=completed.attribution())
-    elif decision.roles:
+    elif roles:
         raise IntentError('unsupported_intent')
     values = _with_retained(sessions._application.registry, values, admitted.get('retained_parameters', ()))
     admitted['inputs'] = values
@@ -1378,7 +1571,9 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
             raise IntentError('unavailable_context')
         admitted['context'] = 'current'
     if decision.arguments or admitted.get('retained_parameters'):
-        values = _bind_arguments(sessions._application.registry, interaction.utterance, values, decision.arguments)
+        values = _bind_arguments(sessions._application.registry, interaction.utterance, values, decision.arguments,
+            field_choices=_argument_fields(sessions._application.registry, replace(interaction, admitted=admitted),
+                                          declarations=decision.arguments))
         admitted.update(inputs=values)
         if decision.arguments:
             admitted['arguments'] = [asdict(d) for d in decision.arguments]
@@ -1398,7 +1593,7 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
             if grouped:
                 # Scalar declarations add values; exact selected membership and
                 # Registry consumer associations remain the admitted group.
-                if (epizoo_resources and any(r.tool == 'epizoo_embed_cells' for r in decision.roles)
+                if (epizoo_resources and any(r['tool'] == 'epizoo_embed_cells' for r in roles)
                         and 'species' in values and 'target_model_manifest_path' not in values):
                     values, selection_error = _select_declared_resource(values, epizoo_resources)
                     if selection_error is not None:

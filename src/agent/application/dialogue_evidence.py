@@ -452,7 +452,7 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
             or admitted.get('request_id') != run.request_id):
         return ()
-    from .dialogue_execution import _parameter_input
+    from .dialogue_execution import _argument_fields, _parameter_input
     from .turn_decisions import _scientific_arguments, admit_scientific_argument
     indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
     linked, current = [], interaction
@@ -478,11 +478,13 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
             record = current.admitted or {}
             arguments = ([] if record.get('argument') is None else [record['argument']])
             arguments += list(record.get('arguments', ()))
-            for encoded in arguments:
-                declaration, = _scientific_arguments([_serialize(encoded)])
+            arguments = _scientific_arguments(_serialize(arguments))
+            fields = _argument_fields(sessions._application.registry, current, declarations=arguments)
+            for declaration in arguments:
                 name, specification = _parameter_input(sessions._application.registry,
                     declaration.tool, declaration.argument)
-                argument = admit_scientific_argument(declaration, current.utterance, specification)
+                argument = admit_scientific_argument(declaration, current.utterance, specification,
+                    observation_fields=fields.get((declaration.tool, declaration.argument)))
                 if (name not in record.get('inputs', {})
                         or _bytes(record['inputs'][name]) != _bytes(argument)):
                     raise ValueError('Declaration differs from its admitted binding.')

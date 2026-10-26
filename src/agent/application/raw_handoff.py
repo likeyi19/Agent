@@ -259,17 +259,42 @@ def declaration(value, field='fastq'):
     return FastqDeclaration(**dict(value, members=tuple(FastqMember(**m) for m in value['members'])))
 
 
-def merge(previous, additions, *, annotation_corrections=False):
+def scientific_metadata_fields(declared):
+    """Correctable pending declarations, excluding captured source identities."""
+    if type(declared) not in (FastqDeclaration, BamDeclaration, FragmentsDeclaration,
+                             AnnotationDeclaration, EpiZooDeclaration):
+        raise ValueError('A typed scientific declaration is required.')
+    fixed = {'source', 'members', 'namespace', 'operation', 'resource',
+             'genome_resource', 'uploaded', 'groups_result'}
+    return tuple(name for name in declared.__dataclass_fields__
+                 if name not in fixed and not name.endswith('_source'))
+
+
+def merge(previous, additions, *, pending=False, unknown_fields=()):
+    """Merge user intent or, by default, strictly reconcile source observations.
+
+    A pending declaration is not accepted scientific authority. Explicit user
+    corrections may change its scientific metadata; only unknown_fields retracts
+    a previous claim. Nullable additions alone continue to mean omission.
+    """
     if type(previous) is not type(additions):
         raise ValueError('Raw declaration kind cannot change.')
+    if (type(unknown_fields) is not tuple or len(unknown_fields) > 16
+            or len(set(unknown_fields)) != len(unknown_fields)
+            or any(type(name) is not str or name not in scientific_metadata_fields(previous)
+                   or getattr(additions, name) is not None for name in unknown_fields)
+            or unknown_fields and not pending):
+        raise ValueError('Unknown declarations must name pending scientific metadata only.')
     values = asdict(previous)
+    for name in unknown_fields:
+        values[name] = None
     if isinstance(previous, EpiZooDeclaration) and additions.genome_source is not None:
         # An explicit uploaded genome supersedes the resource role only. It
         # never changes the original H5AD or another captured scientific input.
         values['genome_resource'] = additions.genome_resource
     if isinstance(previous, AnnotationDeclaration):
         values['uploaded'] = previous.uploaded
-        if annotation_corrections and additions.groups_source is not None and previous.groups_result is not None:
+        if pending and additions.groups_source is not None and previous.groups_result is not None:
             # A newly attached grouping can replace an unusable result choice;
             # the captured count source and original registrations stay intact.
             values['groups_result'] = None
@@ -291,12 +316,15 @@ def merge(previous, additions, *, annotation_corrections=False):
                         old[name] = supplied
                 values[key] = AnnotationUploads(**old)
                 continue
-            annotation_edit = isinstance(previous, AnnotationDeclaration) and (
-                key == 'grouping_provenance' or annotation_corrections and
-                key in ('species', 'assembly', 'measurement', 'context', 'groups_result'))
-            if (key not in ('resource', 'genome_resource') and not annotation_edit
+            correctable = pending and (key in scientific_metadata_fields(previous)
+                or isinstance(previous, AnnotationDeclaration) and key == 'groups_result')
+            if (key not in ('resource', 'genome_resource') and not correctable
                     and values[key] is not None and values[key] != value):
-                raise ValueError('Captured FASTQ declarations cannot be replaced.')
+                if pending:
+                    from .turn_decisions import IntentError
+                    raise IntentError('invalid_prerequisite',
+                        diagnostic_reason='captured_' + key + '_changed', operand='declaration')
+                raise ValueError('Captured scientific sources or declarations cannot be replaced.')
             values[key] = value
     if isinstance(previous, (BamDeclaration, FragmentsDeclaration, AnnotationDeclaration, EpiZooDeclaration)):
         return type(previous)(**values)
@@ -651,6 +679,13 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
 
 def _captured(interaction, preceding):
     from .dialogue_execution import _role_source
+    admitted = interaction.admitted or {}
+    if ('source_view' in interaction.snapshot.get('dialogue', {})
+            and 'continuation' not in admitted
+            and any(field in admitted for field in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo'))):
+        # A new typed request may use offered files while an older task is
+        # pending. Only an explicit continuation selects that older objective.
+        return interaction, None
     reference = interaction.snapshot.get('prerequisite')
     if reference is not None and reference['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
         return _role_source(reference, preceding)
@@ -665,20 +700,28 @@ def _extend_catalog(previous, current):
     return current
 
 
-def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None):
+def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None):
     from .dialogue_execution import _bind_arguments, _with_retained
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
     if not binding.attachment_candidates or binding.roles or binding.execution_inputs:
         raise ValueError('FASTQ declarations require unbound captured attachments.')
     previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
-    # Pending task declarations are correctable typed user intent, not accepted
-    # scientific evidence. Source handles stay fixed; metadata conflicts are
-    # checked separately below with the strict merge.
-    declared = merge(previous, addition, annotation_corrections=field == 'annotation')
-    values = _bind_arguments(registry, interaction.utterance,
-        _with_retained(registry, {}, (origin.admitted or {}).get('retained_parameters', ()))
-        if source is None else _serialize(source.admitted[field + '_arguments']), arguments,
+    # New admission computes this once before observing its exact source. Replay
+    # uses the same merge without scientific IO. Source metadata reconciliation
+    # remains a separate strict owner check below.
+    if declared is None:
+        declared = merge(previous, addition, pending=True, unknown_fields=unknown_fields)
+    retained = (_with_retained(registry, {}, (origin.admitted or {}).get('retained_parameters', ()))
+                if source is None else _serialize(source.admitted[field + '_arguments']))
+    # A retracted declaration cannot survive through an older duplicate scalar
+    # representation. Explicit current argument evidence is still bound below.
+    for name in unknown_fields:
+        retained.pop(name, None)
+    for name in scientific_metadata_fields(addition):
+        if getattr(addition, name) is not None and getattr(previous, name) != getattr(addition, name):
+            retained.pop(name, None)
+    values = _bind_arguments(registry, interaction.utterance, retained, arguments,
         replace_existing=field in ('annotation', 'epizoo'))
     if (field == 'annotation' and source is not None and addition.grouping_provenance is None
             and 'group_column' in source.admitted[field + '_arguments']
@@ -756,14 +799,21 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         rows = _extend_catalog(previous_rows, catalog(input_sets))
     evidence = resource_evidence(input_sets, field)
     source_evidence = None
+    previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
+    addition = getattr(decision, field) or empty(field)
+    declared = merge(previous, addition, pending=True,
+                     unknown_fields=() if initial else decision.unknown_fields)
     if field in ('annotation', 'epizoo'):
         candidate = source_binding(origin, source, interaction, field)
-        previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
-        declared_source = merge(previous, getattr(decision, field) or empty(field),
-                                annotation_corrections=field == 'annotation').source
+        declared_source = declared.source
         if ((origin.submission or {}).get('candidate_input') is not None
-                and declared_source not in (None, 'source.0')):
-            raise IntentError('invalid_prerequisite')
+                and declared_source is not None):
+            selected = origin.submission['registered_input']
+            position = int(declared_source.split('.')[1])
+            if (position >= len(candidate.members)
+                    or candidate.members[position]['resource_id'] != selected['resource_id']
+                    or candidate.members[position]['record_sha256'] != selected['record_sha256']):
+                raise IntentError('invalid_prerequisite')
         if declared_source is not None:
             if field == 'epizoo':
                 from agent.tools.models.epizoo_inputs import observe_source as observe
@@ -778,13 +828,16 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 raise IntentError('invalid_prerequisite')
             owner._verify_records([record])
             source_evidence = observe(record.source_path, record.source_sha256)
+            if field == 'epizoo':
+                source_evidence['interface_version'] = 2
             if field == 'annotation':
                 from .annotation_groups import choices
                 group_choices = choices(sessions, interaction)
                 if group_choices:
                     source_evidence['accepted_groups'] = group_choices
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
-        getattr(decision, field) or empty(field), decision.arguments, rows, sessions._application.registry, field, evidence, source_evidence)
+        addition, decision.arguments, rows, sessions._application.registry, field, evidence, source_evidence,
+        unknown_fields=() if initial else decision.unknown_fields, declared=declared)
     owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
     owner.validate_binding(binding)
     # Candidate validation intentionally does not open unused attachments.
@@ -837,6 +890,8 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
             admitted['annotation_resource_observation'] = resource_observation
     if not initial:
         admitted['continuation'] = {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}
+        if decision.unknown_fields:
+            admitted['unknown_fields'] = list(decision.unknown_fields)
     pending = None
     if missing:
         admitted.update(reason='missing_' + field + '_declarations', choices=missing, value_required=True)
@@ -1028,7 +1083,8 @@ def _prepare_fragments(owner, session_id, candidates, declared, selected, argume
                 category=declared.feature_category, directory=directory, fasta=fasta,
                 species=species_identity(declared.species), assembly=declared.assembly)
         except ScATACReferenceError as exc:
-            raise ReferenceSupplementError('The supplied BED or its reference genome failed owner qualification.') from exc
+            raise ReferenceSupplementError('The supplied BED or its reference genome failed owner qualification.',
+                diagnostic_reason='incompatible_scientific_reference') from exc
     record = owner.bind_raw_source('fragments-handoff:' + identity, records[declared.source],
         session_id=session_id, input_type='external_fragments', source_index=records.get(declared.index_source))
     binding = owner.compose_fragments(record.resource_id,
@@ -1095,7 +1151,8 @@ def validate(interaction, preceding):
     try:
         captured = _serialize(interaction.snapshot)
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
-            interaction.base_generation, interaction.submission, captured.get('dialogue', {}).get('requested_predecessor'))
+            interaction.base_generation, interaction.submission, captured.get('dialogue', {}).get('requested_predecessor'),
+            canonical_sources='source_view' in captured.get('dialogue', {}))
         if captured.get('prerequisite') != expected:
             raise ValueError('FASTQ prerequisite capture changed.')
         admitted = _serialize(interaction.admitted or {})
@@ -1119,7 +1176,7 @@ def validate(interaction, preceding):
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
             rows, build_default_tool_registry(), field, evidence, admitted.get(field + '_source_evidence'),
-            admitted.get('annotation_resource_observation'))
+            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())))
         if evidence is not None and admitted.get('raw_resource_choice') != (declared.resource or
                 ('resource.' + selected.input_set_id if selected is not None else
                  source.admitted.get('raw_resource_choice') if source is not None else None)):

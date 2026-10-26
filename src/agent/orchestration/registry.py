@@ -166,6 +166,7 @@ class ArgumentPlanningSemantics:
     default_when_omitted: object = inspect.Parameter.empty
     conversational_choice: bool = False
     conversational_exact_string: bool = False
+    observation_source: str | None = None
 
     def __post_init__(self) -> None:
         _planning_text(
@@ -204,6 +205,14 @@ class ArgumentPlanningSemantics:
             or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY
         ):
             raise ValueError("Conversational choices require a direct scientific declaration.")
+        if self.observation_source is not None and (
+            type(self.observation_source) is not str
+            or not self.observation_source.isidentifier()
+            or len(self.observation_source) > 128
+            or not self.scientific_parameter or self.accepted_artifact_kinds
+            or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY
+        ):
+            raise ValueError("Observation fields require a direct scientific source parameter.")
         if self.provenance_role is not None and not isinstance(
             self.provenance_role, PlanningProvenanceRole
         ):
@@ -727,6 +736,21 @@ class ToolSpec:
         )
         if self.semantic_planning is not None:
             _validate_semantic_tool_spec(self)
+        for name, argument in (*required.items(), *optional.items()):
+            source = None if argument.planning is None else argument.planning.observation_source
+            if source is None:
+                continue
+            ports = (() if self.semantic_planning is None else
+                     tuple(port for port in self.semantic_planning.consumer_ports if port.name == source))
+            if (argument.accepted_types != (str,) or argument.choices
+                    or len(ports) != 1 or len(ports[0].members) != 1):
+                raise ValueError(f"Tool {self.name!r} observation parameter {name!r} requires one dataset port.")
+            member = ports[0].members[0]
+            dataset = required.get(member.field_name, optional.get(member.field_name))
+            if (dataset is None or dataset.planning is None
+                    or ArtifactSemanticKind.RAW_SCATAC not in dataset.planning.accepted_artifact_kinds
+                    or not set(dataset.accepted_types) <= {str, Path}):
+                raise ValueError(f"Tool {self.name!r} observation source {source!r} is not a dataset path.")
         if self.scientific_authority is not None:
             declared = set() if self.semantic_planning is None else {
                 port.name for port in self.semantic_planning.producer_ports}
@@ -1672,6 +1696,7 @@ def _planning_argument(
     scientific_parameter: bool = False,
     conversational_choice: bool = False,
     conversational_exact_string: bool = False,
+    observation_source: str | None = None,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
 ) -> ArgumentSpec:
@@ -1685,6 +1710,7 @@ def _planning_argument(
             scientific_parameter=scientific_parameter,
             conversational_choice=conversational_choice,
             conversational_exact_string=conversational_exact_string,
+            observation_source=observation_source,
             provenance_role=provenance,
             conditional_note=conditional_note,
         ),
@@ -2484,6 +2510,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Ground-truth observation column used only for evaluation.",
                 source=direct,
                 scientific_parameter=True,
+                observation_source="ground_truth_dataset",
                 provenance=PlanningProvenanceRole.GROUND_TRUTH,
             ),
             "output_dir": _planning_argument(
@@ -2637,6 +2664,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Biological label column in the reference dataset.",
                 source=direct,
                 scientific_parameter=True,
+                observation_source="reference_dataset",
                 provenance=PlanningProvenanceRole.REFERENCE,
             ),
             "query_embedding_path": _planning_argument(
@@ -2926,6 +2954,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Ground-truth biological label column used only for evaluation.",
                 source=direct,
                 scientific_parameter=True,
+                observation_source="ground_truth_dataset",
                 provenance=PlanningProvenanceRole.GROUND_TRUTH,
             ),
             "output_dir": _planning_argument(

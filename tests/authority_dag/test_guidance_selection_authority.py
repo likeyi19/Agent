@@ -27,7 +27,7 @@ class InteractionModel:
         if 'output_selection_schema_version' in p:
             return json.dumps(dict(outputs=[dict(name='selection',step_id='new_selection',output_key='manifest_path')]))
         assert 'guidance_schema_version' in p
-        return json.dumps(dict(candidates=[dict(capability='select_scATAC_cells',explanation=dict(
+        return json.dumps(dict(advice=None, candidates=[dict(capability='select_scATAC_cells',explanation=dict(
             support='insufficient_evidence',paragraphs=[dict(text=t, kind='conditional', citations=[], comparisons=[]) for t in (
                 'Selection could help address the stated objective.',
                 'Omitted criteria use registered owner defaults; explicit criteria take precedence.',

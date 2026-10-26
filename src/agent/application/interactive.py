@@ -364,10 +364,12 @@ class InteractiveAgentApplication:
                         and not field.endswith(('_sha256', '_path')) and 'contract' not in field],
                     method_fields=list(_METHOD_FIELDS.get(group['tool'], ())),
                     evidence=evidence if included else None))
+            # The accepted scientific Revision remains successful independently
+            # of its originating conversation's response publication status.
             return RevisionView(revision.revision_id, revision.parent_revision_id, revision.turn_id,
                 revision.revision_id == state.active_revision_id, tuple(o.name for o in revision.outputs),
                 run_id=revision.run_id, base_generation=turn.base_generation, session_generation=state.generation,
-                status=view.status, retained_outputs=tuple(o.name for o in turn.retained_outputs),
+                status='succeeded', retained_outputs=tuple(o.name for o in turn.retained_outputs),
                 result=view.response, steps=view.steps, artifacts=self.artifact_handles(session_id, revision_id),
                 evidence_outputs=tuple(o.name for o in revision.outputs),
                 scientific_artifacts=scientific_artifacts, result_groups=tuple(groups))
@@ -757,7 +759,8 @@ class InteractiveAgentApplication:
             status, error = 'navigated', None
         if response is not None and response.error is not None:
             error = response.error
-        if interaction is not None and interaction.prerequisite is not None:
+        if (interaction is not None and interaction.prerequisite is not None
+                and interaction.status == 'clarification'):
             status, error = 'clarification', None
         if response is None and status != 'unavailable':
             if processing is not None:

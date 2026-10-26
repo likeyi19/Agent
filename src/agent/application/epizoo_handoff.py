@@ -130,17 +130,33 @@ def schema(source_rows, resource_rows):
             **{k: [r['handle'] for r in resource_rows] for k in ('resource', 'genome_resource')}).items():
         fields[key] = optional({'type': 'string', 'enum': choices}) if choices else {'type': 'null'}
     fields['taxonomy_id'] = optional({'type': 'integer', 'minimum': 1})
+    fields['scientific_name']['anyOf'][0]['description'] = (
+        'Explicit scientific species name for the target identity. Common names '
+        'are language descriptions, not a qualified scientific_name. Unknown is null.')
     return _object(fields)
+
+
+def _species_identity(declared):
+    """Use the reference owner's exact scientific identity, without alias guesses."""
+    from agent.tools.data.regulatory_feature_reference import validate_species
+    if declared.scientific_name is None or declared.taxonomy_id is None:
+        return None
+    try:
+        return asdict(validate_species(dict(scientific_name=declared.scientific_name,
+                                           taxonomy_id=declared.taxonomy_id)))
+    except ValueError:
+        return None
 
 
 def resolve(declared, choices, observations, *, requested=None, operation=None, source=None, checkpoint=None):
     """Unique compatible qualified choice; explicit invalid choices never fall back."""
     compatible = []
+    identity = _species_identity(declared)
     for choice in choices:
         info = observations[choice.input_set_id]
         if info is None or info['operation'] != (operation or declared.operation): continue
         if any(v is None for v in (declared.scientific_name, declared.taxonomy_id, declared.assembly)): continue
-        if (info['species'] != dict(scientific_name=declared.scientific_name, taxonomy_id=declared.taxonomy_id)
+        if (identity is None or info['species'] != identity
                 or info['assembly'] != declared.assembly): continue
         if info['operation'] == 'inference' and (info['matrix_semantics'] != declared.matrix_semantics
                 or source is None or info['feature_membership_sha256'] != source['feature_membership_sha256']): continue
@@ -184,14 +200,27 @@ def requirements(binding, declared, choices, observations, source, pinned):
         ('scientific_name', 'Declare the scientific species name.'), ('taxonomy_id', 'Declare its taxonomy ID.'),
         ('assembly', 'Declare the genome assembly.'), ('matrix_semantics', 'Declare fragment counts or binary accessibility from processing history.'))
         if getattr(declared, key) is None]
+    # Old observations retain their exact historical prerequisite text. The
+    # current source observation adds this owner check without reinterpreting
+    # an old common-name declaration or inventing a scientific name from it.
+    if (source is not None and source.get('interface_version') == 2
+            and declared.scientific_name is not None and declared.taxonomy_id is not None
+            and _species_identity(declared) is None):
+        missing.append('Provide the scientific species name and its taxonomy ID; a common name alone does not establish this target-model identity.')
     if any(int(h.split('.')[1]) >= len(binding.members) for h in sources(declared)):
         raise ValueError('EpiZoo file role is outside captured attachments.')
     if source is not None and source['source_sha256'] != binding.members[int(declared.source.split('.')[1])]['source_sha256']:
         raise ValueError('Source observation identity changed.')
     checkpoint = (binding.members[int(declared.checkpoint_source.split('.')[1])]['source_sha256']
                   if declared.checkpoint_source else None)
-    selected, questions = resolve(declared, choices, observations, requested=declared.resource or pinned,
-                                  source=source, checkpoint=checkpoint)
+    incomplete = (source is not None and source.get('interface_version') == 2
+        and (_species_identity(declared) is None or any(getattr(declared, key) is None
+             for key in ('operation', 'assembly', 'matrix_semantics'))))
+    # Unknown experimental history cannot establish compatibility or a conflict.
+    # Keep the explicit preference for later qualification; never replace it.
+    selected, questions = ((None, []) if incomplete else resolve(
+        declared, choices, observations, requested=declared.resource or pinned,
+        source=source, checkpoint=checkpoint))
     missing += questions
     genome = None
     if declared.operation == 'inference':

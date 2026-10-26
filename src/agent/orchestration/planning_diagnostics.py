@@ -24,7 +24,7 @@ _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
 
 
 def log_operation_event(logger, event, *, context=None, error=None, code=None,
-                        stage=None, kind=None, reason=None, prompt=None, schema=None,
+                        stage=None, kind=None, reason=None, operand=None, prompt=None, schema=None,
                         requested_model=None, observed_model=None, verified_model=None,
                         transport=None):
     """Best-effort operator log, never an execution diagnostic or authority.
@@ -42,6 +42,9 @@ def log_operation_event(logger, event, *, context=None, error=None, code=None,
         for key, value in (('stage', stage), ('kind', kind), ('reason', reason)):
             if type(value) is str and _SAFE_IDENTIFIER.fullmatch(value):
                 row[key] = value
+        if operand in ('target.output', 'target.subject', 'comparison.output', 'comparison.subject',
+                       'detail.field', 'detail.other_field', 'parameter.field', 'declaration'):
+            row['operand'] = operand
         def identity(key, value):
             if type(value) is str and len(value) <= 4096:
                 row[key + '_sha256'] = hashlib.sha256(value.encode()).hexdigest()

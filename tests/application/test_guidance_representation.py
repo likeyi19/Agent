@@ -81,7 +81,8 @@ def test_model_boundary_retains_authoritative_catalog_context_and_public_readine
     for row in compact['readiness']['by_capability'].values():
         assert set(row) == {'required_ports_without_supplied_request_source',
                             'required_scientific_parameters', 'explicit_request_source_choices'}
-    assert 'paragraph order supplies the structure' in payload['instructions'][1]
+    assert 'one to six natural paragraphs' in payload['instructions'][1]
+    assert 'exactly three paragraphs' not in '\n'.join(payload['instructions'])
     enum = schema['properties']['candidates']['items']['properties']['capability']['enum']
     assert enum == payload['offered_capabilities'] == sorted(app.registry.names())
 

@@ -595,4 +595,6 @@ def test_unrelated_new_task_cannot_inherit_captured_source_roles(tmp_path):
         assert not state.revisions
         admitted = state.interactions[-1].admitted
         assert admitted['inputs'] == {}
-        assert 'roles' not in admitted and 'registered_input' not in admitted
+        assert not admitted['roles'] and not admitted.get('continuation')
+        assert admitted['registered_input']['attachment_candidates']
+        assert admitted['tool'] == 'inspect_scATAC'

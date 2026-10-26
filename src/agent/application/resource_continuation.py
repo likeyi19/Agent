@@ -211,7 +211,8 @@ def validate(interaction, preceding):
     try:
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
-            interaction.snapshot.get('dialogue', {}).get('requested_predecessor'))
+            interaction.snapshot.get('dialogue', {}).get('requested_predecessor'),
+            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}))
         if reference != expected:
             raise ValueError('Resource prerequisite capture changed.')
         if (admitted.get('kind') == 'request_resources' or

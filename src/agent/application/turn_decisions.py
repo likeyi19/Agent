@@ -16,8 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class IntentError(ValueError):
-    def __init__(self, reason):
+    def __init__(self, reason, *, diagnostic_reason=None, operand=None):
         self.reason = reason
+        self.diagnostic_reason = diagnostic_reason
+        self.operand = operand
         super().__init__(reason)
 
 
@@ -77,6 +79,20 @@ class ScalarChoiceArgument(ScopedArgument):
         if (not self.literal.strip() or type(self.value) is not str
                 or not self.value.strip() or len(self.value) > 80):
             raise ValueError('Invalid scalar choice declaration.')
+
+
+@dataclass(frozen=True)
+class SourceFieldArgument(ScalarChoiceArgument):
+    """An explicit field and source selection for a Registry-owned dataset port."""
+
+    source: str
+    mode: str
+
+    def __post_init__(self):
+        super().__post_init__()
+        if (type(self.source) is not str or re.fullmatch(r'source\.(?:0|[1-9][0-9]*)', self.source) is None
+                or self.mode not in ('offered', 'literal')):
+            raise ValueError('Invalid source-qualified observation field.')
 
 
 def _validate_arguments(arguments, argument=None):
@@ -340,11 +356,22 @@ class RoleAnswer:
     fragments: 'FragmentsDeclaration | None' = None
     annotation: 'AnnotationDeclaration | None' = None
     epizoo: 'EpiZooDeclaration | None' = None
+    unknown_fields: tuple[str, ...] = ()
 
     def __post_init__(self):
         if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
                 or not (self.roles or self.arguments or self.fastq is not None or self.bam is not None or self.fragments is not None or self.annotation is not None or self.epizoo is not None)):
             raise ValueError('Invalid pending scientific role answer.')
+        from .raw_handoff import scientific_metadata_fields
+        declarations = [v for v in (self.fastq, self.bam, self.fragments, self.annotation, self.epizoo)
+                        if v is not None]
+        if (type(self.unknown_fields) is not tuple or len(self.unknown_fields) > 16
+                or any(type(name) is not str for name in self.unknown_fields)
+                or len(set(self.unknown_fields)) != len(self.unknown_fields)
+                or self.unknown_fields and (len(declarations) != 1 or any(
+                    name not in scientific_metadata_fields(declarations[0])
+                    or getattr(declarations[0], name) is not None for name in self.unknown_fields))):
+            raise ValueError('Unknown fields require one pending scientific metadata declaration.')
         if self.epizoo is not None:
             from .epizoo_handoff import EpiZooDeclaration
             from .raw_handoff import validate_arguments
@@ -376,8 +403,6 @@ class RoleAnswer:
             validate_arguments(self.arguments)
         _validate_roles(self.roles)
         _validate_arguments(self.arguments)
-        if any(isinstance(item, ScalarChoiceArgument) for item in self.arguments):
-            raise ValueError('Role answers require exact scientific declarations.')
 
 
 @dataclass(frozen=True)
@@ -614,9 +639,10 @@ def _scientific_arguments(value):
     result = []
     for item in value:
         choice = type(item) is dict and 'value' in item
-        _shape(item, ('tool', 'argument', 'literal', 'start', 'end', 'value') if choice
-               else ('tool', 'argument', 'literal', 'start', 'end'))
-        result.append((ScalarChoiceArgument if choice else ScopedArgument)(**item))
+        source = type(item) is dict and 'source' in item
+        _shape(item, ('tool', 'argument', 'literal', 'start', 'end')
+               + (('value',) if choice or source else ()) + (('source', 'mode') if source else ()))
+        result.append((SourceFieldArgument if source else ScalarChoiceArgument if choice else ScopedArgument)(**item))
     return tuple(result)
 
 
@@ -650,7 +676,8 @@ def _ground_declaration(value, utterance):
     if value is None:
         return None
     choice = type(value) is dict and 'value' in value
-    keys = ('tool', 'argument', 'literal') + (('value',) if choice else ())
+    source = type(value) is dict and 'source' in value
+    keys = ('tool', 'argument', 'literal') + (('value',) if choice or source else ()) + (('source', 'mode') if source else ())
     quoted = type(value) is dict and 'evidence' in value
     _shape(value, keys + (('evidence',) if quoted else ('start', 'end')))
     literal = value['literal']
@@ -658,7 +685,7 @@ def _ground_declaration(value, utterance):
         raise IntentError('invalid_decision')
     if not quoted:
         # Validate the legacy wire before normalization, including offset types.
-        (ScalarChoiceArgument if choice else ScopedArgument)(**value)
+        (SourceFieldArgument if source else ScalarChoiceArgument if choice else ScopedArgument)(**value)
         if utterance[value['start']:value['end']] == literal:
             return value
     evidence = value['evidence'] if quoted else literal
@@ -756,7 +783,9 @@ def parse_decision(raw, *, utterance=None):
                                 retain_parameters=tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])))
         if kind == 'answer_roles':
             _shape(value, ('kind', 'pending', 'roles') + tuple(
-                key for key in ('arguments', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo') if key in value))
+                key for key in ('arguments', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo', 'unknown_fields') if key in value))
+            if 'unknown_fields' in value and type(value['unknown_fields']) is not list:
+                raise IntentError('invalid_decision')
             from .raw_handoff import declaration
             return RoleAnswer(value['pending'], _input_roles(value['roles']),
                               _scientific_arguments(value.get('arguments', [])),
@@ -764,7 +793,8 @@ def parse_decision(raw, *, utterance=None):
                                 declaration(value['bam'], 'bam') if 'bam' in value else None,
                                 declaration(value['fragments'], 'fragments') if 'fragments' in value else None,
                                 declaration(value['annotation'], 'annotation') if 'annotation' in value else None,
-                                declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None)
+                                declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None,
+                              unknown_fields=tuple(value.get('unknown_fields', ())))
         if kind == 'answer_guidance':
             _shape(value, ('kind', 'targets', 'candidate'))
             if type(value['targets']) is not list: raise IntentError('invalid_decision')
@@ -845,17 +875,36 @@ def decision_schema(public):
     offered = [o for b in public['bases'].values() for o in b['operations']]
     enum = lambda values: {'type': 'string', 'enum': list(dict.fromkeys(values))}
     parameters = public.get('dialogue', {}).get('scientific_parameters', ())
+    source_ids = {row['source'] for row in public.get('dialogue', {}).get('selected_sources', ())
+                  if row.get('input_type') == 'h5ad'}
+    source_rows = [row for row in public.get('dialogue', {}).get('source_fields', ())
+                   if row['source'] in source_ids]
+    if source_ids and not source_rows:
+        # A source-bearing context without a captured field scope cannot fall
+        # back to an unbound declaration. Historical decoding does not use this
+        # live provider schema; a genuinely missing-file task has no source IDs.
+        parameters = [item for item in parameters if not item.get('observation_source')]
     identities = tuple(dict.fromkeys((item['tool'], item['argument']) for item in parameters))
     def declaration_schema(item):
         properties = dict(tool=enum((item['tool'],)), argument=enum((item['argument'],)),
             literal={'type': 'string', 'minLength': 1, 'maxLength': 80},
             evidence={'type': 'string', 'minLength': 1, 'maxLength': 4096})
+        if item.get('observation_source'):
+            if source_rows:
+                variants = []
+                for row in source_rows:
+                    selected = properties | dict(source=enum((row['source'],)))
+                    if row['fields']:
+                        variants.append(_object(selected | dict(mode=enum(('offered',)), value=enum(row['fields']))))
+                    variants.append(_object(selected | dict(mode=enum(('literal',)),
+                        value={'type': 'string', 'minLength': 1, 'maxLength': 80})))
+                return {'anyOf': variants}
         if 'choices' in item:
             properties['value'] = enum(item['choices'])
         return _object(properties)
     declarations = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
         declaration_schema(item) for item in parameters]}}
-    exact = [item for item in parameters if 'choices' not in item]
+    exact = [item for item in parameters if 'choices' not in item or item.get('observation_source')]
     exact_declarations = declarations | {'items': {'anyOf': [declaration_schema(item) for item in exact]}}
     delta = _object(dict(parameter=enum(p for o in offered for p in o['parameters']),
         operation=enum(('set', 'add', 'subtract')), literal={'type':'string'}, evidence={'type':'string'}))
@@ -872,8 +921,7 @@ def decision_schema(public):
     if 'dialogue' in public:
         groups = public['dialogue'].get('result_groups', ())
         selected_sources = public['dialogue'].get('selected_sources', ())
-        sources = tuple(dict.fromkeys(row['source'] for row in
-            (*selected_sources, *public['dialogue'].get('annotation_sources', ()))))
+        sources = tuple(row['source'] for row in selected_sources)
         coordinates = [row['handle'] for row in groups if row['tool'] == 'compute_cell_umap']
         def visualization_schema(*, planned):
             return {'anyOf': [_object(dict(
@@ -885,10 +933,30 @@ def decision_schema(public):
             field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
             other_field={'anyOf':[{'type':'string', 'minLength':1, 'maxLength':256}, {'type':'null'}]},
             offset={'type':'integer', 'minimum':0}, limit={'type':'integer', 'minimum':1, 'maximum':32}))
-        target = _object(dict(output=enum([o['handle'] for o in public['dialogue']['outputs']]
-                             + [g['handle'] for g in public['dialogue'].get('result_groups', ())]
-                             + list(public['dialogue'].get('result_referents', {})) + ['@focus', '@previous']),
-                             subject={'anyOf':[{'type':'string', 'maxLength':128}, {'type':'null'}]}))
+        # Subjects are annotation-summary identities, not arbitrary category
+        # values. All other categorical selection uses the existing detail read.
+        output_subjects = {o['handle']: o.get('subjects', {})
+                           for o in public['dialogue']['outputs']}
+        for group in groups:
+            output_subjects[group['handle']] = output_subjects.get(group.get('canonical_output'), {})
+        for handle, offered in public['dialogue'].get('result_referents', {}).items():
+            choices = offered.get('targets', ())
+            output_subjects[handle] = (output_subjects.get(choices[0]['group'], {})
+                                      if len(choices) == 1 else {})
+        predecessor = public['dialogue'].get('predecessor')
+        for handle, key in (('@focus', 'target'), ('@previous', 'previous')):
+            selected = None if predecessor is None else predecessor.get(key)
+            output_subjects[handle] = {} if selected is None else output_subjects.get(selected['output'], {})
+        target_domains = {}
+        for handle, subjects in output_subjects.items():
+            references = list(dict.fromkeys(reference for row in subjects.get('candidates', ())
+                for reference in (row['id'], *row.get('references', ()))))
+            if references and predecessor is not None:
+                references.extend(('@focus', '@other'))
+            target_domains.setdefault(tuple(references), []).append(handle)
+        target = {'anyOf': [_object(dict(output=enum(handles), subject=(
+            {'anyOf': [enum(references), {'type': 'null'}]} if references else {'type': 'null'})))
+            for references, handles in target_domains.items()]}
         scientific = dict(kind=enum(('answer_scientific',)), target=target,
             comparison={'anyOf':[target, {'type':'null'}]}, focus=enum(('question', 'continue')))
         if any('categorical' in g for g in public['dialogue'].get('result_groups', ())):
@@ -947,14 +1015,14 @@ def decision_schema(public):
                 required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') else 2, 'maxItems': 8,
                     'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
                         port=enum((item['port'],)))) for item in input_roles]}})))
-        if public['dialogue'].get('attachment_candidates') or public['dialogue'].get('annotation_sources'):
+        if public['dialogue'].get('attachment_candidates'):
             from .raw_handoff import schema as raw_schema, target
             from .epizoo_handoff import TOOLS
             from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
             for field, tools in (('fastq', _FASTQ_COMPANION_TOOLS), ('bam', _BAM_COMPANION_TOOLS), ('fragments', _FRAGMENTS_COMPANION_TOOLS), ('annotation', ('annotate_scATAC_cell_types',)), ('epizoo', TOOLS)):
                 if field + '_resources' not in public['dialogue']:
                     continue
-                raw = raw_schema(public['dialogue'].get('annotation_sources', selected_sources) if field in ('annotation', 'epizoo') else selected_sources, public['dialogue'][field + '_resources'], field,
+                raw = raw_schema(selected_sources, public['dialogue'][field + '_resources'], field,
                     groups=public['dialogue'].get('annotation_group_results', ()))
                 empty = {'type': 'array', 'maxItems': 0, 'items': {'type': 'string'}}
                 raw_parameters = [item for item in exact if item['tool'] in tools]
@@ -965,8 +1033,11 @@ def decision_schema(public):
                     **{field: raw}, arguments=raw_arguments,
                     **{k:v for k,v in execution.items() if k in ('references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters')})))
                 if pending is not None and pending.get('field') == field:
+                    from .raw_handoff import empty as empty_declaration, scientific_metadata_fields
                     variants.append(_object(dict(kind=enum(('answer_roles',)), pending=enum(('@roles',)),
-                        roles=empty, **{field: raw}, arguments=raw_arguments)))
+                        roles=empty, **{field: raw}, arguments=raw_arguments,
+                        unknown_fields={'type': 'array', 'maxItems': 16,
+                            'items': enum(scientific_metadata_fields(empty_declaration(field)))})))
         variants.append(_object(execution))
         candidates = public['dialogue'].get('execution_candidates', ())
         if candidates:
@@ -1029,14 +1100,15 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
             'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
+            'Pending scientific declarations are user intent, not accepted evidence. In answer_roles, explicitly stated corrections may update scientific metadata while preserving captured files, source roles, namespace and operation. A null declaration field means no addition. If the user explicitly says a previously recorded scientific claim is unknown or cannot be confirmed, name that offered metadata field in unknown_fields and leave its addition null; do not silently retain it as known. Never retract sources, roles, operation or resource identities through unknown_fields. When the user asks which prerequisites or evidence are needed rather than supplying declarations, choose answer_guidance; the captured pending task can inform conditional advice without scientific execution.',
             'For independent external fragments use request_roles with fragments and empty required_roles/roles. Bind source, optional index_source and optional feature_source only to explicitly selected attachments. Interpret namespace, human/mouse species and hg38/mm10 source assembly. source_profile 10x-atac-fragments.v1 requires explicit declared adjusted zero-based half-open ATAC/ARC intervals, corrected barcode identifiers and read-pair support; never infer source history from columns or filenames. An index is optional. If no offered reference is available, explicit genome_source (plain FASTA) and optional genome_index_source (FAI) plus a declared BED can qualify a private feature reference through the existing owner. Missing genome_source stays null and is requested without losing the task. This supplies genome and regions only, never TSS/QC qualification. Custom peaks or regions require feature_category peak_set or regulatory_regions; if the BED is missing leave feature_source null and preserve the request. The BED must be declared in the source assembly with zero-based half-open intervals; if uncertain leave feature_category null. Never call custom peaks curated cCREs. Agent qualifies the exact BED through its existing owner. resource is an explicit preference only; otherwise leave null. Missing fields stay null. For pending fragments use answer_roles with fragments and only explicit additions, preserving the original task. Do not request FASTQ/BAM or prior Agent output for independent fragments.',
-            'For EpiZoo target-species inference or native post-training with uploaded H5AD, use request_roles with epizoo and empty roles/required_roles. Set operation inference with target epizoo_embed_cells, or posttraining with target adapt_epizoo_species; never train merely to obtain embeddings. Bind source from selected_sources or annotation_sources. Declare scientific_name, taxonomy_id, assembly and fragment_counts/binary_accessibility only from explicit processing context; unknown fields remain null. For training declare de_novo or mapped_reference and peak_set/regulatory_regions feature_category. Inference needs the exact accepted model vocabulary, not a new genome. Training may bind genome_source and optional genome_index_source attachments, or a qualified genome_resource. epizoo_resources are scientific models/references, distinct from the conversational LLM. resource and genome_resource express explicit preferences only; otherwise leave null for compatible unique selection. checkpoint_source may identify an uploaded exact qualified checkpoint; weights alone do not establish vocabulary or provenance. Missing mapping/resources must clarify, never invent coordinate correspondence. Use offered scientific arguments for explicit native settings; omit absent settings for owner defaults. Pending epizoo uses answer_roles, @roles and only additions; preserve the original inputs, operation and explicit settings. Never ask the researcher to build manifests, hashes, InputSets or authority records.',
-            'For direct peak H5AD cell-type annotation use request_roles with annotation and empty roles/required_roles. Bind the source and optional exact ordered groups TSV from selected_sources or annotation_sources. To reuse accepted Leiden groups, select the exact annotation_group_results handle in groups_result; Agent projects the ordered groups after checking the original count-source identity. Do not ask for download/re-upload or grouping provenance for that accepted result. Declare species, assembly, raw measurement history, tissue context and grouping provenance only when supported by the user; missing fields stay null. Agent checks source-bound metadata, asks for missing declarations or an exact obs grouping column, and resolves compatible annotation_resources. Match a supported tissue meaning to an offered exact resource context; do not infer tissue from resource availability. resource is an explicit preference only; otherwise leave null. Use existing scientific arguments for explicit count_slot and group_column; do not invent defaults. Pending annotation requests use answer_roles with annotation and explicit additions or corrections to species, assembly, measurement or tissue context. Use the measurement identifier described in the annotation schema when the declared counting history supports it. Match user-supported tissue meaning to an offered exact resource context, including when a resource becomes available later. Corrections create a new declaration record; they cannot replace captured source files or override conflicting source metadata. A categorical obs column alone does not establish a clustering result. Never invent cell groups, count history or biological context.',
+            'For EpiZoo target-species inference or native post-training with uploaded H5AD, use request_roles with epizoo and empty roles/required_roles. Set operation inference with target epizoo_embed_cells, or posttraining with target adapt_epizoo_species; never train merely to obtain embeddings. Bind source from selected_sources. Declare scientific_name, taxonomy_id, assembly and fragment_counts/binary_accessibility only from explicit processing context; unknown fields remain null. For training declare de_novo or mapped_reference and peak_set/regulatory_regions feature_category. Inference needs the exact accepted model vocabulary, not a new genome. Training may bind genome_source and optional genome_index_source attachments, or a qualified genome_resource. epizoo_resources are scientific models/references, distinct from the conversational LLM. resource and genome_resource express explicit preferences only; otherwise leave null for compatible unique selection. checkpoint_source may identify an uploaded exact qualified checkpoint; weights alone do not establish vocabulary or provenance. Missing mapping/resources must clarify, never invent coordinate correspondence. Use offered scientific arguments for explicit native settings; omit absent settings for owner defaults. Pending epizoo uses answer_roles, @roles and only additions; preserve the original inputs, operation and explicit settings. Never ask the researcher to build manifests, hashes, InputSets or authority records.',
+            'For direct peak H5AD cell-type annotation use request_roles with annotation and empty roles/required_roles. Bind the source and optional exact ordered groups TSV from selected_sources. To reuse accepted Leiden groups, select the exact annotation_group_results handle in groups_result; Agent projects the ordered groups after checking the original count-source identity. Do not ask for download/re-upload or grouping provenance for that accepted result. Declare species, assembly, raw measurement history, tissue context and grouping provenance only when supported by the user; missing fields stay null. Agent checks source-bound metadata, asks for missing declarations or an exact obs grouping column, and resolves compatible annotation_resources. Match a supported tissue meaning to an offered exact resource context; do not infer tissue from resource availability. resource is an explicit preference only; otherwise leave null. Use existing scientific arguments for explicit count_slot and group_column; do not invent defaults. Pending annotation requests use answer_roles with annotation and explicit additions or corrections to species, assembly, measurement or tissue context. Use the measurement identifier described in the annotation schema when the declared counting history supports it. Match user-supported tissue meaning to an offered exact resource context, including when a resource becomes available later. Corrections create a new declaration record; they cannot replace captured source files or override conflicting source metadata. A categorical obs column alone does not establish a clustering result. Never invent cell groups, count history or biological context.',
             'For user-supplied MAESTRO references, annotation.uploaded binds gene_source to a native MAESTRO refgenes transcript/exon table and signature_source to a candidate/gene TSV, using only captured source handles. Record explicit reference species, assembly, biological context, gene_namespace, publisher/derivation provenance and release for each supplied component; unknown fields stay null. These are declarations of origin and applicability, never proof of biological validation. Uploaded roles take precedence over catalog components; never fall back from an invalid explicit upload. A marker table alone cannot replace gene annotations or the qualified genome chromosome scope. Available annotation_resources may supply those remaining dependencies, including a genome-scope-only entry. Ask for missing scientific files or declarations, not InputSet IDs, paths, digests or manifests. A pending annotation may receive uploaded resources through answer_roles without losing the source H5AD or original request.',
             'For BAM preprocessing use request_roles with bam and empty required_roles/roles. Associate only the explicitly selected source. Interpret assay, single-library namespace, species and source assembly. barcode_policy corrected_cb_already_corrected requires explicit history that CB identifiers were corrected; CB presence alone is not proof. source_profile agent-cb-paired-atac.v1 declares unshifted paired ATAC alignments with duplicate pairs retained. Do not infer this history from filenames, tags, coordinates or header names. Missing declarations stay null. For both BAM and FASTQ, resource is only an explicit user preference among offered handles; otherwise leave it null. Agent checks pinned owner contracts, compatible unique resources and configured defaults. Configuration alone is not qualification. A pending resource problem may be answered with an explicit alternative resource; preserve every other captured declaration. Do not request FASTQs, sorting or an index for BAM. For pending bam use answer_roles with bam, empty roles, @roles and only explicit additions; preserve the original task and declarations.',
             *(['dialogue.selected_sources is the exact ordered selection for this turn; source handles identify only those captured registrations. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate the explicitly selected inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve every explicitly selected source and the declared scientific role. When dialogue.attachment_candidates is true, these are captured candidate attachments: bind only the files explicitly relevant to the requested task; unused files remain staged. Their stored input_type is a representation hint, never proof of scientific eligibility. For FASTQ preprocessing use the bounded request_roles fastq variant with empty required_roles and roles. Interpret explicit assay, layout, single-library namespace/grouping, species, raw barcode whitelist policy and member source/read-role/lane/chunk associations. Missing declarations remain null or absent members. Compression is inspected from bytes. FASTQ species belongs only in fastq.species; arguments may contain only the offered FASTQ scientific consumers, never an EpiZoo species argument. Offered fastq_resources handles select reusable configured references and whitelists, never source-bound contexts. Leave resource null unless the user explicitly selects one; Agent resolves qualified compatible choices. Never invent other values or thresholds. Do not invent FASTQ read membership, barcode history, or unsupported consumers. A single missing role may require clarification. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one exact source binding each; the same source may be explicitly assigned to multiple supported consumers. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
               if public.get('dialogue', {}).get('selected_sources') else []),
-            'When dialogue.session_source_candidates is true, selected_sources combine current-turn file offers identified by current_turn_sources with previously submitted files in this Session. These are candidates only, not accepted scientific outputs. Preserve explicit current-file associations and select exact historical companions through the existing roles or scientific declaration when the task requires them. Multiple unresolved files require clarification; never select by order or transfer old scientific declarations. For operations on accepted current results, use planning_context and omit file roles; do not recompute from an upload just because it is offered. Questions remain read-only. In annotation_sources, source.0 is the explicitly selected H5AD; additional sources are companion candidates and cannot replace that primary source. When session_source_candidates_overflow is true, only current explicit files remain offered; ask the user to select required historical files in the input controls. No historical subset has been silently selected.',
+            'When dialogue.session_source_candidates is true, selected_sources combine current-turn file offers identified by current_turn_sources with previously submitted files in this Session. These are candidates only, not accepted scientific outputs. Preserve explicit current-file associations and select exact historical companions through the existing roles or scientific declaration when the task requires them. Multiple unresolved files require clarification; never select by order or transfer old scientific declarations. For operations on accepted current results, use planning_context and omit file roles; do not recompute from an upload just because it is offered. Questions remain read-only. selected_primary_source, when present, identifies the exact explicitly selected H5AD for a new direct annotation/EpiZoo request; companion candidates cannot replace it. A pending task retains its own captured source. When session_source_candidates_overflow is true, only current explicit files remain offered; ask the user to select required historical files in the input controls. No historical subset has been silently selected.',
             'dialogue.embedding_suitability contains read-only scientific-owner observations for exact offered H5AD sources, not execution authority. For ordinary clustering/UMAP prefer available qualified compatible EpiZoo; when no compatible EpiZoo is offered and PCA is eligible, use pca_embed_cells with the same neighbors/Leiden/UMAP tools. Explicit PCA uses PCA; explicit EpiZoo must never switch to PCA after failure. PCA needs no species, assembly or model resource declarations, and uses supplied X values without normalization or filtering. Omit component count and solver details unless explicitly requested. For a single selected H5AD, execute_plan can use its supplied input_path directly; for grouped candidate inputs bind pca_embed_cells.dataset through the existing roles. Questions on existing results remain read-only and use accepted result context.',
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
@@ -1060,12 +1132,14 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'Registered default_when_omitted values apply when the user has no special preference. Do not ask for optional scientific parameters merely because no explicit value was supplied. Preserve explicit requested values; defaults do not supply literal evidence for a user declaration.',
             'execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat a parameter identity.',
-            *(['For an offered exact_string parameter, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize, infer a column from metadata, or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
+            *(['For an offered exact_string parameter without observation_source, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
+            'For a parameter with observation_source and an offered H5AD source, declare source, value, mode, literal and evidence. source explicitly selects that tool\'s observation_source dataset port; a matching roles entry is optional and must agree. Other dataset ports still need their own explicit roles. In mode=offered, value is an exact field name from that source\'s source_fields row, while literal/evidence quotes the researcher\'s natural reference to supplied annotations or the field. The researcher need not spell an internal column name. In mode=literal, the researcher explicitly names the column: value must equal the exact verbatim literal, excluding surrounding quotation marks; this may identify a name outside the bounded metadata offer. Never change modes after a rejected binding, omit value, borrow another file\'s field, infer ground truth from field presence, or invent a column from a descriptive phrase. Native owners qualify the selected data and exact axes. With no supported source yet offered, only an explicitly supplied exact column-name literal may be retained in the existing source-free declaration form; otherwise preserve the objective and request its file roles without inventing a name.',
             'For an offered parameter with choices, value is your semantic normalization to an exact offered choice and literal is the exact dataset declaration in this utterance. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
             'A number alone does not request an operation. Explanatory parameter questions remain answers, never execution or edits to a pending request. Clarify ambiguous parameter association or conflicting values; do not invent an amount or replace an invalid value with a default.',
             'Use arguments=[] for omitted scientific parameters. Registered owners and existing compiler/resource contracts decide requirements and defaults; never invent a numeric default, infer scientific input identity, or create arbitrary execution dictionaries. Exact decimal or rational threshold literals stay exact; do not approximate them with floating point values.',
             'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
+            'Target subject selects only an offered annotation-summary group. Clustering labels and other categorical values are not target subjects: select their exact result and categorical fields through detail. The answer stage reads the requested records with their coverage; never invent a category or treat an unavailable table page as absence.',
             'Subject=null means no new subject is asserted by the model for this turn. '
             'It does not clear an authoritative subject retained through a resolved captured referent; '
             'you need not copy or reconstruct that subject identity. Without a retained subject, null selects the whole result. '
@@ -1130,10 +1204,11 @@ def is_exact_string_argument(argument_spec):
         and not planning.conversational_choice and not planning.accepted_artifact_kinds
         and planning.source_eligibility == PlanningSourceEligibility.REQUEST_INPUT_ONLY
         and (planning.conversational_exact_string or planning.provenance_role in
-             (PlanningProvenanceRole.REFERENCE, PlanningProvenanceRole.GROUND_TRUTH)))
+            (PlanningProvenanceRole.REFERENCE, PlanningProvenanceRole.GROUND_TRUTH)
+             or planning.observation_source is not None))
 
 
-def admit_scientific_argument(declaration, utterance, argument_spec):
+def admit_scientific_argument(declaration, utterance, argument_spec, *, observation_fields=None):
     """Check one semantic declaration's literal identity, then delegate its science."""
     if not isinstance(declaration, ScopedArgument):
         raise IntentError('invalid_decision')
@@ -1145,7 +1220,23 @@ def admit_scientific_argument(declaration, utterance, argument_spec):
         if (start and utterance[start - 1].isalnum()
                 or end < len(utterance) and utterance[end].isalnum()):
             raise IntentError('ungrounded_operand')
-        if (not argument_spec.planning or not argument_spec.planning.conversational_choice
+        column = argument_spec.planning is not None and argument_spec.planning.observation_source is not None
+        if isinstance(declaration, SourceFieldArgument) and not column:
+            raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
+                              operand='parameter.field')
+        if column:
+            if isinstance(declaration, SourceFieldArgument) and declaration.mode == 'literal':
+                if observation_fields is None or declaration.value != declaration.literal:
+                    raise IntentError('invalid_reference', diagnostic_reason='source_field_literal_mismatch',
+                                      operand='parameter.field')
+                # An explicitly supplied exact name may lie outside the bounded
+                # metadata offer. Never manufacture that value from a phrase.
+                return admit_scientific_argument(ScopedArgument(declaration.tool, declaration.argument,
+                    declaration.literal, declaration.start, declaration.end), utterance, argument_spec)
+            if observation_fields is None or declaration.value not in observation_fields:
+                raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
+                                  operand='parameter.field')
+        elif (not argument_spec.planning or not argument_spec.planning.conversational_choice
                 or str not in argument_spec.accepted_types or not argument_spec.choices):
             raise IntentError('unsupported_intent')
         try:

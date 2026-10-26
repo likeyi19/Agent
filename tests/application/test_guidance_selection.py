@@ -12,6 +12,29 @@ from test_scientific_guidance import ask, Model as Guidance, decision
 from test_scientific_dialogue import Model as Dialogue, question
 
 
+def no_planning(app, monkeypatch):
+    from agent.orchestration.executor import PlanExecutor
+    from agent.orchestration.llm_planner import LLMPlanner
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Rejected guidance selection entered planning or preflight.')
+    monkeypatch.setattr(LLMPlanner, '_plan_detailed', forbidden)
+    monkeypatch.setattr(PlanExecutor, 'preflight', forbidden)
+    return forbid_work(app, monkeypatch)
+
+
+def assert_binding_rejection(app, result, before, run_files):
+    assert result.status == 'failed', result
+    assert result.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert result.clarification is None
+    state = app.sessions.load('session')
+    assert state.revisions == before.revisions and state.turns == before.turns
+    assert state.active_revision_id == before.active_revision_id and state.generation == before.generation
+    assert state.interactions[:-1] == before.interactions
+    assert state.interactions[-1].admitted is None
+    assert set(app.run_store.root.glob('*.json')) == run_files
+
+
 class Selection(Dialogue):
     def __init__(self, candidate, evidence, **kwargs):
         super().__init__(dict(kind='execute_candidate',candidate=candidate,evidence=evidence), **kwargs)
@@ -74,8 +97,12 @@ def test_selection_restarts_hands_off_and_replays(app, tmp_path, utterance, evid
 ])
 def test_interest_questions_and_invented_command_do_not_execute(app,monkeypatch,utterance,evidence):
     accepted(app,'inspect_scATAC'); cid=offer(app)
-    result=ask(forbid_work(app,monkeypatch),'select',utterance,Selection(cid,evidence))
-    assert result.status=='clarification'
+    before=app.sessions.load('session'); runs=set(app.run_store.root.glob('*.json'))
+    app=no_planning(app,monkeypatch)
+    model=Selection(cid,evidence)
+    result=ask(app,'select',utterance,model)
+    assert_binding_rejection(app,result,before,runs)
+    assert len(model.calls)==1
 
 
 @pytest.mark.parametrize('bad', ['unknown','stale','weak','evidence','catalog'])
@@ -89,8 +116,18 @@ def test_invalid_selection_fails_before_planner(app,monkeypatch,bad):
         from agent.application import scientific_guidance
         original=scientific_guidance.catalog
         monkeypatch.setattr(scientific_guidance,'catalog',lambda registry: original(registry) | dict(changed=True))
-    result=ask(forbid_work(app,monkeypatch),'select','Run option 1.',Selection(cid,'Run option 1.'))
-    assert result.status=='clarification',result
+    before=app.sessions.load('session'); runs=set(app.run_store.root.glob('*.json'))
+    app=no_planning(app,monkeypatch)
+    model=Selection(cid,'Run option 1.')
+    result=ask(app,'select','Run option 1.',model)
+    if bad in ('weak','evidence','catalog'):
+        assert_binding_rejection(app,result,before,runs)
+    else:
+        assert result.status=='clarification',result
+        state=app.sessions.load('session')
+        assert state.turns==before.turns and state.revisions==before.revisions
+        assert set(app.run_store.root.glob('*.json'))==runs
+    assert len(model.calls)==1
 
 
 @pytest.mark.parametrize('failure',['planner','preflight'])
@@ -188,8 +225,10 @@ def test_semantic_ambiguity_and_conflicting_refinement_clarify(app,monkeypatch,u
 def test_ordinary_execution_cannot_bypass_selection_after_discussion(app,monkeypatch):
     accepted(app,'inspect_scATAC'); offer(app)
     assert ask(app,'discussion','What does this show?',Dialogue(question('r0'))).status=='answered'
-    result=ask(forbid_work(app,monkeypatch),'select','Run option 1.',Dialogue(dict(kind='execute_plan',target='inspect_scATAC')))
-    assert result.status=='clarification'
+    before=app.sessions.load('session'); runs=set(app.run_store.root.glob('*.json'))
+    app=no_planning(app,monkeypatch)
+    result=ask(app,'select','Run option 1.',Dialogue(dict(kind='execute_plan',target='inspect_scATAC')))
+    assert_binding_rejection(app,result,before,runs)
 
 
 def test_durable_selection_rejects_identity_tampering(app,tmp_path):
@@ -204,11 +243,25 @@ def test_durable_selection_rejects_identity_tampering(app,tmp_path):
 
 
 def test_capability_removed_after_guidance(app,monkeypatch):
-    accepted(app,'inspect_scATAC'); cid=offer(app)
-    names=app.registry.names()
-    monkeypatch.setattr(type(app.registry),'names',lambda self: tuple(n for n in names if n!='inspect_scATAC'))
-    result=ask(forbid_work(app,monkeypatch),'select','Run option 1.',Selection(cid,'Run option 1.'))
-    assert result.status=='clarification'
+    from agent.application.local_resources import RegisteredInputGroup, group_choices
+    from agent.orchestration import ToolRegistry
+
+    # A catalog-only recommendation has no retired scientific producer to read.
+    # This tests revocation of executable selection, not removed-tool history.
+    cid=offer(app)
+    app=no_planning(app,monkeypatch)
+    registry=ToolRegistry(tuple(app.registry.get(name) for name in app.registry.names()
+                                if name!='inspect_scATAC'))
+    app=ResearchAgentApplication(app.workspace_root,registry=registry)
+    assert 'inspect_scATAC' not in registry.names()
+    choices=group_choices(RegisteredInputGroup((),{},attachment_candidates=True),registry)
+    assert all(role['tool'] in registry.names() for role in choices['roles'])
+    assert all(role['tool']!='inspect_scATAC' for role in choices['roles'])
+    before=app.sessions.load('session'); runs=set(app.run_store.root.glob('*.json'))
+    model=Selection(cid,'Run option 1.')
+    result=ask(app,'select','Run option 1.',model)
+    assert_binding_rejection(app,result,before,runs)
+    assert len(model.calls)==1
 
 
 def test_state_change_during_output_selection_prevents_submission(app,tmp_path,monkeypatch):

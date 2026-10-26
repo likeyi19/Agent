@@ -16,10 +16,11 @@ from .turn_decisions import IntentError
 
 
 class ReferenceSupplementError(IntentError):
-    def __init__(self, message):
+    def __init__(self, message, *, diagnostic_reason=None):
         self.code = 'REFERENCE_SUPPLEMENT_INVALID'
         self.message = message
-        super().__init__('invalid_reference')
+        super().__init__('invalid_reference', diagnostic_reason=diagnostic_reason,
+                         operand='declaration' if diagnostic_reason is not None else None)
 
 
 def _fail(message):
@@ -45,7 +46,8 @@ def prepare_fai(resources, fasta, directory):
                 try:
                     pysam.faidx('-o', str(temporary), path)
                 except pysam.utils.SamtoolsError as exc:
-                    raise ReferenceSupplementError('FASTA indexing failed. Supply a valid plain FASTA; an existing FAI is optional.') from exc
+                    raise ReferenceSupplementError('FASTA indexing failed. Supply a valid plain FASTA; an existing FAI is optional.',
+                        diagnostic_reason='incompatible_scientific_reference') from exc
                 os.replace(temporary, index)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -73,7 +75,8 @@ def qualify_bed(resources, source, *, parent_path=None, parent_sha256=None, cate
     if fasta is not None:
         with open(fasta.source_path, 'rb') as stream:
             if stream.read(2) == b'\x1f\x8b':
-                _fail('Supply a plain FASTA; compressed genome upload preparation is unsupported.')
+                raise ReferenceSupplementError('Supply a plain FASTA; compressed genome upload preparation is unsupported.',
+                    diagnostic_reason='incompatible_scientific_reference')
         fasta_path, fai_path = fasta.source_path, prepare_fai(resources, fasta, directory)
         provenance = scatac_reference.SourceProvenance(basis='caller_supplied',
             source='Explicit task FASTA; species and assembly are declared, not independently established.')

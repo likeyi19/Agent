@@ -60,11 +60,11 @@ def test_model_clarification_is_successfully_parsed_without_exception(tmp_path, 
     assert not any('diagnostic' in k for k in state.to_dict()['interactions'][0])
 
 
-def test_parser_rejection_remains_semantic_clarification(tmp_path, caplog):
+def test_parser_rejection_is_failed_interpretation_not_a_user_clarification(tmp_path, caplog):
     result, state = invoke(tmp_path, Model(raw='{' + SECRET))
-    assert result.clarification == Clarify('invalid_decision')
-    assert result.text == ('I could not interpret or admit this request reliably. '
-                           'Please restate the task and identify the data or result you mean.')
+    assert result.clarification is None and result.status == 'failed'
+    assert result.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert state.interactions[0].status == 'failed'
     rows = records(caplog)
     failed = next(r for r in rows if r['event'] == 'turn.boundary_failed')
     assert failed['exception_class'] == 'IntentError'
@@ -146,15 +146,16 @@ def test_interactive_failure_and_clarification_survive_retry_and_reopen_without_
     state = app._application.sessions.load(SID)
     assert not state.turns and not state.revisions
     assert state.generation == 0 and state.active_revision_id is None
-    if case in {'provider', 'application'}:
+    if case in {'provider', 'application', 'malformed'}:
         assert result.status == 'failed' and result.response.status == 'failed'
         assert result.response.clarification is None and state.interactions[0].admitted is None
-        code = 'PROVIDER_RATE_LIMITED' if case == 'provider' else 'INTERACTIVE_APPLICATION_FAILED'
+        code = ('PROVIDER_RATE_LIMITED' if case == 'provider' else
+                'INTERACTIVE_INTENT_BINDING_INVALID' if case == 'malformed' else 'INTERACTIVE_APPLICATION_FAILED')
         assert result.error.code == code and result.response.error.code == code
         assert state.interactions[0].status == 'failed'
     else:
         assert result.status == 'clarification' and result.error is None
-        reason = 'ambiguous_subject' if case == 'model_clarification' else 'invalid_decision'
+        reason = 'ambiguous_subject'
         assert result.response.clarification['reason'] == reason
         assert result.response.kind == 'clarify' and result.response.error is None
     assert SECRET not in json.dumps(result.to_dict())
@@ -184,6 +185,32 @@ def test_successful_read_only_admission_preserves_result(tmp_path, caplog):
     assert len(model.calls) == 1
     assert next(r for r in records(caplog) if r['event'] == 'interpreter.parse_completed')['kind'] == 'Answer'
     assert not any('exception_class' in r for r in records(caplog))
+
+
+def test_rejected_binding_identifies_safe_operand_without_reclassifying_as_ambiguity(tmp_path, monkeypatch, caplog):
+    from agent.application import dialogue_execution
+    def reject(*args, **kwargs):
+        raise turn_decisions.IntentError('invalid_reference',
+            diagnostic_reason='uncaptured_result', operand='comparison.output')
+    monkeypatch.setattr(dialogue_execution, 'admit', reject)
+    result, state = invoke(tmp_path, Model(dict(kind='execute_plan', target='inspect_scATAC')),
+        execution_inputs={'input_path': '/private/supplied.h5ad'})
+    assert result.status == 'failed' and result.clarification is None
+    assert result.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    row = next(r for r in records(caplog) if r['event'] == 'turn.boundary_failed')
+    assert (row['kind'], row['stage'], row['reason'], row['operand']) == (
+        'Execute', 'admission', 'uncaptured_result', 'comparison.output')
+    assert not state.turns and not state.revisions
+    assert '/private' not in caplog.text
+
+
+def test_diagnostic_slots_never_log_untrusted_rejection_text(caplog):
+    from agent.orchestration.planning_diagnostics import log_operation_event
+    log_operation_event(turns.logger, 'turn.boundary_failed',
+        reason=SECRET, operand=SECRET, error=ValueError(SECRET))
+    row, = records(caplog)
+    assert 'reason' not in row and 'operand' not in row
+    assert SECRET not in caplog.text
 
 
 def test_logging_failure_and_fingerprints_preserve_original_model_contract(monkeypatch, caplog):

@@ -46,6 +46,17 @@ def sessions_id(sessions):
     return sessions._interaction_session_id
 
 
+def _failed_admission(sessions, interaction, decision):
+    changes = dict(status='failed')
+    reference = interaction.snapshot.get('prerequisite')
+    if reference and isinstance(decision, (SpeciesAnswer, ParameterAnswer, RoleAnswer, ResourceAnswer)):
+        # Failed binding is not authority to retry. A later explicit reply can
+        # still address the same pending objective and last valid association.
+        changes['prerequisite'] = {k: _serialize(v) for k, v in reference.items()
+                                   if k != 'predecessor_turn_id'}
+    _update(sessions, interaction.turn_id, **changes)
+
+
 def _terminal(sessions, interaction, clarification):
     captured = _serialize(interaction.snapshot)
     choices = clarification.choices
@@ -400,9 +411,19 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         captured['dialogue'] = dialogue_capture(sessions, state, captured, predecessor_turn_id, tool_names=tool_names)
         from .dialogue_execution import capture_prerequisite
         pending = capture_prerequisite(state.interactions, state.active_revision_id, generation,
-                                      submission, predecessor_turn_id, execution_inputs=execution_inputs)
+                                      submission, predecessor_turn_id, execution_inputs=execution_inputs,
+                                      canonical_sources=True)
         if pending is not None:
             captured['prerequisite'] = pending
+        from .dialogue_execution import captured_input_group
+        from .local_resources import source_field_choices
+        selected = captured_input_group(Interaction(turn_id, utterance, state.active_revision_id,
+            generation, captured, submission=submission), state.interactions)
+        if selected is not None:
+            captured['dialogue']['source_view'] = dict(
+                execution_inputs=_serialize(selected.execution_inputs), registered_input=selected.attribution())
+            if selected.members:
+                captured['dialogue']['source_fields'] = source_field_choices(selected)
     except SessionConflictError:
         raise
     except (ValueError, RuntimeError, OSError, KeyError):
@@ -445,31 +466,14 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue']['reference_supplementation'] = (reference_resources is not None
             and source_kind(submission) == 'h5ad')
         from .dialogue_execution import scientific_parameters
+        source_fields = captured['dialogue'].get('source_fields', ())
+        visible['dialogue']['source_fields'] = [dict(source=row['source'], fields=list(row['fields']),
+                                                   complete=row['complete']) for row in source_fields]
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
-        role_submission = submission
-        if (submission is not None and not execution_inputs and not submission.get('execution_inputs')
-                and submission.get('registered_input') is None):
-            from .local_resources import available_input_view
-            role_submission = available_input_view(interaction, allow_empty=True).submission
-        if (submission or {}).get('available_input') is not None:
-            from .local_resources import available_input_view
-            role_submission = available_input_view(interaction).submission
-            visible['dialogue']['session_source_candidates'] = True
-            current = (submission or {}).get('registered_input', {}).get('members', ())
-            visible['dialogue']['current_turn_sources'] = [f'source.{i}' for i in range(len(current))]
+        from .local_resources import available_input_view
+        role_submission = available_input_view(interaction, allow_empty=True).submission
         if (submission or {}).get('available_input_overflow'):
             visible['dialogue']['session_source_candidates_overflow'] = True
-        if pending_public is not None and pending_public['field'] in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
-            reference = interaction.snapshot['prerequisite']
-            from .dialogue_execution import _role_source, _role_binding
-            origin, source = _role_source(reference, state.interactions)
-            if pending_public['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
-                from .raw_handoff import source_binding
-                binding = source_binding(origin, source, interaction)
-            else:
-                binding = _role_binding(origin, source, interaction)
-            role_submission = dict(execution_inputs=_serialize(binding.execution_inputs),
-                                   registered_input=binding.attribution())
         if (role_submission is not None
                 and role_submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1'):
             from .local_resources import LocalResourceAdmission, group_choices
@@ -477,6 +481,21 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             choices = group_choices(binding, sessions._application.registry)
             visible['dialogue']['selected_sources'] = choices['sources']
             visible['dialogue']['input_roles'] = choices['roles']
+            current = (submission or {}).get('registered_input', {})
+            current_ids = {member['resource_id'] for member in current.get('members', ())}
+            current_ids.update(item['resource_id'] for item in (submission or {}).get('attachments', ()))
+            primary_id = current.get('resource_id') if current.get('tool_name') == 'inspect_scATAC' else None
+            if primary_id is not None:
+                current_ids.add(primary_id)
+            visible['dialogue']['current_turn_sources'] = [f'source.{i}' for i, member in enumerate(binding.members)
+                if member['resource_id'] in current_ids]
+            if any(member['resource_id'] not in current_ids for member in binding.members):
+                visible['dialogue']['session_source_candidates'] = True
+            if primary_id is not None:
+                primary = [f'source.{i}' for i, member in enumerate(binding.members) if member['resource_id'] == primary_id]
+                if len(primary) != 1:
+                    raise IntentError('invalid_reference')
+                visible['dialogue']['selected_primary_source'] = primary[0]
             if binding.attachment_candidates:
                 visible['dialogue']['attachment_candidates'] = True
                 from .raw_handoff import offers as raw_offers
@@ -485,21 +504,13 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 visible['dialogue']['fragments_resources'] = raw_offers(input_sets, 'fragments')
                 visible['dialogue']['annotation_resources'] = raw_offers(input_sets, 'annotation')
                 visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
-        if (submission or {}).get('candidate_input') is not None:
-            from .raw_handoff import _candidate_view, offers as raw_offers
-            from .local_resources import LocalResourceAdmission, group_choices
-            candidate = _candidate_view(interaction)
-            binding = LocalResourceAdmission._submission_binding(candidate.submission)
-            visible['dialogue']['annotation_sources'] = group_choices(binding, sessions._application.registry)['sources']
-            visible['dialogue']['annotation_resources'] = raw_offers(input_sets, 'annotation')
-            visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
         from .annotation_groups import public_choices
         visible['dialogue']['annotation_group_results'] = public_choices(sessions, interaction)
         if context is not None and context.items:
             visible['dialogue']['planning_context'] = list(context.public_items())
         # Project owner observations of the exact offered inputs, never a workflow.
         # Registered bindings retain source integrity; no observation becomes authority.
-        offered = (submission or {}).get('candidate_input') or (role_submission or {}).get('registered_input', {})
+        offered = (role_submission or {}).get('registered_input', {})
         members = offered.get('members', ())
         if members and (context is None or not context.items or (submission or {}).get('attachments')):
             from .local_resources import LocalResourceAdmission
@@ -526,7 +537,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if interaction.base_revision_id is None:
             if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
                     or isinstance(decision, Execute) and decision.operation == 'plan'
-                    or isinstance(decision, Answer) and decision.intent == 'unsupported'):
+                    or isinstance(decision, Answer) and decision.intent in {'unsupported', 'guidance'}):
                 raise IntentError('unavailable_context')
         if isinstance(decision, (Execute, RequestRoles, RequestResources)):
             from .scientific_guidance import references_candidate
@@ -554,7 +565,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .resource_continuation import answer
             admitted = answer(sessions, interaction, decision, input_sets, reference_resources=reference_resources)
         elif isinstance(decision, (RequestRoles, RoleAnswer)) and (
-                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or decision.epizoo is not None or (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
+                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or decision.epizoo is not None or isinstance(decision, RoleAnswer) and (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
             from .raw_handoff import admit as admit_raw
             admitted, prerequisite = admit_raw(sessions, interaction, decision, input_sets,
                                                reference_resources=reference_resources)
@@ -614,21 +625,24 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         else:
             admitted = admit(sessions, interaction, decision)
     except Exception as exc:
-        log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context, stage=diagnostic_stage, error=exc)
+        log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context,
+            stage=diagnostic_stage, error=exc, kind=None if decision is None else type(decision).__name__,
+            reason=getattr(exc, 'diagnostic_reason', None) or getattr(exc, 'reason', None),
+            operand=getattr(exc, 'operand', None))
         from .local_resources import ResourceAdmissionError
         if isinstance(exc, ResourceAdmissionError):
-            _update(sessions, turn_id, status='failed')
+            _failed_admission(sessions, interaction, decision)
             return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
         if isinstance(exc, PlanningModelError):
             from .interactive_schemas import ClientError
             code = exc.code if exc.code in BUILTIN_ERROR_CODES else 'PLANNING_PROVIDER_ERROR'
             error = ClientError(code, safe_message_for(code))
-            _update(sessions, turn_id, status='failed')
+            _failed_admission(sessions, interaction, decision)
             return TurnOutcome('execute', 'failed', text=error.message, error=error)
         if not isinstance(exc, IntentError):
             # Preparation and application failures are not model decisions.
             # The interactive boundary owns their sanitized presentation.
-            _update(sessions, turn_id, status='failed')
+            _failed_admission(sessions, interaction, decision)
             raise
         reason = exc.reason
         from .turn_decisions import DeclarationGroundingError
@@ -666,8 +680,26 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=pending)
                 return TurnOutcome('clarify', 'clarification',
                     Clarify(reason, tuple(pending['missing']), True))
+        if (reason in {'invalid_decision', 'invalid_reference', 'invalid_prerequisite',
+                       'unsupported_intent', 'unavailable_context'}
+                and getattr(exc, 'diagnostic_reason', None) != 'incompatible_scientific_reference'):
+            from .interactive_schemas import ClientError
+            _failed_admission(sessions, interaction, decision)
+            if reason == 'unavailable_context' and (isinstance(decision, Answer) or diagnostic_stage == 'preparation'):
+                error = ClientError('INTERACTIVE_REFERENCE_INVALID',
+                    'The saved evidence required for this answer is unavailable or invalid.')
+                return TurnOutcome('answer', 'unavailable', text=error.message, error=error)
+            error = ClientError('INTERACTIVE_INTENT_BINDING_INVALID',
+                'The interpreted request could not be matched to the offered data or results. '
+                'No new analysis was started.')
+            return TurnOutcome('answer' if isinstance(decision, Answer) else 'execute',
+                               'failed', text=error.message, error=error)
         return _terminal(sessions, interaction, Clarify(reason))
-    _update(sessions, turn_id, admitted=admitted, status='admitted')
+    changes = dict(admitted=admitted, status='admitted')
+    if isinstance(decision, Answer) and decision.intent == 'guidance' and captured.get('prerequisite'):
+        changes['prerequisite'] = {k: _serialize(v) for k, v in captured['prerequisite'].items()
+                                   if k != 'predecessor_turn_id'}
+    _update(sessions, turn_id, **changes)
     try:
         if isinstance(decision, Answer):
             if decision.intent == 'guidance':

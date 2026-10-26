@@ -110,6 +110,7 @@ def test_compact_scope_actual_parameters_and_owner_versions(tmp_path, stage):
         np.testing.assert_array_equal(result.obsm[key], fixture.result.obsm[key])
     meta = result.uns[delivery.EXPORT_KEY]
     assert meta['format'] == 'compact_analysis_result_h5ad' and 'X=None' in meta['scope']
+    assert bool(meta['clustering_present']) is (stage != 'embedding')
     methods = meta['methods']
     assert methods['embedding']['parameters']['random_seed'] == 17
     assert methods['embedding']['parameters']['normalization'] == 'none'
@@ -163,6 +164,7 @@ def test_integrated_preserves_measurements_axes_source_content_and_privacy(tmp_p
     pd.testing.assert_series_equal(exported.obs['agent_leiden'], fixture.result.obs['leiden'], check_names=False)
     meta = exported.uns[delivery.EXPORT_KEY]
     assert meta['format'] == 'integrated_annotated_h5ad'
+    assert bool(meta['clustering_present']) is True
     assert meta['fields']['obsm'] == {'X_pca': 'agent_X_pca', 'X_umap': 'X_umap'}
     assert meta['fields']['obs'] == {'leiden': 'agent_leiden'}
     assert meta['original_source_sha256'] == sha(fixture.source)
@@ -174,6 +176,35 @@ def test_integrated_preserves_measurements_axes_source_content_and_privacy(tmp_p
         key = 'X' if encoding == 'dense' else 'X/data'
         assert left[key].compression == right[key].compression == 'gzip'
     assert fixture.source.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize('integrated', [False, True])
+def test_unclustered_export_marker_describes_selected_result_not_original_labels(tmp_path, integrated):
+    fixture = export_fixture(tmp_path)
+    # A simulated label-free selected result; the original data still has its
+    # own unrelated Leiden column. Integration must not claim we computed it.
+    del fixture.result.obs['leiden']
+    del fixture.result.uns[science.PROVENANCE_KEY]['parameters']['clustering']
+    fixture.result.uns[science.PROVENANCE_KEY]['clustering_present'] = False
+    fixture.result.write_h5ad(fixture.native)
+    fixture.manifest['clustering_present'] = False
+    before = {p: p.read_bytes() for p in (fixture.source, fixture.native)}
+    exported, _ = download(artifact_for(fixture, integrated=integrated))
+    metadata = exported.uns[delivery.EXPORT_KEY]
+    assert bool(metadata['clustering_present']) is False
+    assert 'clustering' not in metadata['methods']
+    assert metadata['source_sha256'] == sha(fixture.native)
+    assert exported.obs_names.equals(fixture.result.obs_names)
+    assert 'agent_leiden' not in exported.obs
+    if integrated:
+        pd.testing.assert_series_equal(exported.obs['leiden'], fixture.original.obs['leiden'])
+        assert metadata['fields']['obs'] == {}
+    else:
+        assert 'leiden' not in exported.obs and exported.X is None
+    for key in ('X_pca', 'X_umap'):
+        destination = metadata['fields']['obsm'][key] if integrated else key
+        np.testing.assert_array_equal(exported.obsm[destination], fixture.result.obsm[key])
+    assert all(p.read_bytes() == value for p, value in before.items())
 
 
 def test_legacy_anndata_category_references_are_rebound_to_the_export(tmp_path):

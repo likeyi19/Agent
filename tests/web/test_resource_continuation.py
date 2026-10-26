@@ -115,14 +115,14 @@ def test_resource_answer_rejects_changed_scope(fragment_source_factory, tmp_path
             assert client.post('/api/v1/sessions/analysis/turns', json=body).status_code == 409
         elif problem != 'changed_catalog':
             result = execute(client, body)
-            assert result['status'] == 'clarification', (result, backend.errors)
-            assert result['response']['clarification']['reason'] == 'invalid_prerequisite'
+            assert result['status'] == 'failed', (result, backend.errors)
+            assert result['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
     if problem == 'changed_catalog':
         changed = replace(first_choice, label='Changed reviewed definition')
         with TestClient(create_app(backend.service, uploads=backend.uploads, input_sets=(changed, other_choice))) as client:
             result = execute(client, body)
-            assert result['status'] == 'clarification'
-            assert result['response']['clarification']['reason'] == 'invalid_prerequisite'
+            assert result['status'] == 'failed'
+            assert result['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
     state = backend.service._application.sessions.load('analysis')
     assert not state.revisions and state.generation == 0
     assert not any(i.admitted and i.admitted.get('kind') == 'execute' for i in state.interactions)

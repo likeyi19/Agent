@@ -272,6 +272,8 @@ def test_raw_rejected_parameter_answer_cannot_follow_generation_navigation(sourc
     service, _, _ = interactive(source)
     with all_work() as counts:
         view = service.submit_turn('analysis', 'stale-answer', ANSWER, expected_generation=2)
-    assert view.response.kind == 'clarify' and view.response.status != 'activated'
+    assert view.status == 'failed'
+    assert view.response.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert view.run_id is None and view.revision_id is None
     assert not science(counts)
     assert old.sessions.load('analysis').generation == 2

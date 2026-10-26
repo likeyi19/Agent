@@ -207,7 +207,10 @@ def test_ordinary_resolution_change_reuses_neighbors_and_runs_real_leiden_umap(p
         view = facade.submit_turn('analysis', 'modify', MODIFICATION, expected_generation=1)
     assert view.status == 'succeeded', view.to_dict()
     assert view.response.kind == 'execute' and view.revision_id
-    assert 'not fulfilled' in view.response.text
+    # This fixture does not supply the multi-result explanation requested by
+    # current completion handling; scientific activation is still successful.
+    assert view.response.scientific['availability'] == 'unavailable'
+    assert 'explanation is unavailable' in view.response.text
     run = accepted_run(facade, 'modify')
     assert run.lifecycle_status is RunLifecycleStatus.SUCCEEDED
     assert tuple(step.tool_name for step in run.plan.steps) == ('cluster_cells', 'compute_cell_umap')
@@ -256,7 +259,8 @@ def test_ordinary_resolution_change_reuses_neighbors_and_runs_real_leiden_umap(p
     assert visualized.obs['leiden'].tolist() == clustered.obs['leiden'].tolist()
     assert visualized.obsm['X_umap'].shape == (32, 2) and np.isfinite(visualized.obsm['X_umap']).all()
     assert_preserved(before)
-    assert len(models) == 1 and len(models[0].calls) == 3
+    assert len(models) == 1 and len(models[0].calls) == 4
+    assert sum('dialogue_schema_version' in value for value, _, _ in models[0].calls) == 1
     for value, schema, prompt in models[0].calls:
         assert str(source.app.workspace_root) not in prompt
         assert source.run.run_id not in prompt

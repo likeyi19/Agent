@@ -51,6 +51,30 @@ first-result prerequisite advice preserves the pending task. An optional follow-
 explanation encountered a provider connection failure and was not retried; broad
 provider and post-result prose reliability remain unqualified.
 
+OPT-3B adds `inspect_scATAC_fragments` for basic, reference-independent structure
+inspection of plain/gzip/BGZF fragment files. It reports at most 10,000 observed
+records and explicit coverage, without preprocessing declarations. Full encoded
+file identity is checked even though decoded observations are bounded. Barcode
+strings are not called cells; optional TBI inspection checks its header and exact
+bytes, not correspondence with the source. This result supplies no canonical
+fragment authority or QC readiness.
+
+Qualified shared or Session-private QC references now expose their exact pinned
+parent bundles to the existing fragments and BAM entrances. This reuses existing
+qualification and source checks; loose files, unrelated Sessions and a genome
+alone do not become qualified preprocessing resources. FASTQ still needs its
+whitelist and processing declarations. Annotation prerequisite messages identify
+actual conflicting fields, including measurement semantics that changing a
+reference cannot repair. The [OPT-3B report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/REPORT.md)
+separates software tests, authentic researcher verification and pilot boundaries. The
+[execution-clock closeout](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/clock-closeout/REPORT.md)
+records the persistence correction, preserved UTC observations and verification.
+The [final contract closeout](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/contract-closeout/REPORT.md)
+resolves the five remaining response/export cases, with 129 targeted checks
+passing. OPT-3B engineering is COMPLETE within its documented scope. Host
+synchronization still needs administrator follow-up before broader deployment;
+scientific input and model-qualification boundaries remain in force.
+
 [UA3.6.5-R5](docs/architecture/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects

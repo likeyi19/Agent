@@ -171,8 +171,10 @@ def test_explicit_current_h5ad_cannot_be_replaced_by_historical_candidate(resour
             expected_generation=0, utterance=OBJECTIVE, resource_id=current, attachment_ids=[current]))
         assert response.status_code == 202
         done = h.wait_turn(client, 'bad')
-        assert done['status'] == 'clarification' and not calls
-        assert app._application.sessions.load('upload').revisions == ()
+        assert done['status'] == 'failed' and not calls
+        assert done['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
+        state = app._application.sessions.load('upload')
+        assert not state.revisions and not state.turns
 
 
 @pytest.mark.parametrize('problem',['species','assembly','context','namespace','invalid_genes','invalid_markers','missing_provenance'])

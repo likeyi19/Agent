@@ -13,8 +13,6 @@ from .epizoo_handoff import EpiZooDeclaration
 
 
 _ANNOTATION_REFERENCE_MISSING = 'No compatible annotation resource is available. Upload a MAESTRO refgenes transcript/exon table and a marker-signature TSV (candidate, gene), with species, assembly, gene namespace, tissue applicability, publisher/derivation and release.'
-_LEGACY_ANNOTATION_REFERENCE_MISSING = (_ANNOTATION_REFERENCE_MISSING
-    + ' A compatible qualified genome chromosome scope must also be available.')
 
 @dataclass(frozen=True)
 class FastqMember:
@@ -471,7 +469,7 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
     from agent.tools.data import scatac_reference as reference
     if set(evidence) != {s.input_set_id for s in choices}:
         raise ValueError('Resource observations do not match the captured catalog.')
-    candidates, descriptions = [], {}
+    candidates, descriptions, remedies = [], {}, {}
     for choice in choices:
         raw = evidence[choice.input_set_id]
         if raw is None:
@@ -489,8 +487,18 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
                 and choice.inputs().get('annotation_method', EXTERNAL_PRIMARY) == EXTERNAL_PRIMARY
                 and all(getattr(declared, key) is None or getattr(declared, key) == raw.get(key)
                         for key in (('species', 'assembly') if scope_only else keys)))
+            conflicts = [key for key in (('species', 'assembly') if scope_only else keys)
+                         if getattr(declared, key) is not None and getattr(declared, key) != raw.get(key)]
+            if (not scope_only and (raw.get('schema') != EXTERNAL_SPEC or raw.get('method') != EXTERNAL_PRIMARY)
+                    or choice.inputs().get('annotation_method', EXTERNAL_PRIMARY) != EXTERNAL_PRIMARY):
+                conflicts.append('method')
             descriptions[choice.input_set_id] = ('compatible annotation reference' if compatible else
-                'its method, species, assembly, measurement or tissue context conflicts with this task')
+                'incompatible annotation ' + (', '.join(conflicts) if conflicts else 'resource contract'))
+            if 'measurement' in conflicts:
+                remedies[choice.input_set_id] = ''
+                descriptions[choice.input_set_id] += ('. Replacing a reference does not change the input measurement. '
+                    'Supply genuinely compatible counts or choose a method supporting the original measurement; '
+                    'do not relabel or reinterpret the counts')
             if compatible:
                 candidates.append(choice)
             continue
@@ -517,7 +525,8 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         if selected is None:
             return ['The selected resource is unavailable. Supply it or explicitly choose an alternative.'], None
         if selected not in candidates:
-            return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}. Supply a corrected resource or explicitly choose an alternative.'], None
+            remedy = remedies.get(selected.input_set_id, ' Supply a corrected resource or explicitly choose an alternative.')
+            return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}.' + remedy], None
         return [], selected
     if (not candidates and isinstance(declared, AnnotationDeclaration) and declared.uploaded is not None
             and declared.uploaded.gene_source is not None and declared.uploaded.signature_source is not None):
@@ -530,7 +539,8 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         return [], None
     if not candidates:
         if isinstance(declared, AnnotationDeclaration):
-            return [_ANNOTATION_REFERENCE_MISSING], None
+            details = '; '.join(f'{s.label}: {descriptions[s.input_set_id]}' for s in choices)
+            return [_ANNOTATION_REFERENCE_MISSING + (' Available resources: ' + details + '.' if details else '')], None
         needed = ('A qualified annotation gene/marker resource compatible with species, assembly, measurement and tissue context'
                   if isinstance(declared, AnnotationDeclaration) else 'A qualified fragments reference compatible with the declared species and assembly'
                   if isinstance(declared, FragmentsDeclaration) else 'A qualified BAM reference compatible with the declared species and assembly'
@@ -1191,7 +1201,13 @@ def validate(interaction, preceding):
         if missing:
             pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
                 field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
-            if (admitted['kind'] != 'clarify' or [(_ANNOTATION_REFERENCE_MISSING if field == 'annotation' and x == _LEGACY_ANNOTATION_REFERENCE_MISSING else x) for x in admitted['choices']] != missing
+            # Saved prerequisite prose is immutable presentation, not admission
+            # authority. Recompute whether prerequisites are missing and check
+            # all typed bindings below, without requiring historical wording to
+            # equal the current renderer (or keeping legacy message adapters).
+            choices = admitted['choices']
+            if (admitted['kind'] != 'clarify' or not isinstance(choices, list) or not choices
+                    or any(type(x) is not str or not x.strip() for x in choices)
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
                     or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')

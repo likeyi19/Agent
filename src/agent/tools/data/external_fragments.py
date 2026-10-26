@@ -8,22 +8,30 @@ from . import scatac_fragments_v2 as v2
 from ._fragments_common import MAX_SUPPORT, MAX_TOTAL, PACKAGING_POLICY, canonical, run_stage
 
 
-def parse_record(line, dictionary):
+def parse_record(line, dictionary=None):
+    """Read record structure; a supplied reference additionally owns contig bounds.
+
+    Without a reference this returns the observed contig name, never a qualified
+    reference rank. Structural inspection cannot establish coordinate eligibility.
+    """
     try:
         fields = line[:-1].decode('utf-8').split('\t')
         if len(fields) not in (5, 6):
             m.fail('EXTERNAL_FRAGMENTS_RECORD_INVALID')
         name, left, right, barcode, support = fields[:5]
         strand = fields[5] if len(fields) == 6 else ''
-        if (name not in dictionary or any(re.fullmatch('0|[1-9][0-9]{0,18}', n) is None for n in (left, right))
+        if ((dictionary is not None and name not in dictionary)
+                or dictionary is None and re.fullmatch('[!-~]{1,256}', name) is None
+                or any(re.fullmatch('0|[1-9][0-9]{0,18}', n) is None for n in (left, right))
                 or re.fullmatch('[!-~]{1,256}', barcode) is None
                 or re.fullmatch('[1-9][0-9]{0,19}', support) is None
                 or (len(fields) == 6 and strand not in ('+', '-', '.'))):
             m.fail('EXTERNAL_FRAGMENTS_RECORD_INVALID')
         left, right, support = int(left), int(right), int(support)
-        if not 0 <= left < right <= dictionary[name][1] or not 1 <= support <= MAX_SUPPORT:
+        if (not 0 <= left < right or dictionary is not None and right > dictionary[name][1]
+                or not 1 <= support <= MAX_SUPPORT):
             m.fail('EXTERNAL_FRAGMENTS_RECORD_INVALID')
-        return dictionary[name][0], left, right, barcode, strand, support, len(fields)
+        return (dictionary[name][0] if dictionary is not None else name), left, right, barcode, strand, support, len(fields)
     except (UnicodeError, ValueError) as exc:
         if isinstance(exc, m.ExternalFragmentsError):
             raise

@@ -143,8 +143,48 @@ advice is delivered without science or loss of pending intent. A confirmed accep
 parameter-evidence reader omission is fixed; saved historical failure text remains
 exact. An optional post-result prose request failed at provider connection before
 interpretation and was not retried. This is not universal provider/prose qualification.
-Seven completion attempts cost $0.490968 additional key usage. Changes remain
-uncommitted for review; OPT-3B/3C have not begun.
+Seven completion attempts cost $0.490968 additional key usage. OPT-3A was committed
+and pushed by the user at `0d1fbca1fffd9ee4894df92bd2f8b205cabc6525`.
+
+OPT-3B adds bounded `inspect_scATAC_fragments` through the existing Registry,
+source-role, verification and evidence owners (25 registered tools). Inspection
+uses the existing fragment parser without reference qualification and observes at
+most 10,000 records; full encoded identities remain pinned. Distinct barcode
+strings are not cells, and a TBI header never establishes source correspondence.
+Inspection publishes no canonical fragments or downstream scientific authority.
+Full adoption retains its existing reference and processing requirements.
+
+ScientificResourceLibrary and private resource discovery project the exact
+qualified QC parent into existing fragments/BAM InputSets. No new catalog,
+qualification protocol or persistent readiness state is introduced. Selected
+closure integrity, private Session scope and owner validation remain mandatory;
+FASTQ whitelist/history and annotation/model-specific semantics remain distinct.
+Annotation mismatch guidance identifies actual conflicting fields and does not
+recommend changing references to repair incompatible measurement semantics.
+Raw prerequisite replay validates typed bindings and missing requirements while
+preserving saved question prose; current English wording is not historical
+admission authority. The retired single-message wording adapter is removed.
+The [OPT-3B report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/REPORT.md)
+owns the original capability evidence and limitations. The subsequent
+[clock closeout](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/clock-closeout/REPORT.md)
+records the execution-persistence correction and final verification. RunState
+preserves actual timezone-aware UTC observations across clock corrections;
+existing CAS, transitions, trace sequence/prefix and scientific integrity own
+causality and publication. No historical timestamps are rewritten and rollback
+grants no retry authority. The three previously blocked nodes now pass, and a
+native verified DAG persists successfully across an actual host-clock reversal.
+The [final contract closeout](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/contract-closeout/REPORT.md)
+resolves the remaining response/export failures: response tests check accepted
+facts and effective thresholds; the shared export owner retains the public
+`clustering_present` marker from validated selected-result methods for compact
+and integrated H5AD. Original-data labels do not establish selected clustering.
+All 129 compact qualification cases pass, including the five formerly blocked
+cases and six earlier contract corrections, with complete restart assertions.
+OPT-3B engineering is COMPLETE within this bounded scope. Host synchronization
+still requires administrator follow-up before broader deployment; this is not
+unrestricted scientific or operational qualification. Existing capability and
+clock fixes are preserved. Changes remain unstaged and uncommitted; OPT-3C is
+not authorized by this record.
 
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output

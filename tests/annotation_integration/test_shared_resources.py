@@ -65,7 +65,12 @@ def test_library_compatibility_ambiguity_and_corruption(resources, tmp_path, mon
     declared = replace(u.h.declared(), species='human', assembly='hg38', measurement=u.h.c.EXTERNAL_SEMANTICS)
     assert u.handoff._resolve_resource(declared, (choice,), evidence)[1] == choice
     for key, value in [('species','mouse'), ('assembly','mm10'), ('context','unrelated tissue'), ('measurement','binary')]:
-        assert u.handoff._resolve_resource(replace(declared, **{key:value}), (choice,), evidence)[1] is None
+        questions, selected = u.handoff._resolve_resource(replace(declared, resource='resource.' + choice.input_set_id,
+            **{key:value}), (choice,), evidence)
+        assert selected is None and key in questions[0]
+        if key == 'measurement':
+            assert 'Replacing a reference does not change the input measurement' in questions[0]
+            assert 'Supply a corrected resource' not in questions[0]
     duplicate = replace(choice, input_set_id='another', execution_inputs=dict(choice.inputs(), annotation_spec_sha256='b'*64))
     assert u.handoff._resolve_resource(declared, (choice,duplicate), dict(evidence,another=evidence[choice.input_set_id]))[1] is None
     original = app.resources.library.path.read_bytes()
@@ -89,6 +94,54 @@ def test_qc_reference_reuses_existing_owner_across_task_roles(resources, tmp_pat
     library.check(entry)
     Path(entry['resource']['qc_reference_manifest_path']).write_text('corrupt')
     with pytest.raises(ValueError): library.check(entry)
+
+
+def test_qualified_qc_parent_offered_to_exact_fragment_and_bam_roles(resources, tmp_path, monkeypatch):
+    from agent.application import raw_handoff as handoff
+    from agent.tools.data import scatac_qc_reference as owner
+    library = shared.ScientificResourceLibrary(tmp_path/'library')
+    entry = library.install('qc', resources[-1].inputs(), label='Simulated QC', version='test',
+        provenance='Synthetic fixture', usage='Isolated test only')
+    monkeypatch.setattr(owner, 'reinspect_scatac_qc_reference_bundle_sources',
+        lambda *a: pytest.fail('Discovery reconstructed native science'))
+    choices = library.choices()
+    assert len(choices) == 3 and choices[0] == library.input_set(entry)
+    fragments, = handoff.resources(choices, 'fragments')
+    bam, = handoff.resources(choices, 'bam')
+    assert not handoff.resources(choices, 'fastq')  # No whitelist or inferred processing context.
+    assert fragments.inputs() == bam.inputs()
+    bundle = owner.load_scatac_qc_reference_bundle(entry['resource']['qc_reference_manifest_path'])[1]
+    assert fragments.inputs()['reference_bundle_sha256'] == bundle.parent_manifest.sha256
+    declared = handoff.FragmentsDeclaration(species='human', assembly='hg38')
+    evidence = handoff.resource_evidence(choices, 'fragments')
+    assert handoff._resolve_resource(declared, (fragments,), evidence)[1] == fragments
+    for declaration in (replace(declared, species='mouse', assembly='mm10'),
+                        replace(declared, species=None, assembly='mm10')):
+        assert handoff._resolve_resource(declaration, (fragments,), evidence)[1] is None
+    admission = LocalResourceAdmission(tmp_path/'catalog', approved_source_roots=(tmp_path,),
+        scientific_resource_root=library.root)
+    for choice in (fragments, bam):
+        assert shared.check_choice(admission, 'any-session', 'resource.' + choice.input_set_id) == choice.inputs()
+    Path(bundle.parent_manifest.path).write_text('substituted')
+    assert library.choices() == (library.input_set(entry),)
+    with pytest.raises(ValueError): shared.check_choice(admission, 'any', 'resource.' + fragments.input_set_id)
+
+
+def test_private_qc_parent_scope_and_loose_files_never_grant_reuse(resources, tmp_path):
+    admission = LocalResourceAdmission(tmp_path/'catalog', approved_source_roots=(tmp_path,))
+    assert shared.discover(admission, 'one') == ()  # Fixture files exist, but are not admitted.
+    record = shared.persist(admission, resources[-1].inputs(), session_id='one', origin_turn_id='first', label='Private QC')
+    choices = shared.discover(admission, 'one')
+    assert len(choices) == 3 and shared.discover(admission, 'two') == ()
+    for choice in choices[1:]:
+        assert shared.check_choice(admission, 'one', 'resource.' + choice.input_set_id) == choice.inputs()
+        with pytest.raises(ValueError): shared.check_choice(admission, 'two', 'resource.' + choice.input_set_id)
+    q = _serialize(record.reference_qualification)
+    from agent.tools.data.scatac_qc_reference import load_scatac_qc_reference_bundle
+    bundle = load_scatac_qc_reference_bundle(q['inputs']['qc_reference_manifest_path'])[1]
+    incomplete = [row for row in q['files'] if row['path'] != bundle.parent_manifest.path]
+    with pytest.raises(ValueError):
+        shared._raw_reference_choices(q['inputs'], 'a'*40, 'Forged closure', incomplete)
 
 
 def test_experimental_uploads_cannot_enter_library(tmp_path):

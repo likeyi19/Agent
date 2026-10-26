@@ -217,7 +217,9 @@ def test_v4_complete_catalog_size_and_explicit_null_index(source_factory):
     prompt = build_semantic_planning_prompt(query, registry)
     schema = build_semantic_wire_v4_schema(registry, query)
     size = len(prompt.encode()) + len(json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode())
-    assert size <= 34_000  # M14.7: full 23-tool audit catalog; scoped production payloads tested separately.
+    # OPT-3B: 25-tool full catalog. Committed OPT-3A already measured 38,468
+    # bytes; the old M14.7 23-tool ceiling was stale. Current size is 39,372.
+    assert size <= 40_000
     import sys
     sys.path.insert(0,str(Path(__file__).parents[1]/'unit/orchestration'))
     from catalog_expansion import expand_catalog

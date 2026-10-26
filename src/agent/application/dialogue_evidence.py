@@ -32,6 +32,7 @@ MAX_DETAIL_BYTES = 8 * 1024 * 1024
 # Reviewed scope explanations only, not new scores, biological interpretations,
 # or method implementations. Values and method parameters remain evidence facts.
 RESULT_LIMITATIONS = {
+    'inspect_scATAC_fragments': 'Structural observations cover only the inspected prefix unless reached_eof is true. Distinct barcode strings are not cells. Reference compatibility, processing history, index correspondence and QC readiness are not established.',
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
     'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
@@ -775,6 +776,8 @@ def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None
 def annotation_field_semantics(field):
     """Reviewed native summary meanings; no values or duplicate result authority."""
     return {
+        'contract_version': dict(kind='artifact_contract', label='Annotation contract',
+            description='Version of the accepted annotation publication contract.'),
         'n_groups': dict(kind='scientific_result', unit='input groups', label='Supplied annotation groups',
             description='Number of independently supplied groups annotated by the computational method; not proof of distinct biological cell types.'),
         'groups_omitted': dict(kind='summary_coverage', unit='group records',

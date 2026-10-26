@@ -29,23 +29,53 @@ def validate_review(value, files, *, legacy=True):
 def _qc_closure(path, sha):
     from agent.tools.data import scatac_qc_reference as owner
     from agent.tools.data._barcode_qc_binding import resource_qualification
-    from agent.tools.data._fragment_reference import load
     _, bundle, _ = owner.load_scatac_qc_reference_bundle(path, expected_sha256=sha)
     qualification = resource_qualification(bundle)
     # Existing human/mouse QC scope only; no new annotation parser or format.
     if bundle.contract_version != 'scatac-qc-reference-bundle.v1':
         _fail('This resource handoff supports the existing qualified human/mouse QC bundle.')
-    parent = load(bundle.parent_manifest.path, bundle.parent_manifest.sha256)
-    if (parent.reference_identity_sha256 != bundle.parent_reference_identity_sha256
-            or parent.genome.ordered_contig_sha256 != bundle.ordered_contig_sha256
-            or (parent.species, parent.target_assembly) != (bundle.species, bundle.assembly)):
-        _fail('QC scope lineage differs from its qualified parent genome.')
+    parent = _qc_parent(bundle)
     pins = {r.path: r.sha256 for r in (bundle.parent_manifest, bundle.annotation.resource,
         bundle.tss, bundle.lineage, parent.genome.fasta, parent.genome.fai, parent.ccre.bed)}
     pins[str(path)] = sha
     if parent.annotation is not None:
         pins[parent.annotation.resource.path] = parent.annotation.resource.sha256
     return bundle, pins, qualification
+
+
+def _qc_parent(bundle):
+    """Read exact owner lineage without reconstructing or qualifying references."""
+    from agent.tools.data._fragment_reference import load
+    parent = load(bundle.parent_manifest.path, bundle.parent_manifest.sha256)
+    if (parent.reference_identity_sha256 != bundle.parent_reference_identity_sha256
+            or parent.genome.ordered_contig_sha256 != bundle.ordered_contig_sha256
+            or (parent.species, parent.target_assembly) != (bundle.species, bundle.assembly)):
+        _fail('QC scope lineage differs from its qualified parent genome.')
+    return parent
+
+
+def _raw_reference_choices(inputs, identity, label, files):
+    """Project a qualified QC closure into existing operation-specific InputSets.
+
+    Only pinned manifests are read here. Selected-file integrity and scientific
+    consumption retain their existing owners; a loose QC file is not a catalog.
+    """
+    from .input_sets import ScientificInputSet
+    from agent.tools.data.scatac_qc_reference import load_scatac_qc_reference_bundle
+    _, bundle, _ = load_scatac_qc_reference_bundle(inputs['qc_reference_manifest_path'],
+        expected_sha256=inputs['qc_reference_manifest_sha256'])
+    if bundle.contract_version != 'scatac-qc-reference-bundle.v1':
+        return ()
+    if not any(row['path'] == bundle.parent_manifest.path
+               and row['sha256'] == bundle.parent_manifest.sha256 for row in files):
+        _fail('QC parent is outside the qualified resource closure.')
+    _qc_parent(bundle)
+    values = dict(inputs, reference_bundle_path=bundle.parent_manifest.path,
+                  reference_bundle_sha256=bundle.parent_manifest.sha256)
+    return tuple(ScientificInputSet(prefix + identity, label + suffix, values,
+                 **{role + '_companion': True}) for prefix, suffix, role in (
+        ('fref-', ' — fragments reference', 'fragments'),
+        ('bref-', ' — BAM reference', 'bam')))
 
 
 def persist(resources, inputs, *, session_id, origin_turn_id, label, qualification=None, publication_source=None):
@@ -172,7 +202,7 @@ def input_set(record):
 
 
 def discover(resources, session_id):
-    """Scope before projection; listing neither reads data nor repeats science."""
+    """Scope before projection; read pinned manifests, never data or native science."""
     from .reference_supplementation import _records
     choices = list(resources.library.choices()) if resources.library is not None else []
     for record in _records(resources):
@@ -185,12 +215,42 @@ def discover(resources, session_id):
         q = record.reference_qualification
         if q['scope'] != 'session' or q['session_id'] != session_id: continue
         choices.append(input_set(record))
+        if q['profile'] == 'scatac-qc-reference-bundle.v1':
+            try:
+                choices.extend(_raw_reference_choices(_serialize(q['inputs']), record.resource_id[6:46],
+                    record.label, q['files']))
+            except (ValueError, OSError):
+                pass  # An unavailable parent must not hide unrelated valid resources.
     return tuple(choices)
 
 
 def check_choice(resources, session_id, handle):
     """Verify only the selected reference before new scientific consumption."""
     import re
+    derived = re.fullmatch(r'resource\.(fref-|bref-)([0-9a-f]{56}|[0-9a-f]{40})', handle)
+    if derived is not None:
+        prefix, identity = derived.groups()
+        if resources is None: _fail('Scientific resource library unavailable.')
+        if len(identity) == 56:
+            if resources.library is None: _fail('Scientific resource library unavailable.')
+            entry = resources.library.get(identity)
+            if entry['kind'] != 'qc': _fail('Selected reference has no qualified QC parent.')
+            resources.library.check(entry)
+            choices = _raw_reference_choices(entry['resource'], identity, entry['label'], entry['files'])
+        else:
+            from .reference_supplementation import _records
+            matches = [r for r in _records(resources) if r.input_type == 'scientific_reference'
+                       and r.resource_id[6:46] == identity]
+            if len(matches) != 1: _fail('Selected private reference is unavailable.')
+            record = matches[0]
+            q = record.reference_qualification
+            if q['scope'] != 'session' or q['session_id'] != session_id:
+                _fail('Private reference is unavailable in this Session.')
+            values = check_record(resources, record)
+            if q['profile'] != 'scatac-qc-reference-bundle.v1':
+                _fail('Selected reference has no qualified QC parent.')
+            choices = _raw_reference_choices(values, identity, record.label, q['files'])
+        return next(s.inputs() for s in choices if s.input_set_id == prefix + identity)
     if handle.startswith('resource.library-'):
         if resources is None or resources.library is None: _fail('Scientific resource library unavailable.')
         entry = resources.library.get(handle.removeprefix('resource.library-'))
@@ -487,7 +547,16 @@ class ScientificResourceLibrary:
         return ScientificInputSet('library-' + entry['id'], entry['label'], inputs, h5ad_companion=kind == 'genome')
 
     def choices(self):
-        return tuple(self.input_set(r) for r in self.entries() if r['kind'] != 'epizoo')
+        result = []
+        for row in self.entries():
+            if row['kind'] == 'epizoo': continue
+            result.append(self.input_set(row))
+            if row['kind'] == 'qc':
+                try:
+                    result.extend(_raw_reference_choices(row['resource'], row['id'], row['label'], row['files']))
+                except (ValueError, OSError):
+                    pass  # Keep the original QC offer; do not offer an invalid parent.
+        return tuple(result)
 
     def models(self):
         from .local_resources import QualifiedEpiZooResource

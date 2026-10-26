@@ -135,7 +135,8 @@ def test_resource_substitution_and_stale_rejected(case,tmp_path,problem):
             assert response.status_code==409
         else:
             result=submit(client,'answer',ANSWER)
-            assert result['status']=='clarification',result
+            assert result['status']=='failed',result
+            assert result['error']['code']=='INTERACTIVE_INTENT_BINDING_INVALID'
     assert not facade._application.sessions.load('analysis').revisions
     assert not case[1]
 

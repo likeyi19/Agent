@@ -29,7 +29,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "Declared regulatory feature/count validation, replicate pseudobulk and replicate-aware differential accessibility."
     ),
     "raw_preprocessing": (
-        "Raw FASTQ/BAM intake, FASTQ/BAM/external fragments, barcode QC, explicit candidate selection, canonical cell-by-cCRE and qualified custom-region matrix construction."
+        "Raw FASTQ/BAM intake, bounded reference-independent fragment structure inspection, FASTQ/BAM/external fragment preprocessing, barcode QC, explicit candidate selection, canonical cell-by-cCRE and qualified custom-region matrix construction."
     ),
     "exact_matrix_adoption": (
         "Adopt an external exact canonical cell-by-cCRE matrix; ordinary cell-by-peak projection is unsupported."

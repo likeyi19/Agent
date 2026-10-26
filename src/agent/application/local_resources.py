@@ -32,6 +32,8 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('inspect_scATAC_fragments', 'source'),
+    ('inspect_scATAC_fragments', 'source_index'),
     ('inspect_scATAC', 'dataset'),
     ('epizoo_embed_cells', 'dataset'),
     ('pca_embed_cells', 'dataset'),

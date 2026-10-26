@@ -32,6 +32,22 @@ describes the operator JSON, admitted model profiles and named input sets;
 [R7](../architecture/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
 owns current interruption and recovery behavior.
 
+RunStore records timezone-aware wall-clock observations exactly, including clock
+corrections during execution or between processes. `created_at`, `updated_at`,
+step start/finish and trace timestamps are audit observations; their numerical
+order does not establish execution causality. Revision CAS, allowed lifecycle
+transitions, contiguous trace sequence and immutable trace prefixes retain that
+responsibility. Timestamp syntax, required fields, scientific verification and
+artifact identities remain checked. A clock correction grants no retry authority.
+
+The executor measures elapsed step durations with its existing monotonic clock;
+raw process-relative clock readings are not stored as cross-restart authority.
+Historical timestamps and accepted outputs are not rewritten. The existing
+record format is unchanged; reading new records containing a clock rollback
+requires the corrected reader. Accurate absolute UTC remains a host-operator
+responsibility. The [OPT-3B clock closeout](../../../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3b/clock-closeout/REPORT.md)
+records the host observations, software qualification and remaining limitations.
+
 Repository ownership follows the existing layout:
 
 | Location | Purpose |

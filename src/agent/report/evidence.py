@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
+from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
@@ -397,6 +398,9 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    'inspect_scATAC_fragments': _ToolProjection(
+        frozenset(_FRAGMENT_INSPECTION_FIELDS), _FRAGMENT_INSPECTION_FIELDS,
+        'inspect-fragment-structure-v1'),
     'pca_embed_cells': _ToolProjection(_PCA_FIELDS, _PCA_FACTS, 'pca-embed-cells-v1',
         (_ArtifactProjection('analysis_path','cell_pca_embedding_h5ad',
             ('centered_source_projection','eigenpair_residual','exact_source_identity'), digest_field='analysis_sha256'),)),

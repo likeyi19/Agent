@@ -2204,6 +2204,16 @@ def verify_step(
                     'Raw intake manifest failed source reconstruction.',
                     'RAW_INTAKE_VERIFICATION_FAILED',
                 )
+        elif step.tool_name == "inspect_scATAC_fragments":
+            from agent.tools.data.fragment_inspection import verify_result
+            try:
+                verify_result(resolved_arguments, plain_result)
+                passed = True
+            except Exception:
+                passed = False
+            checks.add('fragment_structure_observation', passed,
+                'Bounded fragment observations and exact source identity verified.',
+                'Fragment observation or source identity differs.', 'EXTERNAL_FRAGMENTS_INSPECTION_MISMATCH')
         elif step.tool_name == "inspect_scATAC":
             _verify_inspection(resolved_arguments, plain_result, checks)
         elif step.tool_name == "pca_embed_cells":

@@ -362,7 +362,13 @@ def _step_payload_is_clean(result: StepExecutionResult) -> bool:
 
 @dataclass(frozen=True)
 class PersistedRunState:
-    """Complete local checkpoint for one AgentRuntime run."""
+    """Complete local checkpoint for one AgentRuntime run.
+
+    Timezone-aware wall timestamps preserve actual clock observations, including
+    clock corrections across execution or restart. They do not establish causal
+    order: revisions, trace sequence/prefix and RunStore transitions own that.
+    Step elapsed durations are measured by the executor's monotonic clock.
+    """
 
     schema_version: int
     revision: int
@@ -407,10 +413,8 @@ class PersistedRunState:
             raise TypeError("`request` must be an AgentRequest.")
         if not isinstance(self.lifecycle_status, RunLifecycleStatus):
             raise TypeError("`lifecycle_status` must be a RunLifecycleStatus.")
-        created_at = _parse_aware_timestamp(self.created_at, "created_at")
-        updated_at = _parse_aware_timestamp(self.updated_at, "updated_at")
-        if updated_at < created_at:
-            raise ValueError("`updated_at` cannot precede `created_at`.")
+        _parse_aware_timestamp(self.created_at, "created_at")
+        _parse_aware_timestamp(self.updated_at, "updated_at")
         if self.run_id != f"{self.request.request_id}:run":
             raise ValueError("Persisted run identity does not match the request ID.")
 
@@ -497,12 +501,8 @@ class PersistedRunState:
             range(len(self.trace))
         ):
             raise ValueError("Persisted trace sequences must be contiguous from zero.")
-        previous: datetime | None = None
         for event in self.trace:
-            timestamp = _parse_aware_timestamp(event.timestamp, "trace.timestamp")
-            if previous is not None and timestamp < previous:
-                raise ValueError("Persisted trace timestamps must be nondecreasing.")
-            previous = timestamp
+            _parse_aware_timestamp(event.timestamp, "trace.timestamp")
 
     def _validate_steps(self) -> None:
         if not all(_step_payload_is_clean(result) for result in self.steps):
@@ -521,18 +521,10 @@ class PersistedRunState:
                 or result.verification.target_id != result.step_id
             ):
                 raise ValueError("Persisted step verification targets the wrong step.")
-            started = (
-                None
-                if result.started_at is None
-                else _parse_aware_timestamp(result.started_at, "step.started_at")
-            )
-            finished = (
-                None
-                if result.finished_at is None
-                else _parse_aware_timestamp(result.finished_at, "step.finished_at")
-            )
-            if started is not None and finished is not None and finished < started:
-                raise ValueError("Persisted step finish time precedes its start time.")
+            for field_name in ("started_at", "finished_at"):
+                value = getattr(result, field_name)
+                if value is not None:
+                    _parse_aware_timestamp(value, f"step.{field_name}")
             if (
                 self.recovery_policy_snapshot is not None
                 and result.attempt_count

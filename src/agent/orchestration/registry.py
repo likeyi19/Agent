@@ -3631,6 +3631,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .annotation_registry import annotation_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
+    from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3645,6 +3646,7 @@ def build_default_tool_registry() -> ToolRegistry:
         pseudobulk_spec,
         differential_accessibility_spec,
         raw_intake_spec,
+        fragment_inspection_tool_spec(),
         fragments_tool_spec(),
         external_fragments_tool_spec(),
         bam_fragments_tool_spec(),

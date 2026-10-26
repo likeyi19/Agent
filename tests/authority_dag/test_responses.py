@@ -69,8 +69,17 @@ def test_mini_conversation_restart_and_selection_only(source):
             interpreter=change('Set TSS to 7', target='matrix'))
     assert {k:v for k,v in counts(calls).items() if k != 'owner.verification_entry'} == {'production.selection':1, 'owner.selection':1, 'production.matrix':1, 'owner.matrix':1}
     assert calls['response.execution'] == 1 and calls['response.render'] == 0
-    assert result.facts and 'Minimum TSS enrichment is 7' in result.text, result
-    assert 'fragments' in result.text and 'QC' in result.text
+    assert result.status == 'activated' and result.facts, result
+    assert dict(result.facts.parameters)['min_tss_enrichment'] == 7
+    assert {w.role for w in result.facts.work if w.tool_attempts} == {'cell selection', 'matrix'}
+    assert {r.output.role for r in result.facts.reuse} == {'fragments', 'QC'}
+    assert result.facts.owner_reconstruction_calls is None
+    assert result.scientific.availability == 'deterministic'
+    assert result.scientific.support == 'supported' and result.scientific.claims
+    assert result.scientific.explanation in result.text
+    assert all(c.source['revision_id'] == result.facts.revision_id
+               and c.source['evidence_sha256'] and c.source['pointer']
+               for c in result.scientific.claims)
     print('M155 execution accounting', calls)
     preserved = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in app.workspace_root.rglob('*')
                  if p.is_file() and 'sessions' not in p.relative_to(app.workspace_root).parts}
@@ -133,7 +142,11 @@ assert not calls,calls
     assert {k:v for k,v in counts(selection_calls).items() if k != 'owner.verification_entry'} == {'production.selection':1,'owner.selection':1}
     assert selection_calls['response.execution'] == 1
     print('M155 selection-only',dict(selection_calls))
-    assert outcome.facts and 'no matrix' in outcome.text, outcome
+    assert outcome.status == 'activated' and outcome.facts, outcome
+    assert dict(outcome.facts.parameters)['min_tss_enrichment'] == 8
+    assert not any(o.role == 'matrix' for o in outcome.facts.outputs)
+    assert {w.role for w in outcome.facts.work if w.tool_attempts} == {'cell selection'}
+    assert outcome.scientific.support == 'supported'
     matrix = ask(app, 'absent', 'Which matrix is active?', 'matrix')
     assert 'no matrix' in matrix.text and not any(o.role == 'matrix' for o in matrix.facts.outputs)
     # Visit the sibling and return so previous-active differs from the parent.
@@ -275,7 +288,12 @@ def test_matrix_only_summary_and_navigation_accounting(source):
             interpreter=Interpreter(dict(kind='execute',base='current',operation='op.0',target='matrix',delta=None)))
     assert {k:v for k,v in counts(calls).items() if k != 'owner.verification_entry'} == {'production.matrix':1,'owner.matrix':1}
     assert len(planner.calls) == 1 and calls['response.execution'] == 1
-    assert outcome.facts and 'tool execution for matrix.' in outcome.text
+    assert outcome.status == 'activated' and outcome.facts
+    assert {w.role for w in outcome.facts.work if w.tool_attempts} == {'matrix'}
+    assert outcome.facts.owner_reconstruction_calls is None
+    assert outcome.scientific.availability == 'deterministic'
+    assert outcome.scientific.support == 'supported' and outcome.scientific.claims
+    assert outcome.scientific.explanation in outcome.text
     assert {r.output.role for r in outcome.facts.reuse} == {'fragments','cell selection'}
     assert {o.role for o in outcome.facts.retained_outputs} == {'fragments','cell selection','QC'}
     print('M155 matrix-only',dict(calls))

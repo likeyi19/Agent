@@ -9,7 +9,7 @@ from agent.application.local_resources import (
 )
 from agent.application.turn_decisions import (
     Execute, InputRole, IntentError, RequestRoles, RoleAnswer, RoleRequirement,
-    ScopedArgument, decision_schema, interpret, parse_decision,
+    ScopedArgument, ScalarChoiceArgument, decision_schema, interpret, parse_decision,
 )
 from agent.orchestration.registry import build_default_tool_registry
 
@@ -105,11 +105,19 @@ def test_role_answers_allow_partial_associations_or_an_exact_scientific_declarat
     dict(roles=[dict(tool='evaluate_cell_clustering', port='analysis', source='source.16')]),
     dict(roles=roles(), required_roles=requirements()),
     dict(arguments=[dict(tool='epizoo_embed_cells', argument='species', literal='mouse',
-                         start=0, end=5, value='mouse')]),
+                         start=0, end=5, value={'untrusted': 'mouse'})]),
 ])
 def test_role_answer_has_no_arbitrary_values_or_source_identity_wire(changes):
     with pytest.raises(IntentError, match='invalid_decision'):
         parse_decision(wire(dict(kind='answer_roles', pending='@roles', roles=roles()[:1]) | changes))
+
+
+def test_role_answer_retains_reviewed_scalar_choice_wire():
+    declaration = dict(tool='epizoo_embed_cells', argument='species', literal='mouse',
+                       start=0, end=5, value='mouse')
+    decision = parse_decision(wire(dict(kind='answer_roles', pending='@roles',
+        roles=roles()[:1], arguments=[declaration])))
+    assert decision.arguments == (ScalarChoiceArgument(**declaration),)
 
 
 def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
@@ -133,11 +141,12 @@ def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
     ('evaluate_cell_clustering', {'analysis', 'ground_truth_dataset'}),
 ])
 def test_absent_files_are_registry_requirements_not_language_rules(tool, ports):
-    from dataclasses import dataclass
+    from dataclasses import dataclass, field
     from agent.application.dialogue_execution import missing_file_request
     @dataclass
     class Capture:
         submission: dict
+        snapshot: dict = field(default_factory=dict)
     registry = build_default_tool_registry()
     decision = parse_decision(wire(dict(kind='execute_plan', target=tool)))
     interaction = Capture(submission=dict(execution_inputs={}))
@@ -346,8 +355,8 @@ def test_role_request_cannot_bypass_existing_candidate_selection_guard(tmp_path,
     app, _, group, executor, calls, _ = transfer_continuation_harness(tmp_path)
     result = submit(app, group=group)
     assert seen == [('first', OBJECTIVE, None)]
-    assert result['response']['kind'] == 'clarify'
-    assert result['response']['clarification']['reason'] == 'unsupported_intent'
+    assert result['status'] == 'failed'
+    assert result['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
     state = app._application.sessions.load('session')
     assert state.interactions[-1].prerequisite is None
     assert all(turn.request_id is None and turn.run_id is None for turn in state.turns)

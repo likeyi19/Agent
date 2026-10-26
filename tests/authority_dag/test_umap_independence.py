@@ -122,7 +122,16 @@ def test_accepted_graph_umap_evidence_download_and_recovery(processed_source, mo
         exported = read_elem(handle)
     assert exported.obs_names.equals(artifact.obs_names)
     assert ('leiden' in exported.obs) is clustered
-    assert bool(exported.uns['agent_scientific_export'].get('clustering_present', True)) is clustered
+    metadata = exported.uns['agent_scientific_export']
+    assert bool(metadata['clustering_present']) is clustered
+    assert metadata['contract'] == export.contract
+    assert metadata['source_sha256'] == step.result['analysis_sha256']
+    assert metadata['methods']['embedding']['representation'] == 'X_epizoo'
+    assert metadata['methods']['embedding']['embedding_dim'] == 512
+    assert ('clustering' in metadata['methods']) is clustered
+    assert metadata['methods']['umap']['parameters']['n_components'] == 2
+    for key in ('revision_id', 'run_id', 'step_id', 'accepted_step_sha256'):
+        assert metadata['accepted_result'][key] == export.manifest['provenance'][key]
     if clustered:
         assert exported.obs['leiden'].equals(artifact.obs['leiden'])
     for key in ('X_epizoo', 'X_umap'):

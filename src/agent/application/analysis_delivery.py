@@ -257,6 +257,9 @@ def _metadata(manifest, methods, source_sha256, *, integrated=False):
         scope=('Original supplied scientific data with selected accepted cell analysis; no scientific transformation.'
                if integrated else 'Selected cell identities, assignments and coordinates; X=None and no original features.'),
         source_sha256=source_sha256, stage=manifest.get('stage', 'umap'), methods=methods,
+        # Describe the selected, validated result, not any original-data labels
+        # preserved by an integrated export. Keep the public label-free marker.
+        clustering_present='clustering' in methods,
         accepted_result=manifest.get('provenance', {}),
         authority_scope='Delivery derivative; does not issue scientific authority.',
         omitted_information='Derived neighbor graphs and PCA loadings/fit arrays; private source locators. '

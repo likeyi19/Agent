@@ -39,6 +39,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "build_replicate_pseudobulk",
         "run_replicate_differential_accessibility",
         "inspect_raw_scATAC",
+        "inspect_scATAC_fragments",
         "prepare_scATAC_fragments",
         "import_scATAC_fragments",
         "prepare_scATAC_bam_fragments",
@@ -297,6 +298,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
     } == {
         "inspect_scATAC": "inspect-scatac-v2",
         "inspect_raw_scATAC": "inspect-raw-scatac-v1",
+        "inspect_scATAC_fragments": "inspect-fragment-structure-v1",
         "prepare_scATAC_fragments": "prepare-scatac-fragments-fastq-v2",
         "import_scATAC_fragments": "import-scatac-fragments-external-v1",
         "prepare_scATAC_bam_fragments": "prepare-scatac-fragments-bam-v1",

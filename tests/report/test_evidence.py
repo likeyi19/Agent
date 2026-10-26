@@ -1037,6 +1037,7 @@ def test_production_registry_membership_includes_raw_intake_after_milestone10_4(
         "build_replicate_pseudobulk",
         "run_replicate_differential_accessibility",
         "inspect_raw_scATAC",
+        "inspect_scATAC_fragments",
         "prepare_scATAC_fragments",
         "import_scATAC_fragments",
         "prepare_scATAC_bam_fragments",

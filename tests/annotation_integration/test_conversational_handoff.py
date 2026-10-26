@@ -147,7 +147,7 @@ def test_single_h5ad_browser_wire_uses_same_handoff(external_case,tmp_path):
         first=wait_turn(client,'first')
         assert first['status']=='clarification',first
         assert 'supplied_groups' in first['response']['text']
-        assert prompts[0]['dialogue']['annotation_sources'][0]['source']=='source.0'
+        assert prompts[0]['dialogue']['selected_sources'][0]['source']=='source.0'
         done=send(client,'reply','Use the independent simulated clustering "supplied_groups".')
         assert done['status']=='succeeded',done
         assert len(calls)==1
@@ -351,9 +351,11 @@ def test_unoffered_source_fails_before_observation(external_case,tmp_path,monkey
     with TestClient(web) as client:
         source=stage(client,args)
         result=send(client,'first',OBJECTIVE.replace('Use X','Use "X"'),[source])
-        assert result['status']=='clarification',result
-        assert result['response']['clarification']['reason']=='invalid_decision'
-        assert not calls and not app._application.sessions.load('upload').revisions
+        # OPT-3A distinguishes invalid internal bindings from user clarifications.
+        assert result['status']=='failed',result
+        assert result['error']['code']=='INTERACTIVE_APPLICATION_FAILED'
+        state = app._application.sessions.load('upload')
+        assert not calls and not state.revisions and not state.turns
 
 
 def test_pending_annotation_correction_preserves_source_and_history(external_case, tmp_path, monkeypatch):
@@ -408,12 +410,14 @@ def test_annotation_corrections_cannot_replace_sources_or_source_metadata():
     previous = handoff.AnnotationDeclaration(source='source.0', groups_source='source.1',
         species='human', assembly='hg38', measurement='tfidf', context='blood')
     corrected = handoff.merge(previous, handoff.AnnotationDeclaration(measurement=c.EXTERNAL_SEMANTICS),
-        annotation_corrections=True)
+        pending=True)
     assert corrected.source == previous.source and corrected.groups_source == previous.groups_source
     for key in ('source', 'groups_source'):
-        with pytest.raises(ValueError, match='cannot be replaced'):
+        from agent.application.turn_decisions import IntentError
+        with pytest.raises(IntentError, match='invalid_prerequisite') as error:
             handoff.merge(previous, handoff.AnnotationDeclaration(**{key: 'source.2'}),
-                annotation_corrections=True)
+                pending=True)
+        assert error.value.diagnostic_reason == 'captured_' + key + '_changed'
     # Metadata merging remains strict even after a typed correction.
     from types import SimpleNamespace
     observation = dict(source_sha256='a'*64, declarations={'measurement': 'tfidf'},

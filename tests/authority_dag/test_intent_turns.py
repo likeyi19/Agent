@@ -291,7 +291,10 @@ def test_failures_and_idempotence_preserve_active_state(source,monkeypatch):
         def complete(self,**kwargs): return '{bad json'
     with all_work() as work:
         result=app.sessions.respond('analysis','invalid','Set TSS to 7',interpreter=Invalid())
-    assert result.kind=='clarify' and not work and not planner.calls
+    assert result.kind == 'execute' and result.status == 'failed'
+    assert result.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert not work and not planner.calls
+    assert app.sessions.load('analysis').generation == baseline.generation
     from agent.tools.data import _cell_selection_production
     with monkeypatch.context() as patch:
         def fail(*args,**kwargs): raise ValueError('test production failure')

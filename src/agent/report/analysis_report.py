@@ -14,6 +14,7 @@ import tempfile
 from typing import Literal, Mapping, Sequence, TypedDict
 
 from agent.orchestration.registry import ToolRegistry
+from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.schemas import (
     AgentError,
     AgentRunResult,
@@ -567,6 +568,7 @@ _ADAPTATION_REPORT_FIELDS = (*_ADAPTATION_REPORT_FACTS, "completed_step", "purpo
 from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    'inspect_scATAC_fragments': _FRAGMENT_INSPECTION_FIELDS,
     'pca_embed_cells': ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
                        'parameters','software_versions','finite','cell_order_preserved','backend'),
     "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
@@ -779,6 +781,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    'inspect_scATAC_fragments': 'Bounded fragment structure inspection',
     'pca_embed_cells': 'Centered PCA representation',
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
@@ -808,6 +811,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    **{k: k.replace('_', ' ').capitalize() for k in _FRAGMENT_INSPECTION_FIELDS},
     'software_versions': 'Scientific software versions',
     'method': 'Embedding method', 'representation': 'Embedding representation',
     'parameters': 'Applied PCA parameters', 'embedding_method': 'Embedding method',
@@ -1036,6 +1040,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
     ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
+    ('fragment_structure', 'Bounded fragment structure', frozenset({'inspect_scATAC_fragments'})),
     ("dataset", "Dataset", frozenset({"inspect_scATAC"})),
     (
         "epizoo_representation",
@@ -1080,6 +1085,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
     'pca_embed_cells': ('method','representation','parameters','software_versions'),
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
@@ -1680,6 +1686,7 @@ def _render_summary(
 ) -> list[str]:
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
+        'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
         "annotate_scATAC_cell_types": "Primary marker-based cell-type annotation and annotated H5AD published",
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",

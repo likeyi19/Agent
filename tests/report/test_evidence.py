@@ -1046,6 +1046,7 @@ def test_production_registry_membership_includes_raw_intake_after_milestone10_4(
         "build_scATAC_cell_by_ccre",
         "adopt_scATAC_cell_by_ccre",
         "annotate_scATAC_cell_types",
+        "corroborate_cell_type_annotation",
         "adopt_scATAC_cell_by_features",
         "adapt_epizoo_species",
         "build_scATAC_cell_by_features",

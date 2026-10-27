@@ -20,6 +20,7 @@ from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from agent.tools.analysis.annotation_corroboration import RESULT_FIELDS as _CORROBORATION_FIELDS
 from .annotation import CONTRACT_FIELDS as _ANNOTATION_FIELDS, FACT_FIELDS as _ANNOTATION_FACT_FIELDS
 from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
 from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
@@ -149,6 +150,7 @@ _NEIGHBORS_FIELDS = frozenset(
 )
 _CLUSTERING_FIELDS = frozenset(
     {
+        "analysis_sha256",
         "status",
         "input_analysis_path",
         "analysis_path",
@@ -423,6 +425,15 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             ("accepted_backend_structural_proof", "exact_execution_receipt"), digest_field="manifest_sha256"),
          _ArtifactProjection("checkpoint_path", "epizoo_target_checkpoint",
             ("strict_checkpoint_compatibility", "full_artifact_sha256"), digest_field="checkpoint_sha256"))),
+    "corroborate_cell_type_annotation": _ToolProjection(
+        frozenset(_CORROBORATION_FIELDS),
+        tuple(k for k in _CORROBORATION_FIELDS
+              if k not in ('manifest_path', 'evidence_path')),
+        "corroborate-cell-type-annotation-v1",
+        (_ArtifactProjection("manifest_path", "cell_type_corroboration_manifest_json",
+            ("exact_native_annotation_binding", "qualified_reference_associations"), digest_field="manifest_sha256"),
+         _ArtifactProjection("evidence_path", "cell_type_reference_evidence_tsv",
+            ("exact_reference_records", "full_artifact_sha256"), digest_field="evidence_sha256"))),
     "annotate_scATAC_cell_types": _ToolProjection(
         _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "annotate-scatac-cell-types-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_type_annotation_manifest_json",

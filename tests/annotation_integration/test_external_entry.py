@@ -153,7 +153,7 @@ def external_case(case,tmp_path,monkeypatch):
         for key,values in scores.items():(output/(key+'.json')).write_text(json.dumps(values))
         sparse.save_npz(output/'rp.npz',sparse.csr_matrix([[1.,0.]]*a.n_obs))
         for name in ('markers-native.tsv.gz','markers-maestro-filtered.tsv','markers-signature-input.tsv','group-sizes.tsv'):
-            pd.DataFrame({'group':[rows[0][1]],'gene':['G'],'effect':[1.]}).to_csv(output/name,sep='\t',index=False)
+            pd.DataFrame({'cluster':[rows[0][1]],'gene':['G'],'avg_logFC':[1.]}).to_csv(output/name,sep='\t',index=False)
         (output/'genes.tsv').write_text('G\nH\n');(output/'cells.tsv').write_text('\n'.join(a.obs_names)+'\n')
         pd.DataFrame(rows,columns=['cell_id','group']).to_csv(output/'groups.tsv',sep='\t',index=False)
         (output/'marker-runtime.txt').write_text('synthetic native backend only\n')

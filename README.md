@@ -274,15 +274,22 @@ statistical cell calling and model inference from raw sequencing remain deferred
 
 Direct marker-based cell-type annotation is available through
 [`annotate_scATAC_cell_types`](docs/history/m13.5-agent-annotation-integration.md).
-It consumes an accepted canonical fragment-count matrix or declared human hg38
-Cell Ranger ATAC cut-site peak counts, exact independent groups, and pinned
+It consumes an accepted canonical fragment-count matrix or declared raw genomic
+region counts/binary accessibility, exact independent groups, and pinned
 tissue/context resources. It publishes primary labels in a new annotated H5AD
 while preserving source values and axes. Unresolved cells remain present.
 Groups may be supplied in `obs`, an ordered TSV, or an explicitly selected
-compatible accepted Leiden result. CellMarker corroboration is a reusable private
-component. EpiAgent-NT has qualified private scripts and preserved native results,
-but no registered Agent execution tool. Both comparisons remain optional and
-neither gates or changes primary annotation.
+compatible accepted Leiden result. Optional `corroborate_cell_type_annotation`
+uses qualified local CellMarker records through the same Registry, result and
+download owners, both after annotation and later without native recomputation.
+When qualified groups are absent, the Planner can compose the existing inspection,
+TF-IDF/PCA, neighbors and Leiden capabilities, then bind exact-source groups to
+annotation. Operator-deployed references are shared by discovery and execution.
+The [SWC-2 finalization](../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
+records the genuine unclustered PBMC browser journey, downloads and evidence reuse.
+See the [annotation guide](docs/guides/cell-type-annotation.md) for method-specific
+input support, reference deployment and evidence limits. EpiAgent-NT retains
+private scripts and native results, with no registered execution tool.
 
 ## Milestone 11 status
 
@@ -659,6 +666,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
+| Reference corroboration | `corroborate_cell_type_annotation`: exact accepted annotation and qualified CellMarker records; separate literature associations and downloadable evidence TSV |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
 | Neutral fragment-derived matrix | `build_scATAC_cell_by_features`: verified external fragments, exact caller-ordered cells and neutral features; independent fragment-count authority |
 | Species adaptation | `adapt_epizoo_species`: qualified neutral fragment counts, explicit strategy and pinned EpiZoo/SEAM/profile specification; publishes a target model |

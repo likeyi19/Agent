@@ -574,6 +574,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
+    "corroborate_cell_type_annotation": ("database", "database_release", "species", "context", "tissues", "n_groups", "n_records", "state_counts", "group_summary", "groups_omitted", "limitations"),
     "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
     "build_scATAC_cell_by_ccre": _MATRIX_REPORT_FIELDS,
@@ -789,6 +790,7 @@ _TOOL_TITLES: Mapping[str, str] = {
     "build_scATAC_cell_by_features": "Fragment-derived regulatory-feature matrix",
     "adopt_scATAC_cell_by_features": "Neutral regulatory-feature matrix adoption",
     "adapt_epizoo_species": "EpiZoo species adaptation",
+    "corroborate_cell_type_annotation": "Qualified cell-type reference evidence",
     "annotate_scATAC_cell_types": "Primary cell-type annotation",
     "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
@@ -811,6 +813,9 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "database_release": "Reference database release",
+    "database_table_sha256": "Reference table SHA-256",
+    "annotation_manifest_sha256": "Native annotation SHA-256",
     **{k: k.replace('_', ' ').capitalize() for k in _FRAGMENT_INSPECTION_FIELDS},
     'software_versions': 'Scientific software versions',
     'method': 'Embedding method', 'representation': 'Embedding representation',
@@ -1030,6 +1035,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
+    ("cell_type_reference_evidence", "Qualified reference corroboration", frozenset({"corroborate_cell_type_annotation"})),
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
@@ -1087,6 +1093,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
     'pca_embed_cells': ('method','representation','parameters','software_versions'),
+    "corroborate_cell_type_annotation": ("database_release", "database_table_sha256", "annotation_manifest_sha256"),
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "adopt_scATAC_cell_by_features": ("matrix_semantics", "reference_identity_sha256"),
@@ -1455,6 +1462,8 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
             "Trainer attempts and applied optimizer steps are distinct. Biological performance, convergence, cross-species accuracy and downstream embedding quality were not assessed.",
             "", _fact_ids_line(step.facts), ""))
         return lines
+    if step.tool_name == "corroborate_cell_type_annotation":
+        return ["### Qualified cell-type reference evidence", "", *[f"- {fact.field.replace('_', ' ')}: {_inline_code(fact.value)}" for fact in step.facts], "", _fact_ids_line(step.facts), ""]
     if step.tool_name == "annotate_scATAC_cell_types":
         lines=[f"### Primary cell-type annotation {occurrence}", "",
             "Primary marker-based annotation was propagated from exact groups to every canonical cell. "
@@ -1687,6 +1696,7 @@ def _render_summary(
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
         'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
+        "corroborate_cell_type_annotation": "Qualified local reference evidence published separately from native candidate annotations",
         "annotate_scATAC_cell_types": "Primary marker-based cell-type annotation and annotated H5AD published",
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",

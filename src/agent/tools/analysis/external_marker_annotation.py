@@ -23,10 +23,12 @@ def counts(a, slot):
     if slot == 'X': x = a.X
     elif slot.startswith('layers/') and slot[7:] in a.layers: x = a.layers[slot[7:]]
     else: raise ValueError('Select X or an existing layers/name count slot')
+    if isinstance(x, np.ndarray) and x.ndim == 2 and x.nbytes <= 512 * 1024**2:
+        x = sparse.csr_matrix(x)
     if not (sparse.isspmatrix_csr(x) or sparse.isspmatrix_csc(x)) or x.shape != a.shape:
         raise ValueError('Count slot must be cell-by-peak sparse CSR or CSC')
     x.check_format(full_check=True)
-    if not x.has_canonical_format or x.nnz > 100000000 or x.dtype.kind not in 'iuf':
+    if not x.has_canonical_format or x.nnz > 100000000 or x.dtype.kind not in 'biuf':
         raise ValueError('Canonical sparse raw counts within execution bounds required')
     v = x.data
     if not np.isfinite(v).all() or (v < 0).any() or (v > 2**53-1).any() or np.any(v != np.floor(v)):
@@ -53,7 +55,7 @@ def load_matrix(binding):
     peak_h5ad.inspect(path)
     a=ad.read_h5ad(path)
     _validate_matrix(a)
-    if binding['method'] != c.EXTERNAL_PRIMARY or binding['value_semantics'] != c.EXTERNAL_SEMANTICS:
+    if not c.direct(binding['method']) or c.input_problems(binding['species'], binding['assembly'], binding['value_semantics']):
         raise ValueError('Unsupported explicit method or measurement')
     if binding['ordered_cells_sha256'] != legacy.ordered_identity_sha256(a.obs_names.tolist()) or binding['ordered_features_sha256'] != legacy.ordered_identity_sha256(a.var_names.tolist()):
         raise ValueError('Peak H5AD axes changed')
@@ -67,6 +69,17 @@ def group_rows(a, spec):
         frame=pd.read_csv(legacy.checked_file(selected['path'],selected['sha256']),sep='\t',dtype=str,keep_default_na=False)
         if frame.columns.tolist()!=['cell_id','group']: raise ValueError('Grouping TSV requires exact cell_id/group columns')
         rows=list(frame.itertuples(index=False,name=None))
+    elif 'analysis_path' in selected:
+        from . import embedding_analysis as analysis
+        grouped = analysis._read_analysis(legacy.checked_file(selected['analysis_path'], selected['analysis_sha256']))
+        ids, _, _ = analysis._validate_neighbors_artifact(grouped, expected_stages=frozenset({'clustering'}))
+        analysis._validate_cluster_labels(grouped)
+        embedding = analysis._provenance(grouped).get('embedding', {})
+        if embedding.get('source_sha256') != selected['source_sha256']:
+            raise ValueError('Clustering must retain the exact original count-file identity')
+        if tuple(a.obs_names) != ids:
+            raise ValueError('Clustering and annotation require identical ordered cells')
+        rows = list(zip(ids, grouped.obs[analysis.LEIDEN_KEY].astype(str)))
     else:
         name=selected['obs_column']
         if name not in a.obs or a.obs[name].isna().any(): raise ValueError('Selected grouping column absent or contains missing values')
@@ -113,14 +126,18 @@ def prepare(args,spec):
     if path.stat().st_size>peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB limit')
     peak_h5ad.inspect(path)
     a=ad.read_h5ad(path); _validate_matrix(a); x=counts(a,args['count_slot'])
-    for key,expected in (('species',spec['species']),('assembly',spec['assembly']),
-                         ('measurement',spec['measurement']),('matrix_semantics',spec['measurement'])):
+    metadata = [('species',spec['species']),('assembly',spec['assembly'])]
+    if args['count_slot'] == a.uns.get('count_slot', 'X'):
+        metadata.extend((('measurement',spec['measurement']),('matrix_semantics',spec['measurement'])))
+    for key,expected in metadata:
         if key in a.uns and a.uns[key] != expected:
             raise ValueError('H5AD metadata conflicts with the explicit scientific declaration: '+key)
-    binding=dict(method=c.EXTERNAL_PRIMARY,source_path=str(path),source_sha256=args['source_sha256'],count_slot=args['count_slot'],
+    binding=dict(method=args['annotation_method'],source_path=str(path),source_sha256=args['source_sha256'],count_slot=args['count_slot'],
         species=spec['species'],assembly=spec['assembly'],value_semantics=spec['measurement'],
         ordered_cells_sha256=legacy.ordered_identity_sha256(a.obs_names.tolist()),
         ordered_features_sha256=legacy.ordered_identity_sha256(a.var_names.tolist()),logical_matrix_sha256=logical(x))
+    if spec['measurement'] == 'binary_accessibility' and np.any(x.data > 1):
+        raise ValueError('Declared binary accessibility contains values greater than one')
     coordinates(a.var_names.tolist(),spec); group_rows(a,spec)
     qualification=dict(contract='external-peak-annotation-input.v1',binding=binding,declarations=spec,
                        upstream_counting_history='declared_not_reconstructed')
@@ -212,7 +229,7 @@ def annotate_cell_groups(*,binding,specification,runtime,output_dir, _matrix=Non
     result=legacy.score_candidates(cells,groups,genes,list(f[['cluster','gene','avg_logFC']].itertuples(index=False,name=None)),legacy.read_signatures(signature['path']))
     for key,rows in result.items():(root/f'{key}.json').write_text(json.dumps(rows,sort_keys=True,allow_nan=False)+'\n')
     (root/'rp-genes-by-cells.mtx').unlink();legacy.checked_file(path,binding['source_sha256']);cancellation_checkpoint()
-    value=dict(schema='agent.peak-marker-annotation.v1',profile=c.profile({'annotation_method': c.EXTERNAL_PRIMARY}),binding=binding,inputs=specification,
+    value=dict(schema='agent.peak-marker-annotation.v1',profile=c.profile({'annotation_method': binding['method']}),binding=binding,inputs=specification,
         upstream_revision=legacy.REVISION,upstream_sources=legacy.SOURCES,adapter_sha256=legacy.sha256(__file__),
         r_adapter_sha256=legacy.sha256(script),inherited_policy_adapter_sha256=legacy.sha256(legacy.__file__),
         feature_participation=participation,

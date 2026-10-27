@@ -12,7 +12,7 @@ from .session_state import digest
 from .epizoo_handoff import EpiZooDeclaration
 
 
-_ANNOTATION_REFERENCE_MISSING = 'No compatible annotation resource is available. Upload a MAESTRO refgenes transcript/exon table and a marker-signature TSV (candidate, gene), with species, assembly, gene namespace, tissue applicability, publisher/derivation and release.'
+_ANNOTATION_REFERENCE_MISSING = 'No deployed annotation reference matches the declared biological context. Clarify the species, assembly or tissue applicability when needed; otherwise the operator must provision a compatible gene/signature reference in the scientific resource library.'
 
 @dataclass(frozen=True)
 class FastqMember:
@@ -165,9 +165,12 @@ class AnnotationDeclaration:
     resource: str | None = None
     uploaded: AnnotationUploads | None = None
     groups_result: str | None = None
+    grouping_strategy: str | None = None
 
     def __post_init__(self):
         from agent.tools.analysis.marker_annotation import identifier
+        if self.grouping_strategy not in (None, 'reuse_only', 'compute_if_needed'):
+            raise ValueError('Invalid grouping strategy.')
         if self.uploaded is not None and type(self.uploaded) is not AnnotationUploads:
             raise ValueError('Invalid uploaded resource declarations.')
         for name in ('source', 'groups_source'):
@@ -236,7 +239,7 @@ def declaration(value, field='fastq'):
             raise ValueError('Invalid EpiZoo declaration shape.')
         return EpiZooDeclaration(**value)
     if field == 'annotation':
-        if type(value) is not dict or set(value) - {'uploaded', 'groups_result'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded', 'groups_result'}:
+        if type(value) is not dict or set(value) - {'uploaded', 'groups_result', 'grouping_strategy'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded', 'groups_result', 'grouping_strategy'}:
             raise ValueError('Invalid annotation declaration shape.')
         value = dict(value)
         if value.get('uploaded') is not None:
@@ -341,6 +344,8 @@ def declaration_dict(value):
         result.pop('uploaded')
     if isinstance(value, AnnotationDeclaration) and value.groups_result is None:
         result.pop('groups_result')
+    if isinstance(value, AnnotationDeclaration) and value.grouping_strategy is None:
+        result.pop('grouping_strategy')
     return result
 
 
@@ -362,11 +367,15 @@ def schema(sources, resources, field='fastq', *, groups=()):
         return _object(dict(source=optional([s['source'] for s in sources]),
             groups_source=optional([s['source'] for s in sources]),
             groups_result=optional([g['handle'] for g in groups]) if groups else {'type': 'null'},
-            **{k: text for k in ('species', 'assembly', 'context', 'grouping_provenance')},
+            **{k: text for k in ('species', 'assembly', 'grouping_provenance')},
+            context=dict(text, description='Interpret the user-supported tissue meaning using an exact compatible offered context when available: '
+                + repr(sorted({r['context']['context'] for r in resources if r.get('context', {}).get('context')}))
+                + '. Do not append demographic or health qualifiers to an equivalent offered tissue identifier. Preserve genuinely different tissue/context as a declaration; never select by availability alone.'),
+            grouping_strategy=optional(('reuse_only', 'compute_if_needed')),
             measurement=dict(text, description=(
                 f'Use {EXTERNAL_SEMANTICS} for explicitly declared raw Cell Ranger ATAC '
                 'cut-site counts. Preserve other declared measurement types as text for '
-                'compatibility checking; unknown history is null. Integer values, filenames '
+                'compatibility checking. Use fragment_counts for declared region fragment overlaps, peak_counts for raw peak counts, binary_accessibility for binary region presence; unknown history is null. Integer values, filenames '
                 'and resource availability do not establish counting history.')),
             resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
             uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
@@ -424,7 +433,7 @@ def offers(input_sets, field='fastq'):
         for row, choice in zip(result, resources(input_sets, field), strict=True):
             spec = evidence[choice.input_set_id]
             if spec is not None:
-                context = {k: spec[k] for k in ('species', 'assembly', 'measurement', 'context') if k in spec}
+                context = {k: spec[k] for k in ('species', 'assembly', 'context') if k in spec}
                 if not _unsafe_fact_value(context):
                     row['context'] = context
     return result
@@ -476,21 +485,21 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
             descriptions[choice.input_set_id] = 'its pinned reference is unavailable or invalid'
             continue
         if isinstance(declared, AnnotationDeclaration):
-            from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC, EXTERNAL_PRIMARY
+            from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC, EXTERNAL_PRIMARY, direct
             uploaded = declared.uploaded
             scope_only = 'schema' not in raw and 'contig_scope' in raw
             permitted = {'annotation_spec_path', 'annotation_spec_sha256', 'annotation_method', 'count_slot',
                          'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}
-            keys = ('species', 'assembly') if uploaded is not None and uploaded.signature_source else ('species', 'assembly', 'measurement', 'context')
-            compatible = ((scope_only and uploaded is not None or raw.get('schema') == EXTERNAL_SPEC and raw.get('method') == EXTERNAL_PRIMARY)
+            keys = ('species', 'assembly') if uploaded is not None and uploaded.signature_source else ('species', 'assembly', 'context')
+            compatible = ((scope_only and uploaded is not None or raw.get('schema') == EXTERNAL_SPEC and direct(raw.get('method')))
                 and (scope_only or not set(choice.inputs()) - permitted)
-                and choice.inputs().get('annotation_method', EXTERNAL_PRIMARY) == EXTERNAL_PRIMARY
+                and direct(choice.inputs().get('annotation_method', EXTERNAL_PRIMARY))
                 and all(getattr(declared, key) is None or getattr(declared, key) == raw.get(key)
                         for key in (('species', 'assembly') if scope_only else keys)))
             conflicts = [key for key in (('species', 'assembly') if scope_only else keys)
                          if getattr(declared, key) is not None and getattr(declared, key) != raw.get(key)]
-            if (not scope_only and (raw.get('schema') != EXTERNAL_SPEC or raw.get('method') != EXTERNAL_PRIMARY)
-                    or choice.inputs().get('annotation_method', EXTERNAL_PRIMARY) != EXTERNAL_PRIMARY):
+            if (not scope_only and (raw.get('schema') != EXTERNAL_SPEC or not direct(raw.get('method')))
+                    or not direct(choice.inputs().get('annotation_method', EXTERNAL_PRIMARY))):
                 conflicts.append('method')
             descriptions[choice.input_set_id] = ('compatible annotation reference' if compatible else
                 'incompatible annotation ' + (', '.join(conflicts) if conflicts else 'resource contract'))
@@ -1310,23 +1319,25 @@ def _annotation_requirements(binding, declared, arguments, observation):
             or observation['source_sha256'] != member['source_sha256']):
         raise ValueError('Annotation observation is not bound to the captured source.')
     additions = {k: v for k, v in observation['declarations'].items() if k != 'count_slot'}
+    metadata_slot = observation['declarations'].get('count_slot', 'X')
+    selected_slot = values.get('count_slot', metadata_slot)
+    if observation.get('interface_version', 2) >= 3 and selected_slot != metadata_slot:
+        additions.pop('measurement', None)
     declared = merge(declared, AnnotationDeclaration(**additions))
     for key, question in (
             ('species', 'Specify the source species.'), ('assembly', 'Specify the genome assembly.'),
-            ('measurement', 'Confirm the raw measurement history; this method supports Cell Ranger ATAC cut-site counts.'),
+            ('measurement', 'Describe the actual region measurement: raw peak counts, fragment-overlap counts or binary accessibility.'),
             ('context', 'Specify the tissue context for the marker resource.')):
         if getattr(declared, key) is None:
             missing.append(question)
-    if any(value is not None and value != expected for value, expected in (
-            (declared.species, 'human'), (declared.assembly, 'hg38'), (declared.measurement, c.EXTERNAL_SEMANTICS))):
-        missing.append('This annotation method requires human hg38 raw Cell Ranger ATAC cut-site counts; the captured declarations are incompatible.')
+    missing.extend(c.input_problems(declared.species, declared.assembly, declared.measurement))
     if 'count_slot' not in values and 'count_slot' in observation['declarations']:
         values['count_slot'] = observation['declarations']['count_slot']
     # Historical clarification text is immutable. Only old captured observations
     # retain the retired mandatory-slot question; new owner defaults use X.
     if 'count_slot' not in values and 'interface_version' not in observation:
         missing.append('Identify the raw-count slot: X or layers/name.')
-    if observation.get('interface_version', 2) != 2:
+    if observation.get('interface_version', 2) not in (2, 3, 4):
         raise ValueError('Unsupported annotation handoff version.')
     if declared.groups_result is not None:
         offered = [r for r in observation.get('accepted_groups', ()) if r['handle'] == declared.groups_result]
@@ -1344,6 +1355,10 @@ def _annotation_requirements(binding, declared, arguments, observation):
             values['group_column'] = qualified[0]['column']
             if declared.grouping_provenance is None:
                 declared = replace(declared, grouping_provenance=qualified[0]['provenance'])
+        elif observation.get('interface_version') == 4 and not qualified and declared.grouping_strategy != 'reuse_only':
+            # Planning owns computing missing groups. This is a prerequisite
+            # declaration, never a claim that clustering has already succeeded.
+            declared = replace(declared, grouping_provenance='Exact-source independent clustering selected by the scientific plan')
         else:
             columns = observation['grouping_columns']
             missing.append('Choose the independently derived clustering column in obs'
@@ -1363,7 +1378,7 @@ def _annotation_requirements(binding, declared, arguments, observation):
 def _annotation_binding(candidates, declared, selected, arguments, pointer, projection=None):
     from .local_resources import RegisteredInputGroup, group_role_inputs
     from agent.orchestration.registry import build_default_tool_registry
-    from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY
+    from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY, EXTERNAL_SEMANTICS, REGION_PRIMARY
     roles = [dict(tool='annotate_scATAC_cell_types', port='source', source=declared.source)]
     if declared.groups_source is not None:
         roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=declared.groups_source))
@@ -1373,7 +1388,7 @@ def _annotation_binding(candidates, declared, selected, arguments, pointer, proj
             raise ValueError('Grouping projection differs from the explicit selection')
         roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=f'source.{len(members)}'))
         members.append(projection['member'])
-    values = dict(arguments, annotation_method=EXTERNAL_PRIMARY,
+    values = dict(arguments, annotation_method=EXTERNAL_PRIMARY if declared.measurement == EXTERNAL_SEMANTICS else REGION_PRIMARY,
                   annotation_spec_path=pointer['path'], annotation_spec_sha256=pointer['sha256'])
     bound = RegisteredInputGroup(members, values, roles,
         resource_choice=None if selected is None else selected.resource_choice(), attachment_candidates=True)

@@ -111,6 +111,7 @@ class ArtifactSemanticKind(str, Enum):
     EPIZOO_TARGET_MODEL = "epizoo_target_model"
     SCATAC_CELL_BY_CCRE = "scatac_cell_by_ccre"
     SCATAC_CELL_TYPE_ANNOTATION = "scatac_cell_type_annotation"
+    SCATAC_CELL_TYPE_CORROBORATION = "scatac_cell_type_corroboration"
     SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
     SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
@@ -165,6 +166,7 @@ class ArgumentPlanningSemantics:
     conditional_note: str | None = None
     default_when_omitted: object = inspect.Parameter.empty
     conversational_choice: bool = False
+    planner_choice: bool = False
     conversational_exact_string: bool = False
     observation_source: str | None = None
 
@@ -194,6 +196,9 @@ class ArgumentPlanningSemantics:
             raise TypeError("`scientific_parameter` must be a boolean.")
         if type(self.conversational_choice) is not bool:
             raise TypeError("`conversational_choice` must be a boolean.")
+        if type(self.planner_choice) is not bool or self.planner_choice and (
+                not self.scientific_parameter or self.accepted_artifact_kinds or self.observation_source):
+            raise ValueError('Planner choices require a registered scientific scalar.')
         if type(self.conversational_exact_string) is not bool:
             raise TypeError("`conversational_exact_string` must be a boolean.")
         if self.conversational_exact_string and (self.conversational_choice
@@ -1695,6 +1700,7 @@ def _planning_argument(
     artifacts: tuple[ArtifactSemanticKind, ...] = (),
     scientific_parameter: bool = False,
     conversational_choice: bool = False,
+    planner_choice: bool = False,
     conversational_exact_string: bool = False,
     observation_source: str | None = None,
     provenance: PlanningProvenanceRole | None = None,
@@ -1709,6 +1715,7 @@ def _planning_argument(
             accepted_artifact_kinds=artifacts,
             scientific_parameter=scientific_parameter,
             conversational_choice=conversational_choice,
+            planner_choice=planner_choice,
             conversational_exact_string=conversational_exact_string,
             observation_source=observation_source,
             provenance_role=provenance,
@@ -1844,6 +1851,7 @@ def build_default_tool_registry() -> ToolRegistry:
                         "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1"
                     ),
                     request_sources=(
+                        _semantic_request('source_path', _semantic_request_member('dataset', 'source_path')),
                         _semantic_request(
                             "input_path",
                             _semantic_request_member("dataset", "input_path"),
@@ -2082,7 +2090,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 source=composable, artifacts=(ArtifactSemanticKind.RAW_SCATAC,), provenance=branch),
             'output_dir': _planning_argument(path_types, 'Destination for the PCA publication.', source=direct)},
         optional_arguments={
-            'preprocessing': _planning_argument((str,), 'none (default): supplied X unchanged; tfidf_l2: sklearn smoothed document-frequency TF-IDF with L2 cell normalization before centered PCA. Requires nonnegative integer counts/binary accessibility and no empty cells; no filtering. Exploratory representation, not Signac LSI or biological qualification.', source=direct, scientific_parameter=True, choices=('none', 'tfidf_l2'), conversational_choice=True),
+            'preprocessing': _planning_argument((str,), 'none (default): supplied X unchanged; tfidf_l2: sklearn smoothed document-frequency TF-IDF with L2 cell normalization before centered PCA. For declared raw region counts/binary accessibility, choose tfidf_l2 for exploratory grouping unless the user selects another supported representation. Requires nonnegative integer counts/binary accessibility and no empty cells; no filtering. Not Signac LSI or biological qualification.', source=direct, scientific_parameter=True, choices=('none', 'tfidf_l2'), conversational_choice=True, planner_choice=True),
             'n_components': _planning_argument((int, type(None)), 'Optional component count; default min(50, min(shape)-1).',
                 source=direct, scientific_parameter=True),
             'random_seed': _planning_argument((int,), 'Reproducible PCA random seed (default 0).', source=direct, scientific_parameter=True),
@@ -2296,6 +2304,7 @@ def build_default_tool_registry() -> ToolRegistry:
         result_contract=ResultContract(
             name="CellClusteringToolResult",
             required_fields={
+                "analysis_sha256": (str,),
                 "status": (str,),
                 "input_analysis_path": (str,),
                 "analysis_path": (str,),
@@ -2322,6 +2331,8 @@ def build_default_tool_registry() -> ToolRegistry:
                     bindable=True,
                     provenance=branch,
                 ),
+                "analysis_sha256": _planning_result('Exact clustered analysis checksum.', bindable=True,
+                    artifact=ArtifactSemanticKind.CLUSTERED_ANALYSIS, provenance=branch),
             },
         ),
         exception_classifier=_classify_analysis_exception,
@@ -2362,7 +2373,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 SemanticProducerPortSpec(
                     "clustered_analysis",
                     "clustered_analysis.v1",
-                    (_semantic_member("analysis", "analysis_path"),),
+                    (_semantic_member("analysis", "analysis_path"), _semantic_member('sha256','analysis_sha256')),
                     lineage_from_port="analysis",
                 ),
                 SemanticProducerPortSpec(
@@ -3634,6 +3645,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .matrix_registry import matrix_tool_spec
     from .matrix_adoption_registry import matrix_adoption_tool_spec
     from .annotation_registry import annotation_tool_spec
+    from .corroboration_registry import tool_spec as corroboration_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
@@ -3660,6 +3672,7 @@ def build_default_tool_registry() -> ToolRegistry:
         matrix_tool_spec(),
         matrix_adoption_tool_spec(),
         annotation_tool_spec(),
+        corroboration_tool_spec(),
         *species_tool_specs(),
         fragment_feature_tool_spec(),
     )

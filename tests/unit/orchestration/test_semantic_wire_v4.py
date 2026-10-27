@@ -219,7 +219,7 @@ def test_schema_is_closed_generic_and_registry_request_driven(
             if registry.get(name).planning is not None
         )
     )
-    assert schema["$defs"]["input_name"]["enum"] == ("a_input", "z_input")
+    assert "a_input" not in _encoded(schema) and "z_input" not in _encoded(schema)
     serialized = _encoded(schema)
     assert "secret-z" not in serialized
     assert "/private/secret-a" not in serialized
@@ -289,12 +289,10 @@ def test_schema_without_request_inputs_omits_input_source_variant(
         registry, AgentRequest("no-inputs", "Use upstream sources.", {})
     )
 
-    assert "input_name" not in schema["$defs"]
-    variants = schema["$defs"]["v"]["anyOf"]
-    assert tuple(
-        schema["$defs"][source["$ref"].removeprefix("#/$defs/")]["properties"]["kind"]["enum"]
-        for source in variants
-    ) == (("step",), ("step_port",))
+    serialized = _encoded(schema)
+    assert '"input"' not in serialized
+    assert 'registered_choice' in serialized
+
 
 
 def test_schema_fails_if_planner_visible_tool_lacks_semantic_metadata(
@@ -856,11 +854,10 @@ def test_v4_representative_responses_remain_materially_smaller(
 
 
 def _target_schemas(schema):
-    return {
-        step["properties"]["tool"]["enum"][0]:
-        step["properties"]["sources"]["items"]["properties"]["target"]
-        for step in schema["$defs"]["step"]["anyOf"]
-    }
+    return {step["properties"]["tool"]["enum"][0]: {"enum": tuple(
+        name for item in step["properties"]["sources"]["items"].get("anyOf", ())
+        for name in item["properties"]["target"]["enum"])}
+        for step in schema["$defs"]["step"]["anyOf"]}
 
 
 def _accepts_target(schema, value):
@@ -876,10 +873,12 @@ def test_schema_correlates_every_source_kind_with_selected_tool_ports(registry) 
         if registry.get(name).planning is not None
     }
     assert set(targets) == set(expected)
-    candidates = set.union(*expected.values()) | {"invented", "dataset\n", "embedding\n"}
     for name, target in targets.items():
-        for candidate in candidates:
-            assert _accepts_target(target, candidate) is (candidate in expected[name])
+        assert set(target['enum']) <= expected[name]
+        assert not _accepts_target(target, 'invented')
+    assert 'reference_spec_path' not in targets['corroborate_cell_type_annotation']['enum']
+    assert 'preprocessing' in targets['pca_embed_cells']['enum']
+
 
 
 @pytest.mark.parametrize("tool_name", ("inspect_scATAC", "future_inspection"))
@@ -976,21 +975,33 @@ def test_schema_excludes_all_structured_input_values(registry) -> None:
 @pytest.mark.parametrize("inputs", ({}, {"input_path": "/private/data.h5ad"}))
 def test_source_variants_have_only_kind_as_enum_discriminator(registry, inputs) -> None:
     schema = build_semantic_wire_v4_schema(registry, AgentRequest("schema", "Plan.", inputs))
-    variants = [
-        schema["$defs"][ref["$ref"].removeprefix("#/$defs/")]
-        for ref in schema["$defs"]["v"]["anyOf"]
-    ]
-    assert all("target" not in variant["properties"] for variant in variants)
-    common = set.intersection(*(set(variant["properties"]) for variant in variants))
-    assert {
-        name for name in common
-        if all("enum" in variant["properties"][name] for variant in variants)
-    } == {"kind"}
-    for step in schema["$defs"]["step"]["anyOf"]:
-        source = step["properties"]["sources"]["items"]
-        assert source["additionalProperties"] is False
-        assert source["required"] == ("target", "source")
-        assert source["properties"]["source"] == {"$ref": "#/$defs/v"}
+    for step in schema['$defs']['step']['anyOf']:
+        for selector in step['properties']['sources']['items'].get('anyOf', ()):
+            assert selector['additionalProperties'] is False
+            assert selector['required'] == ('target', 'source')
+            variants = [schema['$defs'][v['$ref'].removeprefix('#/$defs/')]
+                if '$ref' in v else v for v in selector['properties']['source']['anyOf']]
+            assert all('target' not in v['properties'] for v in variants)
+            assert all(len(v['properties']['kind']['enum']) == 1 for v in variants)
+            assert len({v['properties']['kind']['enum'][0] for v in variants}) == len(variants)
+
+
+def test_source_schema_excludes_unrelated_resources_and_illegal_handoffs(registry):
+    schema = build_semantic_wire_v4_schema(registry, AgentRequest('request', 'Annotate', {
+        'source_path':'/private/source.h5ad', 'source_sha256':'a'*64,
+        'annotation_spec_path':'/private/maestro.json', 'annotation_spec_sha256':'b'*64}))
+    by_tool = {s['properties']['tool']['enum'][0]: s for s in schema['$defs']['step']['anyOf']}
+    def ports(tool):
+        return {s['properties']['target']['enum'][0]: s['properties']['source']['anyOf']
+            for s in by_tool[tool]['properties']['sources']['items']['anyOf']}
+    assert 'reference_spec_path' not in ports('corroborate_cell_type_annotation')
+    source = ports('annotate_scATAC_cell_types')['source']
+    assert len(source) == 1 and source[0]['properties']['kind']['enum'] == ('input',)
+    assert source[0]['properties']['input']['enum'] == ('source_path',)
+    assert all('$ref' in option or option['properties']['kind']['enum'] == ('step_port',)
+        for option in ports('pca_embed_cells')['dataset'])
+    clustering = ports('annotate_scATAC_cell_types')['clustering']
+    assert clustering[1]['properties']['source_port']['enum'] == ('clustered_analysis',)
 
 
 def _nested_payload(steps):

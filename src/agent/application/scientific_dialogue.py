@@ -358,7 +358,7 @@ def _load(sessions, session_id, target):
 
 def _subjects(view):
     # A thin selector over an existing reviewed field, not annotation inference.
-    if view.source.tool_name != 'annotate_scATAC_cell_types':
+    if view.source.tool_name not in ('annotate_scATAC_cell_types', 'corroborate_cell_type_annotation'):
         return {}, False
     facts = {f.field:f for f in view.facts}
     rows, omitted = facts.get('group_summary'), facts.get('groups_omitted')
@@ -612,6 +612,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
     comparison_fields = frozenset() if independent_counts else _comparison_fields(views[:2], targets[:2]) if comparing else None
     descriptive_fields = _descriptive_fields(views[:2]) if comparing and not independent_counts else frozenset()
     claims, meanings, labels, limitations = [], {}, [], []
+    automatic_detail_ids = set()
     association_delivered = False
     for index, (target, view) in enumerate(zip(targets, views)):
         claim_limit = (index + 1) * (MAX_CLAIMS // len(targets))
@@ -651,6 +652,11 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         from .dialogue_evidence import DetailRequest, detail_request
         selected = selected_detail if index < 2 else None
         request = detail_request(view, target['subject']) if selected is None else None
+        if request is not None and selected is None and len(targets) > 1:
+            # Share the automatic detail allowance across selected sources.
+            # Whole accepted summaries remain intact; explicit detail requests
+            # retain their own bound and published omission counts.
+            request = replace(request, limit=max(1, request.limit // len(targets)))
         if selected is not None:
             if index == 0 and selected_detail['section'] == 'category_association':
                 request = DetailRequest(**selected_detail,
@@ -748,6 +754,8 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                      evidence_sha256=view.source.evidence_sha256, artifact_name=fact.artifact_name,
                      artifact_sha256=fact.artifact_sha256, pointer=fact.source_pointer,
                      **({} if fact.derivation is None else dict(derivation=_serialize(fact.derivation))))))
+            if selected is None:
+                automatic_detail_ids.add(claims[-1].claim_id)
     from .dialogue_evidence import field_semantics
     public_claims = []
     for claim in claims:
@@ -837,6 +845,19 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 dict(presentation_turn_id=predecessor.turn_id), matching_targets=targets)
             if previous_recipe is not None and previous_recipe['status'] == 'available_for_preparation':
                 public.setdefault('delivery', {}).setdefault('exports', []).append(previous_recipe)
+    # Automatically included detail is optional; whole selected summaries and
+    # explicitly requested detail retain priority within the same byte bound.
+    if automatic_detail_ids and len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:
+        claims = [c for c in claims if c.claim_id not in automatic_detail_ids]
+        public['claims'] = [c for c in public['claims'] if c['claim_id'] not in automatic_detail_ids]
+        public['limitations'].append('Automatic supplementary detail was omitted from this bounded context; selected summaries remain intact. Specific detail may be requested separately.')
+        if not any(c.field.startswith('detail.') for c in claims):
+            public['scope'] = 'accepted_persisted_summary'
+        if comparing:
+            public['comparison']['pairs'] = [p for p in public['comparison']['pairs']
+                if not automatic_detail_ids.intersection((p['left'], p['right']))]
+            if 'comparison' in public.get('delivery', {}):
+                public['delivery']['comparison'] = _comparison_delivery(public, claims, selected_detail)
     # Optional presentation metadata must not crowd out selected scientific facts.
     # The figure and download bytes remain available through their own readers.
     if len(json.dumps(public, ensure_ascii=False).encode()) > MAX_CONTEXT_BYTES:

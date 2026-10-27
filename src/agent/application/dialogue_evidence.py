@@ -35,6 +35,7 @@ RESULT_LIMITATIONS = {
     'inspect_scATAC_fragments': 'Structural observations cover only the inspected prefix unless reached_eof is true. Distinct barcode strings are not cells. Reference compatibility, processing history, index correspondence and QC readiness are not established.',
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
+    'corroborate_cell_type_annotation': 'Reference evidence consists of local pinned literature marker associations. Labels remain native candidates; broad lineage is not subtype validation, missing evidence is not contradiction, and mixed associations are not calibrated confidence.',
     'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
     'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
@@ -557,7 +558,7 @@ def _project(sessions, state, revision, output, fields, detail):
     selected = tuple(sorted(set(facts) | set(parameters))) if fields is None else fields
     # Preserve the existing annotation coverage counter even for field-selected
     # access. No group lookup or annotation semantics are implemented here.
-    coverage = (fact('groups_omitted'),) if step.tool_name == 'annotate_scATAC_cell_types' else ()
+    coverage = (fact('groups_omitted'),) if step.tool_name in ('annotate_scATAC_cell_types', 'corroborate_cell_type_annotation') else ()
     result = DialogueEvidence(state.session_id, revision.revision_id, output.name, 'available',
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
@@ -592,6 +593,7 @@ def detail_sections(tool):
     """One section inventory for application answering and interactive clients."""
     from .result_reading import CATEGORICAL_TOOLS
     return ({'annotate_scATAC_cell_types': ('annotation_rationale',),
+             'corroborate_cell_type_annotation': ('reference_associations',),
              'compute_scATAC_qc': ('length_histogram',)}.get(tool, ())
             + (('categorical_fields', 'category_counts', 'category_association')
                if tool in CATEGORICAL_TOOLS else ()))
@@ -599,6 +601,11 @@ def detail_sections(tool):
 
 def detail_request(view, subject):
     """Reviewed result shapes only; no language/intent routing or scientific work."""
+    if view.source.tool_name == 'corroborate_cell_type_annotation':
+        # The accepted summary already contains per-group associations and cited
+        # record examples. Read full rows for an explicit group/detail request;
+        # duplicating them in every whole-result answer crowds out other science.
+        return None if subject is None else DetailRequest('reference_associations', subject)
     if view.source.tool_name == 'annotate_scATAC_cell_types':
         if subject is None:
             return DetailRequest('annotation_rationale')
@@ -611,6 +618,8 @@ def detail_request(view, subject):
 
 
 def _detail(sessions, step, request):
+    if request.section == 'reference_associations' and step.tool_name == 'corroborate_cell_type_annotation':
+        return _reference_detail(step, request)
     if request.section not in detail_sections(step.tool_name):
         raise _Unsupported('unsupported_detail_section')
     if request.section != 'annotation_rationale' and request.subject is not None:
@@ -743,6 +752,32 @@ def _detail(sessions, step, request):
     return tuple(facts)
 
 
+def _reference_detail(step, request):
+    """Read only accepted reference records; never query or repeat annotation."""
+    from agent.tools.analysis import annotation_corroboration as owner
+    if request.candidate is not None:
+        raise _Unsupported('unsupported_detail_candidate')
+    result=step.result
+    record=VerifiedArtifactAuthority(step.verification.artifact_authority).to_dict()
+    path=Path(result['manifest_path'])
+    manifest,sha=owner.load(path,result['manifest_sha256'])
+    if (record['artifact_contract']!=owner.CONTRACT or record['publication_path']!=str(path)
+            or record['manifest_sha256']!=sha or record['resources']['manifest_identity']!=manifest):
+        raise _Unavailable('detail_authority_binding_mismatch')
+    evidence_path=path.parent/'reference-evidence.json'
+    pin=_one([f for f in record['files'] if f['path']==str(evidence_path)])
+    evidence=owner.read(evidence_path,pin['sha256'],limit=MAX_DETAIL_BYTES)
+    if request.subject is not None and request.subject not in {g['group'] for g in evidence['groups']}:
+        raise _Unavailable('unknown_or_ambiguous_detail_subject')
+    selected=[(i,r) for i,r in enumerate(evidence['records']) if request.subject is None or r['group']==request.subject]
+    facts=[EvidenceFact('reference_association.'+str(n),'available',row,'/records/'+str(i),
+        artifact_name='reference-evidence.json',artifact_sha256=pin['sha256'])
+        for n,(i,row) in enumerate(selected[:request.limit])]
+    facts.append(EvidenceFact('reference_association.records_omitted','available',max(0,len(selected)-request.limit),
+        reason='presentation_coverage_count',artifact_name='reference-evidence.json',artifact_sha256=pin['sha256']))
+    return tuple(facts)
+
+
 def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None, detail=None):
     """Resolve an exact revision/output name; never search for a replacement.
 
@@ -854,6 +889,9 @@ def field_semantics(registry, tool, field):
         reviewed = annotation_field_semantics(field)
         if reviewed is not None:
             semantics.update(reviewed, description_source='reviewed_native_annotation_summary')
+    if tool == 'corroborate_cell_type_annotation' and (field == 'group_summary' or field.startswith('detail.reference_association.')):
+        semantics.update(kind='scientific_result', description_source='reviewed_reference_corroboration',
+            description='Exact native annotation linked to a qualified local CellMarker snapshot. group_summary separates candidate/native_score from mapped reference associations. corroborating means positive equivalent/broader associations; mixed means nonexclusive competing positive associations, not established contradiction. insufficient_evidence means no positive compatible mapped marker; unmapped means no qualified terminology correspondence. lower_rp_markers have negative native avg_logFC (lower regulatory potential), not lower rank, and provide no positive corroboration. Native scores are not probabilities; broad lineage does not validate subtype. Record examples and omitted counts describe bounded presentation, not all database evidence.')
     semantics.setdefault('kind', 'execution_parameter' if field in spec.optional_arguments
                          else 'unclassified_accepted_field')
     return semantics

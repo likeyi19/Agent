@@ -8,6 +8,24 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from .session_state import canonical, digest
 from .reference_supplementation import _fail
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_SCIENTIFIC_LIBRARY = ContextVar('scientific_resource_library', default=None)
+
+
+@contextmanager
+def scientific_resource_scope(library):
+    """Share the deployment library with scientific execution in this operation."""
+    token = _SCIENTIFIC_LIBRARY.set(library)
+    try:
+        yield
+    finally:
+        _SCIENTIFIC_LIBRARY.reset(token)
+
+
+def current_scientific_library():
+    return _SCIENTIFIC_LIBRARY.get()
 
 
 def redistribution_files(files):
@@ -303,7 +321,7 @@ class ScientificResourceLibrary:
         identities = set()
         for row in value['resources']:
             if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
-                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo')
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference')
                     or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
                     or row['id'] in identities):
                 _fail('Scientific resource identity is corrupt.')
@@ -350,6 +368,11 @@ class ScientificResourceLibrary:
                 pins[resource['contig_scope']['path']] = resource['contig_scope']['sha256']
             pins[str(target)] = digest(resource)
             qualifier = lambda: annotation_input.qualify_resources(resource)
+        elif kind == 'marker_reference':
+            from agent.tools.analysis.annotation_corroboration import reference
+            knowledge = resource['knowledge']
+            pins = {knowledge[k + '_path']: knowledge[k + '_sha256'] for k in ('snapshot', 'table')}
+            qualifier = lambda: reference(resource)
         elif kind == 'genome':
             from agent.tools.data import scatac_reference as r, regulatory_feature_reference as owner
             from agent.tools.data.chromap_reference_index import verify_fasta_fai
@@ -549,7 +572,7 @@ class ScientificResourceLibrary:
     def choices(self):
         result = []
         for row in self.entries():
-            if row['kind'] == 'epizoo': continue
+            if row['kind'] in ('epizoo', 'marker_reference'): continue
             result.append(self.input_set(row))
             if row['kind'] == 'qc':
                 try:

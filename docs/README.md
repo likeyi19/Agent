@@ -11,6 +11,11 @@ preprocessing, original-measurement preservation and interpretation limits.
 The [raw scATAC guide](guides/raw-scatac-processing.md) covers FASTQ/BAM prerequisites,
 large-file deployment, matrix semantics, downstream handoff and the separately
 recorded genuine FASTQ and BAM acceptance scopes.
+The [cell-type annotation guide](guides/cell-type-annotation.md) covers native
+MAESTRO region inputs, independent groups, optional CellMarker corroboration and
+the distinction between candidate predictions and reference evidence. The
+[SWC-2 finalization](../../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
+records automatic grouping prerequisites and genuine unclustered-H5AD acceptance.
 
 The documentation has three locations:
 

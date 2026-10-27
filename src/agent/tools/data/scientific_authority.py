@@ -166,6 +166,7 @@ def describe(kind, path, sha, context):
             dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
         owned.extend(root / name for name in value['sidecars'])
         if 'path' in spec['groups']: resources.append(spec['groups']['path'])
+        if 'analysis_path' in spec['groups']: resources.append(spec['groups']['analysis_path'])
         resources.extend([args['annotation_spec_path'],
                           spec['gene_resource']['path'], spec['signature_resource']['path']])
         runtime = annotation.backend_runtime()

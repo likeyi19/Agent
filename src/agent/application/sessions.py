@@ -50,6 +50,7 @@ class AnalysisSessions:
         from .turns import respond
         scoped = AnalysisSessions(self._application, self._store.root)
         scoped._store = self._store
+        scoped._reference_resources = reference_resources
         outcome = respond(scoped, session_id, turn_id, utterance, interpreter=interpreter,
                        expected_generation=expected_generation, answerer=answerer,
                        predecessor_turn_id=predecessor_turn_id, execution_inputs=execution_inputs,
@@ -366,7 +367,7 @@ class AnalysisSessions:
             try:
                 LocalResourceAdmission(self._application._workspace,
                     registry=self._application.registry).validate_result(
-                        submission, result.run_result.steps)
+                        submission, result.run_result.steps, plan=result.run_result.plan)
             except ResourceAdmissionError as exc:
                 from .interactive_schemas import PresentedResponse
                 presentation = PresentedResponse(kind='execute', status='failed',

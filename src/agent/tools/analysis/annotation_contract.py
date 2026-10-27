@@ -10,6 +10,22 @@ SPEC = 'scatac-annotation-inputs.v1'
 EXTERNAL_SPEC = 'scatac-annotation-peak-resources.v1'
 EXTERNAL_PRIMARY = 'maestro-enhanced-count-weighted-peaks.v1'
 EXTERNAL_SEMANTICS = 'cellranger-atac-cut-site-counts.v1'
+REGION_PRIMARY = 'maestro-enhanced-region-counts.v2'
+REGION_SEMANTICS = (EXTERNAL_SEMANTICS, 'fragment_counts', 'peak_counts', 'binary_accessibility')
+
+
+def direct(method):
+    return method in (EXTERNAL_PRIMARY, REGION_PRIMARY)
+
+
+def input_problems(species, assembly, measurement):
+    """Method-specific admission shared by the scientific owner and its handoff."""
+    problems = []
+    if species is not None and assembly is not None and (species, assembly) not in (('human', 'hg38'), ('mouse', 'mm10')):
+        problems.append('MAESTRO requires matching human hg38 or mouse mm10 gene annotations.')
+    if measurement is not None and measurement not in REGION_SEMANTICS:
+        problems.append('Enhanced RP requires raw region counts or binary accessibility with genomic intervals; transformed values or gene-activity scores cannot be interpreted as region counts. Supply an original measurement slot and its counting history.')
+    return problems
 RECOVERY_POLICY = 'annotate-scatac-cell-types-v1'
 PROFILE = dict(primary_profile=science.PROFILE, upstream_revision=science.REVISION,
                matrix_semantics=matrix.PROFILE.profile_id,
@@ -26,10 +42,14 @@ EXTERNAL_PROFILE = dict(PROFILE, primary_profile=EXTERNAL_PRIMARY,
     signature_scoring='signed_marker_sum_with_duplicate_signature_weighting',
     primary_policy='unique_positive_maximum;zero_unresolved;exact_positive_tie_ambiguous')
 EXTERNAL_PROFILE_SHA256 = digest(EXTERNAL_PROFILE)
+REGION_PROFILE = dict(EXTERNAL_PROFILE, primary_profile=REGION_PRIMARY,
+    matrix_semantics='source_bound_region_counts_or_binary;no_measurement_reinterpretation',
+    source='genomic_region_h5ad;counting_history_declared_not_reconstructed')
 COMPLETION = 'native_completion_exact_propagation_and_integrity.v2'
 ARGUMENTS = ('matrix_manifest_path', 'matrix_manifest_sha256', 'annotation_spec_path',
              'annotation_spec_sha256', 'output_dir')
 GROUP_ARGUMENTS = ('groups_path', 'groups_sha256')
+ANALYSIS_GROUP_ARGUMENTS = ('group_analysis_path', 'group_analysis_sha256')
 DIRECT_ARGUMENTS = ('source_path', 'source_sha256', 'annotation_method', 'count_slot', 'group_column')
 OBS_COLUMNS = ('annotation_group', 'primary_annotation', 'annotation_status')
 MAX_BYTES = 65536
@@ -57,12 +77,13 @@ def read_json(path, expected=None, *, limit=MAX_BYTES):
 
 def arguments(value):
     args = dict(value)
-    direct = args.get('annotation_method') == EXTERNAL_PRIMARY
-    if direct:
+    if direct(args.get('annotation_method')):
         args.setdefault('count_slot', 'X')
         expected = ('annotation_spec_path', 'annotation_spec_sha256', 'output_dir',
                     'source_path', 'source_sha256', 'annotation_method', 'count_slot')
-        matrix.shape(args, (*expected, *(GROUP_ARGUMENTS if 'groups_path' in args else ('group_column',))))
+        grouping = (GROUP_ARGUMENTS if 'groups_path' in args else ANALYSIS_GROUP_ARGUMENTS
+                    if 'group_analysis_path' in args else ('group_column',))
+        matrix.shape(args, (*expected, *grouping))
     else:
         matrix.shape(args, ARGUMENTS)
     for key in args:
@@ -92,10 +113,12 @@ def specification(path, sha):
         matrix.absolute_path(value['groups']['path']); matrix.sha(value['groups']['sha256'])
         science.checked_file(value['groups']['path'], value['groups']['sha256'])
     else:
-        if ((value['species'], value['assembly']) != ('human', 'hg38')
-                or value['method'] != EXTERNAL_PRIMARY or value['measurement'] != EXTERNAL_SEMANTICS
-                or value['coordinate_system'] != 'zero-based-half-open'):
-            raise ValueError('Only declared human hg38 Cell Ranger ATAC cut-site counts are qualified')
+        legacy = value['method'] == EXTERNAL_PRIMARY
+        if (not direct(value['method']) or value['coordinate_system'] != 'zero-based-half-open'
+                or input_problems(value['species'], value['assembly'], value['measurement'])
+                or legacy and ((value['species'], value['assembly']) != ('human', 'hg38')
+                               or value['measurement'] != EXTERNAL_SEMANTICS)):
+            raise ValueError('Incompatible Enhanced RP species, assembly or region measurement declaration')
         if 'contig_scope' in value:
             matrix.shape(value['contig_scope'], ('path', 'sha256'))
             matrix.absolute_path(value['contig_scope']['path']); matrix.sha(value['contig_scope']['sha256'])
@@ -114,15 +137,20 @@ def specification(path, sha):
 
 
 def resolved_specification(args):
-    """Bind a reusable reviewed resource choice to an explicitly supplied TSV."""
+    """Require complete execution semantics and bind the selected grouping."""
     value = specification(args['annotation_spec_path'], args['annotation_spec_sha256'])
     external = value['schema'] == EXTERNAL_SPEC
-    if external != (args.get('annotation_method') == EXTERNAL_PRIMARY):
+    if external != direct(args.get('annotation_method')) or external and value['method'] != args['annotation_method']:
         raise ValueError('Explicit annotation method and resource specification differ')
     if external:
+        if value['measurement'] not in REGION_SEMANTICS:
+            raise ValueError('Resolved annotation requires declared region measurement semantics')
         if 'groups_path' in args:
             science.checked_file(args['groups_path'], args['groups_sha256'])
             groups = dict(path=args['groups_path'], sha256=args['groups_sha256'])
+        elif 'group_analysis_path' in args:
+            groups = dict(analysis_path=args['group_analysis_path'],
+                          analysis_sha256=args['group_analysis_sha256'], source_sha256=args['source_sha256'])
         else:
             groups = dict(obs_column=args['group_column'])
         value = dict(value, groups=dict(groups, provenance=value['grouping_provenance']))
@@ -131,9 +159,9 @@ def resolved_specification(args):
 
 def profile(args, version=2):
     method = args.get('annotation_method', science.PROFILE)
-    if method not in (science.PROFILE, EXTERNAL_PRIMARY):
+    if method not in (science.PROFILE, EXTERNAL_PRIMARY, REGION_PRIMARY):
         raise ValueError('Unknown annotation method')
-    value = EXTERNAL_PROFILE if method == EXTERNAL_PRIMARY else PROFILE
+    value = REGION_PROFILE if method == REGION_PRIMARY else EXTERNAL_PROFILE if method == EXTERNAL_PRIMARY else PROFILE
     if version not in (1, 2):
         raise ValueError('Unsupported annotation verification version')
     return value if version == 1 else dict(value, verification=COMPLETION)
@@ -151,7 +179,7 @@ def verifier(version):
 
 
 def external(value):
-    return value['arguments'].get('annotation_method') == EXTERNAL_PRIMARY
+    return direct(value['arguments'].get('annotation_method'))
 
 
 def publication_files(context, paths, accepted=None):
@@ -172,7 +200,7 @@ def publication_files(context, paths, accepted=None):
 
 
 def backend(binding):
-    if binding.get('method') == EXTERNAL_PRIMARY:
+    if direct(binding.get('method')):
         from . import external_marker_annotation
         return external_marker_annotation
     return science
@@ -231,6 +259,6 @@ def component_arguments(args, spec, binding, output):
 
 
 def load_source(binding):
-    if binding.get('method') == EXTERNAL_PRIMARY:
+    if direct(binding.get('method')):
         return backend(binding).load_matrix(binding)
     return science.load_matrix(science.MatrixInput(**binding))

@@ -68,10 +68,11 @@ within the existing supported bounds before raw FASTQ UAT.
 | Species adaptation | Explicit source/SEAM bundles, backend configuration, target genome/features and method-specific mapping resources |
 | Differential accessibility | Explicit qualified edgeR runtime and the repository-controlled R scripts |
 
-The retained CellMarker source/table closure is an optional private corroboration
-resource. Its existing knowledge owner checks the table; it adds no public tool
-or library entry and is not a MAESTRO prerequisite. Source-use restrictions and
-the historical non-gating interpretation remain recorded with that reference.
+The retained CellMarker source/table closure is an optional corroboration
+resource. SWC-2 exposes it through the existing ScientificResourceLibrary and
+registered `corroborate_cell_type_annotation` operation; it is not a MAESTRO
+prerequisite. The [annotation guide](cell-type-annotation.md) records isolated
+deployment and source-use restrictions. Its non-gating interpretation is unchanged.
 
 The EpiZoo owner resolves `AGENT_EPIZOO_CHECKPOINT` and
 `AGENT_EPIZOO_RESOURCES_DIR` at scientific consumption. An omitted Python

@@ -35,7 +35,7 @@ def test_native_encodings_and_private_metadata_export(external_case):
         f['X/data'].attrs['units'] = 'raw cut-site counts'
     args['source_sha256'] = science.sha256(args['source_path'])
     observation = annotation_input.observe(args['source_path'], args['source_sha256'])
-    assert observation['interface_version'] == 2
+    assert observation['interface_version'] == 4
     result = owner.execute_annotation(args)
     assert len(calls) == 1
     from agent.application.annotation_delivery import create_annotation_export

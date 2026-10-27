@@ -342,6 +342,31 @@ def test_changed_evidence_is_reloaded_on_followup(app, monkeypatch):
     assert len(model.calls) == 1
 
 
+def test_context_omits_automatic_detail_but_preserves_whole_summary(app, monkeypatch):
+    from agent.application.dialogue_evidence import EvidenceFact
+    annotation(app)
+    app = forbid_work(app, monkeypatch)
+    result = ask(app, 'bounded-detail', 'Explain the annotation.', Model(question(), ['group_summary']))
+    assert result.status == 'answered'
+    admitted = dict(app.sessions.load('session').interactions[-1].admitted)
+    original = app.sessions.evidence
+    def evidence(*args, **kwargs):
+        view = original(*args, **kwargs)
+        if kwargs.get('detail') is not None:
+            return replace(view, status='available', detail=(EvidenceFact(
+                'candidate.0', 'available', {'markers': ['GENE'] * 6000},
+                '/candidate/0', artifact_name='candidate_evidence', artifact_sha256='a' * 64),))
+        return view
+    monkeypatch.setattr(app.sessions, 'evidence', evidence)
+    public, claims = sd.context(app.sessions, 'session', admitted)
+    assert len(next(c.value for c in claims if c.field == 'group_summary')) == 2
+    assert not any(c.field.startswith('detail.') for c in claims)
+    assert any('Automatic supplementary detail was omitted' in v for v in public['limitations'])
+    admitted['detail'] = dict(section='annotation_rationale', field=None, other_field=None, limit=8, offset=0)
+    with pytest.raises(IntentError, match='unavailable_context'):
+        sd.context(app.sessions, 'session', admitted)
+
+
 def test_retry_reuses_admitted_references_without_reinterpreting(app, monkeypatch):
     annotation(app)
     app = forbid_work(app,monkeypatch)

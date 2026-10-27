@@ -123,7 +123,7 @@ def _counts(groups, matrix):
 
 
 def _provenance(args, authority, participation=None, *, version=2):
-    if args.get('annotation_method') == c.EXTERNAL_PRIMARY:
+    if c.direct(args.get('annotation_method')):
         return dict(contract=c.CONTRACT, profile_sha256=c.profile_sha(args, version), source_path=args['source_path'],
                     source_sha256=args['source_sha256'], input_qualification_sha256=authority,
                     source_contract='external-peak-annotation-input.v1',
@@ -186,7 +186,7 @@ def _verify_derivative(path, binding, cells, args, authority, participation=None
     if original is None:
         original, _ = c.load_source(binding)
     derived = ad.read_h5ad(path)
-    direct = binding.get('method') == c.EXTERNAL_PRIMARY
+    direct = c.direct(binding.get('method'))
     if (not _same_array(original.X, derived.X)
             or not original.obs_names.equals(derived.obs_names) or not original.var_names.equals(derived.var_names)
             or derived.obs.columns.tolist() != [*original.obs.columns, *c.OBS_COLUMNS]):
@@ -363,6 +363,7 @@ def recover_annotation(arguments, execution_identity):
 def annotate_scATAC_cell_types(annotation_spec_path, annotation_spec_sha256, output_dir,
                               matrix_manifest_path=None, matrix_manifest_sha256=None,
                               groups_path=None, groups_sha256=None, source_path=None, source_sha256=None,
-                              annotation_method=None, count_slot=None, group_column=None) -> CellTypeAnnotationResult:
+                              annotation_method=None, count_slot=None, group_column=None,
+                              group_analysis_path=None, group_analysis_sha256=None) -> CellTypeAnnotationResult:
     """Annotate exact groups on canonical or declared peak counts with pinned resources."""
     return execute_annotation({k: v for k, v in locals().items() if v is not None})

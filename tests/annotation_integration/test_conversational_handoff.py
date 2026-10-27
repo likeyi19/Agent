@@ -23,7 +23,7 @@ def choice(args, identity='reviewed'):
 
 
 def declared(**kwargs):
-    return handoff.AnnotationDeclaration(source='source.0', context='synthetic context', **kwargs)
+    return handoff.AnnotationDeclaration(source='source.0', context='synthetic context', grouping_strategy='reuse_only', **kwargs)
 
 
 def argument(name, value):
@@ -184,7 +184,7 @@ def test_resource_question_additive_supplement_and_explicit_selection(external_c
         pending=send(client,'first','Annotate synthetic context using "X" and independent groups "supplied_groups".',[source])
         assert pending['status']=='clarification',pending
         assert not calls
-        assert ('Upload a MAESTRO refgenes' if missing_catalog else 'Choose a reference') in pending['response']['text']
+        assert ('operator must provision' if missing_catalog else 'Choose a reference') in pending['response']['text']
     app,web=setup(args,root,prompts,choices=(first,second))
     with TestClient(web) as client:
         done=send(client,'reply','Use the alternative marker resource and "layers/raw_counts".')
@@ -203,12 +203,14 @@ def test_ambiguous_qualified_group_and_explicit_precedence(external_case):
     a.uns['count_slot']='layers/raw_counts';a.write_h5ad(args['source_path'])
     sha=science.sha256(args['source_path']);observation=observe(args['source_path'],sha)
     binding=SimpleNamespace(members=[{'source_sha256':sha}])
-    d,values,missing=handoff._annotation_requirements(binding,declared(),{'count_slot':'X'},observation)
+    # Metadata describes the raw_counts layer; selecting X needs its own history.
+    declaration=declared(measurement=c.EXTERNAL_SEMANTICS)
+    d,values,missing=handoff._annotation_requirements(binding,declaration,{'count_slot':'X'},observation)
     assert values['count_slot']=='X' and 'group_column' not in values
     assert any('Choose' in q for q in missing)
-    d,values,missing=handoff._annotation_requirements(binding,declared(),{'count_slot':'X','group_column':'other'},observation)
+    d,values,missing=handoff._annotation_requirements(binding,declaration,{'count_slot':'X','group_column':'other'},observation)
     assert not missing and d.grouping_provenance.endswith('B')
-    d,values,missing=handoff._annotation_requirements(binding,declared(),{'count_slot':'X','group_column':'absent'},observation)
+    d,values,missing=handoff._annotation_requirements(binding,declaration,{'count_slot':'X','group_column':'absent'},observation)
     assert values['group_column']=='absent' and any('cannot be replaced' in q for q in missing)
 
 
@@ -220,7 +222,7 @@ def test_incompatible_measurements_preserve_no_execution(external_case,tmp_path)
         source=stage(client,args)
         result=send(client,'first',OBJECTIVE.replace('Use X','Use "X"'),[source])
         assert result['status']=='clarification',result
-        assert 'incompatible' in result['response']['text'] and not calls
+        assert 'transformed values' in result['response']['text'] and not calls
         state=app._application.sessions.load('upload');assert not state.revisions and not state.turns
 
 
@@ -261,7 +263,7 @@ def test_reannotation_parameter_change_navigation_and_old_revision_integrity(ext
             if 'turn_schema_version' in p:
                 slot='layers/raw_counts' if 'layers/raw_counts' in p['utterance'] else 'X'
                 return json.dumps(dict(turn_schema_version=1,decision=dict(kind='request_roles',target=TOOL,
-                    required_roles=[],roles=[],annotation=asdict(declared()),arguments=[argument('count_slot',slot)])))
+                    required_roles=[],roles=[],annotation=asdict(declared(measurement=c.EXTERNAL_SEMANTICS)),arguments=[argument('count_slot',slot)])))
             return super().complete(prompt=prompt,response_schema=response_schema)
     monkeypatch.setitem(HandoffModel.complete.__globals__,'HandoffModel',ReannotationModel)
     app,web=setup(args,root,prompts)
@@ -270,7 +272,7 @@ def test_reannotation_parameter_change_navigation_and_old_revision_integrity(ext
         first=send(client,'first','Annotate independent simulated groups using "X".',[source]);assert first['status']=='succeeded',first
         run=app._application.run_store.load(first['run_id']);before=run.to_dict()
         published=Path(run.steps[0].result['annotated_h5ad_path']);original_digest=science.sha256(published)
-        second=send(client,'second','Reannotate the same source using "layers/raw_counts".',[source],generation=1)
+        second=send(client,'second','Reannotate the same source using original Cell Ranger cut-site counts in "layers/raw_counts".',[source],generation=1)
         assert second['status']=='succeeded',second
         new=app._application.run_store.load(second['run_id'])
         assert new.steps[0].resolved_arguments['count_slot']=='layers/raw_counts'

@@ -489,6 +489,7 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_analysis', 'embeddings.h5ad', 'Cell embeddings — safe export'),
             ('scientific_analysis', 'clusters.h5ad', 'Embeddings and Leiden — safe export'),
             ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
+            ('scientific_reference_evidence', 'reference-evidence.tsv', 'Cell-type reference evidence'),
             ('scientific_integrated', 'integrated-embeddings.h5ad', 'Original data with accepted analysis'),
             ('scientific_integrated', 'integrated-clusters.h5ad', 'Original data with accepted analysis'),
             ('scientific_integrated', 'integrated-analysis.h5ad', 'Original data with accepted analysis'),
@@ -573,7 +574,7 @@ class EvidenceView(DialogueEvidence):
         _strings(self.limitations, 'limitations', maximum=128)
         if (type(self.supported_details) is not tuple or len(self.supported_details) > 5
                 or len(set(self.supported_details)) != len(self.supported_details)
-                or any(s not in ('annotation_rationale', 'length_histogram', 'categorical_fields',
+                or any(s not in ('annotation_rationale', 'reference_associations', 'length_histogram', 'categorical_fields',
                                  'category_counts', 'category_association') for s in self.supported_details)):
             raise ValueError('Invalid supported evidence detail inventory.')
         available = {fact.field for name in ('facts', 'coverage', 'detail') for fact in getattr(self, name)}

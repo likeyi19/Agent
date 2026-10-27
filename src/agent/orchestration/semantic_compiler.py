@@ -85,6 +85,17 @@ class SemanticStepOutputSource:
 
 
 @dataclass(frozen=True)
+class SemanticRegisteredChoiceSource:
+    """Planner selection from an explicitly enabled Registry scalar vocabulary."""
+    target_port: str
+    choice: str
+
+    def __post_init__(self):
+        _nonempty(self.target_port, 'target_port')
+        _nonempty(self.choice, 'choice')
+
+
+@dataclass(frozen=True)
 class SemanticContextSource:
     target_port: str
     handle: str
@@ -95,7 +106,7 @@ class SemanticContextSource:
 
 
 SemanticSourceSelection: TypeAlias = (
-    SemanticRequestInputSource | SemanticStepOutputSource | SemanticContextSource
+    SemanticRequestInputSource | SemanticStepOutputSource | SemanticContextSource | SemanticRegisteredChoiceSource
 )
 
 
@@ -114,7 +125,7 @@ class SemanticPlanStep:
         if not isinstance(self.sources, tuple) or not all(
             isinstance(
                 source,
-                (SemanticRequestInputSource, SemanticStepOutputSource, SemanticContextSource),
+                (SemanticRequestInputSource, SemanticStepOutputSource, SemanticContextSource, SemanticRegisteredChoiceSource),
             )
             for source in self.sources
         ):
@@ -678,6 +689,18 @@ def compile_semantic_plan(
                         "target_port": source.target_port,
                     },
                 )
+            if isinstance(source, SemanticRegisteredChoiceSource):
+                port = next(p for p in tool.semantic_planning.consumer_ports if p.name == source.target_port)
+                argument = (dict(tool.required_arguments) | dict(tool.optional_arguments)).get(port.members[0].field_name)
+                if (len(port.members) != 1 or argument is None or argument.planning is None
+                        or not argument.planning.planner_choice or source.choice not in argument.choices):
+                    raise SemanticPlanCompileError('UNAUTHORIZED_REGISTERED_CHOICE', 'Choice is not enabled by the Registry.')
+                if any(m.input_name in request.inputs for r in port.request_sources for m in r.members):
+                    raise SemanticPlanCompileError('EXPLICIT_PARAMETER_CONFLICT', 'Use the supplied parameter source instead of choosing a value.')
+                argument.validate(port.members[0].field_name, source.choice)
+                state.arguments[port.members[0].field_name] = source.choice
+                state.target_ports.add(source.target_port)
+                continue
             if isinstance(source, SemanticContextSource):
                 from .active_context import current_context
                 from .prior_outputs import channel_for

@@ -10,7 +10,7 @@ def validate_result(value):
         c.matrix.shape(value, public.CellTypeAnnotationResult.__annotations__)
         if (value['status'] != 'success' or value['artifact_type'] != c.ARTIFACT or
                 type(value['artifact_schema_version']) is not int or value['artifact_schema_version'] not in (1, 2) or
-                value['contract_version'] != c.CONTRACT or value['annotation_profile'] not in (c.science.PROFILE, c.EXTERNAL_PRIMARY) or
+                value['contract_version'] != c.CONTRACT or value['annotation_profile'] not in (c.science.PROFILE, c.EXTERNAL_PRIMARY, c.REGION_PRIMARY) or
                 value['validation_state'] != 'not_assessed' or
                 (value['species'],value['assembly']) not in (('human','hg38'),('mouse','mm10'))):
             raise ValueError()
@@ -55,12 +55,13 @@ def annotation_tool_spec():
     from .registry import ArgumentSpec
     required, optional = {}, {}
     common = ('annotation_spec_path','annotation_spec_sha256','output_dir')
-    keys = (*c.ARGUMENTS, *c.GROUP_ARGUMENTS, *c.DIRECT_ARGUMENTS)
+    keys = (*c.ARGUMENTS, *c.GROUP_ARGUMENTS, *c.DIRECT_ARGUMENTS, *c.ANALYSIS_GROUP_ARGUMENTS)
     for key in dict.fromkeys(keys):
         scalar = key in ('annotation_method','count_slot','group_column')
         spec = _planning_argument((str,) if scalar or key.endswith('_sha256') else (str,Path),
             'Explicit annotation input. Counts default to supplied X; select layers/name explicitly for another count slot. Select the exact obs grouping column.',
-            source=S.REQUEST_INPUT_ONLY, artifacts=(A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
+            source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key in c.ANALYSIS_GROUP_ARGUMENTS else S.REQUEST_INPUT_ONLY,
+            artifacts=(A.CLUSTERED_ANALYSIS,) if key in c.ANALYSIS_GROUP_ARGUMENTS else (A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
             scientific_parameter=key in ('count_slot','group_column'),
             conversational_exact_string=key in ('count_slot','group_column'))
         argument = (ArgumentSpec if scalar else MatrixArgument)(spec.accepted_types,planning=spec.planning)
@@ -71,6 +72,9 @@ def annotation_tool_spec():
             request_sources=(request(prefix+'_path',*(input_member(k,prefix+'_'+k) for k in ('path','sha256'))),)))
     for name in ('annotation_method','count_slot','group_column'):
         ports.append(_semantic_argument_port(name,required=False))
+    ports.append(SemanticConsumerPortSpec('clustering',
+        (member('analysis','group_analysis_path'), member('sha256','group_analysis_sha256')), False,
+        accepted_upstream_types=('clustered_analysis.v1',)))
     ports.append(_semantic_argument_port('output_dir',required=True))
     ints = {'artifact_schema_version','n_cells','n_groups','assigned_cells','unassigned_cells','ambiguous_cells','groups_omitted'}
     return ToolSpec(name='annotate_scATAC_cell_types',function=public.annotate_scATAC_cell_types,
@@ -83,8 +87,8 @@ def annotation_tool_spec():
         exception_classifier=classify,retryable_error_codes=frozenset(),recovery_policy_version=c.RECOVERY_POLICY,
         durable_hooks=DurableToolHooks(public.execute_annotation,public.recover_annotation),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Annotate scATAC groups.',
-            'Direct human hg38 raw Cell Ranger ATAC cut-site peak H5AD, explicit source/count_slot/annotation_method and reviewed resources. Requires groups TSV or explicit group_column. Ask for missing roles/resources/declarations. Historical canonical input remains recoverable.',
-            'Count-weighted native Enhanced RP. External count history remains declared. No cCRE adoption, peak projection, normalized/binary values, inferred groups or required validation.', capability_ids=('marker_annotation',)),
+            'Human hg38 or mouse mm10 genomic-region H5AD with declared raw peak counts, fragment_counts or binary_accessibility and compatible gene/signature resources. Use a qualified supplied group_column or groups TSV, or bind clustering from cluster_cells on the exact original source. Reuse compatible accepted prerequisites; otherwise plan the necessary representation, neighbors and clustering. UMAP is not a grouping prerequisite. Ask only for missing biological declarations or incompatible inputs.',
+            'Count-weighted native Enhanced RP. External count history remains declared. All supplied regions and original measurements are preserved. No normalized values, gene-score input, inferred groups or required database corroboration. A separate corroborate_cell_type_annotation operation can query a qualified reference when requested.', capability_ids=('marker_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('annotation','scatac_cell_type_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','annotated_h5ad_path'),)),)))

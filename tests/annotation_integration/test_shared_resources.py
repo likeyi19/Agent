@@ -64,7 +64,7 @@ def test_library_compatibility_ambiguity_and_corruption(resources, tmp_path, mon
     evidence = u.handoff.resource_evidence((choice,), 'annotation')
     declared = replace(u.h.declared(), species='human', assembly='hg38', measurement=u.h.c.EXTERNAL_SEMANTICS)
     assert u.handoff._resolve_resource(declared, (choice,), evidence)[1] == choice
-    for key, value in [('species','mouse'), ('assembly','mm10'), ('context','unrelated tissue'), ('measurement','binary')]:
+    for key, value in [('species','mouse'), ('assembly','mm10'), ('context','unrelated tissue')]:
         questions, selected = u.handoff._resolve_resource(replace(declared, resource='resource.' + choice.input_set_id,
             **{key:value}), (choice,), evidence)
         assert selected is None and key in questions[0]

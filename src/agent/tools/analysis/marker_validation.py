@@ -67,33 +67,17 @@ def load_knowledge(resource):
     return result
 
 
-def corroborate_marker_annotation(*, primary_path, primary_sha256, genes_path, genes_sha256,
-        markers_path, markers_sha256, resource: KnowledgeResource, mapping_path, mapping_sha256,
-        species, context, profile):
-    """Read primary annotation and return separate, non-gating corroboration.
-
-    Positive and competing associations describe biological knowledge, not
-    correctness, contradiction, calibrated confidence or label approval.
-    The input annotation is immutable, including when it is unresolved.
-    """
-    if profile != PROFILE or species not in ('Human','Mouse'):
-        raise ValueError('Unsupported explicit profile/species')
-    identifier(context)
-    primary=json.loads(checked_file(primary_path,primary_sha256).read_text())
-    genes=json.loads(checked_file(genes_path,genes_sha256).read_text())
+def compare_marker_annotation(*, primary, genes, marker_rows, knowledge, mapping, species, context):
+    """Shared comparison over decoded native records; no file-format adapters."""
     if not isinstance(genes,list) or not genes or len({identifier(g).upper() for g in genes})!=len(genes):
         raise ValueError('Ambiguous primary gene space')
     gene_set={g.upper() for g in genes}
-    mapping=json.loads(checked_file(mapping_path,mapping_sha256).read_text())
     if mapping['schema']!='external-marker-alignment.v1' or mapping['species']!=species or mapping['context']!=context:
         raise ValueError('Species/context mapping mismatch')
-    if mapping['resource_table_sha256']!=resource.table_sha256 or mapping['primary_sha256']!=primary_sha256:
-        raise ValueError('Mapping dependency mismatch')
     identifier(mapping['rationale'])
     tissues=mapping['tissues']
     if not tissues or len(set(tissues))!=len(tissues):
         raise ValueError('Explicit unique tissue vocabulary required')
-    knowledge=load_knowledge(resource)
     available={r['original']['tissue_type'] for r in knowledge if r['original']['species']==species}
     if not set(tissues)<=available:
         raise ValueError('Unsupported resource tissue context')
@@ -114,13 +98,12 @@ def corroborate_marker_annotation(*, primary_path, primary_sha256, genes_path, g
         if g['candidate'] is not None:
             identifier(g['candidate'])
     effects={g:{} for g in group_ids}
-    with checked_file(markers_path,markers_sha256).open(newline='') as f:
-        import math
-        for row in csv.DictReader(f,delimiter='\t',quoting=csv.QUOTE_NONE):
-            group,gene,value=row['cluster'],row['gene'].upper(),float(row['avg_logFC'])
-            if group not in effects or gene not in gene_set or gene in effects[group] or not math.isfinite(value):
-                raise ValueError('Invalid primary marker identity/value')
-            effects[group][gene]=value
+    import math
+    for row in marker_rows:
+        group,gene,value=row['cluster'],row['gene'].upper(),float(row['avg_logFC'])
+        if group not in effects or gene not in gene_set or gene in effects[group] or not math.isfinite(value):
+            raise ValueError('Invalid primary marker identity/value')
+        effects[group][gene]=value
     align=mapping['candidates']
     required={g['candidate'] for g in group_rows if g['candidate'] is not None}
     if set(align)!=required:
@@ -156,6 +139,30 @@ def corroborate_marker_annotation(*, primary_path, primary_sha256, genes_path, g
                                         'corroborating':'positive_compatible_associations',
                     'mixed':'competing_nonexclusive_associations',
                     'insufficient_evidence':'no_positive_equivalent_or_broader_associations'}[state]))
+    return result, selected
+
+
+def corroborate_marker_annotation(*, primary_path, primary_sha256, genes_path, genes_sha256,
+        markers_path, markers_sha256, resource: KnowledgeResource, mapping_path, mapping_sha256,
+        species, context, profile):
+    """Read primary annotation and return separate, non-gating corroboration.
+
+    Positive and competing associations describe biological knowledge, not
+    correctness, contradiction, calibrated confidence or label approval.
+    The input annotation is immutable, including when it is unresolved.
+    """
+    if profile != PROFILE or species not in ('Human','Mouse'):
+        raise ValueError('Unsupported explicit profile/species')
+    identifier(context)
+    primary=json.loads(checked_file(primary_path,primary_sha256).read_text())
+    genes=json.loads(checked_file(genes_path,genes_sha256).read_text())
+    mapping=json.loads(checked_file(mapping_path,mapping_sha256).read_text())
+    if mapping['resource_table_sha256']!=resource.table_sha256 or mapping['primary_sha256']!=primary_sha256:
+        raise ValueError('Mapping dependency mismatch')
+    with checked_file(markers_path,markers_sha256).open(newline='') as f:
+        result, selected = compare_marker_annotation(primary=primary, genes=genes,
+            marker_rows=csv.DictReader(f,delimiter='\t',quoting=csv.QUOTE_NONE),
+            knowledge=load_knowledge(resource), mapping=mapping, species=species, context=context)
     dependencies=dict(primary=dict(path=str(primary_path),sha256=primary_sha256),genes=dict(path=str(genes_path),sha256=genes_sha256),
                       markers=dict(path=str(markers_path),sha256=markers_sha256),resource=asdict(resource),
                       mapping=dict(path=str(mapping_path),sha256=mapping_sha256),species=species,context=context)

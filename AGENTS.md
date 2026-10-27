@@ -257,6 +257,56 @@ This is bounded paired corrected-CB BAM readiness, not universal BAM or biologic
 qualification. No commit/push is performed; the next capability area is MAESTRO
 annotation and qualified database evidence, not further raw-data optimization.
 
+SWC-2 builds on `2691d8dd1a7113c280d82fc28199fa940339c3ee` without commit/push.
+The [annotation guide](docs/guides/cell-type-annotation.md) owns the direct
+MAESTRO region-count extension and optional registered
+`corroborate_cell_type_annotation` operation (26 tools). Raw peak counts,
+fragment-overlap counts and binary accessibility keep their actual meanings;
+method-specific coordinates, history, grouping and resource requirements remain.
+New source observations scope measurement metadata to its declared matrix slot;
+an independently selected layer needs its own declaration. Historical observation
+and scientific publication meanings remain readable and unchanged.
+
+The existing CellMarker comparison and ScientificResourceLibrary provide separate,
+signature-bound local reference evidence without modifying native labels or
+recomputing MAESTRO. The [SWC-2 report](../agent-data/acceptance/scientific-workflow-completion/swc-2/REPORT.md)
+separates real Firefox/OpenRouter combined/later corroboration, successful read-only
+evidence answers, real SWC-1 cCRE native execution with a scripted plan, and simulated
+regressions. It preserves initial context overflow and parameter-scope failures,
+their corrections, and a provider-incomplete response. Original matrices, axes,
+groups, historical outputs and production configuration remain intact. Human PBMC
+reference support is not biological truth, subtype validation or universal input/
+provider qualification. Missing CellMarker installation still requires operator
+provisioning; no separate reference-upload continuation is claimed. SWC-3 is the
+next proposed work unit, not started by this record.
+
+SWC-2 Finalization retains this baseline and existing uncommitted work. The
+[finalization report](../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
+owns genuine unclustered-H5AD researcher acceptance: ordinary Firefox/OpenRouter
+requests compose inspection, explicit Registry-selected TF-IDF/PCA, neighbors,
+Leiden, native MAESTRO and CellMarker through existing owners. Exact clustered
+artifacts bind original-file identity and ordered cells to annotation; qualified
+supplied or selected accepted groups remain reusable. No fixed annotation pipeline
+or UMAP is introduced. Operator resource discovery and execution share the scoped
+ScientificResourceLibrary. Explicit PCA user choices prevail; its native default
+remains unchanged X. New observation version 4 defers computable grouping to
+planning; historical observations and displayed text keep their meanings.
+The genuine 569-cell run publishes 13 groups, 553 assigned and 16 unassigned cells,
+plus 233 pinned reference records. Downloads and later evidence answers reuse
+acceptance without science. Bounded context omits automatic supplementary detail
+before losing whole selected summaries; explicit detail remains bounded and exact.
+The report preserves initial planning failures, unavailable completion prose and
+historical wording limitations. This is bounded human PBMC workflow readiness,
+not biological truth or universal provider qualification. No commit/push is
+performed; SWC-3 is not started.
+
+The [SWC-2 owner-contract closeout](../agent-data/acceptance/scientific-workflow-completion/swc-2/finalization/owner-contract-closeout/REPORT.md)
+closes the final source-review defect: resolved direct annotation specifications
+require a supported measurement before input preparation. Pending conversational
+declarations remain nullable; reference matching and accepted historical readers
+retain their existing meanings. Focused regressions and preserved-result reads
+pass without native scientific reruns. No staging, commit or push is performed.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

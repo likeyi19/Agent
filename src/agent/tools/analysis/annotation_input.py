@@ -22,6 +22,9 @@ def observe(path, sha256):
             if name in a.uns:
                 science.identifier(a.uns[name])
                 declarations[name] = a.uns[name]
+        if 'measurement' not in declarations and 'matrix_semantics' in a.uns:
+            science.identifier(a.uns['matrix_semantics'])
+            declarations['measurement'] = a.uns['matrix_semantics']
         columns = []
         for name in a.obs.columns:
             try:
@@ -45,7 +48,9 @@ def observe(path, sha256):
                     raise ValueError('Declared grouping does not identify a valid obs grouping column')
                 science.identifier(provenance)
                 qualified.append(dict(column=column, provenance=provenance))
-        return dict(interface_version=2, source_sha256=sha256, declarations=declarations,
+        # V3 scopes measurement metadata to its declared slot (X when omitted).
+        # It says nothing about an independently selected original-count layer.
+        return dict(interface_version=4, source_sha256=sha256, declarations=declarations,
                     grouping_columns=columns, qualified_groupings=qualified)
     finally:
         a.file.close()
@@ -77,7 +82,9 @@ def resource_specification(base, declared, members):
     problems = []
     uploaded = declared.uploaded
     if uploaded is None:
-        return dict(spec, grouping_provenance=declared.grouping_provenance), problems
+        return dict(spec, grouping_provenance=declared.grouping_provenance,
+                method=c.EXTERNAL_PRIMARY if declared.measurement == c.EXTERNAL_SEMANTICS else c.REGION_PRIMARY,
+                measurement=declared.measurement), problems
     for name in ('species', 'assembly', 'context', 'gene_namespace'):
         if getattr(uploaded, name) is None:
             problems.append('Specify the uploaded references\' ' + name.replace('_', ' ') + '.')
@@ -107,7 +114,7 @@ def resource_specification(base, declared, members):
                 member['source_path'], member['source_sha256'], getattr(uploaded, role + '_provenance'),
                 getattr(uploaded, role + '_release'), uploaded.species, uploaded.assembly,
                 uploaded.context, uploaded.gene_namespace, normalization, semantics))
-    spec.update(schema=c.EXTERNAL_SPEC, method=c.EXTERNAL_PRIMARY, measurement=declared.measurement,
+    spec.update(schema=c.EXTERNAL_SPEC, method=c.EXTERNAL_PRIMARY if declared.measurement == c.EXTERNAL_SEMANTICS else c.REGION_PRIMARY, measurement=declared.measurement,
                 species=declared.species, assembly=declared.assembly, context=declared.context,
                 coordinate_system='zero-based-half-open', grouping_provenance=declared.grouping_provenance)
     return spec, problems

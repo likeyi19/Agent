@@ -23,6 +23,7 @@ from .planning_diagnostics import PlanningDiagnosticStage
 from .registry import ToolRegistry
 from .semantic_compiler import (
     SemanticContextSource,
+    SemanticRegisteredChoiceSource,
     SemanticPlanCandidate,
     SemanticPlanStep,
     SemanticRequestInputSource,
@@ -106,57 +107,52 @@ def build_semantic_wire_v4_schema(
                 "step": {"type": "string"},
             }
         ),
-        "step_port_source": _closed_object_schema(
-            {
-                "kind": {"type": "string", "enum": ("step_port",)},
-                "step": {"type": "string"},
-                "source_port": {"type": "string"},
-            }
-        ),
     }
-    source_variants: list[JsonValue] = []
-    if input_names:
-        definitions["input_name"] = {"type": "string", "enum": input_names}
-        definitions["input_source"] = _closed_object_schema(
-            {
-                "kind": {"type": "string", "enum": ("input",)},
-                "input": {"$ref": "#/$defs/input_name"},
-            }
-        )
-        source_variants.append({"$ref": "#/$defs/input_source"})
     from .active_context import current_context
     active = current_context()
-    if active is not None and active.items:
-        definitions['context_source'] = _closed_object_schema({
-            'kind': {'type': 'string', 'enum': ('context',)},
-            'handle': {'type': 'string', 'enum': tuple(i.handle for i in active.items)},
-        })
-        source_variants.append({'$ref': '#/$defs/context_source'})
-    source_variants.extend(
-        (
-            {"$ref": "#/$defs/step_source"},
-            {"$ref": "#/$defs/step_port_source"},
-        )
-    )
-    definitions["v"] = {"anyOf": tuple(source_variants)}
     step_variants: list[JsonValue] = []
     for tool_name in tool_names:
-        semantic = registry.get(tool_name).semantic_planning
-        assert semantic is not None  # Validated by _planner_visible_tool_names.
-        target_names = tuple(sorted(port.name for port in semantic.consumer_ports))
-        sources_schema: dict[str, JsonValue] = {"type": "array"}
-        if target_names:
-            # Keep target legality outside the kind-discriminated source value.
-            sources_schema["items"] = _closed_object_schema(
-                {
-                    "target": {"type": "string", "enum": target_names},
-                    "source": {"$ref": "#/$defs/v"},
-                }
-            )
-        else:
-            # A registered tool with no consumer ports accepts no sources.
-            sources_schema["items"] = _closed_object_schema({})
-            sources_schema["maxItems"] = 0
+        tool = registry.get(tool_name)
+        semantic = tool.semantic_planning
+        assert semantic is not None
+        arguments = dict(tool.required_arguments) | dict(tool.optional_arguments)
+        selectors = []
+        for port in sorted(semantic.consumer_ports, key=lambda p: p.name):
+            variants = []
+            inputs = tuple(sorted(source.selector for source in port.request_sources
+                if all(m.input_name in request.inputs for m in source.members)))
+            if inputs:
+                variants.append(_closed_object_schema({
+                    'kind': {'type':'string','enum':('input',)},
+                    'input': {'type':'string','enum':inputs}}))
+            if port.accepted_upstream_types:
+                producer_ports = tuple(sorted({p.name for name in tool_names
+                    for p in registry.get(name).semantic_planning.producer_ports
+                    if p.semantic_type in port.accepted_upstream_types}))
+                if producer_ports:
+                    variants.extend(({'$ref':'#/$defs/step_source'}, _closed_object_schema({
+                        'kind': {'type':'string','enum':('step_port',)},
+                        'step': {'type':'string'},
+                        'source_port': {'type':'string','enum':producer_ports}})))
+            if active is not None:
+                handles = tuple(item.handle for item in active.items
+                    if item.binding.semantic_type in port.accepted_upstream_types)
+                if handles:
+                    variants.append(_closed_object_schema({
+                        'kind': {'type':'string','enum':('context',)},
+                        'handle': {'type':'string','enum':handles}}))
+            argument = arguments[port.members[0].field_name] if len(port.members) == 1 else None
+            if (not inputs and argument is not None and argument.planning is not None
+                    and argument.planning.planner_choice):
+                variants.append(_closed_object_schema({
+                    'kind': {'type':'string','enum':('registered_choice',)},
+                    'choice': {'type':'string','enum':argument.choices}}))
+            if variants:
+                selectors.append(_closed_object_schema({
+                    'target': {'type':'string','enum':(port.name,)},
+                    'source': {'anyOf':tuple(variants)}}))
+        sources_schema = {'type':'array', 'items': {'anyOf':tuple(selectors)}} if selectors else {
+            'type':'array', 'items':_closed_object_schema({}), 'maxItems':0}
         step_variants.append(
             _closed_object_schema(
                 {
@@ -237,6 +233,11 @@ def _parse_source(
         # flat v4 payloads. Both representations pass the same strict validation.
         raw_source = {"target": raw_source["target"], **source_value}
     kind = raw_source.get("kind")
+    if kind == 'registered_choice':
+        _require_fields(raw_source, required=frozenset({'kind','target','choice'}), context=context)
+        return SemanticRegisteredChoiceSource(
+            _bounded_string(raw_source['target'], field_name=f'{context}.target'),
+            _bounded_string(raw_source['choice'], field_name=f'{context}.choice'))
     if kind == 'context':
         _require_fields(raw_source, required=frozenset({'kind', 'target', 'handle'}), context=context)
         from .active_context import current_context

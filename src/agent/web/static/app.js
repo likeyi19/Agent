@@ -644,7 +644,7 @@ function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
 function supportedScientificFile(artifact) {
   // The application validates the closed descriptors. Wording and file-purpose
   // policies belong there, shared by the conversation and result inventory.
-  return ["scientific_matrix", "scientific_qc_table", "scientific_selection_table",
+  return ["scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
     "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model", "scientific_composition"]
     .includes(artifact.artifact_type) && typeof artifact.filename === "string";
 }

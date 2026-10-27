@@ -2049,6 +2049,16 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
+        elif step.tool_name == "corroborate_cell_type_annotation":
+            try:
+                from agent.tools.analysis.annotation_corroboration import verify_result
+                verify_result(resolved_arguments, plain_result)
+            except (ValueError, OSError, TypeError, KeyError) as exc:
+                checks.add('marker_reference_integrity', False,
+                    'Exact native annotation and qualified database associations.', 'Reference verification failed.', 'MARKER_REFERENCE_VERIFICATION_FAILED', ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('marker_reference_integrity', True,
+                    'Exact native annotation and qualified database associations.', 'Invalid reference evidence.', 'MARKER_REFERENCE_VERIFICATION_FAILED')
         elif step.tool_name == "annotate_scATAC_cell_types":
             try:
                 from agent.tools.analysis.scatac_annotation import verify_public_result

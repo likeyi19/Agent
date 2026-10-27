@@ -2,7 +2,7 @@
 
 `pca_embed_cells` uses sparse-safe centered Scanpy PCA with ARPACK. Numerical
 eligibility alone does not establish that an input representation is biologically
-appropriate. Choose the representation explicitly and review depth effects,
+appropriate. Record the selected representation and review depth effects,
 feature definitions, sample structure and upstream QC before interpreting clusters.
 
 The optional `preprocessing` parameter has two choices:
@@ -34,8 +34,13 @@ is not claimed.
 
 The Registry offers this choice through the existing conversational parameter
 owner. A researcher can request “TF-IDF with L2 cell normalization before centered
-PCA”; the interpreter binds that phrase to `tfidf_l2`. There is no language-based
-scientific transform or silent default change. The numerical source and eigenpair
+PCA”; the interpreter binds that phrase to `tfidf_l2`. When no choice was supplied,
+the Planner may choose from this parameter's explicitly enabled Registry choices
+using the declared measurement and objective. For raw region counts or binary
+accessibility, its guidance prefers `tfidf_l2`; prepared measurements require their
+actual interpretation. Explicit user choices take precedence. The native default
+remains `none`, and the plan records any selected transform. No arbitrary values
+or other scientific parameters acquire this permission. The numerical source and eigenpair
 checks operate on the chosen representation. Unchanged raw-X publications retain
 v1 identities; transformed publications use embedding/publication v2 and a distinct
 scientific profile. Readers do not reinterpret accepted v1 evidence.

@@ -591,7 +591,7 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
     assert "ref_output_key" not in prompt
     assert any("valid DAG" in rule for rule in payload["instructions"])
     unsupported_rule = next(
-        rule for rule in payload["instructions"] if "unsupported" in rule.lower()
+        rule for rule in payload["instructions"] if "unavailable capabilities or explicit implementations" in rule
     )
     assert "unavailable capabilities or explicit implementations" in unsupported_rule
     assert "ambiguous source identity or invalid DAGs" in unsupported_rule
@@ -665,6 +665,10 @@ def test_semantic_prompt_and_schema_retain_combined_size_headroom(
     def schema_bytes(schema):
         return len(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
+    # Per-port source constraints now exclude illegal bindings at generation,
+    # while the older v3 schema permits a broader generic binding vocabulary.
+    # Retain an absolute bounded payload budget rather than comparing different
+    # authorization contracts merely by byte count.
     assert len(semantic_prompt.encode("utf-8")) + schema_bytes(
         build_semantic_wire_v4_schema(registry, request)
-    ) < len(v3_prompt.encode("utf-8")) + schema_bytes(_response_schema(registry, request))
+    ) < 64 * 1024

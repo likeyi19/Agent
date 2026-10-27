@@ -83,7 +83,7 @@ def test_uploaded_components_without_annotation_inputset(resources,tmp_path,monk
         if supplement:
             pending=h.send(client,'first',OBJECTIVE,[source])
             assert pending['status']=='clarification',pending
-            assert 'refgenes' in pending['response']['text'] and not calls
+            assert 'operator must provision' in pending['response']['text'] and not calls
         g=attach(client,genes,'genes');s=attach(client,signatures,'signatures')
         result=h.send(client,'reply' if supplement else 'first',
             'Use the supplied human hg38 gene-symbol references with the stated synthetic provenance and release.' if supplement else OBJECTIVE,

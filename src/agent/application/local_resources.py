@@ -1898,19 +1898,19 @@ class LocalResourceAdmission:
         if not consumed:
             raise _fail('FASTQ_SOURCE_MISMATCH')
 
-    def _validate_group_consumption(self, binding, steps, *, resolved=False):
+    def _validate_group_consumption(self, binding, steps, *, resolved=False, plan=None):
         from agent.schemas.orchestration import StepOutputRef
 
         if not binding.roles:
             raise _fail('MULTI_INPUT_ROLE_INVALID')
         registry = self._group_registry()
-        by_id = {getattr(s, 'step_id', None): s for s in steps}
+        by_id = {getattr(s, 'step_id', None): s for s in (plan.steps if plan is not None else steps)}
 
         def source_path(value):
             # Inspection returns the same dataset path. Follow only that exact
             # registered identity output, never transformed artifacts or order.
             seen = set()
-            while not resolved and isinstance(value, StepOutputRef):
+            while (not resolved or plan is not None) and isinstance(value, StepOutputRef):
                 producer = by_id.get(value.step_id)
                 if (value.step_id in seen or producer is None
                         or producer.tool_name != 'inspect_scATAC'
@@ -1957,7 +1957,11 @@ class LocalResourceAdmission:
                     actual = arguments.get(member.field_name)
                     if type(actual) is str and actual in selected_paths:
                         inspection = step.tool_name == 'inspect_scATAC' and port.name == 'dataset'
-                        if not inspection and authorized.get((step.tool_name, port.name)) != actual:
+                        planned = by_id.get(step.step_id) if resolved and plan is not None else None
+                        reference = None if planned is None else planned.arguments.get(member.field_name)
+                        inspected_source = (isinstance(reference, StepOutputRef)
+                            and reference.step_id in planned.depends_on and source_path(reference) == actual)
+                        if not inspection and not inspected_source and authorized.get((step.tool_name, port.name)) != actual:
                             raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
                     elif (not resolved and (step.tool_name, port.name) in _GROUP_PORTS and member == port.members[0]
                             and type(actual) is str):
@@ -2154,7 +2158,7 @@ class LocalResourceAdmission:
                 if 'device' in values and step.arguments.get('device') != values['device']:
                     raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
 
-    def validate_result(self, submission, steps):
+    def validate_result(self, submission, steps, *, plan=None):
         """First acceptance only: bind inspections and FASTQ provenance to sources.
 
         Scientific owners have already verified the result. This checks application
@@ -2169,7 +2173,7 @@ class LocalResourceAdmission:
             # after owner verification/presentation too; terminal history reads
             # never call this guard and may outlive source availability.
             self.validate_binding(binding, verify_source=True)
-            self._validate_group_consumption(binding, steps, resolved=True)
+            self._validate_group_consumption(binding, steps, resolved=True, plan=plan)
             return
         if type(binding) is RegisteredInput:
             record = self.load(binding.resource_id)

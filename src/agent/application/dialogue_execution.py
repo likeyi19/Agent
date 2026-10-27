@@ -1500,6 +1500,15 @@ def planning_task(interaction, state):
     origin = _received_origin(interaction, state.interactions)
     admitted = origin.admitted or {}
     task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
+    current = interaction.admitted or {}
+    if current.get('annotation_source_evidence'):
+        evidence = current['annotation_source_evidence']
+        task['source_observation'] = dict(declarations=_serialize(evidence['declarations']),
+            annotation_declarations={k:v for k,v in _serialize(current['annotation']).items()
+                if k in ('species','assembly','measurement','context','grouping_provenance')},
+            qualified_groupings=_serialize(evidence['qualified_groupings']),
+            grouping_columns=_serialize(evidence['grouping_columns']),
+            selected_count_slot=current.get('annotation_arguments', {}).get('count_slot', 'X'))
     if origin.turn_id == interaction.turn_id or not task:
         return task
     from .turn_context import result_groups
@@ -1823,7 +1832,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         == 'scientific-role-selection.v1')
     guard = (lambda tool, arguments: resources.validate_group_consumer(
         interaction.submission, tool, arguments)) if grouped else None
-    with execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
+    from .shared_resources import scientific_resource_scope
+    reference_owner = getattr(sessions, '_reference_resources', None)
+    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
         result = execution_app.run(request)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):

@@ -133,7 +133,7 @@ def integrated_analysis(service, artifact):
 
 
 def export_descriptions(sessions, session_id, targets):
-    """Project existing eligible cell-analysis downloads without preparing bytes.
+    """Project existing eligible matrix/analysis downloads without preparing bytes.
 
     The normal artifact owners establish inventory membership. Payload integrity,
     privacy, size admission and exact delivered bytes remain download-time work.
@@ -157,6 +157,26 @@ def export_descriptions(sessions, session_id, targets):
         output = outputs[0]
         sessions._validate_locator(output)
         origin = state.turn(revision.turn_id)
+        from .matrix_delivery import MATRIX_CONTRACTS, accepted_matrix, selects_matrix_port
+        run = sessions._application.run_store.load(output.run_id)
+        step = next(s for s in run.steps if s.step_id == output.step_id)
+        if step.tool_name in MATRIX_CONTRACTS:
+            selected = selects_matrix_port(sessions._application.registry, step.tool_name, output.output_key)
+            if not selected and output.run_id != origin.run_id:
+                continue
+            try:
+                artifact = accepted_matrix(sessions, session_id, revision, origin,
+                    output if selected else None, step_id=output.step_id)
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                continue
+            reference = artifact.reference
+            descriptions.append(dict(target=index, status='available_for_preparation',
+                **{name:getattr(reference, name) for name in (
+                    'handle', 'artifact_type', 'filename', 'title', 'purpose', 'description', 'size_bytes')},
+                original_measurements=True, original_feature_axis=True,
+                selected_result=dict(cell_embeddings=False, leiden_assignments=False, umap_coordinates=False),
+                payload_checks='performed_on_download', actual_download_status='NOT_RECORDED'))
+            continue
         try:
             compact = accepted_analysis(sessions, session_id, revision, origin, output)
         except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):

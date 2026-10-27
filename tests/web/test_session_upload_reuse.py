@@ -86,7 +86,8 @@ def test_multiple_sources_require_exact_model_selection_and_explicit_inputs_win(
         result, _ = send(client, f'inspect-{i}', 'Inspect this file.', i,
                          resource_id=rid, attachment_ids=[rid])
         assert result['status'] == 'succeeded'
-    assert 'session_source_candidates' not in reuse_model[-1]['dialogue']
+    # Current input remains primary while earlier uploads are offered as candidates.
+    assert reuse_model[-1]['dialogue']['selected_sources'][0]['label'] == 'second.h5ad'
     result, _ = send(client, 'reuse', 'Reuse the second file and inspect it.', 2)
     assert result['status'] == 'succeeded', result
     state = backend.service._application.sessions.load('session')

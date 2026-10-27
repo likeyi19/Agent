@@ -296,6 +296,13 @@ MATRIX_CONTRACTS = {
     'adopt_scATAC_cell_by_features': frozenset({'scatac-cell-by-features.external.v1'}),
 }
 
+def selects_matrix_port(registry, tool_name, output_key):
+    spec = registry.get(tool_name)
+    ports = [p for p in spec.semantic_planning.producer_ports
+             if output_key in {member.field_name for member in p.members}]
+    return len(ports) == 1 and ports[0].name in {'matrix', 'dataset'}
+
+
 def accepted_matrix(service, session_id, revision, origin, output, *, step_id=None):
     from dataclasses import asdict
     from agent.schemas.orchestration import _serialize
@@ -321,9 +328,7 @@ def accepted_matrix(service, session_id, revision, origin, output, *, step_id=No
     spec = service._application.registry.get(step.tool_name)
     spec.result_contract.validate(result)
     output_key = 'manifest_path' if output is None else output.output_key
-    ports = [p for p in spec.semantic_planning.producer_ports
-             if output_key in {member.field_name for member in p.members}]
-    if len(ports) != 1 or ports[0].name not in {'matrix', 'dataset'}:
+    if not selects_matrix_port(service._application.registry, step.tool_name, output_key):
         raise ValueError('Output does not select a reviewed matrix artifact port.')
     manifest_path = Path(result['manifest_path'])
     workspace = service._application._workspace

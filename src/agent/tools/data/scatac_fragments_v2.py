@@ -115,7 +115,7 @@ def _provenance(value):
         'bam_fragment_production': {'bam', 'intake_manifest', 'library_context'},
         'fastq_fragment_production': {'fastq', 'intake_manifest', 'library_context'},
     }[kind]
-    neutral_bam = kind == 'bam_fragment_production' and value['profile']['id'] == 'agent-cb-paired-atac.primary-neutral.v1'
+    neutral_bam = kind == 'bam_fragment_production' and value['profile']['id'] in ('agent-cb-paired-atac.primary-neutral.v1', 'agent-cb-paired-atac.primary-neutral.v2')
     if neutral_bam: allowed = {'bam', 'bam_input_binding'}
     if (set(roles) != allowed or identities != sorted(set(identities))
             or len({p for _, _, p in identities}) != len(identities)):
@@ -213,7 +213,7 @@ def validate_fragments_manifest_v2(value):
             _provenance(entry['provenance'])
             if type(r['species']) is dict and not (entry['provenance']['kind'] == 'external_fragment_adoption'
                     or (entry['provenance']['kind'] == 'bam_fragment_production'
-                        and entry['provenance']['profile']['id'] == 'agent-cb-paired-atac.primary-neutral.v1')):
+                        and entry['provenance']['profile']['id'] in ('agent-cb-paired-atac.primary-neutral.v1', 'agent-cb-paired-atac.primary-neutral.v2'))):
                 fail('FRAGMENTS_V2_REFERENCE_MISMATCH')
             source_count += len(entry['provenance']['sources'])
             if source_count > MAX_SOURCES:

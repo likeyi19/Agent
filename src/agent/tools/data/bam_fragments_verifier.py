@@ -89,7 +89,7 @@ def _read(record, references, groups):
     return record,tags,end,unsupported
 
 
-def _template(primaries, has_supplement, references):
+def _template(primaries, has_supplement, references, *, legacy_profile=False):
     if 64 not in primaries or 128 not in primaries: m.fail('BAM_FRAGMENTS_TEMPLATE_INVALID')
     x,y=primaries[64],primaries[128]; a,ta,ae,ua=x; b,tb,be,ub=y
     if ta.get('RG')!=tb.get('RG'): m.fail('BAM_FRAGMENTS_LIBRARY_MISMATCH')
@@ -103,11 +103,12 @@ def _template(primaries, has_supplement, references):
     unmapped=bool((a['flag']|b['flag'])&12)
     if not unmapped and a['rid']==b['rid'] and (a['tlen']!=0 or b['tlen']!=0):
         length=max(ae,be)-min(a['start'],b['start'])
-        if a['tlen']+b['tlen']!=0 or abs(b['tlen'])!=length: m.fail('BAM_FRAGMENTS_TLEN_MISMATCH')
+        if a['tlen']+b['tlen']!=0 or (legacy_profile and abs(b['tlen'])!=length): m.fail('BAM_FRAGMENTS_TLEN_MISMATCH')
     orientations=(bool(a['flag']&16),bool(b['flag']&16))
     forward,reverse=(y,x) if orientations[0] else (x,y)
     f,_,fe,_=forward; r,_,re,_=reverse
-    geometry=orientations[0]==orientations[1] or f['start']>r['start'] or fe>re
+    geometry=(orientations[0]==orientations[1] or f['start']>=re
+              or (legacy_profile and (f['start']>r['start'] or fe>re)))
     start,stop=f['start']+4,re-5
     reasons=(unmapped,a['rid']!=b['rid'],not(a['flag']&2 and b['flag']&2),
         bool((a['flag']|b['flag'])&512),has_supplement or 'SA' in ta or 'SA' in tb,
@@ -119,7 +120,7 @@ def _template(primaries, has_supplement, references):
     return (references[a['rid']][0],start,stop,ta['CB']),None
 
 
-def reconstruct(bound, directory, runtime):
+def reconstruct(bound, directory, runtime, *, legacy_profile=False):
     raw=directory/'verify.reads'; ordered=directory/'verify.names'; fragments=directory/'verify.fragments'
     header,refs,stream,n=io.project(bound['source']['path'],raw,
         **({'neutral_reference':bound['reference']} if 'primary_contigs' in bound else {}))
@@ -139,7 +140,7 @@ def reconstruct(bound, directory, runtime):
                 label=flag&192
                 if not flag&1 or label not in (64,128) or label in pair: m.fail('BAM_FRAGMENTS_TEMPLATE_INVALID')
                 pair[label]=validated
-            fragment,reason=_template(pair,supplement,refs)
+            fragment,reason=_template(pair,supplement,refs,legacy_profile=legacy_profile)
             counts['n_templates']+=1; counts['n_primary_pairs']+=1
             if fragment is not None and 'primary_contigs' in bound:
                 if fragment[0] not in bound['primary_contigs']:
@@ -181,7 +182,7 @@ def verify_bam_fragments(manifest_path, *, expected_sha256, runtime, temporary_r
         initial=io.take_snapshots([manifest_path]); manifest=v2.load_fragments_manifest_v2(manifest_path,expected_sha256=expected_sha256)
         if len(manifest['libraries'])!=1: m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')
         root=Path(manifest_path).parent; entry=manifest['libraries'][0]; p=entry['provenance']
-        if (p['kind']!='bam_fragment_production' or p['profile']['id'] not in (m.PROFILE_ID,m.NEUTRAL_PROFILE_ID)
+        if (p['kind']!='bam_fragment_production' or p['profile']['id'] not in m.PROFILES
                 or p['profile']['resource']['path']!=str(root/'profile.json')
                 or p['producer_record'] is None or p['producer_record']['path']!=str(root/'production.json')): m.fail('BAM_FRAGMENTS_PROFILE_UNSUPPORTED')
         snapshots=io.take_snapshots([root/'profile.json',root/'production.json'])
@@ -196,7 +197,7 @@ def verify_bam_fragments(manifest_path, *, expected_sha256, runtime, temporary_r
                 or entry['strand']!={'mode':'absent','definition':None}
                 or p!=m.provenance(record,p['profile']['resource'],p['producer_record'])): m.fail('BAM_FRAGMENTS_RECORD_MISMATCH')
         with tempfile.TemporaryDirectory(prefix='agent-bam-verify-',dir=temporary_root) as temp:
-            expected,counts,summary=reconstruct(bound,Path(temp),runtime)
+            expected,counts,summary=reconstruct(bound,Path(temp),runtime,legacy_profile=record['arguments']['source_profile'] in m.LEGACY_PROFILES)
             if counts!=record['qualification'] or summary!=record['canonical'] or any(entry[k]!=summary[k] for k in v2.SUMMARY_KEYS): m.fail('BAM_FRAGMENTS_CONSERVATION_MISMATCH')
             with expected.open('rb') as source:
                 if any(a!=b for a,b in zip_longest(source,_bgzf_lines(root/entry['bgzf']['path']))): m.fail('BAM_FRAGMENTS_TRANSFORMATION_MISMATCH')

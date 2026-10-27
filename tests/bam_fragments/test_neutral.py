@@ -180,7 +180,7 @@ def test_rehashed_forged_fragments(neutral_factory,tmp_path,fault):
 
 def test_production_scope_bug_caught_independently(neutral_factory,tmp_path,monkeypatch):
     args,_=neutral_factory();original=production.generate
-    def faulty(binding,*a):return original(dict(binding,primary_contigs={'nuclear','mito'}),*a)
+    def faulty(binding,*a,**kwargs):return original(dict(binding,primary_contigs={'nuclear','mito'}),*a,**kwargs)
     monkeypatch.setattr(production,'generate',faulty)
     stage=tmp_path/'stage';stage.mkdir()
     production.prepare_in_stage(args,stage,FragmentVerificationRuntime())
@@ -307,7 +307,18 @@ def test_target_vocabulary_cannot_broaden_primary_scope(neutral_factory,monkeypa
 
 
 def test_legacy_profile_identity_unchanged():
-    assert m.sha_bytes(m.PROFILE_BYTES)=='79647fb6e37b89df21405765d058c20cdbe4a2e9b43df310da0c38fe9292a8e0'
+    assert m.sha_bytes(m.LEGACY_PROFILE_BYTES)=='79647fb6e37b89df21405765d058c20cdbe4a2e9b43df310da0c38fe9292a8e0'
+
+
+def test_legacy_neutral_publication_retains_its_reader(neutral_factory,tmp_path):
+    args,_=neutral_factory();args['source_profile']=m.LEGACY_NEUTRAL_PROFILE_ID
+    stage=tmp_path/'legacy-neutral';stage.mkdir();runtime=FragmentVerificationRuntime()
+    value,_=production.prepare_in_stage(args,stage,runtime)
+    assert value['libraries'][0]['provenance']['profile']['id']==m.LEGACY_NEUTRAL_PROFILE_ID
+    assert json.loads((stage/'production.json').read_text())['contract_version']==m.LEGACY_NEUTRAL_PRODUCTION_CONTRACT
+    verifier.verify_bam_fragments(stage/'manifest.json',expected_sha256=sha(stage/'manifest.json'),runtime=runtime)
+    with pytest.raises(m.BamFragmentsError,match='PROFILE_READ_ONLY'):
+        owner.execute_bam_fragments(args)
 
 
 def test_other_contigs_excluded_by_classification(neutral_factory):

@@ -218,7 +218,7 @@ def test_uploaded_qualified_bam_fresh_intake_handoff_and_multiturn_exact_source(
         assert prepared.resolved_arguments['intake_manifest_sha256'] == inspected.result['manifest_sha256']
         for key in ('library_context_path', 'library_context_sha256', 'reference_bundle_path', 'reference_bundle_sha256', 'source_profile'):
             assert prepared.resolved_arguments[key] == companion.inputs()[key]
-        assert prepared.resolved_arguments['source_profile'] == 'agent-cb-paired-atac.v1'
+        assert prepared.resolved_arguments['source_profile'] == 'agent-cb-paired-atac.v2'
         authority = prepared.verification.artifact_authority
         assert authority['schema_version'] == 2 and authority['verifier']['id'] == 'agent.bam-fragments-independent'
         assert authority['producer_qualification']['scope'] == 'bam_read_pair_transformation.v1'
@@ -417,7 +417,7 @@ def downstream_bam_inputs(tmp_path):
             row.set_tag('CB', value['cb'])
             output.write(row)
     arguments.update(source_path=str(path), source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                     source_profile='agent-cb-paired-atac.v1')
+                     source_profile='agent-cb-paired-atac.v2')
     return arguments
 
 

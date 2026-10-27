@@ -93,4 +93,4 @@ def matrix_tool_spec():
             'Preserve selected row order, full reference columns and zeros. Empty selection succeeds. No filtering, cell calling or model inference.', capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_ccre.v1',(member('manifest_path'),member('manifest_sha256'))),
-            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','matrix_path'),)),)))
+            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','matrix_path'),)),)))

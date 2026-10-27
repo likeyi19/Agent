@@ -25,7 +25,7 @@ def validate_bam_result(value):
         v2.shape(value,BamFragmentsResult.__annotations__)
         if (value['status']!='success' or value['artifact_type']!=v2.ARTIFACT_TYPE
                 or type(value['artifact_schema_version']) is not int or value['artifact_schema_version']!=2
-                or value['contract_version']!=v2.CONTRACT_VERSION or value['source_profile']!=m.PROFILE_ID
+                or value['contract_version']!=v2.CONTRACT_VERSION or value['source_profile'] not in (m.PROFILE_ID,m.LEGACY_PROFILE_ID)
                 or value['species'] not in ('human','mouse')
                 or value['assembly']!={'human':'hg38','mouse':'mm10'}[value['species']]
                 or value['strand_mode']!='absent'): raise ValueError()

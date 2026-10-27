@@ -189,12 +189,29 @@ class H5ADUploadAdmission:
             raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
         return record
 
+    def _uploaded_records(self, *, listing='all'):
+        """Select this owner's registrations, excluding task-local role aliases.
+
+        Both can refer to the same uploaded inode. Storage location alone does
+        not make an internal scientific binding a browser upload or library.
+        """
+        attributions = {_ATTACHMENT_ATTRIBUTION, _ATTRIBUTION, _GROUPS_ATTRIBUTION,
+            _FRAGMENTS_ATTRIBUTION, _FASTA_ATTRIBUTION, _BAM_ATTRIBUTION,
+            _FASTQ_ATTRIBUTION, _FASTQ_COLLECTION_ATTRIBUTION}
+        return tuple(self._owned(record) for record in self.resources.list_records(
+            source_root=self.completed, listing=listing) if record.attribution in attributions)
+
+    def session_attachments(self, session_id):
+        self._check_directories()
+        return tuple(record.public() for record in self._uploaded_records()
+                     if getattr(record, 'session_id', None) == session_id)
+
     def choices(self):
         """Only completed browser registrations, without reopening source bytes."""
         try:
             self._check_directories()
-            return tuple(self._owned(record).public()
-                         for record in self.resources.list_records(source_root=self.completed, listing='choices')
+            return tuple(record.public()
+                         for record in self._uploaded_records(listing='choices')
                          if record.input_type in ('h5ad', 'groups', 'external_fragments', 'bam', 'fastq')
                          and getattr(record, 'session_id', None) is None)
         except (ResourceAdmissionError, UploadError):
@@ -205,8 +222,8 @@ class H5ADUploadAdmission:
     def fastq_members(self):
         """Completed bytes with explicit attribution, not selectable libraries."""
         self._check_directories()
-        return tuple(self._owned(record).public()
-                     for record in self.resources.list_records(source_root=self.completed, listing='fastq_members'))
+        return tuple(record.public()
+                     for record in self._uploaded_records(listing='fastq_members'))
 
     @staticmethod
     def _fastq_name(member):
@@ -334,8 +351,7 @@ class H5ADUploadAdmission:
             if fastq_member is not None:
                 # Role slots are immutable across transfer IDs too, including a
                 # changed compression declaration that would choose another path.
-                for record in self.resources.list_records(source_root=self.completed, listing='fastq_members'):
-                    self._owned(record)
+                for record in self._uploaded_records(listing='fastq_members'):
                     occupied = {key: value for key, value in record.fastq_member.items() if key != 'compression'}
                     if occupied == slot and (accepted is None or record.resource_id != accepted.resource_id):
                         raise UploadError('UPLOAD_CONFLICT')

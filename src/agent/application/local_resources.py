@@ -62,8 +62,10 @@ _H5AD_COMPOSITION = 'h5ad-science.v1'
 _FRAGMENTS_COMPOSITION = 'external-fragments-science.v1'
 _BAM_COMPOSITION = 'bam-science.v1'
 _FASTQ_COMPOSITION = 'fastq-science.v1'
+# These consumers may receive user parameters; only the planner binds matrix outputs.
+_RAW_ANALYSIS_TOOLS = ('pca_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
 _FASTQ_COMPANION_TOOLS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments',
-                        'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre')
+                        'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre') + _RAW_ANALYSIS_TOOLS
 _FASTQ_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'source_index_path', 'source_index_sha256', 'output_dir',
     'fragments_manifest_path', 'fragments_manifest_sha256',
@@ -71,7 +73,7 @@ _FASTQ_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _FASTQ_SELECTION_ERRORS = ('FASTQ_RESOURCE_AMBIGUOUS',)
 _BAM_COMPANION_TOOLS = ('inspect_raw_scATAC', 'prepare_scATAC_bam_fragments',
-                       'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre')
+                       'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre') + _RAW_ANALYSIS_TOOLS
 _BAM_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'source_index_path', 'source_index_sha256', 'output_dir',
     'fragments_manifest_path', 'fragments_manifest_sha256',
@@ -79,7 +81,7 @@ _BAM_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
 _FRAGMENTS_COMPANION_TOOLS = ('import_scATAC_fragments', 'compute_scATAC_qc',
-                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features')
+                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features') + _RAW_ANALYSIS_TOOLS
 _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_path',
     'source_index_sha256', 'output_dir', 'fragments_manifest_path', 'fragments_manifest_sha256',
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
@@ -1470,7 +1472,8 @@ class LocalResourceAdmission:
                 specification = self._registry.get(name)
                 arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
                 for key, argument in arguments.items():
-                    if key not in _FRAGMENTS_SOURCE_ARGUMENTS:
+                    if (key not in _FRAGMENTS_SOURCE_ARGUMENTS
+                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
                         declarations.setdefault(key, []).append(argument)
                 if specification.semantic_planning is not None:
                     for port in specification.semantic_planning.consumer_ports:
@@ -1478,7 +1481,8 @@ class LocalResourceAdmission:
                         for source in port.request_sources:
                             for member in source.members:
                                 key = fields[member.name]
-                                if key not in _FRAGMENTS_SOURCE_ARGUMENTS:
+                                if (key not in _FRAGMENTS_SOURCE_ARGUMENTS
+                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
                                     declarations.setdefault(member.input_name, []).append(arguments[key])
             if set(values) - set(declarations):
                 raise ValueError('Unsupported fragments companion declaration.')
@@ -1530,7 +1534,8 @@ class LocalResourceAdmission:
                 specification = self._registry.get(name)
                 arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
                 for key, argument in arguments.items():
-                    if key not in _BAM_SOURCE_ARGUMENTS:
+                    if (key not in _BAM_SOURCE_ARGUMENTS
+                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
                         declarations.setdefault(key, []).append(argument)
                 if specification.semantic_planning is not None:
                     for port in specification.semantic_planning.consumer_ports:
@@ -1538,7 +1543,8 @@ class LocalResourceAdmission:
                         for source in port.request_sources:
                             for member in source.members:
                                 key = fields[member.name]
-                                if key not in _BAM_SOURCE_ARGUMENTS:
+                                if (key not in _BAM_SOURCE_ARGUMENTS
+                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
                                     declarations.setdefault(member.input_name, []).append(arguments[key])
             if set(values) - set(declarations):
                 raise ValueError('Unsupported BAM companion declaration.')
@@ -1585,7 +1591,8 @@ class LocalResourceAdmission:
                 specification = self._registry.get(name)
                 arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
                 for key, argument in arguments.items():
-                    if key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}:
+                    if (key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}
+                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
                         declarations.setdefault(key, []).append(argument)
                 if specification.semantic_planning is not None:
                     for port in specification.semantic_planning.consumer_ports:
@@ -1593,7 +1600,8 @@ class LocalResourceAdmission:
                         for source in port.request_sources:
                             for member in source.members:
                                 key = fields[member.name]
-                                if key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}:
+                                if (key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}
+                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
                                     declarations.setdefault(member.input_name, []).append(arguments[key])
             if set(values) - set(declarations):
                 raise ValueError('Unsupported FASTQ companion declaration.')

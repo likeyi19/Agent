@@ -36,7 +36,7 @@ def test_pending_metadata_corrections_are_not_source_evidence(initial, addition,
 @pytest.mark.parametrize('initial,addition,field', [
     (EpiZooDeclaration(matrix_semantics='fragment_counts'), EpiZooDeclaration(), 'matrix_semantics'),
     (AnnotationDeclaration(measurement='reported counts'), AnnotationDeclaration(), 'measurement'),
-    (BamDeclaration(source_profile='agent-cb-paired-atac.v1'), BamDeclaration(), 'source_profile'),
+    (BamDeclaration(source_profile='agent-cb-paired-atac.v2'), BamDeclaration(), 'source_profile'),
     (FragmentsDeclaration(source_profile='10x-atac-fragments.v1'), FragmentsDeclaration(), 'source_profile'),
     (FastqDeclaration(barcode_policy='raw_sequence_whitelist'), FastqDeclaration(), 'barcode_policy'),
 ])

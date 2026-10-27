@@ -42,7 +42,7 @@ class ChatBAMModel(BAMModel):
         else:
             decision = dict(kind='answer_roles', pending='@roles', roles=[], arguments=[],
                 bam=asdict(BamDeclaration(assembly='hg38', barcode_policy='corrected_cb_already_corrected',
-                                         source_profile='agent-cb-paired-atac.v1')))
+                                         source_profile='agent-cb-paired-atac.v2')))
         return json.dumps(dict(turn_schema_version=1, decision=decision))
 
 

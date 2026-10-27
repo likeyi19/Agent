@@ -221,6 +221,42 @@ private CellMarker corroboration does not validate cell identities. Provider
 explanation failures remain separate from accepted science. Demo and controlled
 pilot conclusions are bounded by that report, not unrestricted deployment.
 
+SWC-1 builds on `96aacb3647806354ff33cb97138b722745f01b74` with no commit/push
+performed. The [raw scATAC guide](docs/guides/raw-scatac-processing.md) owns
+operating prerequisites and the existing configurable streaming upload route.
+The [SWC-1 report](../agent-data/acceptance/scientific-workflow-completion/swc-1/REPORT.md)
+records genuine full FASTQ Firefox/OpenRouter processing into a 1,120 × 1,355,445
+sparse cCRE H5AD, actual downloads, and a separate PCA/neighbors/Leiden/UMAP turn
+without upstream rerun. Existing scientific algorithms remain unchanged. Registry
+matrix ports, explicit downstream parameter admission, private upload discovery,
+matrix download projection and same-step cooutput context are corrected in their
+existing owners. Scalar cooutputs do not select files or create new scientific
+authority; distinct matrices remain ambiguous. Original counts and axes survive
+integrated export. Genuine BAM is NOT TESTED without a qualified input; combined
+one-turn execution has simulated/scripted software evidence only. The report
+separates live successes, observed failures, baseline test failures, historical
+selection/alignment differences and prose limitations. No general biological,
+arbitrary assay or unrestricted deployment qualification is implied.
+
+SWC-1B completes genuine external BAM qualification on the same uncommitted
+baseline. The [SWC-1B report](../agent-data/acceptance/scientific-workflow-completion/swc-1b/REPORT.md)
+records the complete public 10x PBMC500 BAM through native Firefox upload and
+standard OpenRouter planning, verified fragments/QC/selection and a downloaded
+569 × 1,355,445 CSR integer cCRE H5AD. One later `inspect_scATAC` execution reuses
+the exact accepted file after server restart; a preceding evidence-only answer
+and the brief clarification requesting fresh inspection are retained separately.
+No FASTQ or PCA/Leiden/UMAP rerun occurs. Shared BAM policy v2 uses POS/CIGAR
+five-prime endpoints for overlapping/contained pairs and reciprocal TLEN without
+an outer-span requirement. Exact v1 profiles and their strict historical readers
+remain; new v1 execution is read-only. Registry dataset metadata also admits
+published H5AD into existing inspection. Original data/references and SWC-1
+evidence are preserved. New official GRCh38-2020-A resources use isolated
+configuration. The report separates genuine science, simulated regression,
+download concurrency limits and the pre-existing prompt-wording test failure.
+This is bounded paired corrected-CB BAM readiness, not universal BAM or biological
+qualification. No commit/push is performed; the next capability area is MAESTRO
+annotation and qualified database evidence, not further raw-data optimization.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

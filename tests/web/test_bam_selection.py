@@ -17,7 +17,7 @@ from helpers import harness, submission
 def context(identifier='selected', *, default=False, **inputs):
     values = dict(library_context_path='/operator/qualified/library.json', library_context_sha256='a' * 64,
         reference_bundle_path='/operator/qualified/reference.json', reference_bundle_sha256='b' * 64,
-        source_profile='agent-cb-paired-atac.v1') | inputs
+        source_profile='agent-cb-paired-atac.v2') | inputs
     return ScientificInputSet(identifier, 'Qualified ' + identifier + ' BAM context', values,
                               bam_companion=True, bam_default=default)
 

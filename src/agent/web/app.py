@@ -467,9 +467,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/sessions/{session_id}/attachments')
     def session_attachments(session_id: str):
         application.reopen_session(session_id)
-        return {'choices': [] if uploads is None else [uploads._owned(r).public()
-            for r in uploads.resources.list_records(source_root=uploads.completed)
-            if getattr(r, 'session_id', None) == session_id]}
+        return {'choices': [] if uploads is None else list(uploads.session_attachments(session_id))}
 
     @app.post('/api/v1/uploads/fastq-collections', status_code=201)
     def complete_fastq_collection(body: CompleteFastqCollection):

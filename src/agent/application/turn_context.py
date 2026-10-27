@@ -194,14 +194,13 @@ def snapshot(sessions, state, *, tool_names=None):
     for rid in dict.fromkeys(relations.values()):
         revision = revisions[rid]
         operations = []
-        matrix_source = None
+        matrix_outputs = []
         for locator in revision.outputs:
             step = stored_step(sessions, locator)
             if tool_names is not None:
                 tool_names[rid, locator.name] = step.tool_name
             if step.tool_name == MATRIX:
-                if matrix_source is not None: raise IntentError('unavailable_context')
-                matrix_source = asdict(locator)
+                matrix_outputs.append(locator)
             if step.tool_name != SELECTION: continue
             if any(o['source']['run_id'] == locator.run_id and o['source']['step_id'] == locator.step_id for o in operations):
                 continue
@@ -212,6 +211,12 @@ def snapshot(sessions, state, *, tool_names=None):
             operations.append(dict(handle=f'op.{len(operations)}', source=asdict(locator), parameters=parameters))
         if len(operations) > 1 or len(revision.outputs) > 32:
             raise IntentError('unavailable_context')
+        if len({(o.run_id, o.step_id, o.accepted_step_sha256) for o in matrix_outputs}) > 1:
+            raise IntentError('unavailable_context')
+        # Match result_groups: cooutputs of one exact accepted step share its
+        # recipe. The canonical locator never chooses among distinct matrices.
+        matrix_source = (asdict(min(matrix_outputs, key=lambda o: (o.name, o.output_key)))
+                         if matrix_outputs else None)
         # Preserve an exact prior recipe pointer, not its stale matrix artifact or
         # a target to maintain. The pointer was captured by this revision's turn.
         origin = next((i for i in state.interactions if i.turn_id == revision.turn_id), None)

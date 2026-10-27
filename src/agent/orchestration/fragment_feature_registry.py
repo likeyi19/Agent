@@ -60,7 +60,8 @@ def tool_spec():
             {k:(int,) if k in integers else (dict,) if k in ('species','diagnostic') else (str,)
              for k in CellByCCREResult.__annotations__}, validator=validate_result,
             planning_fields={k:_planning_result('Verified fragment-derived neutral matrix authority.',
-                bindable=True,artifact=A.SCATAC_CELL_BY_FEATURES) for k in ('manifest_path','manifest_sha256')}),
+                bindable=True,artifact=A.RAW_SCATAC if k=='matrix_path' else A.SCATAC_CELL_BY_FEATURES)
+                for k in ('manifest_path','manifest_sha256','matrix_path')}),
         exception_classifier=classify, retryable_error_codes=frozenset(),
         recovery_policy_version=public.RECOVERY_POLICY, durable_hooks=DurableToolHooks(public.execute,public.recover),
         planning=_tool_planning(PlanningToolRole.OPERATION,
@@ -70,4 +71,6 @@ def tool_spec():
             capability_ids=('species_adaptation', 'raw_preprocessing')),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_features.v1',
-                (member('manifest_path'),member('manifest_sha256'))),)))
+                (member('manifest_path'),member('manifest_sha256'))),
+            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',
+                (member('dataset','matrix_path'),)),)))

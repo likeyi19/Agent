@@ -192,7 +192,8 @@ def test_all_five_exact_contracts_inventory_without_payload_reads(app, monkeypat
     assert files(app) == before
 
 
-@pytest.mark.parametrize('output_key', ['manifest_path', 'manifest_sha256', 'matrix_path'])
+@pytest.mark.parametrize('output_key', ['manifest_path', 'manifest_sha256', 'matrix_path',
+    'matrix_sha256', 'logical_matrix_sha256', 'n_cells', 'n_features', 'nnz'])
 def test_matrix_and_dataset_semantic_ports(app, monkeypatch, output_key):
     revision, matrix, _ = matrix_accepted(app, monkeypatch, output_key=output_key)
     facade = read_only_boundary(app)
@@ -241,12 +242,12 @@ def test_retained_matrix_uses_actual_originating_run_and_is_not_a_new_chat_file(
     assert facade.scientific_artifacts_for_turn('session', 'later') == ()
 
 
-@pytest.mark.parametrize('case', ['forged', 'result', 'authority', 'manifest', 'failed', 'unaccepted', 'wrong_port'])
+@pytest.mark.parametrize('case', ['forged', 'result', 'authority', 'manifest', 'failed', 'unaccepted', 'unknown_output'])
 def test_unaccepted_or_conflicting_identities_fail_closed(app, monkeypatch, case):
     kwargs = {}
     if case == 'result': kwargs['result_changes'] = {'matrix_sha256': '0' * 64}
     if case == 'authority': kwargs['authority_changes'] = {'artifact_contract': external.CONTRACT}
-    if case == 'wrong_port': kwargs['output_key'] = 'nnz'
+    if case == 'unknown_output': kwargs['output_key'] = 'not_a_result_field'
     if case == 'unaccepted': kwargs['accepted_authority'] = False
     revision, matrix, _ = matrix_accepted(app, monkeypatch, **kwargs)
     facade = read_only_boundary(app)
@@ -260,7 +261,10 @@ def test_unaccepted_or_conflicting_identities_fail_closed(app, monkeypatch, case
             raise ValueError('Unaccepted failed step.')
         monkeypatch.setattr(owner, '_accepted', invalid)
     with pytest.raises(InteractiveBoundaryError): facade.scientific_artifact_handles('session', revision)
-    assert facade.revision('session', revision).scientific_artifacts == ()
+    if case == 'unknown_output':
+        with pytest.raises(InteractiveBoundaryError): facade.revision('session', revision)
+    else:
+        assert facade.revision('session', revision).scientific_artifacts == ()
 
 
 @pytest.mark.parametrize('case', ['absent_display', 'answer', 'failed', 'wrong_request'])
@@ -347,3 +351,40 @@ def test_unrelated_analysis_never_invents_matrix_download(app, monkeypatch, tool
     assert facade.scientific_artifact_handles('session', revision) == ()
     assert facade.scientific_artifacts_for_turn('session', 'initial') == ()
     assert facade.scientific_artifacts_for_turn('session', 'missing') == ()
+
+
+def test_matrix_summary_cooutputs_preserve_existing_file_handles(app, monkeypatch):
+    revision, _, _ = matrix_accepted(app, monkeypatch)
+    facade = read_only_boundary(app)
+    original = facade.scientific_artifact_handles('session', revision)
+    state = app.sessions.load('session')
+    accepted_revision = state.revisions[0]
+    summary = replace(accepted_revision.outputs[0], name='cell_count', output_key='n_cells')
+    turn = state.turn('initial')
+    selection = replace(turn.selections[0], name='cell_count', output_key='n_cells')
+    app.sessions._store._write(replace(state,
+        revisions=(replace(accepted_revision, outputs=accepted_revision.outputs + (summary,)),),
+        turns=(replace(turn, selections=turn.selections + (selection,)),)))
+    assert facade.scientific_artifact_handles('session', revision) == original
+    assert facade.scientific_artifacts_for_turn('session', 'initial') == original
+
+
+def test_accepted_matrix_download_description_reads_metadata_only(app, monkeypatch):
+    from agent.application.analysis_delivery import export_descriptions
+    revision_id, matrix, _ = matrix_accepted(app, monkeypatch)
+    revision = app.sessions.load('session').revisions[0]
+    output = revision.outputs[0]
+    original_open = Path.open
+    def metadata_only(path, *args, **kwargs):
+        assert path != matrix, 'Describing a download must not read its payload.'
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', metadata_only)
+    descriptions = export_descriptions(forbid_work(app, monkeypatch).sessions, 'session',
+        [dict(revision_id=revision_id, output_name=output.name,
+              accepted_step_sha256=output.accepted_step_sha256)])
+    description, = descriptions
+    assert description['artifact_type'] == 'scientific_matrix'
+    assert description['original_measurements'] and description['original_feature_axis']
+    assert description['actual_download_status'] == 'NOT_RECORDED'
+    assert description['payload_checks'] == 'performed_on_download'
+    assert str(app.workspace_root) not in json.dumps(description)

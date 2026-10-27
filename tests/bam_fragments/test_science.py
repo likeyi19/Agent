@@ -71,7 +71,6 @@ def test_both_mate_mapq_before_aggregation(bam_factory,left,right):
     ({'b':{'cigar':'20M1D'}},'unsupported_cigar'),
     ({'a':{'pos':80},'b':{'pos':10}},'geometry'),
     ({'a':{'flag':99|16}},'geometry'),
-    ({'a':{'cigar':'80M'}},'geometry'),
     ({'a':{'cb':None}},'missing_cb'),
     ({'a':{'cigar':'4M'},'b':{'pos':14,'cigar':'4M'}},'short_shifted'),
 ])
@@ -83,6 +82,7 @@ def test_exclusions_are_pairwise_and_deterministic(bam_factory,changes,reason):
 
 
 @pytest.mark.parametrize('changes,expected',[
+    ({'a':{'cigar':'80M'}},'chr2\t14\t75\taCgT-1\t1'),
     ({'a':{'cigar':'10M2I10M'}},'chr2\t14\t75\taCgT-1\t1'),
     ({'b':{'cigar':'10M2D10M'}},'chr2\t14\t77\taCgT-1\t1'),
     ({'a':{'cigar':'20M5S'}},'chr2\t14\t75\taCgT-1\t1'),

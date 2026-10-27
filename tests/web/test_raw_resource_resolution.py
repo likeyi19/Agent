@@ -24,7 +24,7 @@ from test_bam_execution import downstream_bam_inputs, instrument
 
 COMPLETE = handoff.BamDeclaration(source='source.0', assay='SCATAC', namespace='sample',
     species='human', assembly='hg38', barcode_policy='corrected_cb_already_corrected',
-    source_profile='agent-cb-paired-atac.v1')
+    source_profile='agent-cb-paired-atac.v2')
 
 
 def other_reference(choice, root, *, species='human'):

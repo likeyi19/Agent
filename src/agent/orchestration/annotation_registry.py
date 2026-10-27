@@ -87,4 +87,4 @@ def annotation_tool_spec():
             'Count-weighted native Enhanced RP. External count history remains declared. No cCRE adoption, peak projection, normalized/binary values, inferred groups or required validation.', capability_ids=('marker_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('annotation','scatac_cell_type_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
-            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','annotated_h5ad_path'),)),)))
+            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','annotated_h5ad_path'),)),)))

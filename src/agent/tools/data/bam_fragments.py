@@ -67,7 +67,7 @@ def alignment(r, dictionary, rgs):
     return r | {'tag_values':tags, 'computed_end':end, 'unsupported':unsupported}
 
 
-def pair(first, second, split, dictionary):
+def pair(first, second, split, dictionary, *, legacy_profile=False):
     a,b = first,second
     if a['tag_values'].get('RG') != b['tag_values'].get('RG'): m.fail('BAM_FRAGMENTS_LIBRARY_MISMATCH')
     cb1,cb2 = a['tag_values'].get('CB'),b['tag_values'].get('CB')
@@ -80,7 +80,7 @@ def pair(first, second, split, dictionary):
     same = a['rid'] == b['rid']
     if both_mapped and same:
         span = max(a['computed_end'],b['computed_end']) - min(a['start'],b['start'])
-        if (a['tlen'] or b['tlen']) and (a['tlen'] != -b['tlen'] or abs(a['tlen']) != span): m.fail('BAM_FRAGMENTS_TLEN_MISMATCH')
+        if (a['tlen'] or b['tlen']) and (a['tlen'] != -b['tlen'] or (legacy_profile and abs(a['tlen']) != span)): m.fail('BAM_FRAGMENTS_TLEN_MISMATCH')
     if not both_mapped: return None,'unmapped'
     if not same: return None,'discordant'
     if not a['flag']&2 or not b['flag']&2: return None,'improper'
@@ -89,7 +89,9 @@ def pair(first, second, split, dictionary):
     if a['unsupported'] or b['unsupported']: return None,'unsupported_cigar'
     if bool(a['flag']&16) == bool(b['flag']&16): return None,'geometry'
     forward,reverse = (b,a) if a['flag']&16 else (a,b)
-    if forward['start'] > reverse['start'] or forward['computed_end'] > reverse['computed_end']: return None,'geometry'
+    if (forward['start'] >= reverse['computed_end']
+            or (legacy_profile and (forward['start'] > reverse['start']
+                                    or forward['computed_end'] > reverse['computed_end']))): return None,'geometry'
     if any(r['mapq'] < 30 or r['mapq'] == 255 for r in (a,b)): return None,'mapq'
     if cb1 is None or cb2 is None: return None,'missing_cb'
     left,right = forward['start']+4,reverse['computed_end']-5
@@ -97,7 +99,7 @@ def pair(first, second, split, dictionary):
     return (dictionary[a['rid']][0], left, right, cb1),None
 
 
-def generate(binding, directory, runtime):
+def generate(binding, directory, runtime, *, legacy_profile=False):
     projected = directory/'reads.tmp'; ordered = directory/'names.tmp'; ranked = directory/'ranked.tmp'
     header, dictionary, stream, n = io.project(binding['source']['path'], projected,
         **({'neutral_reference':binding['reference']} if 'primary_contigs' in binding else {}))
@@ -121,7 +123,7 @@ def generate(binding, directory, runtime):
                 primary[end] = r
             if set(primary) != {1,2}: m.fail('BAM_FRAGMENTS_TEMPLATE_INVALID')
             q['n_templates'] += 1; q['n_primary_pairs'] += 1
-            fragment,reason = pair(primary[1],primary[2],split,dictionary)
+            fragment,reason = pair(primary[1],primary[2],split,dictionary,legacy_profile=legacy_profile)
             if reason is None and 'primary_contigs' in binding and fragment[0] not in binding['primary_contigs']:
                 fragment,reason = None,'non_primary'
             if reason: q['exclusions'][reason] += 1
@@ -160,7 +162,7 @@ def aggregate(ranked, contigs, directory, runtime):
 def prepare_in_stage(arguments, stage, runtime):
     physical.verify_packaging(runtime); backend = io.runtime_identity(); binding = io.bind(arguments)
     directory = stage/'libraries'/binding['namespace']; directory.mkdir(parents=True)
-    ranked,qualification = generate(binding,directory,runtime)
+    ranked,qualification = generate(binding,directory,runtime,legacy_profile=arguments['source_profile'] in m.LEGACY_PROFILES)
     plain,summary = aggregate(ranked,binding['contigs'],directory,runtime)
     bgzf=directory/'fragments.tsv.gz'
     with bgzf.open('xb') as out:
@@ -168,7 +170,7 @@ def prepare_in_stage(arguments, stage, runtime):
     run_stage([runtime.tabix,'-p','bed',bgzf],cwd=directory,code='BAM_FRAGMENTS_PACKAGING_FAILED')
     outputs={k:io.resource(p) for k,p in (('bgzf',bgzf),('tabix',Path(str(bgzf)+'.tbi')))}
     record=m.validate_record(dict(artifact_type='agent.bam-fragment-production',schema_version=1,
-        contract_version=m.NEUTRAL_PRODUCTION_CONTRACT if arguments['source_profile'] == m.NEUTRAL_PROFILE_ID else m.PRODUCTION_CONTRACT,
+        contract_version=m.production_contract(arguments['source_profile']),
         profile_sha256=m.sha_bytes(m.profile_bytes(arguments['source_profile'])),arguments=arguments,
         **{k:binding[k] for k in m.binding_keys(arguments)},
         source_history=m.HISTORY,runtime=backend,qualification=qualification,canonical=summary,

@@ -174,3 +174,31 @@ def test_catalog_integrity_and_duplicate_references_fail_closed(chat):
     assert client.post('/api/v1/sessions/other/turns', json=submission(
         input_set_id=None, attachment_ids=[rid])).status_code == 400
     assert not backend.models and not backend.science_calls
+
+
+def test_raw_role_aliases_do_not_pollute_upload_discovery_or_refresh(chat):
+    """Private scientific bindings share uploaded bytes but are not new uploads."""
+    client, backend, uploads = chat
+    originals = []
+    typed = []
+    for role in ('R1', 'R2', 'R3'):
+        rid = upload(client, role+'.fastq', b'@read\nACGT\n+\nIIII\n', token=role).json()['resource_id']
+        originals.append(rid)
+        source = uploads.resources.load(rid)
+        typed.append(uploads.resources.bind_raw_source('role:'+role, source,
+            session_id='session', input_type='fastq', declaration=dict(library_id='sample',
+                fastq_layout='tenx-atac-r1-r2-r3.v1', role=role, lane='001',chunk='001')))
+    collection = uploads.resources.register_fastq_collection('private-library',
+        [r.resource_id for r in typed], label='Task library', attribution='Session-scoped FASTQ handoff')
+    response = client.get('/api/v1/resources')
+    assert response.status_code == 200, response.text
+    assert response.json()['choices'] == [] and not response.json().get('fastq_members')
+    response = client.get('/api/v1/sessions/session/attachments')
+    assert response.status_code == 200, response.text
+    assert {r['resource_id'] for r in response.json()['choices']} == set(originals)
+    assert client.get('/api/v1/sessions/other/attachments').json()['choices'] == []
+    # Listing does not grant direct upload-selection authority to internal aliases.
+    from agent.application.local_resources import ResourceAdmissionError
+    for record in [*typed, collection]:
+        with pytest.raises(ResourceAdmissionError):
+            uploads.resolve(record.resource_id)

@@ -16,6 +16,11 @@ capability. Model weights and scientific resources remain outside Git.
 See the [documentation index](docs/README.md) for current operating guidance,
 architecture owners and historical acceptance records.
 
+The [raw scATAC guide](docs/guides/raw-scatac-processing.md) covers FASTQ/BAM
+uploads, reference provisioning, QC/count semantics and downstream reuse.
+It links genuine FASTQ and external corrected-CB BAM Firefox/OpenRouter acceptance,
+including independently verified original H5AD downloads.
+
 The [scientific storage guide](docs/guides/scientific-storage.md) records the FS-2
 resource deployment, FS-3 development retirement, explicit EpiZoo location
 configuration and fresh UAT workspace.

@@ -68,4 +68,4 @@ def matrix_adoption_tool_spec():
             'Conserves external values and identities. No peak projection, fragment/QC/selection lineage or model-readiness claim.', capability_ids=('exact_matrix_adoption',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_ccre.external.v1',(member('manifest_path'),member('manifest_sha256'))),
-            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('value','matrix_path'),)),)))
+            SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','matrix_path'),)),)))

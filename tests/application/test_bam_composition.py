@@ -21,7 +21,7 @@ def registered(tmp_path):
 def context(tmp_path):
     return dict(library_context_path=str(tmp_path / 'library.json'), library_context_sha256='a' * 64,
         reference_bundle_path=str(tmp_path / 'reference.json'), reference_bundle_sha256='b' * 64,
-        source_profile='agent-cb-paired-atac.v1', species='human', raw_assay='SCATAC',
+        source_profile='agent-cb-paired-atac.v2', species='human', raw_assay='SCATAC',
         source_genome_assembly='hg38')
 
 

@@ -81,7 +81,7 @@ class BamDeclaration:
         for value, choices in ((self.assay, ('SCATAC', 'TENX_ATAC')),
                 (self.species, ('human', 'mouse')), (self.assembly, ('hg38', 'mm10')),
                 (self.barcode_policy, ('corrected_cb_already_corrected',)),
-                (self.source_profile, ('agent-cb-paired-atac.v1',))):
+                (self.source_profile, ('agent-cb-paired-atac.v1', 'agent-cb-paired-atac.v2'))):
             if value is not None and value not in choices:
                 raise ValueError('Unsupported BAM scientific declaration.')
         if self.species and self.assembly and {'human': 'hg38', 'mouse': 'mm10'}[self.species] != self.assembly:
@@ -387,7 +387,7 @@ def schema(sources, resources, field='fastq', *, groups=()):
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
             species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
             barcode_policy=optional(('corrected_cb_already_corrected',)),
-            source_profile=optional(('agent-cb-paired-atac.v1',)),
+            source_profile=optional(('agent-cb-paired-atac.v2',)),
             resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'}))
     return _object(dict(assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
         namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
@@ -636,7 +636,9 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
             ('species', 'Specify human or mouse for this canonical reference workflow.'),
             ('barcode_policy', 'Confirm raw barcode sequences requiring whitelist correction.')) if getattr(declared, key) is None]
         if not declared.members:
-            missing.append('Associate the uploaded reads with their read roles, lanes and chunks.')
+            missing.append('Associate the uploaded reads with their read roles, lanes and chunks.'
+                           if binding.members else
+                           'Upload the FASTQ reads and state their read roles, lanes and chunks.')
         for member in declared.members:
             if int(member.source.split('.')[1]) >= len(binding.members):
                 raise ValueError('FASTQ member is outside captured attachments.')

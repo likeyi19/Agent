@@ -8,6 +8,9 @@ The [backend installation guide](guides/backends.md) covers the managed EpiZoo a
 EpiAgent source snapshots, optional dependencies and exact import origins.
 The [PCA representation guide](guides/pca-analysis.md) explains explicit count
 preprocessing, original-measurement preservation and interpretation limits.
+The [raw scATAC guide](guides/raw-scatac-processing.md) covers FASTQ/BAM prerequisites,
+large-file deployment, matrix semantics, downstream handoff and the separately
+recorded genuine FASTQ and BAM acceptance scopes.
 
 The documentation has three locations:
 

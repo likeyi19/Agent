@@ -119,6 +119,8 @@ def recover_bam_fragments(arguments, execution_identity):
 def execute_bam_fragments(arguments, execution_identity=None):
     from .bam_fragments import prepare_in_stage
     args, destination, token = _publication(arguments, execution_identity)
+    if args['source_profile'] not in m.CURRENT_PROFILES:
+        m.fail('BAM_FRAGMENTS_PROFILE_READ_ONLY')
     output = Path(args['output_dir'])
     if output != output.resolve() or destination.exists() or destination.is_symlink():
         m.fail('BAM_FRAGMENTS_ARTIFACT_CONFLICT')

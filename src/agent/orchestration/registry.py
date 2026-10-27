@@ -1796,7 +1796,7 @@ def build_default_tool_registry() -> ToolRegistry:
             "path": _planning_argument(
                 path_types,
                 "Raw scATAC-seq H5AD dataset to inspect.",
-                source=direct,
+                source=composable,
                 artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
             )
         },
@@ -1840,6 +1840,9 @@ def build_default_tool_registry() -> ToolRegistry:
                     "dataset",
                     (_semantic_member("dataset", "path"),),
                     True,
+                    accepted_upstream_types=(
+                        "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1"
+                    ),
                     request_sources=(
                         _semantic_request(
                             "input_path",
@@ -2102,7 +2105,7 @@ def build_default_tool_registry() -> ToolRegistry:
         semantic_planning=SemanticToolSpec(consumer_ports=(
             SemanticConsumerPortSpec('dataset', (_semantic_member('dataset','input_path'),), True,
                 request_sources=(_semantic_request('input_path', _semantic_request_member('dataset','input_path')),),
-                accepted_upstream_types=('raw_scatac_dataset.v1',)),
+                accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1')),
             _semantic_argument_port('output_dir', required=True),
             _semantic_argument_port('n_components', required=False),
             _semantic_argument_port('preprocessing', required=False, input_name='pca_preprocessing'),
@@ -3228,8 +3231,8 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
         semantic_planning=SemanticToolSpec(
             consumer_ports=tuple(
-                (SemanticConsumerPortSpec('input_path',(_semantic_member('value','input_path'),),True,
-                    request_sources=(_semantic_request('input_path',_semantic_request_member('value','input_path')),),
+                (SemanticConsumerPortSpec('input_path',(_semantic_member('dataset','input_path'),),True,
+                    request_sources=(_semantic_request('input_path',_semantic_request_member('dataset','input_path')),),
                     accepted_upstream_types=('scatac_matrix_h5ad.v1',)) if argument=='input_path'
                  else _semantic_argument_port(argument, required=required))
                 for argument, required in (

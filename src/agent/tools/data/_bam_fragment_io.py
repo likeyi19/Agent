@@ -56,7 +56,7 @@ def runtime_identity():
 
 def bind(arguments):
     a = m.validate_arguments(arguments)
-    if a['source_profile'] == m.NEUTRAL_PROFILE_ID:
+    if m.is_neutral(a['source_profile']):
         from .neutral_bam import bind
         return bind(a)
     _, intake, _ = raw.load_raw_intake_manifest(a['intake_manifest_path'], expected_sha256=a['intake_manifest_sha256'])

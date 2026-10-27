@@ -96,7 +96,7 @@ def clarification_text(clarification):
                 'Check the selected inputs and declarations; an operator can help review resource availability.')
     if clarification.reason in {'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations', 'missing_annotation_declarations', 'missing_epizoo_declarations'}:
         return (('Before EpiZoo analysis: ' if clarification.reason == 'missing_epizoo_declarations' else 'Before annotation: ' if clarification.reason == 'missing_annotation_declarations' else 'Before preprocessing: ') + ' '.join(clarification.choices)
-                + ' Your original request and uploaded files are preserved.')
+                + ' Your original request and any supplied files are preserved.')
     if clarification.reason == 'missing_input_roles':
         roles = ', '.join(
             ('dataset to inspect' if choice == 'inspect_scATAC.dataset' else

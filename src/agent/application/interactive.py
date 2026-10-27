@@ -980,6 +980,12 @@ class InteractiveAgentApplication:
                 run = self._application.run_store.load(output.run_id)
                 step = next(s for s in run.steps if s.step_id == output.step_id)
                 if step.tool_name in _MATRIX_CONTRACTS:
+                    from .matrix_delivery import selects_matrix_port
+                    if not selects_matrix_port(self._application.registry, step.tool_name, output.output_key):
+                        # Summary fields do not select a file. The exact current
+                        # plan below still offers its accepted matrix when no
+                        # selected file port represents that step.
+                        continue
                     items.append(self._accepted_matrix(session_id, revision, origin, output))
                 elif step.tool_name == 'adapt_epizoo_species':
                     from .model_delivery import accepted_models

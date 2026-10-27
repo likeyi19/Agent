@@ -2075,10 +2075,11 @@ def build_default_tool_registry() -> ToolRegistry:
             describe=pca_publication.describe,publication_record=pca_publication.publication_record,
             reuse_result=pca_publication.reuse_result,proof_metadata=pca_publication.proof_metadata),
         required_arguments={
-            'input_path': _planning_argument(path_types, 'H5AD X measurements; exact ordered cells/features, no normalization or filtering.',
+            'input_path': _planning_argument(path_types, 'H5AD X measurements; exact ordered cells/features. Optional explicit TF-IDF preprocessing for count/binary accessibility.',
                 source=composable, artifacts=(ArtifactSemanticKind.RAW_SCATAC,), provenance=branch),
             'output_dir': _planning_argument(path_types, 'Destination for the PCA publication.', source=direct)},
         optional_arguments={
+            'preprocessing': _planning_argument((str,), 'none (default): supplied X unchanged; tfidf_l2: sklearn smoothed document-frequency TF-IDF with L2 cell normalization before centered PCA. Requires nonnegative integer counts/binary accessibility and no empty cells; no filtering. Exploratory representation, not Signac LSI or biological qualification.', source=direct, scientific_parameter=True, choices=('none', 'tfidf_l2'), conversational_choice=True),
             'n_components': _planning_argument((int, type(None)), 'Optional component count; default min(50, min(shape)-1).',
                 source=direct, scientific_parameter=True),
             'random_seed': _planning_argument((int,), 'Reproducible PCA random seed (default 0).', source=direct, scientific_parameter=True),
@@ -2096,7 +2097,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 'analysis_path': _planning_result('Compact PCA artifact.', bindable=False)}),
         exception_classifier=_classify_analysis_exception, recovery_policy_version='pca-embed-cells-v1',
         planning=_tool_planning(PlanningToolRole.OPERATION,
-            'Centered PCA of the supplied X values using Scanpy; sparse-safe, no normalization/filtering. Ordinary peak matrices need no genome/model resources.',
+            'Centered PCA using Scanpy; sparse-safe. Explicit preprocessing=tfidf_l2 normalizes count/binary accessibility using sklearn TF-IDF before PCA; default none preserves supplied X. No filtering; not uncentered LSI. Ordinary peak matrices need no genome/model resources.',
             capability_ids=('embedding_analysis',)),
         semantic_planning=SemanticToolSpec(consumer_ports=(
             SemanticConsumerPortSpec('dataset', (_semantic_member('dataset','input_path'),), True,
@@ -2104,6 +2105,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 accepted_upstream_types=('raw_scatac_dataset.v1',)),
             _semantic_argument_port('output_dir', required=True),
             _semantic_argument_port('n_components', required=False),
+            _semantic_argument_port('preprocessing', required=False, input_name='pca_preprocessing'),
             _semantic_argument_port('random_seed', required=False, input_name='pca_random_seed'),
             _semantic_argument_port('overwrite', required=False, input_name='pca_overwrite')),
             producer_ports=(SemanticProducerPortSpec('embedding','cell_embedding_bundle.v1',

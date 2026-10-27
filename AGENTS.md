@@ -204,6 +204,23 @@ the software-verified delivery-fact correction and its unqualified live-language
 follow-up. Changes remain unstaged/uncommitted. The separate Researcher Pilot
 Readiness Review, including host synchronization, is next and is not started here.
 
+RPD-1 builds on committed OPT-3C `67775c3` with no commit/push authorization.
+The [PCA guide](docs/guides/pca-analysis.md) owns the explicit `tfidf_l2`
+preprocessing extension: installed scikit-learn TF-IDF with smoothed document
+frequency and L2 cell normalization, followed by existing centered Scanpy PCA.
+The default remains unchanged X. Transformed publications have distinct v2
+identities; accepted v1 evidence retains its exact meaning. Numeric eligibility
+is not biological suitability, and this representation is not Signac LSI.
+No filtering, inferred normalization or source measurement replacement is added.
+Registry choice metadata and the existing typed parameter owner bind user intent.
+The [RPD-1 report](../agent-data/acceptance/researcher-pilot-demo/rpd-1/REPORT.md)
+separates real Firefox/OpenRouter PBMC multi-turn work, genuine MAESTRO annotation,
+segmented historical FASTQ/current downstream evidence and native EpiZoo technical
+adaptation/inference. Short optimizer updates do not qualify biological transfer;
+private CellMarker corroboration does not validate cell identities. Provider
+explanation failures remain separate from accepted science. Demo and controlled
+pilot conclusions are bounded by that report, not unrestricted deployment.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

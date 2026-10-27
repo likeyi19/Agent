@@ -10,22 +10,34 @@ KIND = 'cell_pca'
 CONTRACT = 'cell-pca-publication.v1'
 PROFILE = digest(dict(method='centered PCA', solver='arpack', preprocessing='supplied X unchanged',
                       verification='centered-projection-leading-eigenspace.v1'))
+TFIDF_CONTRACT = 'cell-pca-publication.v2'
+TFIDF_PROFILE = digest(dict(method='centered PCA', solver='arpack',
+    preprocessing='sklearn.TfidfTransformer;norm=l2;smooth_idf=True;sublinear_tf=False',
+    verification='centered-projection-leading-eigenspace.v1'))
+
+def _identity(args):
+    return (TFIDF_CONTRACT, TFIDF_PROFILE) if args.get('preprocessing') == 'tfidf_l2' else (CONTRACT, PROFILE)
+
+
 VERIFIER = dict(id='agent.cell-pca-source-fit', compatibility_version='1')
 
 
 def arguments(values):
     args = dict(values)
-    if set(args)-{'input_path','output_dir','n_components','random_seed','overwrite'}:
+    if set(args)-{'input_path','output_dir','n_components','random_seed','overwrite','preprocessing'}:
         raise AuthorityError('Unexpected PCA argument.')
     for key in ('input_path','output_dir'):args[key]=str(Path(args[key]).resolve())
     for key,value in (('n_components',None),('random_seed',0),('overwrite',False)):args.setdefault(key,value)
+    if args.get('preprocessing', 'none') not in ('none', 'tfidf_l2'):
+        raise AuthorityError('Invalid PCA preprocessing.')
+    if args.get('preprocessing') == 'none': args.pop('preprocessing')
     return args
 
 
 def load(path,sha=None):
     value,actual=read_json(Path(path),sha)
     _shape(value,('contract','profile','execution_identity','arguments','result','files','sources'))
-    if value['contract']!=CONTRACT or value['profile']!=PROFILE or value['arguments']!=arguments(value['arguments']):
+    if (value['contract'],value['profile'])!=_identity(value['arguments']) or value['arguments']!=arguments(value['arguments']):
         raise AuthorityError('Invalid PCA publication contract.')
     result=value['result'];root=Path(value['arguments']['output_dir'])
     if value['execution_identity'] is not None:_sha(value['execution_identity'])
@@ -53,7 +65,8 @@ def publish(args,result,path):
     args=arguments(args);ctx=current();identity=None
     if ctx is not None and ctx.execution is not None and ctx.execution[:2]==(KIND,Path(args['output_dir'])):
         identity=ctx.execution[2]
-    value=dict(contract=CONTRACT,profile=PROFILE,execution_identity=identity,arguments=args,result=result,
+    contract,profile=_identity(args)
+    value=dict(contract=contract,profile=profile,execution_identity=identity,arguments=args,result=result,
         files=file_closure([result['analysis_path'],result['cell_ids_path']]),sources=file_closure([args['input_path']]))
     sha=_write_json(path,value,overwrite=args['overwrite'])
     return verify_publication(path,expected_sha256=sha)
@@ -83,11 +96,11 @@ def describe(path,sha,context):
     if [f for f in files if f['path']!=str(path)]!=value['files']:
         raise AuthorityError('PCA publication integrity changed.')
     identity=dict(kind=KIND,manifest=value,files=files,upstream={},historical_sources=value['sources'],
-        execution_identity=context.execution_for(KIND,path),profile=PROFILE,verifier=VERIFIER,
+        execution_identity=context.execution_for(KIND,path),profile=value['profile'],verifier=VERIFIER,
         qualification={},policy='historical_verified_sources.v1')
     return dict(kind=KIND,manifest_path=str(path),manifest_sha256=actual,manifest=value,
         proof_identity=identity,files=files,historical_sources=value['sources'],upstream={},
-        profile=PROFILE,verifier=VERIFIER,qualification={})
+        profile=value['profile'],verifier=VERIFIER,qualification={})
 
 
 def reuse_result(kind,description,proof,kwargs):
@@ -104,11 +117,11 @@ def publication_record(context,tool_name,args,result,execution_identity,result_m
             or _result(value,result['manifest_path'],sha)!=dict(result)):
         raise AuthorityError('PCA publication lacks exact producing execution identity.')
     description,key=context.describe(KIND,Path(result['manifest_path']),sha)
-    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.cell-pca',artifact_contract=CONTRACT,
+    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.cell-pca',artifact_contract=value['contract'],
         publication_path=result['manifest_path'],manifest_sha256=sha,files=description['files'],
         execution_identity=execution_identity,arguments_sha256=digest(arguments(args)),receipt_sha256=sha,
         upstream={'producer_inputs':digest(description['proof_identity'])},
         resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=dict(result)),
-        science_profile=PROFILE,producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',
+        science_profile=value['profile'],producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',
         completion='succeeded',integrity_scope='artifact_integrity_lineage_historical_sources.v1',
         source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))

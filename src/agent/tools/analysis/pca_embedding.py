@@ -1,4 +1,4 @@
-"""Centered Scanpy PCA on the supplied X values, without normalization/filtering.
+"""Centered Scanpy PCA with explicit optional sparse TF-IDF preprocessing.
 
 The compact publication carries fit state and exact input identity. Verification
 checks the centered projection and eigenpair residual independently of PCA.
@@ -14,11 +14,14 @@ from . import embedding_analysis as common
 from agent.tools.data._fragments_common import snapshots, unchanged
 
 CONTRACT = 'cell-pca-embedding.v1'
+TFIDF_CONTRACT = 'cell-pca-embedding.v2'
 KEY = 'agent_cell_embedding'
 REPRESENTATION = 'X_pca'
 
 
-def _source(path, *, require_variance=True):
+def _source(path, *, require_variance=True, preprocessing="none"):
+    if preprocessing not in ("none", "tfidf_l2"):
+        raise ValueError("PCA preprocessing must be none or tfidf_l2.")
     data = ad.read_h5ad(path, backed='r')
     try:
         ids = tuple(str(x) for x in data.obs_names)
@@ -47,6 +50,17 @@ def _source(path, *, require_variance=True):
     x = x.astype(np.float64)
     if sparse.issparse(x):
         x.sum_duplicates()  # Canonical storage preserves the logical supplied measurements.
+    if preprocessing == 'tfidf_l2':
+        values = x.data if sparse.issparse(x) else x
+        if (values < 0).any() or not np.equal(values, np.floor(values)).all():
+            raise ValueError('TF-IDF requires nonnegative integer counts or binary accessibility in X.')
+        if (np.asarray(x.sum(axis=1)).ravel() <= 0).any():
+            raise ValueError('TF-IDF requires positive counts in every cell; no cells are silently dropped.')
+        if sparse.issparse(x):
+            x.eliminate_zeros()  # Stored zeros must not count as feature occurrences.
+        from sklearn.feature_extraction.text import TfidfTransformer
+        x = TfidfTransformer(norm='l2', use_idf=True, smooth_idf=True,
+                             sublinear_tf=False).fit_transform(x)
     if sparse.issparse(x):
         from sklearn.utils.sparsefuncs import mean_variance_axis
         means, variances = mean_variance_axis(x, axis=0)
@@ -58,23 +72,30 @@ def _source(path, *, require_variance=True):
     return x, ids, features, means, variance
 
 
-def _parameters(n, seed):
-    return dict(n_components=int(n), solver='arpack', zero_center=True, whitening=False,
+def _parameters(n, seed, preprocessing="none"):
+    value = dict(n_components=int(n), solver='arpack', zero_center=True, whitening=False,
                 normalization='none', scaling='none', feature_selection='all', matrix_slot='X',
                 random_seed=seed, computation_dtype='float64', output_dtype='float32')
+    if preprocessing == 'tfidf_l2':
+        value.update(normalization='tfidf_l2', idf='log((1+n_cells)/(1+document_frequency))+1',
+                     tf='counts', norm='l2', smooth_idf=True, sublinear_tf=False)
+    elif preprocessing != 'none':
+        raise ValueError('Unsupported PCA preprocessing.')
+    return value
 
 
 def descriptor(data):
     value = data.uns.get(KEY)
-    if not isinstance(value, dict) or value.get('contract') != CONTRACT:
+    if not isinstance(value, dict) or value.get('contract') not in (CONTRACT, TFIDF_CONTRACT):
         raise ValueError('Unsupported embedding producer contract.')
     if set(value) != {'contract','method','representation','embedding_dim','embedding_dtype','parameters',
                        'publication_path','source_path','source_sha256','cell_order_sha256','feature_order_sha256','software_versions'}:
         raise ValueError('Invalid embedding provenance.')
     k = value['embedding_dim']; params = value['parameters']
+    preprocessing = 'none' if value['contract'] == CONTRACT else 'tfidf_l2'
     if (value['method'] != 'PCA' or value['representation'] != REPRESENTATION
             or not isinstance(k, (int, np.integer)) or k <= 0 or value['embedding_dtype'] != 'float32'
-            or params != _parameters(k, params.get('random_seed'))):
+            or params != _parameters(k, params.get('random_seed'), preprocessing)):
         raise ValueError('Invalid PCA method or parameters.')
     common._validate_seed(int(params['random_seed']))
     values = np.asarray(data.obsm[REPRESENTATION])
@@ -86,11 +107,11 @@ def descriptor(data):
     for field in ('source_sha256','cell_order_sha256','feature_order_sha256'):
         if not isinstance(value[field], str) or len(value[field]) != 64 or any(c not in '0123456789abcdef' for c in value[field]):
             raise ValueError('Invalid PCA source identity.')
-    return dict(value, embedding_dim=int(k), parameters=_parameters(k, int(params['random_seed'])))
+    return dict(value, embedding_dim=int(k), parameters=_parameters(k, int(params['random_seed']), preprocessing))
 
 
 def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
-                    n_components: int | None = None, random_seed: int = 0,
+                    n_components: int | None = None, random_seed: int = 0, preprocessing: str = "none",
                     overwrite: bool = False):
     common._validate_overwrite(overwrite); common._validate_seed(random_seed)
     path = common._resolve_existing_file(input_path, 'input_path')
@@ -100,7 +121,7 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
     manifest = root / (path.stem + '.pca.manifest.json')
     for p in (output, sidecar, manifest): common._ensure_output_available(p, overwrite=overwrite)
     before = snapshots([path]); sha = common._analysis_digest(path)
-    x, ids, features, means, total = _source(path)
+    x, ids, features, means, total = _source(path, preprocessing=preprocessing)
     if n_components is not None and (type(n_components) is not int or not 0 < n_components < min(x.shape)):
         raise ValueError('PCA n_components must be positive and below min(n_cells, n_features).')
     k = min(50, min(x.shape)-1) if n_components is None else n_components
@@ -111,9 +132,9 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
         import scanpy as sc
         scores, loadings, ratios, variances = sc.pp.pca(x, n_comps=k, zero_center=True,
             svd_solver='arpack', random_state=random_seed, return_info=True, dtype='float32')
-    publication = dict(publication_path=str(manifest), contract=CONTRACT, method='PCA', representation=REPRESENTATION,
+    publication = dict(publication_path=str(manifest), contract=CONTRACT if preprocessing == 'none' else TFIDF_CONTRACT, method='PCA', representation=REPRESENTATION,
         embedding_dim=int(scores.shape[1]), embedding_dtype=str(scores.dtype),
-        parameters=_parameters(scores.shape[1], random_seed), source_path=str(path), source_sha256=sha,
+        parameters=_parameters(scores.shape[1], random_seed, preprocessing), source_path=str(path), source_sha256=sha,
         cell_order_sha256=common._cell_order_digest(ids), feature_order_sha256=common._cell_order_digest(features),
         software_versions=common._software_versions())
     data = ad.AnnData(obs=pd.DataFrame(index=ids), obsm={REPRESENTATION:scores})
@@ -139,7 +160,9 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
         finite=True, cell_order_preserved=True, backend='Scanpy', method='PCA', representation=REPRESENTATION,
         parameters=publication['parameters'], software_versions=publication['software_versions'], source_sha256=sha)
     from .pca_publication import publish
-    return publish(dict(input_path=path,output_dir=root,n_components=n_components,random_seed=random_seed,overwrite=overwrite),result,manifest)
+    args = dict(input_path=path,output_dir=root,n_components=n_components,random_seed=random_seed,overwrite=overwrite)
+    if preprocessing != 'none': args['preprocessing'] = preprocessing
+    return publish(args,result,manifest)
 
 
 def _verify_result(arguments, result):
@@ -155,11 +178,11 @@ def _verify_result(arguments, result):
         raise ValueError('PCA source locator, publication or software provenance differs.')
     if common._analysis_digest(result['input_path']) != meta['source_sha256']:
         raise ValueError('PCA source bytes changed.')
-    x, ids, features, mean, total = _source(result['input_path'])
+    x, ids, features, mean, total = _source(result['input_path'], preprocessing=arguments.get('preprocessing', 'none'))
     k = min(50,min(x.shape)-1) if arguments.get('n_components') is None else arguments['n_components']
     if (tuple(data.obs_names) != ids or common._load_cell_ids(Path(result['cell_ids_path'])) != ids
             or common._cell_order_digest(features) != meta['feature_order_sha256']
-            or meta['parameters'] != _parameters(k, arguments.get('random_seed',0))):
+            or meta['parameters'] != _parameters(k, arguments.get('random_seed',0), arguments.get('preprocessing', 'none'))):
         raise ValueError('PCA source axes or applied parameters differ.')
     fit = data.uns['pca_fit']; v = np.asarray(fit['loadings']); scores = np.asarray(data.obsm[REPRESENTATION])
     variances = np.asarray(fit['variance'])
@@ -235,7 +258,7 @@ def observe_methods(path, resources=()):
         except (ValueError, TypeError, OSError):
             continue
     unchanged(before)
-    return dict(pca='eligible' if np.isfinite(total) and total > 0 else 'invalid_or_unsupported', pca_measurements='supplied X; centered; no normalization or filtering',
+    return dict(pca='eligible' if np.isfinite(total) and total > 0 else 'invalid_or_unsupported', pca_measurements='Centered PCA; default supplied X unchanged. Explicit tfidf_l2 supports nonnegative count/binary X with positive cell totals; no feature or cell filtering. Numeric eligibility does not establish biological suitability.',
                 epizoo=matches, n_cells=len(ids), n_features=len(features))
 
 

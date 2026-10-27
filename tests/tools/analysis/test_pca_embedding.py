@@ -106,7 +106,11 @@ def test_shared_graph_cluster_umap_and_exports(embedding,tmp_path):
         create_neighbors_export(stream,output,manifest,source_sha256=manifest['analysis']['sha256'],
             source_size_bytes=path.stat().st_size,manifest_sha256=sha,max_bytes=path.stat().st_size+65536)
         with h5py.File(output,'r') as h:
-            assert 'X_pca' in h['obsm'] and 'embedding' not in h['uns/agent_milestone6']
+            assert 'X_pca' in h['obsm']
+            from anndata.io import read_elem
+            methods = read_elem(h['uns/agent_milestone6'])
+            assert methods['embedding']['method'] == 'PCA'
+            assert str(tmp_path) not in str(methods)
 
 
 def test_feature_positions_and_hvg_metadata_are_not_implicitly_filtered(source,tmp_path):
@@ -151,3 +155,65 @@ def test_optional_epizoo_observation_without_config_does_not_block_pca(source, m
     observation = pca.observe_methods(source[0], (optional,))
     assert observation['pca'] == 'eligible'
     assert observation['epizoo'] == []
+
+
+@pytest.mark.parametrize('storage', ['csr', 'csc', 'dense'])
+def test_tfidf_pca_matches_independent_count_transform_and_svd(source, tmp_path, storage):
+    path, x = source
+    x[:, -1] = 0  # Unobserved features stay present with finite smoothed IDF.
+    data = ad.read_h5ad(path)
+    data.X = {'csr': sparse.csr_matrix, 'csc': sparse.csc_matrix, 'dense': np.array}[storage](x)
+    data.write_h5ad(path)
+    before = path.read_bytes()
+    result = pca.pca_embed_cells(path, tmp_path / storage, n_components=5, preprocessing='tfidf_l2')
+    weighted = x * (np.log((1 + len(x)) / (1 + (x > 0).sum(axis=0))) + 1)
+    weighted /= np.linalg.norm(weighted, axis=1)[:, None]
+    _, singular, vt = np.linalg.svd(weighted - weighted.mean(axis=0), full_matrices=False)
+    output = ad.read_h5ad(result['analysis_path'])
+    fit = output.uns['pca_fit']
+    np.testing.assert_allclose(fit['variance'], singular[:5]**2/(len(x)-1), rtol=1e-8)
+    np.testing.assert_allclose(fit['loadings'].T @ fit['loadings'], vt[:5].T @ vt[:5], atol=1e-8)
+    assert output.uns[pca.KEY]['contract'] == pca.TFIDF_CONTRACT
+    assert result['parameters']['normalization'] == 'tfidf_l2'
+    assert path.read_bytes() == before
+    pca.verify_result(dict(input_path=path, output_dir=tmp_path/storage, n_components=5,
+                           preprocessing='tfidf_l2'), result)
+    with pytest.raises(ValueError):
+        pca._verify_result(dict(input_path=path, n_components=5), result)
+
+
+@pytest.mark.parametrize('damage', ['negative', 'fractional', 'empty_cell', 'unknown'])
+def test_tfidf_rejects_inappropriate_measurements(source, tmp_path, damage):
+    path, x = source
+    if damage == 'negative': x[0, 0] = -1
+    if damage == 'fractional': x[0, 0] = .5
+    if damage == 'empty_cell': x[0] = 0
+    data = ad.read_h5ad(path); data.X = sparse.csr_matrix(x); data.write_h5ad(path)
+    with pytest.raises(ValueError):
+        pca.pca_embed_cells(path, tmp_path/'bad-tfidf', preprocessing='unknown' if damage == 'unknown' else 'tfidf_l2')
+
+
+def test_tfidf_explicit_sparse_zeros_do_not_affect_document_frequency(source, tmp_path, monkeypatch):
+    path, _ = source
+    data = ad.read_h5ad(path); data.X.data[:4] = 0; data.write_h5ad(path)
+    def forbidden(*a, **k): raise AssertionError('Complete sparse source densified')
+    monkeypatch.setattr(sparse.csr_matrix, 'toarray', forbidden)
+    first = pca.pca_embed_cells(path, tmp_path/'stored', n_components=5, preprocessing='tfidf_l2')
+    data.X.eliminate_zeros(); data.write_h5ad(path)
+    second = pca.pca_embed_cells(path, tmp_path/'removed', n_components=5, preprocessing='tfidf_l2')
+    a = ad.read_h5ad(first['analysis_path']); b = ad.read_h5ad(second['analysis_path'])
+    np.testing.assert_allclose(a.obsm['X_pca'], b.obsm['X_pca'])
+
+
+def test_tfidf_shared_graph_and_export_preserve_method(source, tmp_path):
+    result = pca.pca_embed_cells(source[0], tmp_path/'weighted', n_components=5, preprocessing='tfidf_l2')
+    test_shared_graph_cluster_umap_and_exports(result, tmp_path/'downstream')
+
+
+def test_tfidf_choice_is_offered_and_binds_through_conversational_owner():
+    from agent.application.dialogue_execution import _parameter_input
+    from agent.orchestration.registry import build_default_tool_registry
+    key, argument = _parameter_input(build_default_tool_registry(), 'pca_embed_cells', 'preprocessing')
+    assert key == 'pca_preprocessing'
+    assert argument.planning.conversational_choice
+    assert argument.choices == ('none', 'tfidf_l2')

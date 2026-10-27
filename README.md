@@ -128,7 +128,10 @@ EpiZoo vocabulary requirements and raw-data/QC/matrix scientific contracts remai
 Scanpy PCA for ordinary H5AD X measurements. PCA and EpiZoo use the same neighbor,
 Leiden and UMAP tools with their actual representation and dimensions. Explicit
 EpiZoo requests retain exact model-vocabulary requirements and never silently
-switch methods. PCA applies no normalization or feature/cell filtering.
+switch methods. PCA defaults to unchanged X. RPD-1 adds an explicit TF-IDF/L2 preprocessing
+choice for nonnegative count/binary accessibility, with no feature/cell filtering.
+The [PCA guide](docs/guides/pca-analysis.md) records its exact method, historical
+publication compatibility and scientific limitations.
 
 [UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md) removes the
 primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,

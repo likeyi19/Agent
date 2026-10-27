@@ -79,7 +79,8 @@ def test_species_answer_schema_is_offered_only_with_exact_pending_context():
     assert len(offered) == 1
     assert offered[0]['properties']['pending']['enum'] == ['@species']
     assert offered[0]['properties']['species']['enum'] == ['human', 'mouse']
-    assert offered[0]['required'] == ['kind', 'pending', 'species', 'argument']
+    assert offered[0]['required'] == ['kind', 'pending', 'species']
+    assert set(offered[0]['properties']) == {'kind', 'pending', 'species'}
     assert offered[0]['additionalProperties'] is False
     public['dialogue'].pop('pending_prerequisite')
     assert all(v['properties']['kind']['enum'] != ['answer_prerequisite']
@@ -309,7 +310,7 @@ def test_interpreter_owns_operation_and_source_role_association_for_exact_string
             assert offered['exact_string'] is True and offered['provenance_role'] == role
             rule, = [item for item in captured['instructions'] if item.startswith('For an offered exact_string')]
             for phrase in ('surrounding quotation marks excluded', 'Preserve case, Unicode',
-                           'do not normalize', 'infer a column from metadata', 'provenance_role',
+                           'do not normalize or invent reference/query/ground-truth relationships', 'provenance_role',
                            'ambiguous or conflicting declarations require clarification'):
                 assert phrase in rule
             return decision_wire(dict(kind='execute_plan', target=tool, arguments=[asdict(argument)]))

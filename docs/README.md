@@ -6,6 +6,8 @@ The [scientific storage guide](guides/scientific-storage.md) covers the current
 consolidated deployment and fresh UAT environment.
 The [backend installation guide](guides/backends.md) covers the managed EpiZoo and
 EpiAgent source snapshots, optional dependencies and exact import origins.
+The [PCA representation guide](guides/pca-analysis.md) explains explicit count
+preprocessing, original-measurement preservation and interpretation limits.
 
 The documentation has three locations:
 

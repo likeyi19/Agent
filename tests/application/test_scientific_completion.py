@@ -563,6 +563,8 @@ def test_scientific_answer_retains_exact_presentation_request_without_execution(
         assert payload['evidence']['delivery']['requested_field'] == 'result:cohort'
         figure=payload['evidence']['delivery']['figure_relationships'][0]
         assert figure['satisfies_request'] and figure['coordinate_reused']
+        assert figure['download'] == dict(format='PNG', status='available_with_response',
+            actual_download_status='NOT_RECORDED')
         count=next(c for c in payload['evidence']['claims'] if c['field']=='n_cells')
         return dict(support='supported', paragraphs=[dict(kind='finding',
             text='The requested figure uses the accepted coordinates without fitting another embedding.',
@@ -598,6 +600,8 @@ def test_standalone_source_coloring_preserves_registration_meaning_and_figure_wh
     def reply(payload):
         evidence=payload['evidence']; figure=evidence['delivery']['figure_relationships'][0]
         assert evidence['delivery']['visualization']=='delivered' and figure['satisfies_request']
+        assert figure['download'] == dict(format='PNG', status='available_with_response',
+            actual_download_status='NOT_RECORDED')
         source=next(s for s in figure['sources'] if s['role']=='categories')
         assert source==dict(role='categories',field='source:cohort',origin='registered_source',
             observation_role='supplied_source_observation; biological validity not assessed')
@@ -665,6 +669,8 @@ def test_read_only_answer_uses_same_pinned_relationship_or_reports_its_unavailab
         else:
             figure = evidence['delivery']['figure_relationships'][0]
             assert figure['coordinate_reused'] and not figure['satisfies_request']
+            assert figure['download'] == dict(format='PNG', status='available_with_response',
+                actual_download_status='NOT_RECORDED')
             assert {s['version'] for s in figure['sources']} == {1, 2}
             text = 'The accepted figure uses the exact retained coordinates; recoloring did not fit a new embedding.'
         return dict(support='supported', paragraphs=[dict(kind='finding', text=text,

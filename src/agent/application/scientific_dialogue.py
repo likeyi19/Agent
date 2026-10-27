@@ -993,8 +993,11 @@ ANSWER_INSTRUCTIONS = (
     'Correspondence applies only to those exact fields and cells. Do not doubt that '
     'qualified relationship merely because a native-result summary omits it. Only satisfies_request=true '
     'marks a figure matching this request; other available figures do not fulfill it. Figure-file availability does '
-    'not establish biological interpretation of a figure.',
-    'delivery.exports describes existing download variants and their exact accepted-result scope. '
+    'not establish biological interpretation of a figure. A figure download descriptor identifies a pinned '
+    'PNG available with the published response in the result view; it does not record a browser transfer. '
+    'Do not invent a download URL or deny PNG availability because data exports list only H5AD files.',
+    'delivery.exports describes scientific data download variants and their exact accepted-result scope; '
+    'it is not the figure inventory. '
     'available_for_preparation is an eligible recipe, not proof that bytes were already prepared or downloaded; '
     'payload checks occur on download. selected_result fields describe only that selected result, not all '
     'possible fields in the original source. Do not combine separate variants into an invented file or '
@@ -1118,7 +1121,10 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
             'explicitly hypothetical advice need consistency with that context, not evidence that a '
             'hypothetical experiment has occurred. Do not import new observations about this dataset.',
             'Pinned delivery.figure_relationships establish their exact presentation sources and coordinate '
-            'reuse, not biological validation. delivery.exports establishes described existing preparation '
+            'reuse, not biological validation. Their download descriptors establish PNG availability with '
+            'the published response, not completed browser transfers. Data exports are a separate inventory; '
+            'their absence of PNG does not establish that a figure cannot be downloaded. '
+            'delivery.exports establishes described existing preparation '
             'variants, not completed downloads or a union of separate files. Respect its payload-check scope.',
             'delivery.selected_export qualifies only its explicitly selected original measurements and '
             'source-to-destination fields. Respect each component version and recorded methods rather than '
@@ -1440,7 +1446,8 @@ def _figure_relationships(state, figures, matching=()):
             sources.append(item)
         value = dict(kind=metadata['kind'], coordinate_reused=metadata.get('coordinate_reused', False),
                      satisfies_request=(metadata['manifest_sha256'], metadata['figure_id']) in identities,
-                     sources=sources)
+                     sources=sources, download=dict(format='PNG', status='available_with_response',
+                         actual_download_status='NOT_RECORDED'))
         if 'correspondence' in metadata:
             value['correspondence'] = {k:metadata['correspondence'][k] for k in ('basis', 'n_cells')}
         result.append(value)

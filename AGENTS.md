@@ -186,6 +186,24 @@ unrestricted scientific or operational qualification. Existing capability and
 clock fixes are preserved. Changes remain unstaged and uncommitted; OPT-3C is
 not authorized by this record.
 
+OPT-3B was subsequently committed at `77e92af`; OPT-3C builds on that clean
+baseline. OPT-3C projects Interaction-owned requested figures and composed
+downloads through the existing Web result selector, artifact renderer and cache,
+using exact published source references. Latest relevant requested output is the
+default; explicit historical previews remain protected and never activate science.
+Tab-scoped display conveniences preserve conversation, draft and result choice
+across refresh; browser-local recent discovery remains shared. No new lifecycle,
+result catalog or scientific authority is introduced. Accepted scientific status
+remains separate from response preparation; an early cached result refreshes when
+its exact saved response arrives. Pinned figure facts explicitly describe PNG
+availability with the response, never browser transfer completion. Historical
+displayed prose stays immutable, including an observed erroneous PNG-unavailability
+statement. The [OPT-3C report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3c/REPORT.md)
+records bounded engineering completion, real Firefox/source-preservation evidence,
+the software-verified delivery-fact correction and its unqualified live-language
+follow-up. Changes remain unstaged/uncommitted. The separate Researcher Pilot
+Readiness Review, including host synchronization, is next and is not started here.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

@@ -115,7 +115,7 @@ def test_resource_and_companion_controls_use_only_safe_configured_choices():
 
 def test_resource_selection_is_only_a_rechecked_display_convenience():
     convenience = section('function saveResourceSelection()', 'function uploadStatus(')
-    assert 'localStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value)' in convenience
+    assert 'sessionStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value)' in convenience
     render = section('function renderResources(', 'async function loadResources()')
     assert 'state.resources.find((choice) => choice.resource_id === selectedId)' in render
     initialize = source()[source().index('async function initialize()'):]

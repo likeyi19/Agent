@@ -32,6 +32,22 @@ describes the operator JSON, admitted model profiles and named input sets;
 [R7](../architecture/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)
 owns current interruption and recovery behavior.
 
+The Web client keeps the selected conversation, draft, attachment references and
+result preview in tab-scoped session storage. Refresh and a normal server restart
+reopen that tab's conversation without resubmitting work. Recent conversations
+remains browser-local shared discovery; it does not enumerate server Sessions.
+Closing a tab may discard its unsent draft/display choices. When upgrading from
+the older browser-global convenience storage, reopen the desired conversation
+once using Recent conversations or its Session ID. Old scientific history remains
+on the server. No entire Session history or scientific authority is stored in the
+browser.
+
+Latest requested outputs in the result selector uses exact published figure and
+export source references. Selecting an earlier presentation preserves its original
+wording and source attribution; it does not change the conversation's active
+scientific result. Downloads report a request only. Verify the saved file through
+the browser's own download interface when local delivery matters.
+
 RunStore records timezone-aware wall-clock observations exactly, including clock
 corrections during execution or between processes. `created_at`, `updated_at`,
 step start/finish and trace timestamps are audit observations; their numerical

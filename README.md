@@ -75,6 +75,18 @@ passing. OPT-3B engineering is COMPLETE within its documented scope. Host
 synchronization still needs administrator follow-up before broader deployment;
 scientific input and model-qualification boundaries remain in force.
 
+OPT-3C brings requested figures and composed downloads into the existing left
+results panel. The result selector defaults to the latest relevant requested
+outputs; explicit historical figure/result choices remain previews and do not
+activate another scientific result. Browser tabs retain their own conversation,
+draft and display choices across refresh, while Recent conversations remains
+shared within the browser. Figures and downloads precede the detailed scientific
+summary. Pinned figure availability is explicit in scientific answer evidence;
+neither that availability nor a download click establishes local delivery.
+The [OPT-3C report](../agent-data/acceptance/ua3.6.5/uat-02/post-round2-opt-3c/REPORT.md)
+records browser verification, scientific preservation and the bounded language
+delivery limitation. The separate Researcher Pilot Readiness Review remains next.
+
 [UA3.6.5-R5](docs/architecture/ua3.6.5-r5-llm-agent-interface-scientific-interaction-redesign.md)
 is implemented and has passed bounded acceptance and final engineering review.
 The current interface projects

@@ -102,7 +102,7 @@ def test_rich_view_is_reconstructed_without_persisting_scientific_state_locally(
     convenience = source[source.index('function saveConveniences'):source.index('async function api')]
     assert set(re.findall(r'^\s+(\w+):', convenience, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
-        'viewedRevisionId', 'workspacePanel',
+        'viewedRevisionId', 'workspacePanel', 'resultChoice',
     }
     initialize = source[source.index('async function initialize'):]
     assert 'choice.input_set_id === conveniences.inputSetId' in initialize

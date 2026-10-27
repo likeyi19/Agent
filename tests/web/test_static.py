@@ -102,7 +102,7 @@ def test_refresh_reopens_instead_of_replaying_and_retry_keeps_identity():
     convenience_fields = convenience_fields[:convenience_fields.index('};')]
     assert set(re.findall(r'^\s+(\w+):', convenience_fields, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
-        'viewedRevisionId', 'workspacePanel',
+        'viewedRevisionId', 'workspacePanel', 'resultChoice',
     }
 
 

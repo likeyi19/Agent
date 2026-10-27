@@ -29,6 +29,7 @@ const state = {
   fastqMembers: [], fastqCompletion: null,
   inputSets: [], epizooResources: [],
   scientificFiles: new Map(),
+  artifactPreview: false, resultChoice: null,
 };
 
 class ApiError extends Error {
@@ -41,7 +42,7 @@ class ApiError extends Error {
 
 function readConveniences() {
   try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    const value = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "{}");
     return value && typeof value === "object" ? value : {};
   } catch (_) {
     return {};
@@ -84,8 +85,9 @@ function saveConveniences() {
     epizooResourceId: element("epizoo-resource-choice").value,
     viewedRevisionId: state.session && state.viewedRevisionId !== state.session.active_revision_id ? state.viewedRevisionId : null,
     workspacePanel: element("research-layout").dataset.panel,
+    resultChoice: state.resultChoice,
   };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
 }
 
 async function api(path, method = "GET", body = null) {
@@ -364,13 +366,14 @@ async function loadRevision(revisionId) {
   const sessionId = state.session.session_id;
   const epoch = state.epoch;
   const revisionEpoch = ++state.revisionEpoch;
-  const previousSelection = state.revision?.revision_id === revisionId ? element("result-selection").value : null;
+  const previousSelection = state.resultChoice?.revisionId === revisionId ? state.resultChoice.selection : null;
   const previousOutput = state.revision?.revision_id === revisionId ? element("evidence-output").value : null;
   if (state.viewedRevisionId !== revisionId) element("scientific-panel").scrollTop = 0;
   state.evidenceEpoch += 1;
   state.revision = null;
   state.evidence = null;
   state.viewedRevisionId = revisionId;
+  state.artifactPreview = false;
   element("result-choice").value = revisionId;
   renderResultNavigation();
   saveConveniences();
@@ -384,6 +387,7 @@ async function loadRevision(revisionId) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     state.revision = revision;
     renderRevision(revision);
+    renderPresentationChoices();
     if (previousOutput && revision.evidence_outputs.includes(previousOutput)) element("evidence-output").value = previousOutput;
     if (previousSelection && Array.from(element("result-selection").options).some((o) => o.value === previousSelection)) {
       element("result-selection").value = previousSelection;
@@ -440,6 +444,7 @@ function renderRevision(revision) {
   renderArtifacts(revision);
   const groups = revision.result_groups || [];
   element("result-selection").replaceChildren(...[
+    ["@latest", "Latest requested outputs"],
     ["@overview", "Accepted analysis overview"],
     ...groups.map((group) => [group.handle, group.label]),
     ["@field", "Selected field (details)"],
@@ -490,8 +495,50 @@ function distinctFigureArtifacts(artifacts) {
   });
 }
 
-function selectResultFigure(group = null) {
+// Display association uses the published source references, never captured base
+// context, filenames, prose, cell counts or the currently active revision.
+function presentationChoices() {
+  if (!state.revision || !state.session) return [];
+  const revisionId = state.revision.revision_id;
+  return state.session.turns.flatMap((turn) => {
+    const entry = state.scientificFiles.get(JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id]));
+    if (!entry) return [];
+    const presentations = entry.presentations.filter((artifact) => artifact.turn_id === turn.turn_id
+      && artifact.revision_id === null && artifact.figure?.sources.some((source) =>
+        source.role === "coordinates" && source.output?.revision_id === revisionId));
+    const artifacts = entry.artifacts.filter((artifact) => {
+      if (artifact.artifact_type !== "scientific_composition" || artifact.turn_id !== turn.turn_id) return false;
+      const contents = artifact.contents || {};
+      return [contents.measurement, ...(contents.observations || []), ...(contents.representations || [])]
+        .some((source) => source?.accepted_output?.revision_id === revisionId);
+    });
+    return presentations.length || artifacts.length ? [{turn, presentations, artifacts}] : [];
+  });
+}
+
+function renderPresentationChoices() {
+  if (!state.revision) return;
+  const select = element("result-selection");
+  const previous = select.value;
+  for (const option of Array.from(select.options)) if (option.value.startsWith("@turn:")) option.remove();
+  for (const {turn} of presentationChoices()) {
+    const option = document.createElement("option");
+    option.value = `@turn:${turn.turn_id}`;
+    option.textContent = `Requested: ${turn.utterance.slice(0, 100)}`;
+    select.append(option);
+  }
+  const saved = state.resultChoice?.revisionId === state.revision.revision_id ? state.resultChoice.selection : null;
+  select.value = Array.from(select.options).some((o) => o.value === saved) ? saved : previous;
+}
+
+function selectResultFigure(group = null, presentation = null) {
+  if (state.artifactPreview) return;
   clearArtifactView();
+  if (presentation?.presentations.length) {
+    const figures = distinctFigureArtifacts(presentation.presentations);
+    if (figures.length === 1) viewArtifact(state.session.session_id, null, figures[0], false);
+    return;
+  }
   const names = group ? new Set(group.outputs.map((o) => o.name)) : null;
   const matching = state.revision.artifacts.filter((artifact) => artifact.figure
     && artifact.artifact_type === "analysis_figure"
@@ -506,12 +553,23 @@ function renderResultSelection() {
   if (!state.revision) return;
   state.evidenceEpoch += 1;
   const groups = state.revision.result_groups || [];
+  const choice = element("result-selection").value;
+  if (choice === "@field") return;
+  const presentations = presentationChoices();
+  const presentation = choice === "@latest" ? presentations.at(-1)
+    : presentations.find((entry) => choice === `@turn:${entry.turn.turn_id}`);
   const selected = groups.find((g) => g.handle === element("result-selection").value);
   const visible = selected ? [selected] : groups;
   element("result-method").textContent = selected ? selected.label : "Accepted analysis";
   const nodes = [];
   const limitations = [];
-  if (!selected && state.revision.result) {
+  if (presentation) {
+    const request = document.createElement("p"); request.className = "muted small";
+    request.textContent = `Requested: ${presentation.turn.utterance}`;
+    const response = document.createElement("p"); response.className = "message-text";
+    response.textContent = presentation.turn.response.text;
+    nodes.push(request, response);
+  } else if (!selected && state.revision.result) {
     const summary = document.createElement("p");
     summary.className = "message-text";
     summary.textContent = state.revision.result.text;
@@ -572,7 +630,10 @@ function renderResultSelection() {
   }));
   element("detail-form").hidden = !sections.length;
   element("detail-content").replaceChildren();
-  selectResultFigure(selected);
+  renderArtifacts({...state.revision,
+    artifacts: [...(presentation?.presentations || []), ...state.revision.artifacts],
+    scientific_artifacts: [...(presentation?.artifacts || []), ...(state.revision.scientific_artifacts || [])]});
+  selectResultFigure(selected, presentation);
 }
 
 function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
@@ -673,6 +734,7 @@ function appendScientificFiles(response, turn) {
   if (cached) {
     const details = document.createElement("details");
     details.className = "message-artifacts";
+    details.open = presentation || recipe;
     details.dataset.detailKey = "result-artifacts";
     const summary = document.createElement("summary");
     summary.textContent = "Downloads & technical report";
@@ -721,6 +783,9 @@ function appendScientificFiles(response, turn) {
     if (figures.status === "fulfilled") entry.presentations = figures.value.artifacts;
     entry.error = inventory.status === "rejected" || revision.status === "rejected" || figures.status === "rejected";
     renderHistory();
+    renderPresentationChoices();
+    if (!state.artifactPreview && (element("result-selection").value === "@latest"
+        || element("result-selection").value.startsWith("@turn:"))) renderResultSelection();
   }).catch(() => {
     // Missing or unqualified historical associations expose no download.
   });
@@ -762,12 +827,12 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
       view.setAttribute("aria-label", `${view.textContent}: ${name}`);
       view.dataset.artifactHandle = artifact.handle;
       view.dataset.actionKey = `artifact-view:${artifact.handle}`;
-      view.addEventListener("click", () => viewArtifact(sessionId, revision.revision_id, artifact));
+      view.addEventListener("click", () => viewArtifact(sessionId, artifact.revision_id, artifact));
       const download = document.createElement("a");
       download.textContent = "Download";
       download.setAttribute("aria-label", `Download ${name}`);
       download.dataset.actionKey = `artifact-download:${artifact.handle}`;
-      download.href = `/api/v1${artifactPath(sessionId, revision.revision_id, artifact.handle, artifact.turn_id)}?download=true`;
+      download.href = `/api/v1${artifactPath(sessionId, artifact.revision_id, artifact.handle, artifact.turn_id)}?download=true`;
       download.target = "_blank";
       download.rel = "noopener";
       guardDownload(download);
@@ -793,12 +858,24 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
     showWorkspacePanel("results");
     element("artifact-panel").open = true;
   }
+  const coordinateRevision = artifact.figure?.sources?.find((source) => source.role === "coordinates")?.output?.revision_id;
+  if (revisionId === null && coordinateRevision && state.viewedRevisionId !== coordinateRevision) await loadRevision(coordinateRevision);
   if (revisionId !== null && (!state.revision || state.revision.revision_id !== revisionId)) await loadRevision(revisionId);
   if (epoch !== state.epoch) return;
   if (!state.session || state.session.session_id !== sessionId
+      || (revisionId === null && coordinateRevision && state.viewedRevisionId !== coordinateRevision)
       || (revisionId !== null && (!state.revision || state.revision.revision_id !== revisionId))) {
     if (state.session && state.session.session_id === sessionId) element("scientific-details").scrollIntoView({ block: "nearest" });
     return;
+  }
+  if (reveal) {
+    state.artifactPreview = true;
+    if (revisionId === null && coordinateRevision === state.revision?.revision_id) {
+      element("result-selection").value = `@turn:${artifact.turn_id}`;
+      state.resultChoice = {revisionId: coordinateRevision, selection: element("result-selection").value};
+      renderResultSelection();
+      saveConveniences();
+    }
   }
   clearArtifactView();
   const artifactEpoch = state.artifactEpoch;
@@ -1143,7 +1220,7 @@ function restoreConversationUi(history, captured) {
 // Draft storage contains opaque references and display labels, never file bytes.
 function saveAttachments() {
   if (!state.attachmentSession) return;
-  try { localStorage.setItem(`agent.web.attachments.${state.attachmentSession}`, JSON.stringify(
+  try { sessionStorage.setItem(`agent.web.attachments.${state.attachmentSession}`, JSON.stringify(
     state.attachments.map((a) => ({ resource: a.resource, label: a.label, size: a.size })))); } catch (_) {}
 }
 
@@ -1192,7 +1269,7 @@ async function restoreAttachments(sessionId) {
   state.attachments = []; state.attachmentSession = sessionId; state.restoringAttachments = true;
   renderAttachments(); updateControls();
   let saved = [];
-  try { saved = JSON.parse(localStorage.getItem(`agent.web.attachments.${sessionId}`) || "[]"); } catch (_) {}
+  try { saved = JSON.parse(sessionStorage.getItem(`agent.web.attachments.${sessionId}`) || "[]"); } catch (_) {}
   if (!Array.isArray(saved)) saved = [];
   try {
     const catalog = await api(`${sessionPath(sessionId)}/attachments`);
@@ -1494,7 +1571,8 @@ function displaySession(view, preferredRevisionId = null) {
   const nextRevisionId = preferredRevisionId && view.revisions.some((revision) => revision.revision_id === preferredRevisionId)
     ? preferredRevisionId : revisionToDisplay(previous, view, state.viewedRevisionId);
   const refreshRevision = !state.revision || state.revision.revision_id !== nextRevisionId
-    || !previous || previous.session_id !== view.session_id;
+    || !previous || previous.session_id !== view.session_id
+    || (!state.revision.result && view.turns.some((turn) => turn.turn_id === state.revision.turn_id && turn.response));
   state.session = view;
   rememberSession(view);
   if (state.attachmentSession !== view.session_id) restoreAttachments(view.session_id);
@@ -1594,6 +1672,10 @@ function watchTurn(sessionId, turnId) {
 }
 
 async function openSession(sessionId, resumeTurnId = "", preferredRevisionId = null) {
+  if (state.session?.session_id !== sessionId) {
+    state.resultChoice = null;
+    element("utterance").value = "";
+  }
   state.attachmentSession = null;
   state.revision = null;
   const epoch = ++state.epoch;
@@ -1774,8 +1856,8 @@ function selectedCompanion(inputType = selectedResourceType()) {
 
 function saveResourceSelection() {
   // This convenience is rechecked against the server catalog and sent per turn.
-  try { localStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value); } catch (_) {}
-  try { localStorage.setItem(MULTI_RESOURCE_STORAGE_KEY, JSON.stringify(selectedResourceIds())); } catch (_) {}
+  try { sessionStorage.setItem(RESOURCE_STORAGE_KEY, element("resource-choice").value); } catch (_) {}
+  try { sessionStorage.setItem(MULTI_RESOURCE_STORAGE_KEY, JSON.stringify(selectedResourceIds())); } catch (_) {}
 }
 
 function uploadStatus(text, failed = false) {
@@ -1815,9 +1897,9 @@ function renderResources(selectedId = "", restoreSavedSelection = false) {
 async function loadResources() {
   let selectedId = "";
   let savedIds = [];
-  try { selectedId = localStorage.getItem(RESOURCE_STORAGE_KEY) || ""; } catch (_) {}
+  try { selectedId = sessionStorage.getItem(RESOURCE_STORAGE_KEY) || ""; } catch (_) {}
   try {
-    const saved = JSON.parse(localStorage.getItem(MULTI_RESOURCE_STORAGE_KEY) || "[]");
+    const saved = JSON.parse(sessionStorage.getItem(MULTI_RESOURCE_STORAGE_KEY) || "[]");
     if (Array.isArray(saved) && saved.length <= MAX_SELECTED_RESOURCES
         && new Set(saved).size === saved.length && saved.every((id) => typeof id === "string")) savedIds = saved;
   } catch (_) {}
@@ -2134,6 +2216,7 @@ element("history-notice").addEventListener("click", async () => {
 
 async function createSession() {
   const epoch = ++state.epoch;
+  state.resultChoice = null;
   state.scientificFiles.clear();
   stopPolling();
   state.opening = true;
@@ -2237,7 +2320,12 @@ element("activate-revision").addEventListener("click", () => activateViewedRevis
 element("continue-revision").addEventListener("click", () => activateViewedRevision(true));
 element("load-evidence").addEventListener("click", () => loadEvidence());
 element("evidence-output").addEventListener("change", () => loadEvidence());
-element("result-selection").addEventListener("change", () => renderResultSelection());
+element("result-selection").addEventListener("change", () => {
+  state.artifactPreview = false;
+  state.resultChoice = {revisionId: state.viewedRevisionId, selection: element("result-selection").value};
+  renderResultSelection();
+  saveConveniences();
+});
 element("evidence-panel").addEventListener("toggle", () => {
   if (element("evidence-panel").open && state.revision && !state.evidence) {
     element("evidence-content").textContent = "Choose an accepted field and select Show evidence to read its exact value.";
@@ -2336,6 +2424,10 @@ async function initialize() {
     if (typeof conveniences.sessionId === "string" && conveniences.sessionId) {
       await openSession(conveniences.sessionId, typeof conveniences.polledTurnId === "string" ? conveniences.polledTurnId : "",
         typeof conveniences.viewedRevisionId === "string" ? conveniences.viewedRevisionId : null);
+      state.resultChoice = conveniences.resultChoice || null;
+      renderPresentationChoices();
+      if (state.revision) renderResultSelection();
+      if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
       if (conveniences.workspacePanel === "results" && state.viewedRevisionId) showWorkspacePanel("results");
     } else {
       await createSession();

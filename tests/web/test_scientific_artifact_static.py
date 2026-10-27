@@ -48,7 +48,7 @@ def test_details_report_and_figure_controls_remain_available():
     artifacts = source[source.index('function renderArtifacts'):source.index('async function viewArtifact')]
     assert 'revision.scientific_artifacts || []' in artifacts
     assert '["analysis_report", "analysis_figure"].includes(artifact.artifact_type)' in artifacts
-    assert 'viewArtifact(sessionId, revision.revision_id, artifact)' in artifacts
+    assert 'viewArtifact(sessionId, artifact.revision_id, artifact)' in artifacts
     assert 'innerHTML' not in source
 
 
@@ -72,7 +72,7 @@ def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
     assert 'Promise.allSettled' in messages
     renderer = source[source.index('function renderArtifacts'):source.index('async function viewArtifact')]
     assert 'target.replaceChildren(...nodes)' in renderer
-    assert 'viewArtifact(sessionId, revision.revision_id, artifact)' in renderer
+    assert 'viewArtifact(sessionId, artifact.revision_id, artifact)' in renderer
     viewer = source[source.index('async function viewArtifact'):source.index('function readableLabel')]
     assert 'await loadRevision(revisionId)' in viewer
     assert viewer.index('const epoch = state.epoch') < viewer.index('await loadRevision(revisionId)')

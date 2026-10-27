@@ -60,7 +60,6 @@ def test_empty_first_request_uses_interpreter_planner_compiler_and_runtime(tmp_p
     (dict(kind='execute', base='current', operation='op.0', target='selection', delta=None), 'unavailable_context'),
     (dict(kind='answer', intent='version', relation='current', technical=False), 'unavailable_context'),
     (dict(kind='answer_scientific', target=dict(output='@focus', subject=None), comparison=None, focus='question'), 'unavailable_context'),
-    (dict(kind='answer_guidance', targets=[], candidate=None), 'unavailable_context'),
 ])
 def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, decision, expected):
     application = ResearchAgentApplication(tmp_path / 'workspace')
@@ -68,13 +67,41 @@ def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, deci
     model = Model(decision)
     outcome = application.sessions.respond('empty', 'question', 'What can this result show?',
                                           interpreter=model, expected_generation=0)
-    assert outcome.kind == 'clarify' and outcome.clarification.reason == expected
+    if decision['kind'] == 'clarify':
+        assert outcome.kind == 'clarify' and outcome.clarification.reason == expected
+        interaction_status = 'clarification'
+    else:
+        # OPT-3A distinguishes invalid model references from a user clarification.
+        answering = decision['kind'] in {'answer', 'answer_scientific'}
+        assert (outcome.kind, outcome.status) == (('answer', 'unavailable') if answering else ('execute', 'failed'))
+        assert outcome.clarification is None
+        assert outcome.error.code == ('INTERACTIVE_REFERENCE_INVALID' if answering else 'INTERACTIVE_INTENT_BINDING_INVALID')
+        interaction_status = 'failed'
     state = application.sessions.load('empty')
     assert state.generation == 0 and state.active_revision_id is None and not state.revisions
-    assert not state.turns and state.interactions[0].status == 'clarification'
+    assert not state.turns and state.interactions[0].status == interaction_status
+    assert not list(application.run_store.root.glob('*.json'))
     assert state.interactions[0].base_revision_id is None and len(model.calls) == 1
     assert model.calls[0]['bases'] == {} and model.calls[0]['dialogue']['outputs'] == []
     assert 'inspect_scATAC' in model.calls[0]['dialogue']['tools']
+
+
+def test_empty_guidance_uses_supported_advice_without_creating_scientific_state(tmp_path, monkeypatch):
+    from test_scientific_guidance import Model as GuidanceModel, guard
+    application = guard(ResearchAgentApplication(tmp_path / 'workspace'), monkeypatch)
+    application.sessions.create('empty')
+    model = GuidanceModel(dict(kind='answer_guidance', targets=[], candidate=None), direct=True)
+    outcome = application.sessions.respond('empty', 'question', 'What information would help before an analysis?',
+        interpreter=model, expected_generation=0)
+    assert (outcome.kind, outcome.status) == ('answer', 'answered')
+    assert outcome.scientific.support == 'insufficient_evidence' and not outcome.scientific.claims
+    assert outcome.guidance is None and outcome.clarification is None
+    state = application.sessions.load('empty')
+    assert state.generation == 0 and state.active_revision_id is None
+    assert not state.turns and not state.revisions and not list(application.run_store.root.glob('*.json'))
+    assert state.interactions[0].status == 'answered' and state.interactions[0].base_revision_id is None
+    assert len(model.calls) == 2 and model.calls[0]['bases'] == {}
+    assert model.calls[0]['dialogue']['outputs'] == []
 
 
 def test_empty_unsupported_answer_and_exact_presentation_survive_process(tmp_path):

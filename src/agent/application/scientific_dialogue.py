@@ -694,7 +694,8 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 if independent.status == 'available':
                     detail_facts = independent.detail
         def leaves(key, val, pointer, depth=0):
-            if key in ('training_configuration', 'transfer_assessment', 'species'):
+            if key in ('training_configuration', 'transfer_assessment', 'species',
+                       'parameters', 'embedding_parameters'):
                 yield key, val, pointer
                 return
             if hasattr(val, 'items') and depth < 3:

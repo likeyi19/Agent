@@ -41,6 +41,8 @@ _GROUP_PORTS = (
     ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
     ('evaluate_cell_clustering', 'ground_truth_dataset'),
+    ('evaluate_cell_annotation', 'ground_truth_dataset'),
+    ('validate_scATAC_feature_space', 'input_path'),
     ('transfer_cell_labels', 'reference_dataset'),
     ('transfer_cell_labels', 'query_dataset'),
     ('annotate_scATAC_cell_types', 'source'),
@@ -510,9 +512,9 @@ def _group_roles(values, member_count):
                 or role['source'] not in {f'source.{i}' for i in range(member_count)}):
             raise ValueError('Unsupported source role.')
         roles.append(dict(role))
-    if len({(r['tool'], r['port']) for r in roles}) != len(roles):
+    if len({(r['tool'], r['port'], r['source']) for r in roles}) != len(roles):
         raise ValueError('Duplicate or conflicting roles.')
-    return sorted(roles, key=lambda r: (r['tool'], r['port']))
+    return sorted(roles, key=lambda r: (r['tool'], r['port'], r['source']))
 
 
 def _group_port(registry, tool_name, port_name):
@@ -691,21 +693,69 @@ def _group_declarations(registry):
                 for member in source.members:
                     if member.input_name not in aliases and fields[member.name] != 'output_dir':
                         declarations.setdefault(member.input_name, []).append(arguments[fields[member.name]])
-    # Downstream scalar settings share the same Registry handoff. Adding a
-    # numeric setting does not authorize another dataset/path consumer.
-    for tool in _H5AD_COMPANION_TOOLS:
-        spec = registry.get(tool)
-        arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
-        for port in spec.semantic_planning.consumer_ports:
-            fields = {m.name: m.field_name for m in port.members}
-            for source in port.request_sources:
-                for member in source.members:
-                    argument = arguments[fields[member.name]]
-                    if (member.input_name not in aliases and argument.planning is not None
-                            and argument.planning.scientific_parameter
-                            and set(argument.accepted_types) <= {int, float}):
-                        declarations.setdefault(member.input_name, []).append(argument)
+    # Reuse the typed parameter owner's reviewed scalar domain for downstream
+    # consumers. A scalar declaration never authorizes another file/path role.
+    from .dialogue_execution import _parameter_input, scientific_parameters
+    for parameter in scientific_parameters(registry):
+        name, argument = _parameter_input(registry, parameter['tool'], parameter['argument'])
+        if name not in aliases and argument not in declarations.get(name, ()):
+            declarations.setdefault(name, []).append(argument)
     return aliases, declarations
+
+
+def _role_sources(roles, binding, registry):
+    """Resolve existing request aliases from explicit roles, never source order.
+
+    Repeated ports have no unique canonical alias. Their exact files must already
+    be named by another explicit role through an alias that this Registry port
+    accepts (for example reference_dataset and query_dataset).
+    """
+    counts = {}
+    for role in roles:
+        key = (role['tool'], role['port'])
+        counts[key] = counts.get(key, 0) + 1
+    values = {}
+    resolved = []
+    for role in roles:
+        port, source, _ = _group_port(registry, role['tool'], role['port'])
+        record = binding.members[int(role['source'].split('.')[1])]
+        if counts[(role['tool'], role['port'])] == 1:
+            for member in source.members:
+                value = record['source_sha256'] if member.name == 'sha256' else record['source_path']
+                if member.input_name in values and values[member.input_name] != value:
+                    raise ValueError('Conflicting consumer source aliases.')
+                values[member.input_name] = value
+            resolved.append((role, source))
+    for role in roles:
+        if counts[(role['tool'], role['port'])] == 1:
+            continue
+        port, _, _ = _group_port(registry, role['tool'], role['port'])
+        record = binding.members[int(role['source'].split('.')[1])]
+        matches = [source for source in port.request_sources
+            if tuple(m.name for m in source.members) == tuple(m.name for m in port.members)
+            and all(values.get(m.input_name) == (record['source_sha256'] if m.name == 'sha256'
+                     else record['source_path']) for m in source.members)]
+        if len(matches) != 1:
+            raise ValueError('Repeated operation needs an exact registered source alias.')
+        resolved.append((role, matches[0]))
+    return resolved
+
+
+def plan_source_path(value, steps):
+    """Follow only the registered identity-preserving inspection output."""
+    from agent.schemas.orchestration import StepOutputRef
+    if not isinstance(value, StepOutputRef):
+        return value
+    by_id = {step.step_id: step for step in steps}
+    seen = set()
+    while isinstance(value, StepOutputRef):
+        producer = by_id.get(value.step_id)
+        if (value.step_id in seen or producer is None or producer.tool_name != 'inspect_scATAC'
+                or value.output_key != 'input_path'):
+            return None
+        seen.add(value.step_id)
+        value = producer.arguments.get('path')
+    return value
 
 
 def group_role_inputs(binding, roles, registry):
@@ -716,16 +766,25 @@ def group_role_inputs(binding, roles, registry):
             raise ValueError('Unassigned selected input.')
         aliases, declarations = _group_declarations(registry)
         values = _serialize(binding.execution_inputs)
-        existing = {m.input_name for role in binding.roles
-                    for m in _group_port(registry, role['tool'], role['port'])[1].members}
+        existing = {m.input_name for _, source in _role_sources(binding.roles, binding, registry)
+                    for m in source.members}
         companions = {key: value for key, value in values.items() if key not in existing}
         if set(companions) - set(declarations):
             raise ValueError('Unsupported companion input or substituted dataset path.')
         for key, value in companions.items():
             for argument in declarations[key]:
-                argument.validate(key, value)
-        for role in roles:
-            port, source, argument = _group_port(registry, role['tool'], role['port'])
+                try:
+                    argument.validate(key, value)
+                except (ValueError, TypeError):
+                    continue
+                break
+            else:
+                raise ValueError('Unsupported companion value.')
+            # Shared names describe a union of possible consumers here. The
+            # selected tool's typed admission and compiled arguments enforce
+            # its own restrictions; an unrelated tool cannot narrow the name.
+        for role, source in _role_sources(roles, binding, registry):
+            port, _, argument = _group_port(registry, role['tool'], role['port'])
             spec = registry.get(role['tool'])
             arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
             fields = {m.name: m.field_name for m in port.members}
@@ -776,16 +835,8 @@ def validate_group_roles(binding, roles, registry, required_roles, *, complete=F
                               if isinstance(r, InputRole) else r for r in roles], len(binding.members))
         if not {(r['tool'], r['port']) for r in values} <= set(required):
             raise ValueError('Unoffered required scientific role.')
-        aliases = {}
-        for role in values:
-            _, source, _ = _group_port(registry, role['tool'], role['port'])
-            record = binding.members[int(role['source'].split('.')[1])]
-            for member in source.members:
-                value = record['source_sha256'] if member.name == 'sha256' else record['source_path']
-                if member.input_name in aliases and aliases[member.input_name] != value:
-                    raise ValueError('Conflicting consumer source aliases.')
-                aliases[member.input_name] = value
-        if complete and (len(values) != len(required)
+        _role_sources(values, binding, registry)
+        if complete and ({(r['tool'], r['port']) for r in values} != set(required)
                 or not binding.attachment_candidates and
                 {r['source'] for r in values} != {f'source.{i}' for i in range(len(binding.members))}):
             raise ValueError('Incomplete scientific source associations.')
@@ -1907,25 +1958,15 @@ class LocalResourceAdmission:
         by_id = {getattr(s, 'step_id', None): s for s in (plan.steps if plan is not None else steps)}
 
         def source_path(value):
-            # Inspection returns the same dataset path. Follow only that exact
-            # registered identity output, never transformed artifacts or order.
-            seen = set()
-            while (not resolved or plan is not None) and isinstance(value, StepOutputRef):
-                producer = by_id.get(value.step_id)
-                if (value.step_id in seen or producer is None
-                        or producer.tool_name != 'inspect_scATAC'
-                        or value.output_key != 'input_path'):
-                    return None
-                seen.add(value.step_id)
-                value = producer.arguments.get('path')
-            return value
+            return plan_source_path(value, tuple(by_id.values()))
 
         authorized = {}
         for role in binding.roles:
             port, _, _ = _group_port(registry, role['tool'], role['port'])
             path = binding.members[int(role['source'].split('.')[1])]['source_path']
-            authorized[(role['tool'], role['port'])] = path
-            consumers = [s for s in steps if s.tool_name == role['tool']]
+            authorized.setdefault((role['tool'], role['port']), set()).add(path)
+            consumers = [s for s in steps if s.tool_name == role['tool'] and source_path(
+                (s.resolved_arguments if resolved else s.arguments).get(port.members[0].field_name)) == path]
             if len(consumers) != 1:
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
             arguments = consumers[0].resolved_arguments if resolved else consumers[0].arguments
@@ -1961,7 +2002,7 @@ class LocalResourceAdmission:
                         reference = None if planned is None else planned.arguments.get(member.field_name)
                         inspected_source = (isinstance(reference, StepOutputRef)
                             and reference.step_id in planned.depends_on and source_path(reference) == actual)
-                        if not inspection and not inspected_source and authorized.get((step.tool_name, port.name)) != actual:
+                        if not inspection and not inspected_source and actual not in authorized.get((step.tool_name, port.name), set()):
                             raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
                     elif (not resolved and (step.tool_name, port.name) in _GROUP_PORTS and member == port.members[0]
                             and type(actual) is str):
@@ -1980,13 +2021,16 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         self.validate_binding(binding, verify_source=False)
         records = []
-        for role in binding.roles:
-            if role['tool'] != tool_name:
-                continue
-            port, _, _ = _group_port(self._group_registry(), role['tool'], role['port'])
-            member = binding.members[int(role['source'].split('.')[1])]
-            if arguments.get(port.members[0].field_name) != member['source_path']:
+        ports = {r['port'] for r in binding.roles if r['tool'] == tool_name}
+        for port_name in ports:
+            port, _, _ = _group_port(self._group_registry(), tool_name, port_name)
+            matches = [binding.members[int(r['source'].split('.')[1])] for r in binding.roles
+                if r['tool'] == tool_name and r['port'] == port_name
+                and arguments.get(port.members[0].field_name) ==
+                    binding.members[int(r['source'].split('.')[1])]['source_path']]
+            if len(matches) != 1:
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
+            member = matches[0]
             if any(arguments.get(m.field_name) != member['source_sha256'] for m in port.members[1:]):
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
             records.append(self.load(member['resource_id']))

@@ -455,7 +455,7 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
             or admitted.get('request_id') != run.request_id):
         return ()
-    from .dialogue_execution import _argument_fields, _parameter_input
+    from .dialogue_execution import _argument_fields, _parameter_input, _check_parameter_plan
     from .turn_decisions import _scientific_arguments, admit_scientific_argument
     indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
     linked, current = [], interaction
@@ -492,12 +492,14 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
                         or _bytes(record['inputs'][name]) != _bytes(argument)):
                     raise ValueError('Declaration differs from its admitted binding.')
                 declarations[declaration.tool, declaration.argument] = (name, argument)
+        # Share the admission owner: exact source-scoped consumers, no second
+        # single-instance interpretation during accepted-evidence presentation.
+        consumers = _check_parameter_plan(sessions._application.registry, run.plan, admitted, state.interactions)
         names = {}
         for (tool, argument_name), (input_name, argument) in declarations.items():
-            if tool != step.tool_name:
+            if tool != step.tool_name or (step.step_id, argument_name) not in consumers:
                 continue
-            if (len([p for p in run.plan.steps if p.tool_name == tool]) != 1
-                    or input_name not in admitted.get('inputs', {})
+            if (input_name not in admitted.get('inputs', {})
                     or _bytes(admitted['inputs'][input_name]) != _bytes(argument)
                     or argument_name not in planned.arguments
                     or _bytes(planned.arguments[argument_name]) != _bytes(argument)

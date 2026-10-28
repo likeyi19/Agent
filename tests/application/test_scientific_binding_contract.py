@@ -173,19 +173,19 @@ def test_historical_and_generic_identity_cannot_conflict():
             argument=argument, arguments=[argument])))
 
 
-def test_combined_historical_and_generic_declarations_share_the_eight_argument_bound(registry):
+def test_combined_historical_and_generic_declarations_share_the_scientific_argument_bound(registry):
     from agent.application.dialogue_execution import scientific_parameters
     candidates = [item for item in scientific_parameters(registry)
         if (item['tool'], item['argument']) != ('cluster_cells', 'resolution')]
-    assert len(candidates) >= 8
+    assert len(candidates) >= 32
     arguments = [dict(tool=item['tool'], argument=item['argument'], literal='1', start=0, end=1)
-        for item in candidates[:8]]
+        for item in candidates[:32]]
     legacy = dict(tool='cluster_cells', argument='resolution', literal='1', start=0, end=1)
     with pytest.raises(IntentError, match='invalid_decision'):
         parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', argument=legacy, arguments=arguments)))
     accepted = parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
-        argument=legacy, arguments=arguments[:7])))
-    assert len(accepted.arguments) == 8 and accepted.argument is None
+        argument=legacy, arguments=arguments[:31])))
+    assert len(accepted.arguments) == 32 and accepted.argument is None
     assert accepted.arguments[0].tool == 'cluster_cells'
 
 
@@ -202,7 +202,7 @@ def test_argument_schema_offers_exact_registered_pairs_without_cross_product():
     assert answer['properties']['pending']['enum'] == ['@parameters']
     assert answer['properties']['arguments']['minItems'] == 1
     offered = execute['properties']['arguments']
-    assert offered['maxItems'] == 8
+    assert offered['maxItems'] == 32
     pairs = {(value['properties']['tool']['enum'][0], value['properties']['argument']['enum'][0])
         for value in offered['items']['anyOf']}
     assert pairs == {(value['tool'], value['argument']) for value in public()['dialogue']['scientific_parameters']}
@@ -278,7 +278,6 @@ def test_reviewed_strings_keep_direct_source_and_reference_or_ground_truth_roles
 
 
 @pytest.mark.parametrize('changes', [
-    {'accepted_types': (str, type(None))},
     {'accepted_types': (str, int)},
     {'choices': ('cell_type',)},
     {'planning': None},
@@ -310,12 +309,10 @@ def test_arbitrary_scientific_strings_and_query_operands_do_not_gain_declaration
     ('epizoo_embed_cells', 'checkpoint_path'),
     ('epizoo_embed_cells', 'device'),
     ('evaluate_cell_clustering', 'output_dir'),
-    ('validate_scATAC_feature_space', 'genome_assembly'),
-    ('build_replicate_pseudobulk', 'condition_key'),
     ('build_scATAC_cell_by_ccre', 'reference_manifest_sha256'),
     ('adopt_scATAC_cell_by_ccre', 'assembly'),
 ])
-def test_paths_devices_design_columns_assemblies_and_digests_stay_excluded(registry, tool, name):
+def test_paths_devices_unreviewed_assemblies_and_digests_stay_excluded(registry, tool, name):
     from agent.application.dialogue_execution import _parameter_input, scientific_parameters
     from agent.application.turn_decisions import is_exact_string_argument
 

@@ -16,6 +16,15 @@ capability. Model weights and scientific resources remain outside Git.
 See the [documentation index](docs/README.md) for current operating guidance,
 architecture owners and historical acceptance records.
 
+The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
+records the current 27-tool inventory, genuine replicated differential-accessibility
+and clustering-evaluation journeys, statistical downloads and long-session follow-up.
+The [blocker closeout](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
+updates the recommendation to **CONDITIONAL GO** for controlled research use:
+source-qualified repeated EpiZoo operations, fixed held-out annotation evaluation,
+downloads and later evidence answers now pass genuine browser/native acceptance.
+Biological validity and universal input/provider qualification remain outside that conclusion.
+
 The [raw scATAC guide](docs/guides/raw-scatac-processing.md) covers FASTQ/BAM
 uploads, reference provisioning, QC/count semantics and downstream reuse.
 It links genuine FASTQ and external corrected-CB BAM Firefox/OpenRouter acceptance,

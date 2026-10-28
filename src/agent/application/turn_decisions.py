@@ -14,6 +14,9 @@ from agent.orchestration.planning_diagnostics import log_operation_event
 
 logger = logging.getLogger(__name__)
 
+# Composed scientific requests can need more than eight explicit declarations.
+MAX_SCIENTIFIC_ARGUMENTS = 32
+
 
 class IntentError(ValueError):
     def __init__(self, reason, *, diagnostic_reason=None, operand=None):
@@ -95,14 +98,42 @@ class SourceFieldArgument(ScalarChoiceArgument):
             raise ValueError('Invalid source-qualified observation field.')
 
 
+@dataclass(frozen=True)
+class SourceScopedArgument(ScopedArgument):
+    """A scalar for the operation consuming one explicit Registry dataset port."""
+
+    port: str
+    source: str
+
+    def __post_init__(self):
+        super().__post_init__()
+        InputRole(self.tool, self.port, self.source)
+
+
+@dataclass(frozen=True)
+class SourceScopedChoiceArgument(ScalarChoiceArgument):
+    """The same source scope for a reviewed categorical scalar."""
+
+    port: str
+    source: str
+
+    def __post_init__(self):
+        super().__post_init__()
+        InputRole(self.tool, self.port, self.source)
+
+
+def argument_identity(item):
+    return (item.tool, item.argument, getattr(item, 'port', None), getattr(item, 'source', None))
+
+
 def _validate_arguments(arguments, argument=None):
-    if (type(arguments) is not tuple or len(arguments) > 8
+    if (type(arguments) is not tuple or len(arguments) > MAX_SCIENTIFIC_ARGUMENTS
             or any(not isinstance(item, ScopedArgument) for item in arguments)):
         raise ValueError('Invalid bounded scientific arguments.')
-    identities = [(item.tool, item.argument) for item in arguments]
+    identities = [argument_identity(item) for item in arguments]
     if argument is not None:
-        identities.append((argument.tool, argument.argument))
-    if len(identities) > 8:
+        identities.append(argument_identity(argument))
+    if len(identities) > MAX_SCIENTIFIC_ARGUMENTS:
         raise ValueError('Scientific argument declaration limit exceeded.')
     if len(identities) != len(set(identities)):
         raise ValueError('Duplicate scoped scientific argument.')
@@ -147,7 +178,7 @@ class InputRole:
 def _validate_roles(roles):
     if (type(roles) is not tuple or len(roles) > 8
             or any(not isinstance(item, InputRole) for item in roles)
-            or len({(item.tool, item.port) for item in roles}) != len(roles)):
+            or len({(item.tool, item.port, item.source) for item in roles}) != len(roles)):
         raise ValueError('Invalid bounded scientific input roles.')
 
 
@@ -634,16 +665,26 @@ def _leiden_argument(value):
 
 
 def _scientific_arguments(value):
-    if type(value) is not list or len(value) > 8:
+    if type(value) is not list or len(value) > MAX_SCIENTIFIC_ARGUMENTS:
         raise IntentError('invalid_decision')
     result = []
     for item in value:
-        choice = type(item) is dict and 'value' in item
-        source = type(item) is dict and 'source' in item
-        _shape(item, ('tool', 'argument', 'literal', 'start', 'end')
-               + (('value',) if choice or source else ()) + (('source', 'mode') if source else ()))
-        result.append((SourceFieldArgument if source else ScalarChoiceArgument if choice else ScopedArgument)(**item))
+        cls, keys = _argument_shape(item)
+        _shape(item, keys + ('start', 'end'))
+        result.append(cls(**item))
     return tuple(result)
+
+
+def _argument_shape(value):
+    choice = type(value) is dict and 'value' in value
+    source = type(value) is dict and 'source' in value
+    scoped = type(value) is dict and 'port' in value
+    keys = ('tool', 'argument', 'literal') + (('value',) if choice else ())
+    if scoped:
+        return (SourceScopedChoiceArgument if choice else SourceScopedArgument), keys + ('source', 'port')
+    if source:
+        return SourceFieldArgument, keys + ('source', 'mode')
+    return (ScalarChoiceArgument if choice else ScopedArgument), keys
 
 
 def _input_roles(value):
@@ -675,9 +716,7 @@ def _ground_declaration(value, utterance):
     """
     if value is None:
         return None
-    choice = type(value) is dict and 'value' in value
-    source = type(value) is dict and 'source' in value
-    keys = ('tool', 'argument', 'literal') + (('value',) if choice or source else ()) + (('source', 'mode') if source else ())
+    cls, keys = _argument_shape(value)
     quoted = type(value) is dict and 'evidence' in value
     _shape(value, keys + (('evidence',) if quoted else ('start', 'end')))
     literal = value['literal']
@@ -685,7 +724,7 @@ def _ground_declaration(value, utterance):
         raise IntentError('invalid_decision')
     if not quoted:
         # Validate the legacy wire before normalization, including offset types.
-        (SourceFieldArgument if source else ScalarChoiceArgument if choice else ScopedArgument)(**value)
+        cls(**value)
         if utterance[value['start']:value['end']] == literal:
             return value
     evidence = value['evidence'] if quoted else literal
@@ -710,7 +749,7 @@ def parse_decision(raw, *, utterance=None):
             result[k] = v
         return result
     try:
-        if type(raw) is not str or len(raw.encode()) > 8192: raise IntentError('invalid_decision')
+        if type(raw) is not str or len(raw.encode()) > 32768: raise IntentError('invalid_decision')
         envelope = json.loads(raw, object_pairs_hook=pairs)
         _shape(envelope, ('turn_schema_version', 'decision'))
         if type(envelope['turn_schema_version']) is not int or envelope['turn_schema_version'] != 1:
@@ -734,7 +773,7 @@ def parse_decision(raw, *, utterance=None):
             if 'argument' in value:
                 value['argument'] = ground(value['argument'])
             if 'arguments' in value:
-                if type(value['arguments']) is not list or len(value['arguments']) > 8:
+                if type(value['arguments']) is not list or len(value['arguments']) > MAX_SCIENTIFIC_ARGUMENTS:
                     raise IntentError('invalid_decision')
                 value['arguments'] = [ground(item) for item in value['arguments']]
             parsed = parse_decision(json.dumps(envelope))
@@ -901,8 +940,14 @@ def decision_schema(public):
                 return {'anyOf': variants}
         if 'choices' in item:
             properties['value'] = enum(item['choices'])
-        return _object(properties)
-    declarations = {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
+        plain = _object(properties)
+        ports = [row['port'] for row in public.get('dialogue', {}).get('input_roles', ())
+                 if row['tool'] == item['tool']]
+        if source_ids and ports:
+            return {'anyOf': [plain, _object(properties | dict(
+                source=enum(sorted(source_ids)), port=enum(ports)))]}
+        return plain
+    declarations = {'type': 'array', 'maxItems': MAX_SCIENTIFIC_ARGUMENTS, 'items': {'anyOf': [
         declaration_schema(item) for item in parameters]}}
     exact = [item for item in parameters if 'choices' not in item or item.get('observation_source')]
     exact_declarations = declarations | {'items': {'anyOf': [declaration_schema(item) for item in exact]}}
@@ -1083,8 +1128,75 @@ def decision_schema(public):
     return _object(dict(turn_schema_version={'type':'integer','enum':[1]}, decision={'anyOf':variants}))
 
 
+def _compact_decision_schema(schema):
+    """Share identical schema branches through standard local JSON Schema refs.
+
+    This changes only the provider representation, not the admitted language.
+    In particular, tool/argument/source associations remain complete branches.
+    """
+    from collections import Counter
+    counts = Counter()
+
+    def key(value):
+        if isinstance(value, dict) and (value.get('type') in
+                ('object', 'array', 'string', 'integer', 'number', 'boolean', 'null')
+                or 'anyOf' in value):
+            encoded = json.dumps(value, sort_keys=True, separators=(',', ':'))
+            if len(encoded) >= 256:
+                return encoded
+
+    def count(value):
+        identity = key(value)
+        if identity is not None:
+            counts[identity] += 1
+        for child in (value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()):
+            count(child)
+
+    count(schema)
+    names, definitions = {}, {}
+
+    def encode(value):
+        identity = key(value)
+        if identity is not None and counts[identity] > 1:
+            if identity not in names:
+                name = names[identity] = f's{len(names)}'
+                definitions[name] = {k: encode(v) for k, v in value.items()}
+            return {'$ref': '#/$defs/' + names[identity]}
+        if isinstance(value, dict):
+            return {k: encode(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [encode(v) for v in value]
+        return value
+
+    result = encode(schema)
+    if definitions:
+        result['$defs'] = definitions
+    return result
+
+
+def _interpretation_public(public):
+    """Avoid repeating identical evidence offers for exact captured cooutputs."""
+    dialogue = public.get('dialogue')
+    if dialogue is None:
+        return public
+    outputs = {row['handle']: dict(row) for row in dialogue['outputs']}
+    fields = ('available_fields', 'fields_omitted', 'subjects')
+    for group in dialogue.get('result_groups', ()):
+        canonical = outputs.get(group.get('canonical_output'))
+        if canonical is None or not all(k in canonical for k in fields):
+            continue
+        for handle in group['outputs']:
+            member = outputs[handle]
+            if member is canonical or any(member.get(k) != canonical[k] for k in fields):
+                continue
+            for k in fields:
+                member.pop(k)
+            member['evidence_from'] = canonical['handle']
+    return public | {'dialogue': dialogue | {'outputs': list(outputs.values())}}
+
+
 def interpret(model, utterance, public, *, diagnostic_context=None):
-    prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **public,
+    prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **_interpretation_public(public),
         'instructions': [
             'For what to analyze next, useful analyses, alternatives or missing evidence for an objective, choose answer_guidance. It is read-only advice, never execution. Select up to four relevant exact evidence targets; an empty set is allowed and means no result evidence selected, not scientific absence.',
             'Guidance co-presents evidence; it does not compare measurements or infer common populations/cluster correspondence. Explicit subjects and historical targets obey the same exact reference rules as scientific answers.',
@@ -1096,7 +1208,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
             'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
             'For a reusable H5AD composed only from existing accepted results, choose answer_scientific.export. Select measurement as the exact accepted result g whose original measurements are requested, an accepted matrix g, or an explicitly offered source.N. Select observations and representations individually with their exact accepted output g, field and intended destination name. Observation fields use the exact result:/source: names offered in that result group\'s export_fields or categorical.fields; representations select the exact obsm: field in that group\'s export_fields, describing its actual accepted embedding representation or X_umap. Select 1 to 32 fields in total; include only requested fields, never every retained result. Destinations must be distinct within each slot and must not overwrite existing original fields; clarify missing or ambiguous destination choices. No new output, arbitrary obsm field, recency choice or scientific computation is authorized. Exact source lineage and ordered cells remain required at the export owner; an eligible figure or equal cell counts do not qualify original measurements. When sources or fields are unresolved, clarify rather than substituting a result or creating a scientific plan. Inventory describes a preparation recipe; it does not mean downloadable bytes have already been prepared or delivered.',
-            'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values.',
+            'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values. evidence_from references the exact cooutput carrying identical available_fields, fields_omitted and subjects; all output handles retain their own identities.',
             'dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.',
             'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
             'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
@@ -1132,7 +1244,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'A supported scientific operation with missing files is not an unsupported capability. Use request_roles with the offered Registry input roles and only exact existing source associations; leave roles empty when no file is available. This captures the original objective for a later upload. Do not construct a workflow or invent source handles. If a required declaration is omitted for a selected input, choose execute_plan and omit that declaration from arguments; the compiler determines its exact prerequisite. Use missing_species only while answering an offered pending species prerequisite. Unsupported capabilities, ambiguous sources, conflicting declarations and incompatible inputs remain distinct.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
             'Registered default_when_omitted values apply when the user has no special preference. Do not ask for optional scientific parameters merely because no explicit value was supplied. Preserve explicit requested values; defaults do not supply literal evidence for a user declaration.',
-            'execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Do not repeat a parameter identity.',
+            'execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. For repeated operations, declare each explicit source separately using source and port from the offered input_roles for that tool. This scopes the value to the operation consuming that exact dataset, without step identifiers. A value explicitly applying to both files needs one declaration per source; the same evidence clause may support both. Unscoped values never authorize repeated operations. Do not repeat the same tool/argument/source/port identity.',
             *(['For an offered exact_string parameter without observation_source, literal is the explicitly supplied value (observation column or processing namespace as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For a parameter with observation_source and an offered H5AD source, declare source, value, mode, literal and evidence. source explicitly selects that tool\'s observation_source dataset port; a matching roles entry is optional and must agree. Other dataset ports still need their own explicit roles. In mode=offered, value is an exact field name from that source\'s source_fields row, while literal/evidence quotes the researcher\'s natural reference to supplied annotations or the field. The researcher need not spell an internal column name. In mode=literal, the researcher explicitly names the column: value must equal the exact verbatim literal, excluding surrounding quotation marks; this may identify a name outside the bounded metadata offer. Never change modes after a rejected binding, omit value, borrow another file\'s field, infer ground truth from field presence, or invent a column from a descriptive phrase. Native owners qualify the selected data and exact axes. With no supported source yet offered, only an explicitly supplied exact column-name literal may be retained in the existing source-free declaration form; otherwise preserve the objective and request its file roles without inventing a name.',
@@ -1182,7 +1294,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
         ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'} else [])},
         sort_keys=True, separators=(',', ':'),
         ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
-    response_schema = decision_schema(public)
+    response_schema = _compact_decision_schema(decision_schema(public))
     log_operation_event(logger, 'interpreter.preparation_completed', context=diagnostic_context,
                         prompt=prompt, schema=response_schema)
     response = model.complete(prompt=prompt, response_schema=response_schema)
@@ -1200,7 +1312,8 @@ def is_exact_string_argument(argument_spec):
     """
     from agent.orchestration.registry import PlanningProvenanceRole, PlanningSourceEligibility
     planning = argument_spec.planning
-    return (argument_spec.accepted_types == (str,) and not argument_spec.choices
+    return (str in argument_spec.accepted_types
+        and set(argument_spec.accepted_types) <= {str, type(None)} and not argument_spec.choices
         and planning is not None and planning.scientific_parameter
         and not planning.conversational_choice and not planning.accepted_artifact_kinds
         and planning.source_eligibility == PlanningSourceEligibility.REQUEST_INPUT_ONLY

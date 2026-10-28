@@ -173,22 +173,21 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
     context = public()
     parameters = context['dialogue']['scientific_parameters']
     choices = [row for row in parameters if row.get('choices')]
-    assert {(row['tool'], row['argument']): tuple(row['choices']) for row in choices} == {
-        ('epizoo_embed_cells', 'species'): ('human', 'mouse'),
-        ('import_scATAC_fragments', 'source_profile'): ('10x-atac-fragments.v1',),
-        ('import_scATAC_fragments', 'source_selection'): ('full_export', 'subset_export', 'unknown'),
-    }
+    registry = build_default_tool_registry()
+    for row in choices:
+        tool = registry.get(row['tool'])
+        spec = tool.required_arguments.get(row['argument'], tool.optional_arguments.get(row['argument']))
+        assert tuple(row['choices']) == tuple(v for v in spec.choices if v is not None)
+        assert spec.planning.conversational_choice
+
     offered = {(row['tool'], row['argument']) for row in parameters}
     assert len(parameters) == len(offered)
-    assert {(row['tool'], row['argument']) for row in parameters if row.get('exact_string')} == {
-        ('epizoo_embed_cells', 'assembly'),
-        ('evaluate_cell_clustering', 'label_key'),
-        ('transfer_cell_labels', 'reference_label_key'),
-        ('evaluate_cell_annotation', 'ground_truth_label_key'),
-        ('import_scATAC_fragments', 'namespace'),
-        ('annotate_scATAC_cell_types', 'count_slot'),
-        ('annotate_scATAC_cell_types', 'group_column'),
-    }
+    from agent.application.turn_decisions import is_exact_string_argument
+    for row in parameters:
+        if row.get('exact_string'):
+            spec = registry.get(row['tool'])
+            assert is_exact_string_argument(spec.required_arguments.get(row['argument'], spec.optional_arguments.get(row['argument'])))
+
     execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
         if row['properties']['kind']['enum'] == ['execute_plan'])
     members = execution['properties']['arguments']['items']['anyOf']
@@ -196,7 +195,7 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
         for row in members}
     assert actual == offered and len(actual) == len(members)
     categorical = [row for row in members if 'value' in row['properties']]
-    assert len(categorical) == 3
+    assert len(categorical) == len(choices)
     for row in categorical:
         assert row['additionalProperties'] is False
         assert set(row['properties']) == {'tool', 'argument', 'literal', 'evidence', 'value'}
@@ -328,7 +327,7 @@ def test_pending_scalar_schema_preserves_exact_pairs_and_scoped_choices(field, k
     actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
         for row in members}
     assert actual == expected and len(actual) == len(members)
-    assert arguments['maxItems'] == 8
+    assert arguments['maxItems'] == 32
     assert all(row['additionalProperties'] is False for row in members)
     if field == 'species':
         assert all('value' not in row['properties'] for row in members)

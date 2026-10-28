@@ -464,3 +464,22 @@ def test_model_lifecycle_summary_survives_six_source_completion_budget(app,monke
         assert values['strategy']=='de_novo' and values['model_state']=='initialization'
         assert values['transfer_assessment']['candidates'][0]['statistics']['usable_mapping_fraction']==.01
         assert values['optimizer_steps']==0
+
+
+def test_pca_method_configuration_stays_whole_in_composed_completion(app, monkeypatch):
+    parameters = dict(normalization='tfidf_l2', norm='l2', smooth_idf=True,
+        sublinear_tf=False, idf='log((1+n_cells)/(1+document_frequency))+1',
+        computation_dtype='float64', embedding_dtype='float32', matrix_slot='X',
+        feature_selection='all', centered=True, n_components=50, random_seed=0)
+    rid = accepted(app, 'pca_embed_cells', copies=6, overrides=dict(parameters=parameters))[0]
+    app = forbid_work(app, monkeypatch)
+    revision = app.sessions.load('session').revisions[-1]
+    targets = [dict(revision_id=rid, output_name=o.name,
+        accepted_step_sha256=o.accepted_step_sha256, subject=None) for o in revision.outputs]
+    public, claims = sd.context(app.sessions, 'session', dict(target=None, comparison=None),
+        evidence_targets=targets)
+    assert len(claims) <= sd.MAX_CLAIMS
+    assert len(json.dumps(public).encode()) <= sd.MAX_CONTEXT_BYTES
+    for i in range(6):
+        values = {c.field: c.value for c in claims if c.target == f't{i}'}
+        assert values['parameters'] == parameters

@@ -74,10 +74,25 @@ def source_port(registry, tool_name, name):
 
 
 def bind_output(store, registry, run_id, step_id, port_name):
-    from .verification_authority import _accepted
+    from .verification_authority import _accepted, _accepted_step
     state = store.load(run_id)
     if state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
         raise AuthorityError('Historical source run is not terminal successful.')
+    stored, _, _ = _accepted_step(store, run_id, step_id)
+    port = source_port(registry, stored.tool_name, port_name)
+    if port.accepted_file_sha256_field is not None:
+        from agent.schemas.verification_authority import digest
+        # This is exact accepted-file reuse, not a schema-2 publication upgrade.
+        # The consumer retains its native scientific eligibility checks.
+        from agent.schemas.orchestration import _serialize
+        registry.get(stored.tool_name).result_contract.validate(_serialize(stored.result))
+        sha = stored.result[port.accepted_file_sha256_field]
+        path = stored.result[port.members[0].field_name]
+        from pathlib import Path
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise AuthorityError('Accepted file has no exact absolute identity.')
+        return PriorOutputBinding(run_id, step_id, stored.tool_name, port_name, port.semantic_type,
+            accepted_step_digest(stored), sha, digest(stored.verification.to_dict()), 'accepted-file.v1')
     stored, authority, _, _ = _accepted(store, run_id, step_id)
     if authority.record['schema_version'] != 2:
         raise AuthorityError('Historical execution requires reusable schema-2 authority.')
@@ -97,7 +112,17 @@ def validate_binding(binding, *, store=None, registry=None, integrity=False):
     registry = build_default_tool_registry() if registry is None else registry
     if bind_output(store, registry, binding.run_id, binding.step_id, binding.source_port) != binding:
         raise AuthorityError('Historical output anchor, publication, or authority changed.')
-    if integrity:
+    if binding.verification_mode == 'accepted-file.v1':
+        port = source_port(registry, binding.tool_name, binding.source_port)
+        stored = next(s for s in store.load(binding.run_id).steps if s.step_id == binding.step_id)
+        from pathlib import Path
+        try:
+            with Path(stored.result[port.members[0].field_name]).open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != binding.manifest_sha256:
+                    raise AuthorityError('Accepted file bytes changed.')
+        except OSError as exc:
+            raise AuthorityError('Accepted file is unavailable.') from exc
+    elif integrity:
         from .verification_authority import _load_context
         _load_context(store, binding.run_id, 'historical_verified_sources.v1').validate_anchors()
     state = store.load(binding.run_id)
@@ -122,10 +147,14 @@ def channel_for(binding, tool_name, target_port, registry):
     if len(channels) != 1:
         raise AuthorityError('Historical output is incompatible with the consumer port.')
     channel = channels[0]
-    # Existing special request-role lineage contracts must not be bypassed.
-    # M15.3 admits owner-authorized artifact channels without unresolved roles.
     if channel.required_lineage is not None:
-        raise AuthorityError('Historical channel requires an unsupported explicit role lineage.')
+        # A fixed owner-qualified source role survives acceptance. An unresolved
+        # branch role still cannot be invented from step order or a path.
+        semantic = registry.get(binding.tool_name).semantic_planning
+        producer = source_port(registry, binding.tool_name, binding.source_port)
+        sources = [p for p in semantic.consumer_ports if p.name == producer.lineage_from_port]
+        if len(sources) != 1 or sources[0].required_lineage != channel.required_lineage:
+            raise AuthorityError('Historical channel requires an unresolved explicit role lineage.')
     return channel
 
 
@@ -174,7 +203,7 @@ def import_plan_sources(plan, context, store):
     imported = set()
     for binding in bindings:
         validate_binding(binding, store=store)
-        if binding.run_id not in imported:
+        if binding.verification_mode == 'scientific-authority.v2' and binding.run_id not in imported:
             merge_context(context, _load_context(store, binding.run_id, 'historical_verified_sources.v1'))
             imported.add(binding.run_id)
     previous = context.validate_anchors
@@ -187,8 +216,8 @@ def import_plan_sources(plan, context, store):
 
 
 def binding_for_locator(locator, store, registry):
-    from .verification_authority import _accepted
-    step, _, _, _ = _accepted(store, locator.run_id, locator.step_id)
+    from .verification_authority import _accepted_step
+    step, _, _ = _accepted_step(store, locator.run_id, locator.step_id)
     if accepted_step_digest(step) != locator.accepted_step_sha256:
         raise AuthorityError('Active locator accepted-step anchor changed.')
     semantic = registry.get(step.tool_name).semantic_planning
@@ -224,6 +253,8 @@ def _optional_member_binding(run_id, step_id, output_key, anchor, store, registr
         if output_key in {member.field_name for member in port.members}]
     if len(ports) > 1:
         raise AuthorityError('Active locator does not identify a unique semantic artifact.')
+    if ports and ports[0].accepted_file_sha256_field is not None:
+        return bind_output(store, registry, run_id, step_id, ports[0].name)
     from agent.tools.scientific_authority import qualified_port
     if (not ports or not qualified_port(stored.tool_name, ports[0].name, registry)
             or authority is None or authority.record['schema_version'] != 2):
@@ -246,7 +277,7 @@ def matrix_dataset_binding(binding, store, registry):
     fanout. A manifest and its owner-published matrix are one scientific source.
     """
     from agent.tools.scientific_authority import tool_kind
-    if tool_kind(binding.tool_name, registry) != 'matrix' or binding.source_port != 'matrix':
+    if binding.verification_mode != 'scientific-authority.v2' or tool_kind(binding.tool_name, registry) != 'matrix' or binding.source_port != 'matrix':
         return None
     semantic = registry.get(binding.tool_name).semantic_planning
     ports = [port for port in semantic.producer_ports if port.name == 'dataset'
@@ -330,7 +361,9 @@ def validate_active_outputs(locators, store, registry):
     loaded = set()
     for locator in locators:
         binding = optional_binding_for_locator(locator, store, registry)
-        if binding is None:
+        if binding is None or binding.verification_mode == 'accepted-file.v1':
+            if binding is not None:
+                validate_binding(binding, store=store, registry=registry)
             nonreusable.append(locator)
             continue
         if binding.run_id not in loaded:
@@ -378,6 +411,9 @@ def validate_active_outputs(locators, store, registry):
 
     def checked_binding(binding):
         validate_binding(binding, store=store, registry=registry)
+        if binding.verification_mode == 'accepted-file.v1':
+            walk_step(binding.run_id, binding.step_id)
+            return
         if binding.run_id not in loaded:
             merge_context(context, _load_context(store, binding.run_id, 'historical_verified_sources.v1'))
             loaded.add(binding.run_id)

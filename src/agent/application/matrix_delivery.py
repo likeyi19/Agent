@@ -416,7 +416,7 @@ def _string_block(item, left, right):
     return values
 
 
-def _private_metadata(item):
+def _private_metadata(item, *, recurse=True):
     """Inspect metadata only; scientific arrays are never interpreted as text."""
     from agent.tools.analysis.peak_h5ad import _PATH, strings
     def private(text):
@@ -431,7 +431,7 @@ def _private_metadata(item):
         if np.asarray(value).dtype.kind in 'OSU' and any(private(str(v)) for v in np.asarray(value).ravel()):
             return True
     if isinstance(item, h5py.Group):
-        return any(_private_metadata(child) for child in item.values())
+        return recurse and any(_private_metadata(child) for child in item.values())
     if h5py.check_string_dtype(item.dtype) is not None:
         selections = [()] if item.ndim == 0 else (
             slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
@@ -492,6 +492,7 @@ def _copy(source, destination, omitted=(), _references=None):
                 _references.append((target, key, value, dtype))
             else:
                 target.attrs[key] = value
+        if item.shape is None: continue  # AnnData's empty/null scalar encoding.
         if item.shape == (): target[()] = item[()]
         elif h5py.check_string_dtype(item.dtype) is not None:
             for left in range(0, len(item), 4096):
@@ -606,7 +607,8 @@ class MatrixDownloadPreparer:
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
-        from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery
+        from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
+        statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
             and getattr(artifact, 'role', None) == corroboration_delivery.ROLE)
         model_role = getattr(artifact, 'role', None)
@@ -622,7 +624,7 @@ class MatrixDownloadPreparer:
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
         composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
                     and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
-        export = processed or annotation or compact or integrated or composed
+        export = processed or annotation or compact or integrated or composed or statistical
         exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
@@ -635,7 +637,7 @@ class MatrixDownloadPreparer:
             filename = model_delivery.FILES[model_role][0]
             content_type = 'application/json' if model_metadata else 'application/octet-stream'
         elif export:
-            filename = (artifact.reference.filename if integrated or composed else
+            filename = (artifact.reference.filename if integrated or composed or statistical else
                         analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
                         if compact else exporter.FILENAME)
             if filename is None:
@@ -735,7 +737,8 @@ class MatrixDownloadPreparer:
                         artifact.manifest, source_sha256=artifact.sha256, max_bytes=delivered_limit)
                     original_snapshot.close(); original_snapshot = None
                 else:
-                    create_export = (analysis_delivery.create_analysis_export if compact else
+                    create_export = (statistical_delivery.create_statistical_export if statistical else
+                                     analysis_delivery.create_analysis_export if compact else
                                      annotation_delivery.create_annotation_export if annotation
                                      else neighbors_delivery.create_neighbors_export)
                     create_export(snapshot, derivative, artifact.manifest,

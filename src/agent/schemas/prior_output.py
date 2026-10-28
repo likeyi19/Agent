@@ -10,6 +10,7 @@ class PriorOutputBinding:
     source_port: str
     semantic_type: str
     accepted_step_sha256: str
+    # Mode pins the meaning: publication/authority, or file bytes/accepted verification.
     manifest_sha256: str
     authority_sha256: str
     verification_mode: str = 'scientific-authority.v2'
@@ -20,7 +21,7 @@ class PriorOutputBinding:
                 raise ValueError('Invalid prior-output identity.')
             if name.endswith('_sha256') and (len(value) != 64 or any(c not in '0123456789abcdef' for c in value)):
                 raise ValueError('Invalid prior-output digest.')
-        if self.verification_mode != 'scientific-authority.v2':
+        if self.verification_mode not in ('scientific-authority.v2', 'accepted-file.v1'):
             raise ValueError('Unsupported historical verification mode; no implicit authority upgrade.')
 
     def to_dict(self):

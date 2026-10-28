@@ -1152,7 +1152,7 @@ def test_unconfigured_scientific_input_is_not_silently_dropped(
             incomplete_registry,
         )
 
-    assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"
+    assert caught.value.code == "UNUSED_REQUEST_INPUT"
 
 
 def test_multiple_producer_ports_require_explicit_source_port() -> None:

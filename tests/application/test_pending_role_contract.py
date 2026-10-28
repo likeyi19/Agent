@@ -130,8 +130,9 @@ def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
     assert answer['pending']['enum'] == ['@roles']
     assert [entry['properties']['port']['enum'] for entry in answer['roles']['items']['anyOf']] == [
         ['analysis'], ['ground_truth_dataset']]
-    assert [entry['properties']['argument']['enum'] for entry in answer['arguments']['items']['anyOf']] == [
-        ['label_key']]
+    argument_variants = answer['arguments']['items']['anyOf']
+    entries = [branch for entry in argument_variants for branch in entry.get('anyOf', [entry])]
+    assert {tuple(entry['properties']['argument']['enum']) for entry in entries} == {('label_key',)}
     assert 'answer_roles' not in variants(public(selected=False, pending=True))
 
 

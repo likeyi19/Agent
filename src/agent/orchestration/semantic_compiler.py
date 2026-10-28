@@ -958,7 +958,7 @@ def compile_semantic_plan(
     )
     if unauthorized:
         _raise_compile(
-            "UNAUTHORIZED_REQUEST_INPUT",
+            "UNUSED_REQUEST_INPUT",
             "Selected tools have no explicit compiler use for matching request "
             f"inputs {unauthorized}.",
             diagnostic_fields={"input_name": unauthorized[0]},

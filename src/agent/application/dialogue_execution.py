@@ -14,8 +14,9 @@ import re
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
-from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument, SourceFieldArgument, InputRole,
-    _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape)
+from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument, SourceFieldArgument, SourceScopedArgument, SourceScopedChoiceArgument, InputRole,
+    _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape,
+)
 
 
 def _resolution_input(registry):
@@ -31,7 +32,7 @@ def _parameter_input(registry, tool_name, argument_name):
     argument = tool.required_arguments.get(argument_name, tool.optional_arguments.get(argument_name))
     choice = (argument is not None and argument.planning is not None
         and argument.planning.conversational_choice and str in argument.accepted_types
-        and bool(argument.choices) and all(type(v) is str and v.strip() for v in argument.choices)
+        and bool(argument.choices) and all(v is None or type(v) is str and v.strip() for v in argument.choices)
         and not argument.planning.accepted_artifact_kinds)
     exact_string = argument is not None and is_exact_string_argument(argument)
     if (argument is None or argument.planning is None or not argument.planning.scientific_parameter
@@ -164,23 +165,27 @@ def _argument_fields(registry, interaction, binding=None, roles=None, *, declara
 def _source_field_roles(registry, roles, declarations):
     """A source-qualified field explicitly selects its one registered input port."""
     from .local_resources import _group_port
-    merged = {(role.tool, role.port): role for role in roles}
+    merged = list(roles)
     for declaration in declarations:
-        if not isinstance(declaration, SourceFieldArgument):
+        if isinstance(declaration, (SourceScopedArgument, SourceScopedChoiceArgument)):
+            port = declaration.port
+        elif isinstance(declaration, SourceFieldArgument):
+            _, argument = _parameter_input(registry, declaration.tool, declaration.argument)
+            port = argument.planning.observation_source
+            if port is None:
+                raise IntentError('invalid_reference')
+            # A field selects one dataset, not arbitrary repeated column offers.
+            if any(r.tool == declaration.tool and r.port == port and r.source != declaration.source
+                   for r in merged):
+                raise IntentError('invalid_reference', diagnostic_reason='source_field_role_conflict',
+                                  operand='parameter.field')
+        else:
             continue
-        _, argument = _parameter_input(registry, declaration.tool, declaration.argument)
-        port = argument.planning.observation_source
-        if port is None:
-            raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
-                              operand='parameter.field')
         _group_port(registry, declaration.tool, port)
         role = InputRole(declaration.tool, port, declaration.source)
-        key = (role.tool, role.port)
-        if key in merged and merged[key] != role:
-            raise IntentError('invalid_reference', diagnostic_reason='source_field_role_conflict',
-                              operand='parameter.field')
-        merged[key] = role
-    return tuple(merged.values())
+        if role not in merged:
+            merged.append(role)
+    return tuple(merged)
 
 
 def scientific_parameters(registry):
@@ -189,6 +194,8 @@ def scientific_parameters(registry):
     for tool_name in registry.names():
         tool = registry.get(tool_name)
         for name, spec in {**tool.required_arguments, **tool.optional_arguments}.items():
+            if tool_name == 'adapt_epizoo_species' and name in ('max_steps', 'learning_rate', 'training_batch_size'):
+                continue  # Readable historical training settings; current initialization has no optimizer.
             try:
                 _parameter_input(registry, tool_name, name)
             except IntentError:
@@ -199,7 +206,7 @@ def scientific_parameters(registry):
                 from agent.orchestration.semantic_prompt import _safe_registered_value
                 item['default_when_omitted'] = _safe_registered_value(spec.planning.default_when_omitted)
             if spec.planning.conversational_choice:
-                item['choices'] = list(spec.choices)
+                item['choices'] = [value for value in spec.choices if value is not None]
             elif is_exact_string_argument(spec):
                 item.update(exact_string=True, provenance_role=(spec.planning.provenance_role.value if spec.planning.provenance_role is not None else None))
                 if spec.planning.observation_source is not None:
@@ -327,17 +334,19 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
                     field_choices=None):
     from .turn_decisions import admit_scientific_argument
     values = dict(inputs)
-    names = set()
+    names = {}
     for declaration in declarations:
         name, specification = _parameter_input(registry, declaration.tool, declaration.argument)
         column = specification.planning.observation_source is not None
         if not column and specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
             raise IntentError('unsupported_intent')
-        if name in names:
-            raise IntentError('ambiguous_parameter')
-        names.add(name)
         value = admit_scientific_argument(declaration, utterance, specification,
             observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)))
+        # Multiple explicitly declared consumers may share one registered input
+        # (for example pseudobulk and DA condition_key). They must agree exactly.
+        if name in names and names[name] != value:
+            raise IntentError('conflicting_scientific_parameter')
+        names[name] = value
         if name in values:
             try:
                 specification.validate(declaration.argument, values[name])
@@ -450,8 +459,8 @@ def _validate_argument_record(interaction):
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
         if 'argument' in admitted:
             declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
-        if len(declarations) > 8 or len({(d.tool, d.argument) for d in declarations}) != len(declarations):
-            raise ValueError('Invalid scoped declarations.')
+        from .turn_decisions import _validate_arguments
+        _validate_arguments(declarations)
         values = _serialize(admitted['inputs'])
         expected = _bind_arguments(registry, interaction.utterance,
             _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations,
@@ -828,25 +837,58 @@ def parameter_scope_choices(admitted, interactions):
 
 def _check_parameter_plan(registry, plan, admitted, interactions):
     """Verify exact consumers of scoped declarations; never alter a plan."""
+    from .local_resources import _group_port, plan_source_path
     identities = _parameter_identities(admitted, interactions)
+    records = _parameter_records(admitted, interactions)
+    members = admitted.get('registered_input', {}).get('members', ())
+    roles = admitted.get('roles', ())
+    authorized = set()
+    names = set()
     for tool_name, argument_name in identities:
         name, _ = _parameter_input(registry, tool_name, argument_name)
+        names.add(name)
         consumers = [s for s in plan.steps if s.tool_name == tool_name]
-        if len(consumers) != 1:
-            raise IntentError('ambiguous_parameter')
-        if consumers[0].arguments.get(argument_name) != admitted['inputs'][name]:
-            raise IntentError('planning_failed')
-        for step in plan.steps:
-            if step is consumers[0]:
-                continue
-            tool = registry.get(step.tool_name)
-            for candidate in {**tool.required_arguments, **tool.optional_arguments}:
-                try:
-                    other_input, _ = _parameter_input(registry, step.tool_name, candidate)
-                except IntentError:
-                    continue
-                if other_input == name and candidate in step.arguments:
+        # The latest linked declaration owns scope. No conversation-order lookup.
+        declarations = next(([d for d in record.get('arguments', ())
+            if (d['tool'], d['argument']) == (tool_name, argument_name)]
+            for record in records if any((d['tool'], d['argument']) == (tool_name, argument_name)
+                for d in record.get('arguments', ()))), [])
+        scoped = [d for d in declarations if 'port' in d]
+        if scoped:
+            if len(scoped) != len(declarations):
+                raise IntentError('ambiguous_parameter')
+            selected = []
+            for declaration in scoped:
+                role = dict(tool=tool_name, port=declaration['port'], source=declaration['source'])
+                index = int(declaration['source'].split('.')[1])
+                if role not in roles or index >= len(members):
+                    raise IntentError('invalid_reference')
+                port, _, _ = _group_port(registry, tool_name, declaration['port'])
+                path = members[index]['source_path']
+                matches = [step for step in consumers if plan_source_path(
+                    step.arguments.get(port.members[0].field_name), plan.steps) == path]
+                if len(matches) != 1 or matches[0] in selected:
                     raise IntentError('ambiguous_parameter')
+                selected.extend(matches)
+        else:
+            if len(consumers) != 1:
+                raise IntentError('ambiguous_parameter')
+            selected = consumers
+        for step in selected:
+            if step.arguments.get(argument_name) != admitted['inputs'][name]:
+                raise IntentError('planning_failed')
+            authorized.add((step.step_id, argument_name))
+    for step in plan.steps:
+        tool = registry.get(step.tool_name)
+        for candidate in {**tool.required_arguments, **tool.optional_arguments}:
+            try:
+                other_input, _ = _parameter_input(registry, step.tool_name, candidate)
+            except IntentError:
+                continue
+            if (other_input in names and candidate in step.arguments
+                    and (step.step_id, candidate) not in authorized):
+                raise IntentError('ambiguous_parameter')
+    return authorized
 
 
 def resource_context_digest(resources):
@@ -923,19 +965,19 @@ def _role_completion(registry, origin, source, interaction, roles, declarations)
     required = _serialize(origin.admitted['required_roles'])
     roles = _source_field_roles(registry, roles, declarations)
     previous = () if source is None else _input_roles(_serialize(source.admitted['roles']))
-    merged = { (r.tool, r.port): r for r in previous }
+    merged = list(previous)
     for role in roles:
-        key = (role.tool, role.port)
-        if key in merged and merged[key] != role:
+        if any((r.tool, r.port) == (role.tool, role.port) for r in previous) and role not in previous:
             raise IntentError('invalid_prerequisite')
-        merged[key] = role
-    captured_roles = validate_group_roles(binding, tuple(merged.values()), registry, required)
+        if role not in merged:
+            merged.append(role)
+    captured_roles = validate_group_roles(binding, tuple(merged), registry, required)
     base = (_with_retained(registry, _serialize(binding.execution_inputs),
                           (origin.admitted or {}).get('retained_parameters', ()))
             if source is None else _serialize(source.admitted['inputs']))
     values = _bind_arguments(registry, interaction.utterance, base, declarations,
         field_choices=_argument_fields(registry, interaction, binding, captured_roles, declarations=declarations))
-    missing = [r for r in required if (r['tool'], r['port']) not in merged]
+    missing = [r for r in required if (r['tool'], r['port']) not in {(v.tool, v.port) for v in merged}]
     metadata = binding.attribution()
     metadata['roles'] = [asdict(r) for r in captured_roles]
     if not missing:

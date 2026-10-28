@@ -567,7 +567,7 @@ def test_v4_unrepresented_scientific_parameter_fails_closed(
             registry,
         )
 
-    assert caught.value.code == "UNAUTHORIZED_REQUEST_INPUT"
+    assert caught.value.code == "UNUSED_REQUEST_INPUT"
 
 
 def test_v4_incomplete_tool_semantic_metadata_fails_before_model_call(

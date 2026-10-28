@@ -971,6 +971,7 @@ class InteractiveAgentApplication:
             if turn_id is not None and turn_id != origin.turn_id:
                 raise ValueError('Turn does not identify this created result.')
             selections = {(s.name, s.step_id, s.output_key) for s in origin.selections}
+            from .statistical_delivery import TOOLS as STATISTICAL_TOOLS, accepted_statistical_result
             items = []
             represented = set()
             for output in revision.outputs:
@@ -987,6 +988,11 @@ class InteractiveAgentApplication:
                         # selected file port represents that step.
                         continue
                     items.append(self._accepted_matrix(session_id, revision, origin, output))
+                elif step.tool_name in STATISTICAL_TOOLS:
+                    if output.run_id != origin.run_id and output.output_key not in STATISTICAL_TOOLS[step.tool_name][:2]:
+                        continue
+                    items.append(accepted_statistical_result(self, session_id, revision, origin,
+                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model'):
                     from .model_delivery import accepted_models
                     items.extend(accepted_models(self, session_id, revision, origin,
@@ -1038,6 +1044,9 @@ class InteractiveAgentApplication:
                     continue
                 if planned.tool_name in _MATRIX_CONTRACTS:
                     items.append(self._accepted_matrix(session_id, revision, origin, None,
+                        step_id=planned.step_id))
+                elif planned.tool_name in STATISTICAL_TOOLS:
+                    items.append(accepted_statistical_result(self, session_id, revision, origin, None,
                         step_id=planned.step_id))
                 elif planned.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model'):
                     from .model_delivery import accepted_models

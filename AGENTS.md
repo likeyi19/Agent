@@ -345,6 +345,48 @@ Three targeted Firefox requests returned empty provider completions with
 the earlier attribution rejection and short-follow-up binding remain unqualified.
 No provider configuration change, scientific rerun, staging, commit or push occurs.
 
+CWC-1 assesses committed SWC-3 `722993d779817b533af47c57d2ed3d159946a932`
+without staging, commit or push. Its
+[readiness report](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
+owns the complete 27-tool inventory, genuine Firefox/OpenRouter replicated
+pseudobulk/edgeR and clustering-evaluation acceptance, actual downloads and bounded
+long-session follow-up. Shared typed declarations admit composed statistical intent;
+explicit equal declarations may name multiple consumers, while undeclared fanout
+and conflicting values remain invalid. The 32-declaration bound is shared with
+persisted replay. Source roles, reviewed parameter metadata and exact supplied-input
+diagnostics remain in their existing owners. Lossless provider-schema/cooutput
+projection and whole parameter facts reduce duplication without changing accepted
+identities or historical displayed text. Statistical H5AD exports reuse the shared
+snapshot/privacy pipeline and confer no new scientific authority.
+
+The [CWC-1 blocker closeout](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
+updates the decision to **CONDITIONAL GO** for controlled research use. Existing
+typed declarations and roles now identify repeated operations by explicit source
+and Registry dataset port. Admission and accepted-evidence attribution share the
+same scope validator. Unqualified fanout, source substitution and conflicting
+shared values remain invalid; historical single-operation meanings are preserved.
+
+The existing prior-output binder permits an explicitly registered accepted file
+and checksum through `accepted-file.v1`, pinning the accepted step, verification
+and bytes. Only the transfer annotation port opts in here; this does not create
+schema-2 publication authority or admit arbitrary uploads. Fixed Registry lineage
+survives acceptance; unresolved lineage remains forbidden. The genuine Firefox
+journey runs two EpiZoo embeddings and transfer, then independently evaluates fixed
+predictions against later-uploaded held-out labels without upstream rerun. Native
+metrics, downloads and a later complete evidence answer are checked. The 17/40
+held-out agreement is not biological validation; compact context and occasional
+withheld prose remain limitations. New initialization offers omit legacy training
+choices while accepted historical readers remain. No science algorithm, resource
+default, tool inventory, staging, commit or push changes.
+
+The [CWC-1 final engineering closeout](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/final-closeout/REPORT.md)
+retains **CONDITIONAL GO** and ends CWC-1 development. Final review found no
+material defect or confirmed redundancy requiring additional implementation changes;
+existing final regression and genuine acceptance evidence remain applicable. The
+user authorizes one reviewed completion commit and a normal push to `origin/main`.
+Earlier no-commit statements describe the pre-closeout stages. Scientific,
+biological and provider limitations remain unchanged; no next capability is started.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

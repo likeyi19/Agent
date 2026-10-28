@@ -4,6 +4,11 @@ Start with the [operating and development guide](guides/operating-and-developmen
 the repository [README](../README.md), and the detailed [engineering contract](../AGENTS.md).
 The [scientific storage guide](guides/scientific-storage.md) covers the current
 consolidated deployment and fresh UAT environment.
+The [CWC-1 readiness report](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
+assesses every current scientific capability, records new statistical/evaluation
+acceptance and shared corrections. Its [blocker closeout](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
+resolves repeated source-scoped operations and fixed annotation evaluation, with a
+CONDITIONAL GO recommendation for the documented controlled research scopes.
 The [backend installation guide](guides/backends.md) covers the managed EpiZoo and
 EpiAgent source snapshots, optional dependencies and exact import origins.
 The [PCA representation guide](guides/pca-analysis.md) explains explicit count

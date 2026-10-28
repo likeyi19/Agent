@@ -160,6 +160,19 @@ def export_descriptions(sessions, session_id, targets):
         from .matrix_delivery import MATRIX_CONTRACTS, accepted_matrix, selects_matrix_port
         run = sessions._application.run_store.load(output.run_id)
         step = next(s for s in run.steps if s.step_id == output.step_id)
+        from .statistical_delivery import TOOLS as STATISTICAL_TOOLS, accepted_statistical_result
+        if step.tool_name in STATISTICAL_TOOLS:
+            try:
+                artifact = accepted_statistical_result(sessions, session_id, revision, origin,
+                    None if output.run_id == origin.run_id else output, step_id=output.step_id)
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
+                continue
+            reference = artifact.reference
+            descriptions.append(dict(target=index, status='available_for_preparation',
+                **{name:getattr(reference, name) for name in (
+                    'handle', 'artifact_type', 'filename', 'title', 'purpose', 'description', 'size_bytes')},
+                payload_checks='performed_on_download', actual_download_status='NOT_RECORDED'))
+            continue
         if step.tool_name in ('adapt_epizoo_species', 'posttrain_epizoo_model'):
             from .model_delivery import accepted_models
             selected = output.output_key in ('manifest_path', 'manifest_sha256')

@@ -411,3 +411,17 @@ def test_source_and_model_digests_are_authoritative(tmp_path: Path) -> None:
         for name in before
     }
     assert after == before
+
+
+def test_query_truth_metadata_cannot_change_fixed_embedding_transfer(tmp_path):
+    """Held-out labels are never a transfer input, even if present in query obs."""
+    arguments = _sources(tmp_path)
+    first = _run(arguments)
+    before = ad.read_h5ad(first['annotation_path'])
+    query = ad.read_h5ad(arguments['query_h5ad_path'])
+    query.obs['celltype'] = ['invented truth'] * query.n_obs
+    query.obs['ground_truth'] = ['another label'] * query.n_obs
+    query.write_h5ad(arguments['query_h5ad_path'])
+    second = _run(arguments, output_dir=tmp_path/'other-output')
+    after = ad.read_h5ad(second['annotation_path'])
+    pd.testing.assert_frame_equal(before.obs, after.obs)

@@ -133,7 +133,8 @@ def clarification_text(clarification):
         names = {'parent':'parent version', 'previous_active':'previously active version'}
         return 'Do you mean the ' + ' or the '.join(names[c] for c in clarification.choices) + '?'
     if clarification.reason in {'missing_parameter_value', 'ambiguous_parameter'}:
-        if not clarification.choices: return 'There is no editable selection threshold in the captured state.'
+        if not clarification.choices:
+            return 'Please state which scientific parameter you want to use and its value.'
         if clarification.reason == 'ambiguous_parameter' and any('.' in name for name in clarification.choices):
             return 'Please identify one unambiguous operation for ' + ' and '.join(clarification.choices) + '.'
         if len(clarification.choices) == 1:

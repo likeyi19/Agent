@@ -26,10 +26,11 @@ def strings(item, selection):
     return result
 
 
-def inspect(source, *, private_paths=(), privacy=False, observation_fields=None):
+def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True):
     """Reject indirect storage, unsafe filters and excessive allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
-        if observation_fields is None and not {'X','obs','var'} <= set(f):
+        required = {'X','obs','var'} if require_matrix else {'obs','var'}
+        if observation_fields is None and not required <= set(f):
             raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
         if privacy and f.userblock_size:
             raise ValueError('Unreviewed HDF5 user block cannot be delivered')
@@ -79,7 +80,7 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None)
                             if privacy and item.name not in private_paths and (_PATH.search(text) or any(ord(c)<32 for c in text)):
                                 raise ValueError('Private locator or control character in H5AD metadata')
                 elif item.dtype.kind in 'biuf':
-                    size += item.size * item.dtype.itemsize
+                    size += (item.size or 0) * item.dtype.itemsize
                 else:
                     raise ValueError('Unsupported H5AD value dtype')
                 if size > MAX_LOGICAL_BYTES:

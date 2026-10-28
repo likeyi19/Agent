@@ -489,6 +489,9 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_analysis', 'embeddings.h5ad', 'Cell embeddings — safe export'),
             ('scientific_analysis', 'clusters.h5ad', 'Embeddings and Leiden — safe export'),
             ('scientific_annotation', 'annotated.h5ad', 'Annotated cells — safe export'),
+            ('scientific_statistics', 'pseudobulk.h5ad', 'Replicate pseudobulk counts'),
+            ('scientific_statistics', 'differential-accessibility.h5ad', 'Differential accessibility results'),
+            ('scientific_statistics', 'transferred-labels.h5ad', 'Transferred cell labels'),
             ('scientific_reference_evidence', 'reference-evidence.tsv', 'Cell-type reference evidence'),
             ('scientific_integrated', 'integrated-embeddings.h5ad', 'Original data with accepted analysis'),
             ('scientific_integrated', 'integrated-clusters.h5ad', 'Original data with accepted analysis'),
@@ -539,6 +542,14 @@ class ScientificArtifactHandle(ArtifactHandle):
                      'analysis.h5ad': 'UMAP analysis', 'neighbors.h5ad': 'Neighbor graph'}[self.filename]
             title, purpose, description = (stage + ' (compact H5AD)', 'Compact analysis-result H5AD',
                 'Lightweight cell analysis and recorded methods. No original matrix or feature axis; X=None.')
+        elif self.artifact_type == 'scientific_statistics':
+            description = {
+                'pseudobulk.h5ad': 'Integer sample-level counts with ordered features, replicate/condition metadata and recorded methods.',
+                'differential-accessibility.h5ad': 'Feature-level statistics and filtering status with sample design and recorded methods; X=None.',
+                'transferred-labels.h5ad': 'Ordered query labels, confidence, assignment status and recorded methods; X=None.',
+            }[self.filename]
+            title, purpose = self.label + ' (H5AD)', 'Statistical results'
+            description += ' Private metadata omitted.'
         elif self.artifact_type == 'scientific_annotation':
             title, purpose, description = ('Annotated original data (H5AD)', 'Integrated annotated H5AD',
                 'Original measurements and features with accepted cell annotations; private metadata omitted.')

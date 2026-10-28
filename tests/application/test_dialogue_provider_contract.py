@@ -101,7 +101,7 @@ def test_minimal_wire_does_not_bypass_semantic_admission(app, monkeypatch, wire,
     annotation(app)
     model = Model(wire)
     result = ask(forbid_work(app,monkeypatch),'invalid',utterance,model)
-    assert result.status == 'clarification'
+    assert result.status == 'failed'
     assert len(model.calls) == 1
 
 
@@ -111,5 +111,5 @@ def test_minimal_execution_cannot_handoff_guidance_candidate(app, monkeypatch):
     app = guard(app, monkeypatch)
     assert ask(app,'guide','What should I analyze next?',GuidanceModel()).guidance
     result = ask(app,'run','Run option 1.',Model(dict(kind='execute_plan',target='inspect_scATAC')))
-    assert result.status == 'clarification'
-    assert result.clarification.reason == 'unsupported_intent'
+    assert result.status == 'failed'
+    assert result.clarification is None

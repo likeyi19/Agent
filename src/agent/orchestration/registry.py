@@ -382,6 +382,7 @@ class SemanticProducerPortSpec:
     semantic_type: str
     members: tuple[SemanticPortMember, ...]
     lineage_from_port: str | None = None
+    accepted_file_sha256_field: str | None = None
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "producer port name", 128)
@@ -392,6 +393,10 @@ class SemanticProducerPortSpec:
             raise TypeError(
                 "Semantic producer ports require SemanticPortMember values."
             )
+        if self.accepted_file_sha256_field is not None:
+            _planning_text(self.accepted_file_sha256_field, 'accepted file digest field', 128)
+            if len(self.members) != 1:
+                raise ValueError('Accepted-file reuse requires one exact file output.')
         if self.lineage_from_port is not None:
             _planning_text(
                 self.lineage_from_port, "producer lineage_from_port", 128
@@ -861,6 +866,14 @@ def _validate_semantic_tool_spec(spec: ToolSpec) -> None:
 
     consumer_set = set(consumer_names)
     for port in semantic.producer_ports:
+        if port.accepted_file_sha256_field is not None:
+            field = port.members[0].field_name
+            metadata = spec.result_contract.planning_fields.get(field)
+            if (spec.result_contract.required_fields.get(port.accepted_file_sha256_field) != (str,)
+                    or spec.result_contract.required_fields.get(field) != (str,)
+                    or field == port.accepted_file_sha256_field or metadata is None
+                    or not metadata.downstream_bindable or metadata.artifact_kind is None):
+                raise ValueError('Accepted-file reuse requires a registered artifact and exact digest result.')
         members = _unique_semantic_members(
             port.members, f"Tool {spec.name!r} producer port {port.name!r}"
         )
@@ -2944,6 +2957,7 @@ def build_default_tool_registry() -> ToolRegistry:
                     "cell_annotation.v1",
                     (_semantic_member("annotation", "annotation_path"),),
                     lineage_from_port="query_dataset",
+                    accepted_file_sha256_field="annotation_sha256",
                 ),
             ),
         ),
@@ -3108,6 +3122,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("X", "layer"),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
             ),
             "matrix_semantics": _planning_argument(
                 (str,),
@@ -3120,18 +3135,21 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
             ),
             "species": _planning_argument(
                 (str,),
                 "Species of the raw scATAC feature space.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "genome_assembly": _planning_argument(
                 (str,),
                 "Genome assembly matching the declared species.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "coordinate_source": _planning_argument(
                 (str,),
@@ -3139,6 +3157,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("none", "var_columns"),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
             ),
         },
         optional_arguments={
@@ -3147,6 +3166,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Layer name when matrix_source is layer; otherwise null or omitted.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
                 conditional_note=(
                     "Required when matrix_source is layer and incompatible with "
                     "matrix_source X."
@@ -3157,6 +3177,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Chromosome var-column key when coordinates come from var columns.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
                 conditional_note=(
                     "Required when coordinate_source is var_columns; otherwise null "
                     "or omitted."
@@ -3167,6 +3188,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Start-coordinate var-column key when coordinates use var columns.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
                 conditional_note=(
                     "Required when coordinate_source is var_columns; otherwise null "
                     "or omitted."
@@ -3177,6 +3199,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "End-coordinate var-column key when coordinates use var columns.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
                 conditional_note=(
                     "Required when coordinate_source is var_columns; otherwise null "
                     "or omitted."
@@ -3188,6 +3211,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("zero_based_half_open", "one_based_closed", None),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
                 conditional_note=(
                     "Required when coordinate_source is var_columns; otherwise null "
                     "or omitted."
@@ -3198,6 +3222,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Optional raw uns key corroborating the declared matrix semantics.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "overwrite": _planning_argument(
                 (bool,),
@@ -3288,18 +3313,21 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Raw observation column identifying biological replicates.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "group_key": _planning_argument(
                 (str,),
                 "Biological group column or fixed predicted-label key.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "condition_key": _planning_argument(
                 (str,),
                 "Raw observation column identifying comparison conditions.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "output_dir": _planning_argument(
                 path_types,
@@ -3312,6 +3340,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("raw_obs", "verified_annotation"),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
             ),
         },
         optional_arguments={
@@ -3437,24 +3466,28 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Exact biological group selected for the contrast.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "condition_key": _planning_argument(
                 (str,),
                 "Condition key recorded in the pseudobulk artifact.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "numerator_condition": _planning_argument(
                 (str,),
                 "Exact numerator condition for the directional contrast.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "denominator_condition": _planning_argument(
                 (str,),
                 "Exact denominator condition for the directional contrast.",
                 source=direct,
                 scientific_parameter=True,
+                conversational_exact_string=True,
             ),
             "design_type": _planning_argument(
                 (str,),
@@ -3462,6 +3495,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 choices=("independent", "paired"),
                 source=direct,
                 scientific_parameter=True,
+                conversational_choice=True,
             ),
             "output_dir": _planning_argument(
                 path_types,

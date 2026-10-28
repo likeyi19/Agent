@@ -170,13 +170,13 @@ def test_metadata_scope_absence_does_not_advertise_a_source_free_bypass(tmp_path
     assert properties and all(set(row) == {'tool','argument','literal','evidence'} for row in properties)
 
 
-def test_registry_metadata_does_not_advertise_an_unregistered_group_port(tmp_path):
+def test_annotation_evaluation_offers_its_registered_ground_truth_port(tmp_path):
     app, _, _, _, _ = case(tmp_path)
     parameters = scientific_parameters(app._application.registry)
     assert all('choices' not in row for row in parameters if row.get('observation_source'))
     annotation, = [row for row in parameters if (row['tool'],row['argument']) ==
                    ('evaluate_cell_annotation','ground_truth_label_key')]
-    assert 'observation_source' not in annotation and annotation['exact_string']
+    assert annotation['observation_source'] == 'ground_truth_dataset' and annotation['exact_string']
 
 
 @pytest.mark.parametrize('mode', ['offered', 'literal'])

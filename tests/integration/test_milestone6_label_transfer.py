@@ -159,3 +159,46 @@ def test_label_transfer_plan_only_invokes_zero_scientific_tools(tmp_path: Path) 
     assert not (tmp_path / "not-created").exists()
     for function in guarded.values():
         function.assert_not_called()
+
+
+def test_accepted_transfer_reuses_fixed_file_for_later_evaluation(tmp_path):
+    """Simulated embeddings, genuine transfer/evaluation; no inference qualification."""
+    import pytest
+    from agent.orchestration.prior_outputs import bind_output, validate_binding, resolve, prior_output_store
+    from agent.schemas.prior_output import PriorOutputRef
+    from agent.schemas.verification_authority import AuthorityError
+    arguments, ids = _artifacts(tmp_path)
+    registry = build_default_tool_registry()
+    store = FileRunStore(tmp_path/'store')
+    plan = AgentPlan('first', 'first', 'test', (PlanStep('transfer', 'transfer_cell_labels', arguments),))
+    first = AgentRuntime(planner=FixedPlanner(plan), registry=registry, run_store=store).run(
+        AgentRequest('first', 'Transfer.', {}))
+    assert first.status is RunStatus.SUCCEEDED
+    binding = bind_output(store, registry, first.run_id, 'transfer', 'annotation')
+    assert binding.verification_mode == 'accepted-file.v1'
+    assert validate_binding(binding, store=store, registry=registry, integrity=True)
+    with pytest.raises(AuthorityError):
+        validate_binding(replace(binding, verification_mode='scientific-authority.v2'), store=store)
+    with pytest.raises(AuthorityError):
+        validate_binding(replace(binding, accepted_step_sha256='0'*64), store=store)
+    reference = PriorOutputRef(binding, 'annotation_path')
+    with prior_output_store(store):
+        path = Path(resolve(reference))
+        with pytest.raises(AuthorityError):
+            resolve(PriorOutputRef(binding, 'query_h5ad_path'))
+    original = path.read_bytes()
+    path.write_bytes(original + b'changed')
+    with pytest.raises(AuthorityError):
+        validate_binding(binding, store=store)
+    path.write_bytes(original)
+    truth = tmp_path/'truth.h5ad'
+    ad.AnnData(obs=pd.DataFrame({'truth':['T cell','B cell']}, index=list(ids))).write_h5ad(truth)
+    later = AgentPlan('later', 'later', 'test', (PlanStep('evaluate', 'evaluate_cell_annotation', dict(
+        annotation_path=reference, ground_truth_h5ad_path=str(truth), ground_truth_label_key='truth',
+        output_dir=str(tmp_path/'evaluation'))),))
+    # Restart the store and run only evaluation; the accepted transfer is immutable.
+    second = AgentRuntime(planner=FixedPlanner(later), registry=registry,
+        run_store=FileRunStore(tmp_path/'store')).run(AgentRequest('later', 'Evaluate fixed labels.', {}))
+    assert second.status is RunStatus.SUCCEEDED, second
+    assert [s.tool_name for s in second.steps] == ['evaluate_cell_annotation']
+    assert path.read_bytes() == original

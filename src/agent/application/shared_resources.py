@@ -321,7 +321,7 @@ class ScientificResourceLibrary:
         identities = set()
         for row in value['resources']:
             if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
-                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference')
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer')
                     or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
                     or row['id'] in identities):
                 _fail('Scientific resource identity is corrupt.')
@@ -391,6 +391,25 @@ class ScientificResourceLibrary:
             # Existing QC owner supplies its content closure and scientific identity.
             bundle, pins, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
             qualifier = lambda: owner.reinspect_scatac_qc_reference_bundle_sources(bundle)
+        elif kind == 'liftover_chain':
+            from agent.tools.data.liftover_chain import qualify
+            pins={resource[k]['path']:resource[k]['sha256'] for k in ('chain','input_fai','destination_fai')}
+            qualifier=lambda: qualify(resource)
+        elif kind == 'epizoo_transfer':
+            from agent.tools.models.epizoo_adaptation import resources as owner, contract as c
+            c.checks.shape(resource,('source_bundle','seam_bundle','source_references','liftover','bedtools'))
+            pins={}
+            for key in ('source_bundle','seam_bundle'):
+                record=resource[key];bundle=c.read_json(record['path'],record['sha256'])
+                pins[record['path']]=record['sha256']
+                pins.update({r['path']:r['sha256'] for r in bundle['files']+bundle['code']['files']})
+            for record in [*resource['source_references'],resource['liftover'],resource['bedtools']]:
+                if record is not None: pins[record['path']]=record['sha256']
+            def qualifier():
+                for key in ('source_bundle','seam_bundle'): owner.load_bundle(**resource[key])
+                from agent.tools.data.scatac_reference import load_scatac_reference_bundle,reinspect_scatac_reference_bundle_sources
+                for ref in resource['source_references']:
+                    reinspect_scatac_reference_bundle_sources(load_scatac_reference_bundle(ref['path'],expected_sha256=ref['sha256'])[1])
         elif kind == 'epizoo':
             from .local_resources import QualifiedEpiZooResource
             from agent.tools.analysis.epizoo_embedding import _pinned_resource_paths, _check_resource_files
@@ -524,6 +543,9 @@ class ScientificResourceLibrary:
         if kind == 'genome':
             genome = dict(resource['genome'])
             return dict(resource, genome=dict(genome, fasta=copy(genome['fasta']), fai=copy(genome['fai'])))
+        if kind == 'liftover_chain':
+            return dict(resource, **{key: copy(resource[key])
+                for key in ('chain', 'input_fai', 'destination_fai')})
         if kind == 'qc':
             bundle, _, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
             _, original, _ = parent.load_scatac_reference_bundle(bundle.parent_manifest.path,
@@ -543,7 +565,7 @@ class ScientificResourceLibrary:
             result = replace(result, resource_identity_sha256=qc._identity(result))
             output = manifest(qc.canonical_qc_reference_bundle_bytes(result))
             return dict(qc_reference_manifest_path=output['path'], qc_reference_manifest_sha256=output['sha256'])
-        _fail('Only uploaded annotation, genome and QC references support library-owned copying.')
+        _fail('Only annotation, genome, QC and chain references support library-owned copying.')
 
     def install_genome(self, fasta_path, fai_path, *, species, assembly, label, version, provenance, usage):
         """Install external FASTA/FAI directly, without an experimental dataset or Run."""
@@ -566,13 +588,14 @@ class ScientificResourceLibrary:
                           annotation_spec_sha256=digest(resource))
         elif kind == 'qc': inputs = resource
         elif kind == 'genome': inputs = dict(library_genome=entry)
+        elif kind == 'epizoo_transfer': inputs = dict(library_epizoo_transfer=entry)
         else: _fail('Models use the existing native model selection interface.')
-        return ScientificInputSet('library-' + entry['id'], entry['label'], inputs, h5ad_companion=kind == 'genome')
+        return ScientificInputSet('library-' + entry['id'], entry['label'], inputs, h5ad_companion=kind in ('genome','epizoo_transfer'))
 
     def choices(self):
         result = []
         for row in self.entries():
-            if row['kind'] in ('epizoo', 'marker_reference'): continue
+            if row['kind'] in ('epizoo', 'marker_reference', 'liftover_chain'): continue
             result.append(self.input_set(row))
             if row['kind'] == 'qc':
                 try:

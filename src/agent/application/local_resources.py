@@ -87,7 +87,7 @@ _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_pat
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'pca_embed_cells', 'build_cell_neighbors',
-                         'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species')
+                         'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
                           'matrix_manifest_path', 'matrix_manifest_sha256'}
@@ -682,7 +682,7 @@ def _group_declarations(registry):
     declarations = {}
     # Adaptation consumes the explicitly adopted matrix and its qualified model
     # specification; it contributes companion parameters, not another file role.
-    for tool in sorted({tool for tool, _ in _GROUP_PORTS} | {'adapt_epizoo_species'}):
+    for tool in sorted({tool for tool, _ in _GROUP_PORTS} | {'adapt_epizoo_species','posttrain_epizoo_model'}):
         spec = registry.get(tool)
         arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
         for port in spec.semantic_planning.consumer_ports:
@@ -2051,14 +2051,14 @@ class LocalResourceAdmission:
         if resolved:
             from agent.schemas import StepStatus
             if not isinstance(path, str) or not isinstance(sha, str): return False
-            matches = [s for s in steps if s.tool_name == 'adapt_epizoo_species'
+            matches = [s for s in steps if s.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model')
                        and s.status == StepStatus.SUCCEEDED and s.result and s.verification and s.verification.passed
                        and s.result.get('manifest_path') == path and s.result.get('manifest_sha256') == sha]
             return len(matches) == 1
         return (isinstance(path, StepOutputRef) and isinstance(sha, StepOutputRef)
             and path.step_id == sha.step_id and path.output_key == 'manifest_path'
             and sha.output_key == 'manifest_sha256' and path.step_id in step.depends_on
-            and any(s.step_id == path.step_id and s.tool_name == 'adapt_epizoo_species' for s in steps))
+            and any(s.step_id == path.step_id and s.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model') for s in steps))
 
     def _validate_neutral_h5ad(self, binding, steps, *, resolved=False):
         if type(binding) is not RegisteredInput or binding.composition != _H5AD_COMPOSITION:

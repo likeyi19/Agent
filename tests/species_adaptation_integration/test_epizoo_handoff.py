@@ -284,3 +284,123 @@ def test_downstream_zero_and_invalid_training_values_use_registry(case, native_c
         arg = ScopedArgument('adapt_epizoo_species', key, value, len(key)+5, len(key)+5+len(value))
         with pytest.raises(IntentError):
             _bind_arguments(registry, 'Use '+key+' '+value+'.', {}, (arg,))
+
+
+def test_lifecycle_default_selects_nearest_model_but_preserves_explicit_history():
+    from agent.application.epizoo_handoff import EpiZooDeclaration,resolve
+    from agent.application.input_sets import ScientificInputSet
+    def model(name,distance,state):
+        choice=ScientificInputSet(name,name,dict(target_model_manifest_path='/'+name,
+            target_model_manifest_sha256=name[0]*64,captured_revision_id=name,captured_model_distance=distance),h5ad_companion=True)
+        observation=dict(operation='inference',model_state=state,species=dict(scientific_name='Danio rerio',taxonomy_id=7955),
+            assembly='danRer11',matrix_semantics='binary_accessibility',feature_membership_sha256='f'*64)
+        return choice,observation
+    initial,io=model('initialized',2,'initialization');trained,to=model('trained',0,'posttraining')
+    declared=EpiZooDeclaration(operation='inference',scientific_name='Danio rerio',taxonomy_id=7955,
+        assembly='danRer11',matrix_semantics='binary_accessibility')
+    observations={initial.input_set_id:io,trained.input_set_id:to};source=dict(feature_membership_sha256='f'*64)
+    assert resolve(declared,[initial,trained],observations,source=source)[0]==trained
+    assert resolve(declared,[initial,trained],observations,source=source,requested='resource.initialized')[0]==initial
+    from dataclasses import replace
+    assert resolve(replace(declared,operation='posttraining_initialized'),[initial,trained],observations,source=source)[0]==initial
+    other,oo=model('other',0,'posttraining');observations[other.input_set_id]=oo
+    assert resolve(declared,[initial,trained,other],observations,source=source)[0] is None
+
+
+def test_initialization_omits_strategy_requirement():
+    from agent.application.epizoo_handoff import EpiZooDeclaration,requirements
+    from agent.application.input_sets import ScientificInputSet
+    from types import SimpleNamespace
+    model=ScientificInputSet('transfer','Native EpiZoo transfer resources',dict(library_epizoo_transfer={}),h5ad_companion=True)
+    genome=ScientificInputSet('genome','Qualified target genome',dict(library_genome={}),h5ad_companion=True)
+    species=dict(scientific_name='Danio rerio',taxonomy_id=7955)
+    obs=dict(transfer=dict(operation='initialization',universal_target=True),genome=dict(operation='genome',species=species,assembly='danRer11'))
+    declaration=EpiZooDeclaration(operation='initialization',source='source.0',scientific_name='Danio rerio',taxonomy_id=7955,
+        assembly='danRer11',matrix_semantics='binary_accessibility',feature_category='peak_set')
+    binding=SimpleNamespace(members=[dict(source_sha256='a'*64)])
+    source=dict(source_sha256='a'*64,interface_version=2)
+    declared,missing,selected=requirements(binding,declaration,[model,genome],obs,source,None)
+    assert not missing and selected==model and declared.strategy is None
+    assert declared.genome_resource=='resource.genome'
+
+
+def test_initialization_handoff_compiles_automatic_transfer_without_user_spec(case,native_choice,tmp_path,monkeypatch):
+    """Scripted provider and resource qualification; stop before native science."""
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from agent.application.epizoo_handoff import EpiZooDeclaration
+    from agent.application import epizoo_handoff
+    from agent.application.input_sets import ScientificInputSet
+    from agent.tools.models import epizoo_inputs
+    from agent.orchestration.executor import PlanExecutor
+    choice=ScientificInputSet('transfer','Simulated qualified pretrained resources',dict(library_epizoo_transfer={}),h5ad_companion=True)
+    original=epizoo_inputs.observe_resource
+    monkeypatch.setattr(epizoo_inputs,'observe_resource',lambda values:dict(operation='initialization',universal_target=True)
+        if 'library_epizoo_transfer' in values else original(values))
+    monkeypatch.setattr(epizoo_handoff,'prepare_transfer_spec',lambda *a,**k:native_choice.inputs())
+    calls=[]
+    def stop(self,plan,**kwargs):
+        checked=self.preflight(plan);assert checked.passed,checked
+        calls.append(plan);raise RuntimeError('Deliberate software preflight stop; no native model execution')
+    monkeypatch.setattr(PlanExecutor,'execute',stop)
+    def decisions(p):
+        declared=EpiZooDeclaration(operation='initialization',source='source.0',genome_source='source.1',
+            scientific_name=case['species']['scientific_name'],taxonomy_id=case['species']['taxonomy_id'],
+            assembly=case['assembly'],matrix_semantics='fragment_counts',feature_category='peak_set')
+        return dict(kind='request_roles',target='adapt_epizoo_species',required_roles=[],roles=[],arguments=[],epizoo=asdict(declared))
+    app,web=setup(tmp_path/'init-chat',(choice,),decisions)
+    with TestClient(web) as client:
+        assert client.post('/api/v1/sessions',json={'session_id':'test'}).status_code==201
+        source=upload(client,'matrix.h5ad',Path(case['source_path']).read_bytes(),'h5ad')
+        genome=upload(client,'genome.fa',b'>chr1\n'+b'A'*100+b'\n')
+        response=send(client,'initialize','Transfer this EpiZoo model without training; choose the strategy after assessment.',[source,genome])
+        assert calls,response
+        args=calls[0].steps[-1].arguments
+        assert 'strategy' not in args and 'max_steps' not in args
+        assert not app._application.sessions.load('test').revisions
+
+
+def test_missing_chain_retains_pending_objective_without_scientific_run(case,native_choice,tmp_path,monkeypatch):
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from agent.application import epizoo_handoff
+    from agent.application.epizoo_handoff import EpiZooDeclaration,EpiZooResourcePrerequisite
+    from agent.application.input_sets import ScientificInputSet
+    from agent.tools.models import epizoo_inputs
+    choice=ScientificInputSet('transfer','Simulated qualified pretrained resources',dict(library_epizoo_transfer={}),h5ad_companion=True)
+    original=epizoo_inputs.observe_resource
+    monkeypatch.setattr(epizoo_inputs,'observe_resource',lambda values:dict(operation='initialization',universal_target=True)
+        if 'library_epizoo_transfer' in values else original(values))
+    message='No compatible chain is available for the exact requested assembly pair.'
+    def unavailable(*a,**k): raise EpiZooResourcePrerequisite(message)
+    monkeypatch.setattr(epizoo_handoff,'prepare_transfer_spec',unavailable)
+    def decisions(p):
+        return dict(kind='request_roles',target='adapt_epizoo_species',required_roles=[],roles=[],arguments=[],
+            epizoo=asdict(EpiZooDeclaration(operation='initialization',source='source.0',genome_source='source.1',
+                scientific_name=case['species']['scientific_name'],taxonomy_id=case['species']['taxonomy_id'],
+                assembly=case['assembly'],matrix_semantics='fragment_counts',feature_category='peak_set',
+                strategy='mapped_reference',reference_species='human')))
+    root=tmp_path/'chain-chat'
+    app,web=setup(root,(choice,),decisions)
+    with TestClient(web) as client:
+        assert client.post('/api/v1/sessions',json={'session_id':'test'}).status_code==201
+        source=upload(client,'matrix.h5ad',Path(case['source_path']).read_bytes(),'h5ad')
+        genome=upload(client,'genome.fa',b'>chr1\n'+b'A'*100+b'\n')
+        response=send(client,'initialize','Initialize using mapped reference.',[source,genome])
+        assert response['status']=='clarification',response
+        assert message in response['response']['text']
+        state=app._application.sessions.load('test')
+        assert not state.turns and not state.revisions
+        assert state.interactions[-1].admitted['epizoo']['strategy']=='mapped_reference'
+    restarted,_=setup(root,(choice,),decisions)
+    reopened=restarted.reopen_session('test')
+    assert reopened.turns[-1].response.text==response['response']['text']
+    assert restarted._application.sessions.load('test').interactions[-1].prerequisite is not None
+
+
+def test_target_measurement_is_an_offered_reusable_scientific_choice():
+    from agent.application.dialogue_execution import scientific_parameters
+    from agent.orchestration import build_default_tool_registry
+    choice=next(p for p in scientific_parameters(build_default_tool_registry())
+        if p['tool']=='epizoo_embed_cells' and p['argument']=='matrix_semantics')
+    assert choice['choices']==['fragment_counts','binary_accessibility']

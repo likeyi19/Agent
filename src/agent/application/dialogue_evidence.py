@@ -39,7 +39,8 @@ RESULT_LIMITATIONS = {
     'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
     'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
-    'adapt_epizoo_species': 'Adaptation completion and structural qualification do not establish improved biological performance.',
+    'adapt_epizoo_species': 'Model state and optimizer updates distinguish initialization from historical trained adaptation. Initialization performs native parameter transfer and zero target optimizer updates. Usable mapping fraction divides targets overlapping the exact retained reference vocabulary by all target features; liftOver success alone is insufficient. Automatic thresholds are operational preferences, not biological performance thresholds. An unavailable mapping assessment is not zero measured coverage.',
+    'posttrain_epizoo_model': 'Post-training warm-starts the exact initialized checkpoint with a fresh optimizer and scheduler. Attempted steps, applied optimizer updates and AMP skips are distinct. Finite losses and completed updates do not establish biological convergence or better embeddings. Independent UMAP layouts cannot establish improvement.',
     'cluster_cells': 'Clustering summaries record method parameters and cluster counts. They do not establish cluster correspondence, cell-type identity, biological superiority, significance or causality.',
     'compute_cell_umap': 'UMAP parameters and output dimensions describe a layout. Independently computed coordinates have no established alignment: rotation, reflection or scale differences do not establish biological change. No coordinate comparison or biological superiority is established.',
     'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
@@ -831,6 +832,10 @@ def field_semantics(registry, tool, field):
     from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
     spec = registry.get(tool)
     semantics = {}
+    if tool in ('adapt_epizoo_species', 'posttrain_epizoo_model') and field in (
+            'model_state', 'strategy', 'transfer_assessment', 'training_configuration'):
+        semantics.update(kind='scientific_method', description_source='reviewed_model_lifecycle',
+            description='Accepted native model lifecycle evidence. Initialization has zero target optimizer updates; post-training warm-starts its exact initialized parent. strategy is the method actually selected. transfer_assessment records the requested preference, provisional policy and actual retained-vocabulary mapping statistics; its coverage denominator is all target features. Unavailable assessment is not measured zero coverage. Neither mapping coverage nor finite training establishes biological superiority or convergence.')
     parameter_labels = {'clustering_parameters': 'Clustering parameters',
                         'selection_threshold_origins': 'Selection threshold origins',
                         'explicit_user_parameters': 'Explicit user parameters',

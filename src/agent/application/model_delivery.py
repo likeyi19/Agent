@@ -14,6 +14,8 @@ from agent.schemas.verification_authority import canonical, digest
 CONTRACT = 'epizoo-target-model.v1'
 CHECKPOINT = 'model_checkpoint'
 METADATA = 'model_metadata'
+FEATURES = 'model_features'
+FREQUENCY = 'model_frequency'
 # Full-vocabulary accepted M14.4/M14.5 targets are 4.60/3.74 GiB.
 # Five GiB covers both without changing the 1 GiB limit of other roles.
 MAX_CHECKPOINT_BYTES = 5 * 1024**3
@@ -21,6 +23,8 @@ MAX_METADATA_BYTES = 8 * 1024**2
 FILES = {
     CHECKPOINT: ('epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
     METADATA: ('epizoox-model.json', 'Model configuration and reuse requirements'),
+    FEATURES: ('epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
+    FREQUENCY: ('epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
 }
 
 
@@ -35,7 +39,7 @@ def read_json(stream):
     return raw, value
 
 
-def metadata(manifest, sha):
+def metadata(manifest, sha, *, root=None):
     """No paths, cells, corpus tokens, raw matrices or arbitrary provenance text."""
     p = manifest['arguments']['profile']
     result = dict(format='epizoox-download-metadata.v1', portable_bundle=False,
@@ -63,6 +67,31 @@ def metadata(manifest, sha):
             'Agent target inference uses max_length=8192, random_sample=True, seed=0, batch_size=1, num_workers=0, float32, CUDA float16 autocast.',
             'Model export does not export Agent execution authority, authorize global sharing, or establish biological convergence.',
         ], runtime={k:manifest['runtime'][k] for k in ('python','packages','cuda','cudnn')})
+    if manifest['schema_version']==2:
+        from .matrix_delivery import _open_matrix_source
+        with _open_matrix_source(Path(root)/'transfer-decision.json', Path(root)) as stream:
+            decision_bytes, decision = read_json(stream)
+        pin = manifest['files']['transfer-decision.json']
+        if (hashlib.sha256(decision_bytes).hexdigest()!=pin['sha256']
+                or len(decision_bytes)!=pin['size_bytes']):
+            raise ValueError('Transfer decision differs from the accepted model.')
+        result['format']='epizoox-download-metadata.v2'
+        result['requested_strategy']=result['strategy']
+        result['strategy']=decision['selected']
+        result['transfer_assessment']=dict(decision,candidates=[dict(v,
+            chain={k:x for k,x in v['chain'].items() if k!='path'}) for v in decision['candidates']])
+        result['model_state']=p['purpose']
+        parent=manifest['arguments']['parent']
+        result['parent_initialized_manifest_sha256']=parent['manifest_sha256'] if parent else None
+        result['training_resume']=('checkpoint-warm-start;no-optimizer-state-resume'
+            if parent else 'not-trained;parameter-transfer-only')
+        result['available_companion_downloads']={FILES[role][0]:manifest['files'][name]
+            for role,name in ((FEATURES,'features.txt'),(FREQUENCY,'document_frequency.npy'))}
+        result['required_not_included']={}
+        result['reuse_requirements'][2]='Download the exact feature vocabulary and document-frequency companion files listed here with this checkpoint.'
+        result['document_frequency_scope']=manifest['preprocessing']['df_scope']
+        result['preprocessing_cell_count']=result.pop('training_cell_count')
+        result['reuse_requirements'][3]='Use preprocessing_cell_count with the pinned document-frequency vector for native compute_tfidf, scale_factor=10000 and float32; generate_cell_sentences uses species=None and base_offset=4.'
     # Closed owner configurations contain no locators; reject path-like declared
     # species/assembly instead of silently exporting a private user string.
     from .matrix_delivery import _PATH_TEXT
@@ -91,11 +120,11 @@ def accepted_models(service, session_id, revision, origin, output, *, step_id=No
     step, authority, execution, anchor = _accepted(store, run_id, step_id)
     record = authority.to_dict(); result = _serialize(step.result)
     if (store.load(run_id).lifecycle_status.value != 'SUCCEEDED'
-            or step.tool_name != 'adapt_epizoo_species'
+            or step.tool_name not in ('adapt_epizoo_species','posttrain_epizoo_model')
             or output is not None and (output.output_key not in ('manifest_path','manifest_sha256')
                 or accepted_step_digest(step) != output.accepted_step_sha256)
             or record['schema_version'] != 2 or record['scope'] != 'scientific_correctness.v1'
-            or record['completion'] != 'succeeded' or record['artifact_contract'] != CONTRACT
+            or record['completion'] != 'succeeded' or record['artifact_contract'] not in (CONTRACT,c.LIFECYCLE_CONTRACT)
             or record['artifact_type'] != c.ARTIFACT
             or record['verifier'] != dict(id='epizoo.species-adaptation-structural', compatibility_version='1')):
         raise ValueError('No exact accepted target model.')
@@ -132,12 +161,21 @@ def accepted_models(service, session_id, revision, origin, output, *, step_id=No
                   dict(path=str(checkpoint),**pin)):
         if files.get(entry['path']) != entry: raise ValueError('Unpinned model publication.')
     # Inventory does not read 1.2 GiB. Download hashes a private snapshot before
-    # sending any headers. Metadata is derived only from the pinned manifest.
-    projected = metadata(manifest,sha)
+    # sending any headers. Metadata uses the pinned manifest and decision bytes.
+    projected = metadata(manifest,sha,root=path.parent)
     items=[]
-    for role, payload, payload_sha, size in ((CHECKPOINT,checkpoint,pin['sha256'],pin['size_bytes']),
-                                            (METADATA,path,sha,len(raw))):
+    payloads=[(CHECKPOINT,checkpoint,pin['sha256'],pin['size_bytes']),(METADATA,path,sha,len(raw))]
+    if manifest['schema_version']==2:
+        for role,name in ((FEATURES,'features.txt'),(FREQUENCY,'document_frequency.npy')):
+            payload=path.parent/name;record=manifest['files'][name]
+            if files.get(str(payload))!=dict(path=str(payload),**record): raise ValueError('Unpinned model companion.')
+            payloads.append((role,payload,record['sha256'],record['size_bytes']))
+    for role, payload, payload_sha, size in payloads:
         filename,label=FILES[role]
+        if manifest['schema_version']==2:
+            state_label = ('Initialized' if manifest['arguments']['profile']['purpose']=='initialization'
+                           else 'Post-trained')
+            label = state_label + ': ' + label
         identity=dict(session_id=session_id,revision_id=revision.revision_id,turn_id=origin.turn_id,
             output=None if output is None else asdict(output),run_id=run_id,step_id=step_id,
             accepted_step_sha256=accepted_step_digest(step),authority_sha256=authority.identity_sha256,

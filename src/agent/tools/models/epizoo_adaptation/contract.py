@@ -9,6 +9,7 @@ from agent.tools.data import scatac_matrix_contract as checks
 from agent.tools._cancellation import cancellation_checkpoint
 
 CONTRACT = 'epizoo-target-model.v1'
+LIFECYCLE_CONTRACT = 'epizoo-target-model.v2'
 ARTIFACT = 'agent.epizoo-target-model'
 POLICY = 'adapt-epizoo-species-v1'
 PROFILE = dict(id='epizoo-species-posttraining.v1', matrix_semantics='fragment_counts',
@@ -45,6 +46,9 @@ def scientific_profile(matrix_semantics='fragment_counts'):
 
 def profile_sha256(profile):
     validate_execution(profile)
+    if profile.get('id') == 'epizoo-model-lifecycle.v3':
+        from ..native_posttraining import LIFECYCLE_SHA256
+        return LIFECYCLE_SHA256
     if profile.get('id') == 'epizoo-native-posttraining.v2':
         from ..native_posttraining import METHOD_SHA256
         return METHOD_SHA256
@@ -53,9 +57,10 @@ def profile_sha256(profile):
 
 def validate_strategy(profile, strategy):
     validate_execution(profile)
-    if strategy not in ('de_novo', 'mapped_reference'):
+    lifecycle = profile.get('id') == 'epizoo-model-lifecycle.v3'
+    if strategy not in (('auto', 'de_novo', 'mapped_reference') if lifecycle else ('de_novo', 'mapped_reference')):
         raise ValueError('Unknown adaptation strategy.')
-    if profile['matrix_semantics'] == 'binary_accessibility' and strategy != 'de_novo':
+    if not lifecycle and profile['matrix_semantics'] == 'binary_accessibility' and strategy != 'de_novo':
         raise ValueError('Binary accessibility is qualified for de_novo only.')
 
 
@@ -119,6 +124,12 @@ def read_json(path,sha=None):
 
 
 def validate_execution(value):
+    if value.get('id') == 'epizoo-model-lifecycle.v3':
+        from ..native_posttraining import lifecycle_profile
+        if value != lifecycle_profile(matrix_semantics=value['matrix_semantics'],
+                operation=value['purpose'], **value['requested_overrides']):
+            raise ValueError('Model lifecycle configuration differs.')
+        return value
     if value.get('id') == 'epizoo-native-posttraining.v2':
         from ..native_posttraining import validate
         return validate(value)

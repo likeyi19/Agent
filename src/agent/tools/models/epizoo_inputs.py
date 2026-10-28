@@ -17,12 +17,20 @@ def observe_source(path, sha):
 
 
 def observe_resource(inputs):
+    if 'library_epizoo_transfer' in inputs:
+        from .epizoo_adaptation.resources import code_bundle
+        resource=inputs['library_epizoo_transfer']['resource']
+        code=code_bundle()
+        for key in ('source_bundle','seam_bundle'):
+            if c.read_json(**dict(path=resource[key]['path'],sha=resource[key]['sha256']))['code']!=code:
+                raise ValueError('Transfer resources belong to a different backend/owner version.')
+        return dict(operation='initialization',universal_target=True)
     if 'target_model_manifest_path' in inputs:
         value = publication.load_manifest(inputs['target_model_manifest_path'], inputs['target_model_manifest_sha256'])
         path = Path(inputs['target_model_manifest_path']).parent / 'features.txt'
         if c.file_record(path)['sha256'] != value['files']['features.txt']['sha256']:
             raise ValueError('Target vocabulary changed.')
-        return dict(operation='inference', species=value['reference']['species'],
+        return dict(operation='inference', model_state=value['arguments']['profile']['purpose'], species=value['reference']['species'],
             assembly=value['reference']['target_assembly'],
             matrix_semantics=value['arguments']['profile']['matrix_semantics'],
             feature_membership_sha256=c.digest(sorted(path.read_text().splitlines())),
@@ -46,7 +54,11 @@ def observe_resource(inputs):
 
 def qualify_resource(inputs):
     """Reuse owner qualification, with no training or new model parsing."""
-    if 'target_model_manifest_path' in inputs:
+    if 'library_epizoo_transfer' in inputs:
+        from .epizoo_adaptation.resources import load_bundle
+        resource=inputs['library_epizoo_transfer']['resource']
+        for key in ('source_bundle','seam_bundle'): load_bundle(**resource[key])
+    elif 'target_model_manifest_path' in inputs:
         from .epizoo_target_inference import bind_model
         bind_model(inputs['target_model_manifest_path'], inputs['target_model_manifest_sha256'],
             inputs.get('target_model_source_run_id'), inputs.get('target_model_source_step_id'))

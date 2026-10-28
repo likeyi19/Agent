@@ -10,6 +10,12 @@ METHOD = dict(id='epizoo-native-posttraining.v2', defaults='pinned-EpiZooXPostTr
     overrides=['max_steps', 'learning_rate', 'training_batch_size'],
     admission='explicit-step-budget;cuda:0;qualified-loader-batch-at-most-4')
 METHOD_SHA256 = digest(METHOD)
+LIFECYCLE_METHOD = dict(id='epizoo-model-lifecycle.v3',
+    initialization='native-parameter-transfer;zero-optimizer-updates',
+    posttraining='native-EpiZooXPostTrainer;exact-initialized-parent',
+    defaults=dict(max_steps=1000, batch_size=1, warmup_fraction=0.1),
+    biological_performance='not-qualified')
+LIFECYCLE_SHA256 = digest(LIFECYCLE_METHOD)
 # METHOD is the frozen native-v2 scientific identity. Its original admission
 # label is historical; default omission is now allowed. Resolved trainer values
 # and requested_overrides remain part of the exact execution/publication hash.
@@ -17,6 +23,28 @@ METHOD_SHA256 = digest(METHOD)
 
 class TrainingResourceError(ValueError):
     code = 'EPIZOO_TRAINING_CAPACITY_UNAVAILABLE'
+
+
+def lifecycle_profile(*, matrix_semantics, operation, max_steps=None,
+                      learning_rate=None, training_batch_size=None):
+    if operation not in ('initialization', 'posttraining'):
+        raise ValueError('Unknown model lifecycle operation.')
+    if operation == 'initialization' and any(v is not None for v in
+            (max_steps, learning_rate, training_batch_size)):
+        raise ValueError('Initialization cannot accept optimizer settings.')
+    value = resolve(matrix_semantics=matrix_semantics,
+        max_steps=1000 if max_steps is None else max_steps,
+        learning_rate=learning_rate, training_batch_size=1 if training_batch_size is None else training_batch_size)
+    value.update(id=LIFECYCLE_METHOD['id'], purpose=operation,
+        requested_overrides=dict(max_steps=max_steps, learning_rate=learning_rate,
+                                 training_batch_size=training_batch_size))
+    cfg = value['trainer']
+    steps = cfg['max_steps']
+    cfg.update(warmup_steps=min(1000, steps // 10), save_steps=steps,
+               log_steps=max(1, min(100, steps // 10)), keep_last=1)
+    if operation == 'initialization':
+        cfg['max_steps'] = 0
+    return value
 
 
 def resolve(*, matrix_semantics, max_steps=None, learning_rate=None, training_batch_size=None):
@@ -49,6 +77,10 @@ def validate(value):
 def resource_requirements(profile, n_features):
     """Necessary storage/state bounds, not an activation-memory or time promise."""
     weights, trainable = _state_sizes(n_features,json.dumps(profile['architecture'],sort_keys=True))
+    if profile.get('purpose')=='initialization':
+        return dict(model_state_bytes=weights,minimum_gpu_bytes=weights,
+                    minimum_checkpoint_disk_bytes=weights+1024**2,
+                    runtime_seconds=None,activation_memory_bytes=None)
     cfg = profile['trainer']
     copies = min(cfg['max_steps']//cfg['save_steps'], cfg['keep_last']) + 2
     return dict(model_state_bytes=weights, minimum_gpu_bytes=weights+3*trainable,

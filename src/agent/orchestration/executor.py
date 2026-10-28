@@ -722,7 +722,7 @@ class PlanExecutor:
                 owned = hooks_for_tool(step.tool_name, self._registry)
                 recorded = persisted.verification is not None and persisted.verification.artifact_authority is not None
                 if durable_run_id is not None and (
-                    step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+                    step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features')
                     or (owned is not None and recorded)
                     or (references(plan) and supports_tool(step.tool_name, self._registry) and owned is None)
                 ):

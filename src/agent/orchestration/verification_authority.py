@@ -356,7 +356,7 @@ def resume_annotation_authorities(function):
         if state.lifecycle_status in {RunLifecycleStatus.PLANNED, RunLifecycleStatus.SUCCEEDED,
                 RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED, RunLifecycleStatus.CANCELLED}:
             return function(runtime, run_id)
-        if any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+        if any(s.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features')
                for s in state.steps):
             with accepted_authorities(store, run_id):
                 return function(runtime, run_id)

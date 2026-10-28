@@ -99,7 +99,7 @@ def test_registry_target_edge_and_legacy_port():
     spec = registry.get('epizoo_embed_cells')
     ports = {p.name: p for p in spec.semantic_planning.consumer_ports}
     assert ports['target_model'].accepted_upstream_types == ('epizoo_target_model.v1',)
-    assert ports['dataset'].accepted_upstream_types == ('raw_scatac_dataset.v1',)
+    assert ports['dataset'].accepted_upstream_types == ('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1')
     spec.required_arguments['species'].validate('species', {'scientific_name':'Test species','taxonomy_id':123})
 
 

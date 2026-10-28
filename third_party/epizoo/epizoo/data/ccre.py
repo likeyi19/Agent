@@ -203,6 +203,7 @@ def build_ccre_map(
     tmp_dir: Optional[str] = None,
     keep_tmp: bool = False,
     cancel_check=None,
+    evidence_callback=None,
 ) -> Dict[int, int]:
     """
     Build cCRE index mapping from a new species to a reference species.
@@ -308,6 +309,10 @@ def build_ccre_map(
             f"from {new_n} new cCREs to {ref_n} reference cCREs."
         )
 
+        # Optional observation of the very same mapping, before temporary files
+        # are removed. This does not change mapping or tie-breaking semantics.
+        if evidence_callback is not None:
+            evidence_callback(ccre_map, new_n, ref_n, lifted_bed, overlap_bed)
         return ccre_map
 
     finally:

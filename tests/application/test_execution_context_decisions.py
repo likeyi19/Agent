@@ -168,6 +168,40 @@ def test_unoffered_read_references_cannot_bind_a_task(change):
         _research_intent(SimpleNamespace(snapshot=dict(dialogue=dict(results=[]))), decision)
 
 
+def test_same_input_continuation_retains_exact_scientific_declarations_without_repetition():
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from agent.application.dialogue_execution import admit, _validate_argument_record, _validate_research_intent
+    from agent.application.session_state import Interaction
+    from agent.application.turn_decisions import RetainedParameter, ScopedArgument
+    from agent.orchestration import build_default_tool_registry
+
+    registry = build_default_tool_registry()
+    species = dict(scientific_name='Danio rerio', taxonomy_id=7955)
+    known = dict(species=species, assembly='danRer11', matrix_semantics='binary_accessibility')
+    row = dict(handle='g0', tool='epizoo_embed_cells', parameters=[
+        dict(argument=name, value=value, origin='accepted_argument') for name, value in known.items()])
+    utterance = 'Use the trained model on the same input with 17 neighbors.'
+    interaction = Interaction('continue', utterance, 'captured', 0, dict(dialogue=dict(results=[row])))
+    sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry), _interaction_session_id='session')
+    start = utterance.index('17')
+    decision = Execute('current', 'plan', 'epizoo_embed_cells', None,
+        arguments=(ScopedArgument('build_cell_neighbors', 'n_neighbors', '17', start, start+2),),
+        references=('g0',), retain_parameters=tuple(RetainedParameter('g0', name) for name in known))
+    admitted = admit(sessions, interaction, decision, {})
+    assert admitted['inputs'] == dict(known, n_neighbors=17)
+    captured = replace(interaction, admitted=admitted)
+    _validate_argument_record(captured)
+    _validate_research_intent(captured)
+    changed = [dict(row) for row in admitted['retained_parameters']]
+    changed[0]['value'] = dict(scientific_name='Mus musculus', taxonomy_id=10090)
+    with pytest.raises(ValueError, match='intention changed'):
+        _validate_research_intent(replace(captured, admitted=dict(admitted, retained_parameters=changed)))
+    with pytest.raises(IntentError, match='unavailable_context'):
+        admit(sessions, interaction, replace(decision,
+            retain_parameters=(RetainedParameter('g0', 'unknown_measurement'),)), {})
+
+
 def test_prerequisite_task_rebinds_group_handles_by_exact_captured_source():
     from types import SimpleNamespace
     from agent.application.dialogue_execution import planning_task

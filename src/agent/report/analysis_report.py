@@ -574,6 +574,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
+    "posttrain_epizoo_model": tuple(k for k in _ADAPTATION_REPORT_FIELDS if k != "adaptation_spec_sha256") + ("parent_model_manifest_sha256",),
     "corroborate_cell_type_annotation": ("database", "database_release", "species", "context", "tissues", "n_groups", "n_records", "state_counts", "group_summary", "groups_omitted", "limitations"),
     "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
@@ -782,6 +783,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "posttrain_epizoo_model": "EpiZooX post-training",
     'inspect_scATAC_fragments': 'Bounded fragment structure inspection',
     'pca_embed_cells': 'Centered PCA representation',
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
@@ -813,6 +815,10 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "model_state": "Model training state",
+    "transfer_assessment": "Native mapping assessment and transfer decision",
+    "parent_model_manifest_sha256": "Initialized parent model manifest",
+    "parent_initialized_manifest_sha256": "Initialized parent model manifest",
     "database_release": "Reference database release",
     "database_table_sha256": "Reference table SHA-256",
     "annotation_manifest_sha256": "Native annotation SHA-256",
@@ -1039,7 +1045,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
-    ("species_adaptation", "EpiZoo species adaptation", frozenset({"adopt_scATAC_cell_by_features", "adapt_epizoo_species"})),
+    ("species_adaptation", "EpiZoo species adaptation", frozenset({"adopt_scATAC_cell_by_features", "adapt_epizoo_species", "posttrain_epizoo_model"})),
     ("external_cell_by_ccre", "External cell-by-cCRE adoption", frozenset({"adopt_scATAC_cell_by_ccre"})),
     ("cell_by_ccre", "Cell-by-cCRE matrix", frozenset({"build_scATAC_cell_by_ccre"})),
     ("barcode_qc", "Observed-barcode QC", frozenset({"compute_scATAC_qc"})),
@@ -1096,6 +1102,7 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "corroborate_cell_type_annotation": ("database_release", "database_table_sha256", "annotation_manifest_sha256"),
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
+    "posttrain_epizoo_model": ("strategy", "profile_sha256", "parent_model_manifest_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "adopt_scATAC_cell_by_features": ("matrix_semantics", "reference_identity_sha256"),
     "adopt_scATAC_cell_by_ccre": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","source_sha256","reference_identity_sha256"),
     "build_scATAC_cell_by_features": ("matrix_semantics","matrix_profile_id","matrix_profile_sha256","upstream_identities"),
@@ -1166,6 +1173,33 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
         "package_versions",
     ),
 }
+
+
+def report_fact_fields(tool_name, raw_facts):
+    """Reviewed, version-aware fact order shared by reports and bounded answers.
+
+    Missing required facts still fail at the report consumer. Historical facts
+    gain no new meaning; optional extensions are selected by their recorded keys.
+    """
+    fields = _REPORT_FIELDS.get(tool_name, ())
+    if tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap') and 'embedding_method' in raw_facts:
+        fields = (*fields, 'embedding_method', 'representation')
+        if 'embedding_parameters' in raw_facts:
+            fields = (*fields, 'embedding_parameters')
+    if tool_name == 'compute_cell_umap' and 'clustering_present' in raw_facts:
+        fields = (*fields, 'clustering_present')
+    if tool_name in ('adapt_epizoo_species','posttrain_epizoo_model') and 'training_method' in raw_facts:
+        fields = (*fields, 'training_method', 'training_configuration', 'training_biological_performance')
+        if 'model_state' in raw_facts: fields=(*fields,'model_state','transfer_assessment','parent_initialized_manifest_sha256')
+    if tool_name == 'epizoo_embed_cells' and 'target_model_method' in raw_facts:
+        fields = (*fields, 'target_model_method', 'target_assembly', 'target_matrix_semantics',
+                  'target_training_purpose', 'target_training_steps', 'target_checkpoint_sha256',
+                  'target_feature_sha256', 'target_features_reordered', 'target_biological_performance')
+    if 'model_state' in raw_facts and tool_name in ('adapt_epizoo_species', 'posttrain_epizoo_model'):
+        priority = ('model_state', 'strategy', 'transfer_assessment', 'optimizer_steps',
+            'completed_step', 'n_cells', 'n_features', 'species', 'assembly', 'training_configuration')
+        fields = tuple(dict.fromkeys((*priority, *fields)))
+    return fields
 
 
 def _project_artifact_integrity(payload: Mapping[str, object]) -> tuple[_ArtifactIntegrity, ...]:
@@ -1292,18 +1326,7 @@ def _project_report(
                 "Verified evidence lacks reportable step facts.",
             )
         step_facts: list[_Fact] = []
-        if tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap') and 'embedding_method' in raw_facts:
-            fields = (*fields, 'embedding_method', 'representation')
-            if 'embedding_parameters' in raw_facts:
-                fields = (*fields, 'embedding_parameters')
-        if tool_name == 'compute_cell_umap' and 'clustering_present' in raw_facts:
-            fields = (*fields, 'clustering_present')
-        if tool_name == 'adapt_epizoo_species' and 'training_method' in raw_facts:
-            fields = (*fields, 'training_method', 'training_configuration', 'training_biological_performance')
-        if tool_name == 'epizoo_embed_cells' and 'target_model_method' in raw_facts:
-            fields = (*fields, 'target_model_method', 'target_assembly', 'target_matrix_semantics',
-                      'target_training_purpose', 'target_training_steps', 'target_checkpoint_sha256',
-                      'target_feature_sha256', 'target_features_reordered', 'target_biological_performance')
+        fields = report_fact_fields(tool_name, raw_facts)
         for field in fields:
             if field not in raw_facts:
                 raise AnalysisReportError(
@@ -1450,7 +1473,7 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
             "A declared peak set is not a curated cCRE set. Matrix availability does not establish downstream model readiness.",
             "", _fact_ids_line(step.facts), ""))
         return lines
-    if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species'):
+    if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model'):
         adopting = step.tool_name == 'adopt_scATAC_cell_by_features'
         lines=[f"### {'Neutral matrix adoption' if adopting else 'EpiZoo species adaptation'} {occurrence}", "",
             "Exact external values and cell/feature order were conserved; value semantics are externally declared." if adopting else
@@ -1705,6 +1728,7 @@ def _render_summary(
         "build_scATAC_cell_by_features": "Fragment-derived neutral matrix independently verified",
         "adopt_scATAC_cell_by_features": "Neutral matrix adopted with exact conservation",
         "adapt_epizoo_species": "Target EpiZoo model published; biological performance not assessed",
+        "posttrain_epizoo_model": "EpiZooX post-training completed; biological performance not assessed",
         "select_scATAC_cells": "Explicit QC selection succeeded; statistical cell calling was not assessed",
         "import_scATAC_fragments": "External fragment adoption succeeded; source contents and exact conservation were independently verified",
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",

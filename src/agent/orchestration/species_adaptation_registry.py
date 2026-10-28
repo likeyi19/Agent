@@ -4,7 +4,7 @@ from agent.schemas.orchestration import _serialize
 from .matrix_registry import MatrixArgument, classify as matrix_classify
 from .registry import ArgumentSpec
 from agent.tools.data import neutral_matrix_tool as adoption
-from agent.tools.models import species_adaptation as adaptation
+from agent.tools.models import species_adaptation as adaptation, epizoo_posttraining as posttraining
 
 
 class TrainingArgument(ArgumentSpec):
@@ -61,12 +61,14 @@ def validate_adaptation(value):
     from .registry import ToolResultContractError
     from agent.tools.models.epizoo_adaptation import contract as c
     try:
-        c.checks.shape(value, adaptation.RESULT_FIELDS)
-        from agent.tools.models.native_posttraining import METHOD_SHA256
+        c.checks.shape(value, posttraining.RESULT_FIELDS if 'parent_model_manifest_sha256' in value else adaptation.RESULT_FIELDS)
+        from agent.tools.models.native_posttraining import METHOD_SHA256, LIFECYCLE_SHA256
         if (value['status']!='success' or value['artifact_type']!=c.ARTIFACT or
-            value['contract_version']!=c.CONTRACT or value['profile_sha256'] not in (c.PROFILE_SHA256,c.BINARY_PROFILE_SHA256,METHOD_SHA256) or
-            value['purpose'] not in ('qualification','production','native') or
+            value['contract_version'] not in (c.CONTRACT,c.LIFECYCLE_CONTRACT) or value['profile_sha256'] not in (c.PROFILE_SHA256,c.BINARY_PROFILE_SHA256,METHOD_SHA256,LIFECYCLE_SHA256) or
+            value['purpose'] not in ('qualification','production','native','initialization','posttraining') or
             value['strategy'] not in ('de_novo','mapped_reference')): raise ValueError()
+        if (value['contract_version']==c.LIFECYCLE_CONTRACT) != (value['profile_sha256']==LIFECYCLE_SHA256): raise ValueError()
+        if (value['purpose'] in ('initialization','posttraining')) != (value['profile_sha256']==LIFECYCLE_SHA256): raise ValueError()
         if (value['profile_sha256'] == METHOD_SHA256) != (value['purpose'] == 'native'): raise ValueError()
         if value['profile_sha256']==c.BINARY_PROFILE_SHA256 and (
                 value['strategy']!='de_novo' or value['purpose']!='qualification'):
@@ -77,7 +79,9 @@ def validate_adaptation(value):
             if key.endswith('_sha256') and not (key=='mapping_identity_sha256' and val is None): c.checks.sha(val)
         for key in ('manifest_path','checkpoint_path'): c.checks.absolute_path(value[key])
         if Path(value['checkpoint_path']) != Path(value['manifest_path']).parent/'checkpoint.pth': raise ValueError()
-        for key in ('n_cells','n_features','completed_step','optimizer_steps'): c.checks.integer(value[key],1)
+        for key in ('n_cells','n_features'): c.checks.integer(value[key],1)
+        for key in ('completed_step','optimizer_steps'): c.checks.integer(value[key],0 if value['purpose']=='initialization' else 1)
+        if value['purpose']=='initialization' and value['completed_step']!=0: raise ValueError()
         c.checks.integer(value['amp_skipped_steps'])
         if value['completed_step'] != value['optimizer_steps']+value['amp_skipped_steps']: raise ValueError()
         if (value['mapping_identity_sha256'] is None) != (value['strategy']=='de_novo'): raise ValueError()
@@ -98,12 +102,15 @@ def tool_specs():
          {'matrix_semantics':('fragment_counts','insertion_counts','binary_accessibility')}),
         ('adapt_epizoo_species',adaptation,adaptation.RESULT_FIELDS,validate_adaptation,
          (('matrix','matrix_manifest',('scatac_cell_by_features.external.v1','scatac_cell_by_features.v1')),('specification','adaptation_spec',())),
-         {'strategy':('de_novo','mapped_reference')})):
+         {'strategy':('auto','de_novo','mapped_reference')}),
+        ('posttrain_epizoo_model',posttraining,posttraining.RESULT_FIELDS,validate_adaptation,
+         (('matrix','matrix_manifest',('scatac_cell_by_features.external.v1','scatac_cell_by_features.v1')),
+          ('target_model','target_model_manifest',('epizoo_target_model.v1',))),{})):
         required={};ports=[]
         for key in public.ARGUMENTS:
             spec=_planning_argument((str,Path) if key.endswith('_path') or key=='output_dir' else (str,),
                 'Explicit supplied binding; no inferred resources or strategy fallback.',
-                source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key.startswith('matrix_manifest') else S.REQUEST_INPUT_ONLY,
+                source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key.startswith(('matrix_manifest','target_model_manifest')) else S.REQUEST_INPUT_ONLY,
                 choices=choices.get(key,()))
             if name == 'adopt_scATAC_cell_by_features' and key == 'source_path':
                 from dataclasses import replace
@@ -122,29 +129,40 @@ def tool_specs():
         optional = {}
         if not is_adoption:
             for key, types, description in (
-                ('max_steps', (int,), 'Positive native training steps; omission uses pinned EpiZoo defaults (currently 500,000). Only explicit post-training intent authorizes new training; never substitute training for existing-model inference.'),
+                ('max_steps', (int,), 'Positive explicit training attempt budget. New post-training defaults to 1,000 attempts, batch 1, 10% warmup (at most 1,000); initialization has no optimizer and rejects training settings. Successful execution does not prove convergence.'),
                 ('learning_rate', (int,float), 'Explicit positive native optimizer learning rate; omitted uses pinned EpiZoo defaults.'),
                 ('training_batch_size', (int,), 'Explicit training loader batch size, 1 through 4 under the qualified 24 GiB execution envelope.')):
                 spec = _planning_argument(types, description, source=S.REQUEST_INPUT_ONLY, scientific_parameter=True)
                 optional[key] = TrainingArgument(spec.accepted_types, allow_step_output_ref=False, planning=spec.planning)
                 ports.append(_semantic_argument_port(key, required=False))
+        if public is posttraining:
+            for key in ('target_model_source_run_id','target_model_source_step_id'):
+                optional[key]=_planning_argument((str,), 'Exact accepted parent execution coordinates.',source=S.REQUEST_INPUT_ONLY)
+                ports.append(_semantic_argument_port(key,required=False))
+        if public is adaptation:
+            optional['strategy']=required.pop('strategy')
+            from dataclasses import replace
+            ports=[replace(p,required=False) if p.name=='strategy' else p for p in ports]
         ints={'artifact_schema_version','n_cells','n_features','nnz','total_count','zero_row_count','completed_step','optimizer_steps','amp_skipped_steps'}
         fields={k:(int,) if k in ints else (dict,) if k=='species' else (str,type(None)) if k=='mapping_identity_sha256' else (str,) for k in result_fields}
         specs.append(ToolSpec(name=name,function=getattr(public,name),required_arguments=required,optional_arguments=optional,
             result_contract=ResultContract('NeutralMatrixResult' if is_adoption else 'SpeciesAdaptationResult',fields,
                 validator=validator,planning_fields={k:_planning_result('Verified exact artifact binding.',bindable=True,
-                    artifact=A.SCATAC_CELL_BY_FEATURES if is_adoption else A.EPIZOO_TARGET_MODEL) for k in ('manifest_path','manifest_sha256')}),
+                    artifact=A.RAW_SCATAC if k=='matrix_path' else A.SCATAC_CELL_BY_FEATURES if is_adoption else A.EPIZOO_TARGET_MODEL)
+                    for k in (('manifest_path','manifest_sha256','matrix_path') if is_adoption else ('manifest_path','manifest_sha256'))}),
             exception_classifier=classify,retryable_error_codes=frozenset(),recovery_policy_version=public.RECOVERY_POLICY,
             durable_hooks=DurableToolHooks(public.execute,public.recover),
             planning=_tool_planning(PlanningToolRole.OPERATION,
-                'Adopt exact new-species cell-by-regulatory-feature H5AD.' if is_adoption else 'Post-train pretrained EpiZoo for an explicit target species.',
+                'Adopt exact new-species cell-by-regulatory-feature H5AD.' if is_adoption else 'Post-train the exact accepted initialized EpiZooX model.' if public is posttraining else 'Initialize target-species EpiZooX by native parameter transfer without training.',
                 'Complete ordered neutral reference/genome; int64 CSR; declared value semantics. Peaks are exact features, never projected to canonical cCREs.' if is_adoption else
-                'Qualified neutral matrix: external or fragment-derived fragment_counts, or binary_accessibility with explicit binary-de-novo-qualification.v1; specification pins reference and source/SEAM bundles.',
+                'Exact neutral target matrix and qualified model resources. Initialization supports fragment counts or binary accessibility and records zero updates. Post-training requires an initialized model with exact features/measurement; no fresh transfer.',
                 'No inferred raw/QC lineage, curated-cCRE or model-readiness claim.' if is_adoption else
-                'Explicit de_novo or mapped_reference; mapped requires supplied chain/reference resources. No fallback or biological quality claim; the model port can feed qualified epizoo_embed_cells target inference.',
+                'Omitted strategy uses native mapping assessment and a recorded operational preference. Explicit de_novo needs no chain; explicit mapped_reference retains low coverage when usable. Model outputs feed native EpiZooX inference or independent post-training.',
                 capability_ids=('species_adaptation',)),
             semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
                 SemanticProducerPortSpec('matrix' if is_adoption else 'model',
                     'scatac_cell_by_features.external.v1' if is_adoption else 'epizoo_target_model.v1',
-                    (member('manifest_path'),member('manifest_sha256'))),))))
+                    (member('manifest_path'),member('manifest_sha256'))),)
+                + ((SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',
+                        (member('dataset','matrix_path'),)),) if is_adoption else ()))))
     return tuple(specs)

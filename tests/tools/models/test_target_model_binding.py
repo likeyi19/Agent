@@ -30,7 +30,7 @@ def accepted(tmp_path, monkeypatch):
         manifest_sha256=sha,checkpoint_sha256='checkpoint'))
     authority=SimpleNamespace(to_dict=lambda:record,identity_sha256='accepted-authority')
     monkeypatch.setenv('AGENT_EPIZOO_SOURCE_STORE',str(tmp_path/'store'))
-    monkeypatch.setattr(binding,'FileRunStore',lambda root:None)
+    monkeypatch.setattr(binding,'FileRunStore',lambda root:SimpleNamespace(root=Path(root)))
     monkeypatch.setattr(binding,'_accepted',lambda *a:(stored,authority,'execution','anchor'))
     monkeypatch.setattr(binding.publication,'load_manifest',lambda *a:manifest)
     monkeypatch.setattr(resources,'runtime',lambda:{})

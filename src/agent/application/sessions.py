@@ -545,7 +545,7 @@ class AnalysisSessions:
         """
         from agent.orchestration.active_context import ActivePlanningContext, ActiveContextItem
         from agent.orchestration.prior_outputs import (optional_binding_for_locator, validate_binding,
-                                                      qualified_dependencies_for_locator)
+                                                      qualified_dependencies_for_locator, matrix_dataset_binding)
         from agent.schemas.orchestration import _serialize
         if type(integrity) is not bool or type(reuse) is not bool:
             raise TypeError('Planning context policies must be boolean.')
@@ -575,6 +575,10 @@ class AnalysisSessions:
                                                        self._application.registry)
                 sources[output] = ((binding,) if binding is not None else qualified_dependencies_for_locator(
                     output, self._application.run_store, self._application.registry))
+                representations = tuple(dataset for source in sources[output]
+                    if (dataset := matrix_dataset_binding(source, self._application.run_store,
+                                                         self._application.registry)) is not None)
+                sources[output] = tuple(dict.fromkeys((*sources[output], *representations)))
                 for source in sources[output]:
                     if source not in bindings:
                         if integrity:

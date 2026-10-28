@@ -708,7 +708,7 @@ class MatrixDownloadPreparer:
                 _, manifest = model_delivery.read_json(snapshot)
                 if manifest != artifact.manifest:
                     raise ValueError('Changed model metadata.')
-                data = model_delivery.metadata(manifest, artifact.manifest_sha256)
+                data = model_delivery.metadata(manifest, artifact.manifest_sha256, root=artifact.path.parent)
                 if len(data) > model_delivery.MAX_METADATA_BYTES:
                     raise ValueError('Model metadata projection exceeds the bound.')
                 snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()

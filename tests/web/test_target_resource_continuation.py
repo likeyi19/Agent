@@ -56,8 +56,14 @@ def test_target_resource_reply_preserves_registered_source_and_objective(tmp_pat
         assert client.post('/api/v1/sessions/session/turns', json=answer).status_code == 202
         result = wait_turn(client, 'answer')
         if replace_source:
-            assert result['status'] == 'clarification'
+            # A typed binding violation is a failed continuation, not a new
+            # model-authored clarification. The original pending task survives.
+            assert result['status'] == 'failed'
             assert not backend.science_calls
+            state = backend.service._application.sessions.load('session')
+            assert not state.turns and not state.revisions
+            assert state.interactions[0].prerequisite['binding_turn_id'] == 'first'
+            assert state.interactions[0].utterance == objective
         else:
             assert result['status'] == 'succeeded', result
             run = backend.service._application.run_store.load(result['run_id'])

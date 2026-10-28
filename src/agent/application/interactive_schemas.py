@@ -496,7 +496,12 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_composition', 'composed-analysis.h5ad', 'Original data with selected accepted results'),
             ('scientific_model', 'epizoox-checkpoint.pth', 'EpiZooX model checkpoint'),
             ('scientific_model', 'epizoox-model.json', 'Model configuration and reuse requirements'),
+            ('scientific_model', 'epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
+            ('scientific_model', 'epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
         }
+        reviewed.update((kind, filename, prefix + ': ' + label)
+            for kind, filename, label in tuple(reviewed) if kind == 'scientific_model'
+            for prefix in ('Initialized', 'Post-trained'))
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):
             raise ValueError('Unsupported scientific artifact descriptor.')

@@ -2031,10 +2031,12 @@ def verify_step(
     artifact_authority = None
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features'):
+        if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features'):
             try:
                 if step.tool_name == 'adapt_epizoo_species':
                     from agent.tools.models.species_adaptation import verify_public_result
+                elif step.tool_name == 'posttrain_epizoo_model':
+                    from agent.tools.models.epizoo_posttraining import verify_public_result
                 elif step.tool_name == 'build_scATAC_cell_by_features':
                     from agent.tools.data.fragment_feature_tool import verify_public_result
                 else:

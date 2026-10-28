@@ -744,7 +744,7 @@ class InteractiveAgentApplication:
                 status, state_revision = run.lifecycle_status.value.lower(), run.revision
                 from agent.tools.models.native_posttraining import training_notice
                 steps = tuple(StepView(s.step_id, s.tool_name, s.status.value, s.attempt_count,
-                    training_notice(s.resolved_arguments) if s.tool_name == 'adapt_epizoo_species'
+                    training_notice(s.resolved_arguments) if s.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model')
                         and s.status.value == 'RUNNING' and s.resolved_arguments else None) for s in run.steps)
                 if status == 'succeeded' and (turn is None or turn.status in {'linked','run_succeeded','ready'}):
                     status = 'finalizing'
@@ -987,7 +987,7 @@ class InteractiveAgentApplication:
                         # selected file port represents that step.
                         continue
                     items.append(self._accepted_matrix(session_id, revision, origin, output))
-                elif step.tool_name == 'adapt_epizoo_species':
+                elif step.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model'):
                     from .model_delivery import accepted_models
                     items.extend(accepted_models(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
@@ -1039,7 +1039,7 @@ class InteractiveAgentApplication:
                 if planned.tool_name in _MATRIX_CONTRACTS:
                     items.append(self._accepted_matrix(session_id, revision, origin, None,
                         step_id=planned.step_id))
-                elif planned.tool_name == 'adapt_epizoo_species':
+                elif planned.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model'):
                     from .model_delivery import accepted_models
                     items.extend(accepted_models(self, session_id, revision, origin, None,
                         step_id=planned.step_id))

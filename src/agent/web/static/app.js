@@ -695,7 +695,7 @@ function scientificFileNode(sessionId, artifact) {
   if (artifact.artifact_type === "scientific_model") {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
-    note.textContent = "Accepted trained model. Read the configuration and reuse requirements; these downloads are not a standalone inference bundle.";
+    note.textContent = "Accepted model. Read the configuration for initialization or training status and reuse requirements; these downloads are not a standalone inference bundle.";
     row.append(note);
   }
   return row;

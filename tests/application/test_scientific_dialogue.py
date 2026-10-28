@@ -443,3 +443,24 @@ def test_scientific_wire_is_closed():
     bad = question()
     bad['value'] = 123
     with pytest.raises(IntentError): parse_decision(json.dumps(dict(turn_schema_version=1,decision=bad)))
+
+
+def test_model_lifecycle_summary_survives_six_source_completion_budget(app,monkeypatch):
+    assessment=dict(selected='de_novo',reason='evaluated-below-preference-criteria',
+        candidates=[dict(source_species='human',statistics=dict(total_target_ccres=100,
+            usable_mapped_target_ccres=1,usable_mapping_fraction=.01))])
+    rid=accepted(app,'adapt_epizoo_species',copies=6,overrides=dict(strategy='de_novo',
+        purpose='initialization',optimizer_steps=0,completed_step=0,
+        species=dict(scientific_name='Danio rerio',taxonomy_id=7955),assembly='danRer11'),
+        extra_facts=dict(model_state='initialization',transfer_assessment=assessment,
+            training_configuration=dict(trainer=dict(max_steps=0,lr=.00005,warmup_steps=100),batch_size=1)))[0]
+    app=forbid_work(app,monkeypatch);revision=app.sessions.load('session').revisions[-1]
+    targets=[dict(revision_id=rid,output_name=o.name,accepted_step_sha256=o.accepted_step_sha256,subject=None)
+        for o in revision.outputs]
+    public,claims=sd.context(app.sessions,'session',dict(target=None,comparison=None),evidence_targets=targets)
+    assert len(claims)<=sd.MAX_CLAIMS and len(json.dumps(public).encode())<=sd.MAX_CONTEXT_BYTES
+    for i in range(6):
+        values={c.field:c.value for c in claims if c.target=='t'+str(i)}
+        assert values['strategy']=='de_novo' and values['model_state']=='initialization'
+        assert values['transfer_assessment']['candidates'][0]['statistics']['usable_mapping_fraction']==.01
+        assert values['optimizer_steps']==0

@@ -678,3 +678,20 @@ def test_read_only_answer_uses_same_pinned_relationship_or_reports_its_unavailab
     outcome = ask(app, 'relationship', 'Explain the accepted figure sources without rerunning anything.', Model(decision, response=reply))
     assert outcome.status == 'answered' and calls == ['scripted_cluster_owner']
     assert all(files(app)[p] == value for p, value in before.items() if not p.startswith('sessions/'))
+
+
+def test_generic_figure_delivery_recognizes_existing_native_inventory(tmp_path,monkeypatch):
+    from agent.application import dialogue_evidence
+    facade,source,calls,models=service(tmp_path)
+    original=CompletionModel.complete
+    def requested(self,*,prompt,response_schema):
+        if 'turn_schema_version' in json.loads(prompt):self.decision['delivery']=['explanation','visualization']
+        return original(self,prompt=prompt,response_schema=response_schema)
+    monkeypatch.setattr(CompletionModel,'complete',requested)
+    # Explicit simulated inventory; no biological figure qualification.
+    monkeypatch.setattr(dialogue_evidence,'figure_inventory',lambda *a:(dict(metadata=dict(
+        manifest_sha256='a'*64,figure_id='simulated-native',kind='umap',sources=[])),))
+    view=submit(facade,source)
+    assert 'requested visualization is available in the result view' in view.response.text
+    assert 'has not been produced' not in view.response.text
+    assert calls==['inspect_scATAC']

@@ -307,6 +307,44 @@ declarations remain nullable; reference matching and accepted historical readers
 retain their existing meanings. Focused regressions and preserved-result reads
 pass without native scientific reruns. No staging, commit or push is performed.
 
+SWC-3 builds on `e88e9b6314b7f82c1e8ddf054e95ccb4bb0b19f0` without commit/push.
+The [EpiZoo lifecycle guide](docs/guides/epizoo-model-lifecycle.md) owns versioned
+zero-update initialization, automatic transfer assessment, native zero-shot,
+independent `posttrain_epizoo_model` and trained-model inference (27 tools).
+ScientificResourceLibrary remains the shared resource owner; qualified exact-pair
+chains may be privately acquired from listed UCSC resources or explicitly installed.
+The native mapping callback observes existing liftOver/retained-vocabulary overlaps;
+it does not change mapping mathematics. Policy thresholds are provisional operational
+preferences, never biological performance claims. Explicit valid preferences remain
+respected, and unavailable assessment differs from measured low correspondence.
+
+The [SWC-3 report](../agent-data/acceptance/scientific-workflow-completion/swc-3/REPORT.md)
+separates genuine 16-cell danRer11 native initialization, 1,000 applied training
+updates and both inference paths from live Firefox/OpenRouter composition and a
+separate 100-update multi-turn continuation. Exact initialized-parent roles, accepted
+matrix H5AD ports and source declarations support reuse through existing owners.
+Strict checkpoint lineage, ordered axes and native preprocessing remain authoritative.
+Model downloads include status, actual transfer evidence and exact companions;
+old model publications and displayed prose retain their meanings. The report records
+live planning/presentation failures, their bounded corrections, provider failures,
+restart/download evidence and remaining limitations. Final live read-only prose
+remains unqualified after `PROVIDER_COMPLETION_INCOMPLETE`; full conversational
+closeout is not claimed. Execution does not qualify
+biological convergence or unrestricted cross-species performance. No commit or push
+is performed; inverse regulatory design and cross-capability review remain outside scope.
+
+The [SWC-3 finalization](../agent-data/acceptance/scientific-workflow-completion/swc-3/finalization/REPORT.md)
+closes the bounded review under Outcome B. Same-input continuation can retain exact
+offered scientific declarations through the existing typed parameter owner; no new
+memory or selection mechanism is added. Reports and answers share version-aware
+fact ordering, and model summaries no longer fabricate temporary adaptation-spec
+metadata for post-training. The 194 conversational/report and 94 lifecycle/authority
+checks pass. Accepted Runs, revisions, model hashes and historical text are preserved.
+Three targeted Firefox requests returned empty provider completions with
+`length / max_output_tokens`; usage was unavailable. Live generated mapping prose,
+the earlier attribution rejection and short-follow-up binding remain unqualified.
+No provider configuration change, scientific rerun, staging, commit or push occurs.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

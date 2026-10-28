@@ -4,14 +4,18 @@ Agent manages code-only snapshots of both scientific backends under
 [`third_party/epizoo/`](../../third_party/epizoo/) and
 [`third_party/epiagent/`](../../third_party/epiagent/). Agent scientific owners call
 these packages; their algorithms remain upstream code. The existing Registry has
-24 tools. EpiZoo supports current accepted capabilities. EpiAgent is an installed
+27 tools. EpiZoo supports current accepted capabilities. EpiAgent is an installed
 backend for future tools, with no current public Agent execution tool or automatic
 substitution for EpiZoo or PCA.
 
 Each snapshot's `SOURCE.json` records its upstream revision, original and included
 file hashes, exclusions and packaging/test amendments. EpiZoo is pinned to
 `029cd631d0f9806a646c4a3b42ce10b958f2b67f`; EpiAgent is pinned to
-`9c4b7902537b14871bdb13d2fad43bff9974310a`. Scientific Python modules are unchanged.
+`9c4b7902537b14871bdb13d2fad43bff9974310a`. SWC-3 adds an optional observation
+callback to native EpiZoo `build_ccre_map()` before temporary mapping files are
+removed; its algorithm and numerical defaults remain unchanged. `SOURCE.json`
+records this exact amendment and preserves original upstream hashes. Other
+scientific Python modules remain unchanged.
 Original MIT licenses and attribution remain; EpiZoo's SEAM configuration also
 retains its Apache-2.0 notice and DNABERT-2/MosaicBERT attribution. See
 [EpiZoo NOTICE](../../third_party/epizoo/NOTICE) and

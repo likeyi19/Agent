@@ -51,6 +51,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "corroborate_cell_type_annotation",
         "adopt_scATAC_cell_by_features",
         "adapt_epizoo_species",
+        "posttrain_epizoo_model",
         "build_scATAC_cell_by_features",
     )
     assert registry.contains("inspect_scATAC")
@@ -311,6 +312,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "corroborate_cell_type_annotation": "corroborate-cell-type-annotation-v1",
         "adopt_scATAC_cell_by_features": "adopt-scatac-cell-by-features-v1",
         "adapt_epizoo_species": "adapt-epizoo-species-v1",
+        "posttrain_epizoo_model": "adapt-epizoo-species-v1",
         "build_scATAC_cell_by_features": "build-scatac-cell-by-features-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
         "pca_embed_cells": "pca-embed-cells-v1",

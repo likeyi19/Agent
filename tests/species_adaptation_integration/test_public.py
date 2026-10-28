@@ -84,7 +84,7 @@ def test_registry_scope():
     from agent.orchestration.planning_scope import capability_index
     r=build_default_tool_registry()
     index=capability_index(r)
-    assert set(index['species_adaptation'])=={'adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features','epizoo_embed_cells'}
+    assert set(index['species_adaptation'])=={'adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features','epizoo_embed_cells','posttrain_epizoo_model'}
     assert 'adapt_epizoo_species' not in index['embedding_analysis']
 
 
@@ -318,3 +318,35 @@ def test_binary_profile_binds_receipt_authority_and_result(integration,tmp_path)
     bad=c.write_json(tmp_path/'forged-profile.json',forged)
     with pytest.raises(ValueError,match='Unsupported target-model contract'):
         publication.load_manifest(bad['path'],bad['sha256'])
+
+
+def test_accepted_neutral_matrix_exposes_exact_dataset_for_later_consumers(case, tmp_path):
+    from agent.application import OutputSelection
+    from agent.orchestration.prior_outputs import bind_output, channel_for, resolve, prior_output_store
+    from agent.schemas.prior_output import PriorOutputRef
+    app=ResearchAgentApplication(tmp_path/'app',planner=Planner(public_args(case)))
+    app.sessions.create('matrix')
+    state=app.sessions.run('matrix','adopt',AgentRequest('adopt','Adopt exact supplied regions.',{}),
+        (OutputSelection('matrix','adopt','manifest_path'),),expected_generation=0)
+    assert state.turn('adopt').status=='activated'
+    from dataclasses import replace
+    from agent.application.session_state import Interaction
+    from agent.application.turn_context import snapshot
+    from agent.application.scientific_dialogue import capture
+    snap=snapshot(app.sessions,state)
+    snap['dialogue']=capture(app.sessions,state,snap,None)
+    interaction=Interaction('inference','Embed the accepted matrix.',state.active_revision_id,state.generation,snap)
+    app.sessions._store._update('matrix',lambda previous:replace(previous,interactions=(interaction,)))
+    context,_=app.sessions.planning_context_for_interaction('matrix','inference',integrity=False)
+    assert {i.binding.source_port for i in context.items}=={'matrix','dataset'}
+    binding=bind_output(app.run_store,app.registry,'adopt:run','adopt','dataset')
+    assert binding in [i.binding for i in context.items]
+    for consumer in ('epizoo_embed_cells','inspect_scATAC','pca_embed_cells'):
+        channel_for(binding,consumer,'dataset',app.registry)
+    with prior_output_store(app.run_store):
+        path=resolve(PriorOutputRef(binding,'matrix_path'))
+    import anndata as ad
+    original=ad.read_h5ad(case['source_path']);delivered=ad.read_h5ad(path)
+    assert original.obs_names.equals(delivered.obs_names)
+    assert original.var_names.equals(delivered.var_names)
+    assert (original.X!=delivered.X).nnz==0

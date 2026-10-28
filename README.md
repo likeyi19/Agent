@@ -669,7 +669,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Reference corroboration | `corroborate_cell_type_annotation`: exact accepted annotation and qualified CellMarker records; separate literature associations and downloadable evidence TSV |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
 | Neutral fragment-derived matrix | `build_scATAC_cell_by_features`: verified external fragments, exact caller-ordered cells and neutral features; independent fragment-count authority |
-| Species adaptation | `adapt_epizoo_species`: qualified neutral fragment counts, explicit strategy and pinned EpiZoo/SEAM/profile specification; publishes a target model |
+| Target EpiZoo lifecycle | `adapt_epizoo_species`: automatic or explicit transfer with zero-update initialization; `posttrain_epizoo_model`: native training from that accepted parent; exact target inference through `epizoo_embed_cells` |
 | Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
 | Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
 | Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
@@ -1257,11 +1257,12 @@ The [UA3.5 closeout](docs/history/ua3.5-closeout.md) records the accepted human 
 initial-declaration admission and non-secret human deployment requirements,
 with their distinct scientific and language qualification limits.
 
-General task-specific fine-tuning is future work and must publish a separate
-qualified derived model. Existing `adapt_epizoo_species` retains its qualified
-pretrained-source, SEAM and explicit `mapped_reference`/`de_novo` contracts and
-publishes separate target-species weights. Adapted-target inference remains
-deferred; original pretrained weights are preserved.
+The [target-species EpiZoo lifecycle](docs/guides/epizoo-model-lifecycle.md) separates
+automatic transfer assessment and zero-update initialization from native target
+post-training. Accepted initialized and trained checkpoints support exact native
+cell inference and the existing downstream tools. Qualified EpiZoo/SEAM, genome
+and optional chain resources are resolved through the shared library. Historical
+adapted-model semantics and original pretrained weights remain unchanged.
 
 ### External fragments browser attachment (UA3.4.1)
 

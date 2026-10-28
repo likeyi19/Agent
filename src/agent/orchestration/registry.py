@@ -1916,7 +1916,8 @@ def build_default_tool_registry() -> ToolRegistry:
             "assembly": _planning_argument((str,), "Exact target assembly declaration.",
                 source=direct, scientific_parameter=True, conversational_exact_string=True),
             "matrix_semantics": _planning_argument((str,), "Exact target-model measurement semantics.",
-                choices=("fragment_counts", "binary_accessibility"), source=direct, scientific_parameter=True),
+                choices=("fragment_counts", "binary_accessibility"), source=direct, scientific_parameter=True,
+                conversational_choice=True),
             "checkpoint_path": ArgumentSpec(
                 path_types,
                 planning=ArgumentPlanningSemantics(
@@ -2031,7 +2032,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.QUERY,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1"),
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("species", required=True),

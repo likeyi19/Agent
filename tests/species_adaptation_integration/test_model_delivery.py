@@ -250,3 +250,55 @@ def test_unretained_model_does_not_appear_on_later_revision(accepted):
         assert client.get(base(child.active_revision_id)).json()['artifacts']==[]
         assert client.get(base(child.active_revision_id)+'/'+entries['epizoox-checkpoint.pth'].handle).status_code==404
         assert client.get(base(rid)+'/'+entries['epizoox-checkpoint.pth'].handle).status_code==200
+
+
+@pytest.mark.parametrize('state',['initialization','posttraining'])
+def test_lifecycle_metadata_has_effective_strategy_and_truthful_training(accepted,tmp_path,state):
+    from copy import deepcopy
+    from agent.tools.models.epizoo_adaptation import contract as c
+    _,_,_,_,artifact=accepted
+    manifest=deepcopy(artifact.manifest)
+    manifest['schema_version']=2
+    manifest['arguments']['profile']['purpose']=state
+    manifest['arguments']['strategy']='auto'
+    manifest['arguments']['parent']=None if state=='initialization' else {'manifest_sha256':'b'*64}
+    manifest['preprocessing']['df_scope']=state+'-input-corpus'
+    if state=='initialization':manifest['execution'].update(completed_step=0,optimizer_steps=0,amp_skipped_steps=0)
+    decision=dict(selected='de_novo',requested='auto',candidates=[],reason='mapping-unavailable;not-evaluated')
+    record=c.write_json(tmp_path/'transfer-decision.json',decision)
+    manifest['files']['transfer-decision.json']={k:v for k,v in record.items() if k!='path'}
+    result=json.loads(delivery.metadata(manifest,'a'*64,root=tmp_path))
+    assert result['format']=='epizoox-download-metadata.v2'
+    assert result['strategy']=='de_novo' and result['requested_strategy']=='auto'
+    assert result['transfer_assessment']==decision
+    assert result['model_state']==state and result['required_not_included']=={}
+    assert 'training_cell_count' not in result
+    if state=='initialization':assert result['optimizer_updates']==0 and result['training_resume']=='not-trained;parameter-transfer-only'
+    else:assert result['parent_initialized_manifest_sha256']=='b'*64
+    (tmp_path/'transfer-decision.json').write_text('{}')
+    with pytest.raises(ValueError):delivery.metadata(manifest,'a'*64,root=tmp_path)
+
+
+def test_scientific_answer_projects_the_existing_model_download_inventory(accepted):
+    from agent.application.analysis_delivery import export_descriptions
+    app,_,rid,entries,_=accepted
+    state=app.sessions.load('model');revision=next(r for r in state.revisions if r.revision_id==rid)
+    output=revision.outputs[0]
+    descriptions=export_descriptions(app.sessions,'model',[dict(revision_id=rid,output_name=output.name,
+        accepted_step_sha256=output.accepted_step_sha256,subject=None)])
+    assert {r['filename'] for r in descriptions}=={'epizoox-checkpoint.pth','epizoox-model.json'}
+    assert all(r['actual_download_status']=='NOT_RECORDED' for r in descriptions)
+    assert all(r['status']=='available_for_preparation' for r in descriptions)
+
+
+@pytest.mark.parametrize('state',['Initialized','Post-trained'])
+def test_lifecycle_download_labels_preserve_closed_artifact_contract(state):
+    from agent.application.interactive_schemas import ScientificArtifactHandle
+    from agent.application.model_delivery import FILES
+    for filename,label in FILES.values():
+        item=ScientificArtifactHandle('a'*64,'scientific_model','b'*64,'revision','turn',100,
+            filename,state+': '+label)
+        assert item.title==state+': '+label
+    with pytest.raises(ValueError,match='Unsupported scientific artifact'):
+        ScientificArtifactHandle('a'*64,'scientific_model','b'*64,'revision','turn',100,
+            'epizoox-checkpoint.pth','Biologically validated: EpiZooX model checkpoint')

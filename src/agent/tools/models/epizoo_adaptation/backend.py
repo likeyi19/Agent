@@ -47,7 +47,7 @@ def sequences_and_embeddings(reference,features,seam,profile,root,device):
     from epizoo.inference.embeddings import extract_seq_embeddings
     from torch.utils.data import DataLoader
     check_file(seam['checkpoint'])
-    if profile.get('id') == 'epizoo-native-posttraining.v2':
+    if profile.get('id') in ('epizoo-native-posttraining.v2', 'epizoo-model-lifecycle.v3'):
         from ..native_posttraining import extract_sequences
         sequences=extract_sequences(reference, features, root)
     else:
@@ -85,7 +85,7 @@ def mapping_tool_versions(liftover,bedtools):
     return result
 
 
-def mapping(spec,source,reference,features,root):
+def mapping(spec,source,reference,features,root, *, evidence=False):
     from epizoo.data.ccre import build_ccre_map
     from agent.tools.data.scatac_reference import load_scatac_reference_bundle,reinspect_scatac_reference_bundle_sources
     import pandas as pd
@@ -137,28 +137,57 @@ def mapping(spec,source,reference,features,root):
                 chrom,interval=name.rsplit(':',1); start,end=interval.split('-')
                 f.write(f'{chrom}\t{start}\t{end}\n')
     cancellation_checkpoint()
+    options = {}
+    if evidence:
+        from .transfer_assessment import observe_mapping
+        def observe(result,n,r,lifted,overlaps):
+            import shutil
+            shutil.copyfile(lifted,root/'mapping-lifted.bed')
+            shutil.copyfile(overlaps,root/'mapping-overlaps.tsv')
+            write_json(root/'mapping-evidence.json',observe_mapping(result,n,r,lifted,overlaps,
+                min_overlap=spec['min_overlap']))
+        options['evidence_callback'] = observe
     result=build_ccre_map(str(new),str(old),chain_path,liftover_bin=spec['liftover']['path'],
         bedtools_bin=spec['bedtools']['path'],min_overlap=spec['min_overlap'],tmp_dir=str(root),
-        cancel_check=cancellation_checkpoint)
+        cancel_check=cancellation_checkpoint, **options)
     cancellation_checkpoint()
     write_json(root/'correspondence.json',{str(k):int(v) for k,v in sorted(result.items())})
     return result
 
 
-def train(source,seq,sentences,profile,strategy,correspondence,source_species,root,device):
+def train(source,seq,sentences,profile,strategy,correspondence,source_species,root,device, *, parent=None):
+    import time
+    started=time.monotonic()
     from epizoo.models.epizoo import EpiZooConfig
     from epizoo.models.epizoo_x import EpiZooXConfig
     from epizoo.qualification import qualify_source,initialize_target,parameter_scopes
     from epizoo.data.datasets import CellDatasetX,collate_fn_x
     from epizoo.train.posttrain import EpiZooXPostTrainer,EpiZooXPostTrainConfig
     from torch.utils.data import DataLoader
-    state=torch.load(source['checkpoint']['path'],map_location='cpu',weights_only=True,mmap=True)
-    state=qualify_source(state,EpiZooConfig(**source['architecture']))
     cfg=EpiZooXConfig(vocab_size=len(seq)+4,**profile['architecture'])
-    model=initialize_target(state,seq,cfg,strategy=strategy,mapping=correspondence,source_species=source_species)
+    if parent is None:
+        state=torch.load(source['checkpoint']['path'],map_location='cpu',weights_only=True,mmap=True)
+        state=qualify_source(state,EpiZooConfig(**source['architecture']))
+        model=initialize_target(state,seq,cfg,strategy=strategy,mapping=correspondence,source_species=source_species)
+    else:
+        from epizoo.qualification import strict_target
+        state=torch.load(parent,map_location='cpu',weights_only=True,mmap=True)
+        model=strict_target(state,cfg)
     scopes=parameter_scopes(model)
     if scopes['frozen']!=['seq_emb.weight']: raise ValueError('Unexpected frozen modules.')
     del state
+    if profile['purpose'] == 'initialization':
+        torch.save(model.state_dict(),root/'checkpoint.pth')
+        record=dict(completed_step=0,finite_loss_steps=0,last_losses={},optimizer_steps=0,
+            amp_skipped_steps=0,final_amp_scale=None,parameter_scopes=scopes,
+            expected_forward=dict(cells=1,embedding_dim=512,decoder_size=len(seq)),
+            peak_gpu_allocated_bytes=torch.cuda.max_memory_allocated(device),
+            peak_gpu_reserved_bytes=torch.cuda.max_memory_reserved(device),
+            device=torch.cuda.get_device_name(device),mid_training_resume=False)
+        write_json(root/'execution.json',record)
+        del model
+        gc.collect(); torch.cuda.empty_cache()
+        return record
     dataset=CellDatasetX(sentences,num_ccres=len(seq),max_length=profile['max_length'],
                         random_sample=profile['random_sample'],cca_alpha=profile['cca_alpha'])
     generator=torch.Generator().manual_seed(profile['seed'])
@@ -199,5 +228,8 @@ def train(source,seq,sentences,profile,strategy,correspondence,source_species,ro
         peak_gpu_allocated_bytes=torch.cuda.max_memory_allocated(device),
         peak_gpu_reserved_bytes=torch.cuda.max_memory_reserved(device),
         device=torch.cuda.get_device_name(device),mid_training_resume=False)
+    if profile.get('id')=='epizoo-model-lifecycle.v3':
+        record['elapsed_seconds']=time.monotonic()-started
+        record['warm_start']='initialized-checkpoint;fresh-optimizer-scheduler'
     write_json(root/'execution.json',record)
     return record

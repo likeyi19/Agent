@@ -15,14 +15,25 @@ from . import contract as c,resources,preprocessing,backend
 
 def arguments(value):
     args=deepcopy(value)
-    if set(args)!={'matrices','source_bundle','seam_bundle','strategy','mapping','profile','device','output_dir'}:
+    lifecycle=args.get('profile',{}).get('id') == 'epizoo-model-lifecycle.v3'
+    fields={'matrices','source_bundle','seam_bundle','strategy','mapping','profile','device','output_dir'}
+    if lifecycle: fields.add('parent')
+    if set(args)!=fields:
         raise ValueError('Invalid adaptation arguments.')
     c.validate_strategy(args['profile'], args['strategy'])
     if args['device']!='cuda:0': raise ValueError('Initial execution profile requires explicit cuda:0; no fallback.')
-    if args['strategy'] not in ('de_novo','mapped_reference'):
+    if args['strategy'] not in (('auto','de_novo','mapped_reference') if lifecycle else ('de_novo','mapped_reference')):
         raise ValueError('Unknown adaptation strategy.')
-    if (args['strategy']=='de_novo')!=(args['mapping'] is None):
+    if not lifecycle and (args['strategy']=='de_novo')!=(args['mapping'] is None):
         raise ValueError('Mapping resources must agree with the explicit strategy.')
+    if lifecycle:
+        if not isinstance(args['mapping'],list) or len(args['mapping'])>2:
+            raise ValueError('At most two qualified human/mouse mapping candidates are supported.')
+        if (args['parent'] is None) != (args['profile']['purpose']=='initialization'):
+            raise ValueError('Post-training requires an exact initialized parent; initialization has none.')
+        if args['parent'] is not None:
+            c.checks.shape(args['parent'],('manifest_path','manifest_sha256','run_id','step_id'))
+            c.checks.absolute_path(args['parent']['manifest_path']);c.checks.sha(args['parent']['manifest_sha256'])
     for key in ('source_bundle','seam_bundle'):
         c.checks.shape(args[key],('path','sha256'))
         c.checks.absolute_path(args[key]['path']); c.checks.sha(args[key]['sha256'])
@@ -62,11 +73,19 @@ def load_manifest(path,sha):
     c.checks.shape(value,('artifact_type','contract_version','schema_version','profile_sha256','arguments',
         'reference','source_identity','seam_identity','preprocessing','execution','files','runtime'))
     args=arguments(value['arguments'])
-    if (value['artifact_type'],value['contract_version'],value['schema_version'],value['profile_sha256'])!=(c.ARTIFACT,c.CONTRACT,1,c.profile_sha256(args['profile'])):
+    lifecycle=args['profile'].get('id')=='epizoo-model-lifecycle.v3'
+    if (value['artifact_type'],value['contract_version'],value['schema_version'],value['profile_sha256'])!=(c.ARTIFACT,c.LIFECYCLE_CONTRACT if lifecycle else c.CONTRACT,2 if lifecycle else 1,c.profile_sha256(args['profile'])):
         raise ValueError('Unsupported target-model contract.')
     required={'checkpoint.pth','sequence_embeddings.npy','sequences.txt','document_frequency.npy','sentence_tokens.npy',
               'sentence_indptr.npy','cells.jsonl','features.txt','preprocessing.json','execution.json','training/training_log.csv'}
-    if value['arguments']['strategy']=='mapped_reference':
+    if lifecycle:
+        required.add('transfer-decision.json')
+        if args['profile']['purpose']=='initialization': required.remove('training/training_log.csv')
+        for spec in args['mapping']:
+            prefix='mapping-'+c.digest(spec)+'/'
+            required.update(prefix+name for name in ('mapping-target.bed','mapping-retained-source.bed',
+                'correspondence.json','mapping-evidence.json','mapping-lifted.bed','mapping-overlaps.tsv'))
+    elif value['arguments']['strategy']=='mapped_reference':
         required|={'mapping-target.bed','mapping-retained-source.bed','correspondence.json'}
     if set(value['files'])!=required: raise ValueError('Incomplete/unexpected target model sidecars.')
     for name,record in value['files'].items():
@@ -75,7 +94,7 @@ def load_manifest(path,sha):
 
 
 def _summary(value,path,sha):
-    return dict(status='success',artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,
+    return dict(status='success',artifact_type=c.ARTIFACT,contract_version=value['contract_version'],
         manifest_path=str(path),manifest_sha256=sha,checkpoint_path=str(path.parent/'checkpoint.pth'),
         checkpoint_sha256=value['files']['checkpoint.pth']['sha256'],completed_step=value['execution']['completed_step'],
         purpose=value['arguments']['profile']['purpose'],n_cells=value['preprocessing']['n_cells'],
@@ -93,14 +112,37 @@ def _build(args,root):
     torch.cuda.reset_peak_memory_stats(args['device'])
     with backend.seeded(args['profile']['seed']):
         df,sentences=preprocessing.preprocess(joint)
-        metadata=preprocessing.save_preprocessing(root,joint,cells,manifests,df,sentences)
-        seq=backend.sequences_and_embeddings(reference,joint.var_names.tolist(),seam,args['profile'],root,args['device'])
-        mapping=backend.mapping(args['mapping'],source,reference,joint.var_names.tolist(),root) if args['mapping'] else None
-        execution=backend.train(source,seq,sentences,args['profile'],args['strategy'],mapping,
-            args['mapping']['source_species'] if args['mapping'] else None,root,args['device'])
+        scope=(args['profile']['purpose']+'-input-corpus' if args['profile'].get('id')=='epizoo-model-lifecycle.v3' else 'joint-training-corpus')
+        metadata=preprocessing.save_preprocessing(root,joint,cells,manifests,df,sentences,scope=scope)
+        lifecycle=args['profile'].get('id')=='epizoo-model-lifecycle.v3'
+        parent_checkpoint=None
+        if lifecycle and args['parent']:
+            import shutil
+            parent=_parent(args)
+            parent_root=Path(args['parent']['manifest_path']).parent
+            for name in parent['files']:
+                if name in ('sequence_embeddings.npy','sequences.txt','transfer-decision.json') or name.startswith('mapping-'):
+                    dest=root/name; dest.parent.mkdir(parents=True,exist_ok=True)
+                    shutil.copyfile(parent_root/name,dest)
+            seq=np.load(root/'sequence_embeddings.npy',allow_pickle=False)
+            decision=c.read_json(root/'transfer-decision.json')
+            strategy=decision['selected']; mapping=None; source_species=None
+            parent_checkpoint=parent_root/'checkpoint.pth'
+        else:
+            seq=backend.sequences_and_embeddings(reference,joint.var_names.tolist(),seam,args['profile'],root,args['device'])
+            if lifecycle:
+                from .transfer_assessment import assess
+                decision,mapping,selected=assess(args['strategy'],args['mapping'],source,reference,joint.var_names.tolist(),root)
+                strategy=decision['selected'];source_species=selected['source_species'] if selected else None
+            else:
+                mapping=backend.mapping(args['mapping'],source,reference,joint.var_names.tolist(),root) if args['mapping'] else None
+                strategy=args['strategy'];source_species=args['mapping']['source_species'] if args['mapping'] else None
+        train_options={'parent':parent_checkpoint} if lifecycle else {}
+        execution=backend.train(source,seq,sentences,args['profile'],strategy,mapping,
+            source_species,root,args['device'],**train_options)
     files={str(p.relative_to(root)):{k:v for k,v in c.file_record(p).items() if k!='path'}
            for p in sorted(root.rglob('*')) if p.is_file()}
-    value=dict(artifact_type=c.ARTIFACT,contract_version=c.CONTRACT,schema_version=1,profile_sha256=c.profile_sha256(args['profile']),
+    value=dict(artifact_type=c.ARTIFACT,contract_version=c.LIFECYCLE_CONTRACT if lifecycle else c.CONTRACT,schema_version=2 if lifecycle else 1,profile_sha256=c.profile_sha256(args['profile']),
         arguments=args,reference=reference.to_dict(),source_identity=source['identity_sha256'],
         seam_identity=seam['identity_sha256'],preprocessing=metadata,execution=execution,files=files,runtime=resources.runtime())
     record=c.write_json(root/'manifest.json',value)
@@ -109,8 +151,23 @@ def _build(args,root):
         if path.is_file():
             with path.open('rb') as f: os.fsync(f.fileno())
     from agent.tools.data.scatac_qc_reference import _fsync_dir
-    _fsync_dir(root/'training'); _fsync_dir(root)
+    if (root/'training').exists(): _fsync_dir(root/'training')
+    _fsync_dir(root)
     return dict(manifest_path=str(root/'manifest.json'),manifest_sha256=record['sha256'])
+
+
+def _parent(args):
+    from ..epizoo_target_inference import bind_model
+    pin=args['parent']
+    bind_model(pin['manifest_path'],pin['manifest_sha256'],pin['run_id'],pin['step_id'])
+    value=load_manifest(pin['manifest_path'],pin['manifest_sha256'])
+    if value['contract_version']!=c.LIFECYCLE_CONTRACT or value['arguments']['profile']['purpose']!='initialization' or value['execution']['optimizer_steps']!=0:
+        raise ValueError('Post-training must consume an accepted initialized checkpoint, not transfer again or resume optimizer state.')
+    if any(args[k]!=value['arguments'][k] for k in ('source_bundle','seam_bundle','mapping','strategy')):
+        raise ValueError('Parent model resource lineage differs.')
+    if args['profile']['matrix_semantics']!=value['arguments']['profile']['matrix_semantics']:
+        raise ValueError('Parent model measurement semantics differ.')
+    return value
 
 
 @owned_verification('epizoo_adaptation')
@@ -123,7 +180,27 @@ def verify_target(path,*,expected_sha256):
         raise ValueError('Target model resource lineage differs.')
     joint,cells,manifests,reference=preprocessing.corpus(args['matrices'], profile=args['profile'], strategy=args['strategy'])
     if reference.to_dict()!=value['reference']: raise ValueError('Target reference changed.')
-    if args['mapping']:
+    lifecycle=value['schema_version']==2
+    if lifecycle:
+        from .transfer_assessment import select, observe_mapping
+        decision=c.read_json(root/'transfer-decision.json')
+        if decision!=select(args['strategy'],decision['candidates']): raise ValueError('Transfer decision differs.')
+        if len(decision['candidates'])!=len(args['mapping']): raise ValueError('Mapping candidate set differs.')
+        for spec,candidate in zip(args['mapping'],decision['candidates']):
+            identity=c.digest(spec); directory=root/('mapping-'+identity)
+            if candidate['identity']!=identity or candidate['chain']!=spec['chain']:
+                raise ValueError('Mapping resource identity differs.')
+            correspondence={int(k):v for k,v in c.read_json(directory/'correspondence.json').items()}
+            stats=observe_mapping(correspondence,joint.n_vars,source['retained'][spec['source_species']]['count'],
+                directory/'mapping-lifted.bed',directory/'mapping-overlaps.tsv',min_overlap=spec['min_overlap'])
+            if stats!=candidate['statistics'] or stats!=c.read_json(directory/'mapping-evidence.json'):
+                raise ValueError('Mapping observations differ from native output.')
+        if args['parent']:
+            parent=_parent(args)
+            if (parent['reference']!=value['reference'] or
+                    parent['preprocessing']['ordered_feature_sha256']!=value['preprocessing']['ordered_feature_sha256']):
+                raise ValueError('Parent model feature/reference identity differs.')
+    elif args['mapping']:
         import tempfile
         with tempfile.TemporaryDirectory(prefix='.verify-map-',dir=root.parent) as scratch:
             expected=backend.mapping(args['mapping'],source,reference,joint.var_names.tolist(),Path(scratch))
@@ -148,7 +225,7 @@ def verify_target(path,*,expected_sha256):
     if [json.loads(line) for line in (root/'cells.jsonl').read_text().splitlines()]!=cells:
         raise ValueError('Target dataset/cell row identity differs.')
     from epizoo.data.ccre import extract_dna_sequences
-    if args['profile'].get('id') == 'epizoo-native-posttraining.v2':
+    if args['profile'].get('id') in ('epizoo-native-posttraining.v2','epizoo-model-lifecycle.v3'):
         from ..native_posttraining import extract_sequences
         sequences=extract_sequences(reference, joint.var_names.tolist(), root.parent)
     else:
@@ -160,11 +237,13 @@ def verify_target(path,*,expected_sha256):
     execution=c.read_json(root/'execution.json')
     if execution!=value['execution'] or execution['completed_step']!=args['profile']['trainer']['max_steps'] or execution['finite_loss_steps']!=execution['completed_step']:
         raise ValueError('Incomplete target training execution.')
-    if execution['optimizer_steps']<1 or execution['amp_skipped_steps']<0 or execution['optimizer_steps']+execution['amp_skipped_steps']!=execution['completed_step']:
+    initialization=lifecycle and args['profile']['purpose']=='initialization'
+    if execution['optimizer_steps']<(0 if initialization else 1) or execution['amp_skipped_steps']<0 or execution['optimizer_steps']+execution['amp_skipped_steps']!=execution['completed_step']:
         raise ValueError('Invalid optimizer-step accounting.')
-    if execution['mid_training_resume'] is not False or not all(np.isfinite(execution['last_losses'][k]) for k in ('loss','sr_loss','cca_loss')):
+    if execution['mid_training_resume'] is not False or (execution['last_losses']!={} if initialization else not all(np.isfinite(execution['last_losses'][k]) for k in ('loss','sr_loss','cca_loss'))):
         raise ValueError('Invalid training execution record.')
-    if c.read_json(root/'preprocessing.json')!=value['preprocessing'] or value['preprocessing']!=preprocessing.describe_preprocessing(root,joint,manifests):
+    scope=args['profile']['purpose']+'-input-corpus' if lifecycle else 'joint-training-corpus'
+    if c.read_json(root/'preprocessing.json')!=value['preprocessing'] or value['preprocessing']!=preprocessing.describe_preprocessing(root,joint,manifests,scope=scope):
         raise ValueError('Preprocessing record differs.')
     from epizoo.models.epizoo_x import EpiZooXConfig
     from epizoo.qualification import strict_target,parameter_scopes,check_forward

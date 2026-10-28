@@ -926,7 +926,7 @@ class AgentRuntime:
             self._registry.validate_arguments(step.tool_name, args)
             authority_options = {}
             from agent.tools.scientific_authority import supports_tool, tool_kind, hooks_for_tool
-            if (step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features')
+            if (step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features')
                     or (hooks_for_tool(step.tool_name, self._registry) is not None
                         and old.verification is not None and old.verification.artifact_authority is not None)
                     or (prior_references(state.plan) and supports_tool(step.tool_name, self._registry)
@@ -941,7 +941,7 @@ class AgentRuntime:
                 value = spec.durable_hooks.recover(args, execution_identity(state.run_id, state.plan, step, spec))
             else:
                 value = old.result
-            if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','build_scATAC_cell_by_features'):
+            if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features'):
                 from agent.schemas.orchestration import _serialize
                 value = _serialize(value)
             self._registry.validate_result(step.tool_name, value)

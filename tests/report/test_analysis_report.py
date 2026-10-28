@@ -737,3 +737,21 @@ def test_no_scientific_callable_is_invoked(tmp_path: Path) -> None:
     result = build_analysis_report(run, evidence, tmp_path / "out", registry=registry)
     assert verify_analysis_report(run, evidence, result, registry=registry).passed
     assert calls == []
+
+
+def test_posttrained_checkpoint_report_has_parent_and_training_methods(tmp_path):
+    # A verified post-training result must finish presentation without invoking science.
+    facts = dict(species={"scientific_name": "Danio rerio", "taxonomy_id": 7955},
+        assembly="danRer11", reference_identity_sha256="a"*64, ordered_feature_sha256="b"*64,
+        source_matrix_identity_sha256="c"*64, source_model_identity_sha256="d"*64,
+        seam_bundle_identity_sha256="e"*64, strategy="de_novo", profile_sha256="f"*64,
+        optimizer_steps=1000, amp_skipped_steps=0, mapping_identity_sha256=None,
+        completed_step=1000, purpose="posttraining", n_cells=16, n_features=17922,
+        checkpoint_sha256="1"*64, contract_version="epizoo-target-model.v2",
+        parent_model_manifest_sha256="2"*64)
+    run, evidence, _, result = _build(tmp_path, ("posttrain_epizoo_model",),
+        facts_override={"posttrain_epizoo_model": facts})
+    text = Path(result["report_path"]).read_text()
+    assert "2"*64 in text and "1000" in text
+    assert "post-training completed" in text
+    assert verify_analysis_report(run, evidence, result, registry=_guarded_registry()).passed

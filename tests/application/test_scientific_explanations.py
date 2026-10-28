@@ -281,7 +281,7 @@ def test_guidance_one_review_exact_mapping_and_failure_preservation(app, monkeyp
     if expected_stage:
         assert result.status == 'unavailable' and result.guidance is None
         assert state.interactions[-1].guidance_candidates is None
-        assert 'accepted result' in result.text
+        assert 'No new analysis was started.' in result.text
         assert caplog.records[-1].scientific_answer_stage == expected_stage
     else:
         assert result.status == 'answered'

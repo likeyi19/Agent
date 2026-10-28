@@ -891,6 +891,13 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
 }
 
 
+from dataclasses import replace as _replace_projection
+from agent.tools.models.epizoo_posttraining import RESULT_FIELDS as _POSTTRAIN_FIELDS
+_TOOL_PROJECTIONS['posttrain_epizoo_model'] = _replace_projection(
+    _TOOL_PROJECTIONS['adapt_epizoo_species'], contract_fields=frozenset(_POSTTRAIN_FIELDS),
+    fact_fields=tuple(k for k in _TOOL_PROJECTIONS['adapt_epizoo_species'].fact_fields
+                      if k != 'adaptation_spec_sha256') + ('parent_model_manifest_sha256',))
+
 def _plain_json(value: object, path: str = "value") -> JsonValue:
     if value is None or isinstance(value, (str, bool, int)):
         return value
@@ -1319,7 +1326,7 @@ def _prepare_evidence(
             facts.update(_plain_json(method_facts(step_result.result['analysis_path']), 'embedding_method'))
         if step.tool_name == "compute_cell_umap" and "clustering_present" in step_result.result:
             facts["clustering_present"] = step_result.result["clustering_present"]
-        if step.tool_name == 'adapt_epizoo_species' and step_result.result['purpose'] == 'native':
+        if step.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model') and step_result.result['purpose'] in ('native','initialization','posttraining'):
             from agent.tools.models.epizoo_adaptation.publication import load_manifest
             model = load_manifest(step_result.result['manifest_path'], step_result.result['manifest_sha256'])
             profile = model['arguments']['profile']
@@ -1328,6 +1335,15 @@ def _prepare_evidence(
                     batch_size=profile['batch_size'], sequence_batch_size=profile['sequence_batch_size'],
                     seed=profile['seed'], dtype=profile['dtype'], max_length=profile['max_length']),
                     'training_configuration'), training_biological_performance='not_assessed')
+            if model['schema_version']==2:
+                from agent.tools.models.epizoo_adaptation import contract as c
+                decision=c.read_json(Path(step_result.result['manifest_path']).parent/'transfer-decision.json')
+                # Paths stay private. Exact chain and candidate identities remain
+                # available alongside observed statistics and the decision rule.
+                public_decision=dict(decision,candidates=[dict(v,chain={k:x for k,x in v['chain'].items() if k!='path'}) for v in decision['candidates']])
+                facts.update(model_state=profile['purpose'],transfer_assessment=_plain_json(public_decision,'transfer_assessment'),
+                    parent_initialized_manifest_sha256=model['arguments']['parent']['manifest_sha256'] if model['arguments']['parent'] else None)
+
         if step.tool_name == "epizoo_embed_cells" and "resource_provenance" in step_result.result:
             facts["resource_provenance"] = validate_resource_provenance(
                 step_result.result["resource_provenance"],

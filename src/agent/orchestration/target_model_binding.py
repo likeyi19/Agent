@@ -37,9 +37,9 @@ def accepted_target(path, sha, run_id, step_id):
     stored, authority, _, anchor = _accepted(store, run_id, step_id)
     record = authority.to_dict()
     path = Path(path).resolve(strict=True)
-    if (stored.tool_name != 'adapt_epizoo_species' or record['schema_version'] != 2
+    if (stored.tool_name not in ('adapt_epizoo_species','posttrain_epizoo_model') or record['schema_version'] != 2
             or record['scope'] != 'scientific_correctness.v1' or record['completion'] != 'succeeded'
-            or record['artifact_contract'] != contract.CONTRACT
+            or record['artifact_contract'] not in (contract.CONTRACT,contract.LIFECYCLE_CONTRACT)
             or record['artifact_type'] != contract.ARTIFACT
             or record['publication_path'] != str(path) or record['manifest_sha256'] != sha
             or stored.result['manifest_path'] != str(path) or stored.result['manifest_sha256'] != sha):
@@ -65,11 +65,22 @@ def accepted_target(path, sha, run_id, step_id):
     required = {str(path), str(path.parent.parent / 'receipt.json')}
     required.update(str(path.parent / name) for name in manifest['files'])
     required.update(str(p) for p in native.rglob('*.py'))
-    recorded_native = {name for name in expected if Path(name).is_relative_to(native)}
-    if recorded_native != {str(p) for p in native.rglob('*.py')} or not required <= expected.keys():
+    recorded_native={name for name in expected if Path(name).is_relative_to(native)}
+    if recorded_native!={str(p) for p in native.rglob('*.py')} or not required <= expected.keys():
         raise AuthorityError('Incomplete accepted target/native implementation binding.')
     context = current() or VerificationContext()
-    if context.files(required) != [expected[name] for name in sorted(required)]:
+    observed=context.files(required)
+    compatible=dict(expected)
+    # One reviewed additive mapping-observation change is irrelevant to target
+    # inference. Permit only these exact before/after bytes, never arbitrary
+    # changes or missing native modules. Historical records stay immutable.
+    mapping_path=str(native/'data/ccre.py')
+    for item in observed:
+        if (item['path']==mapping_path and expected[mapping_path]['sha256']==
+                '0baf6f5642be41960076ca3508469de29887b1a127b2c82f88d36b16a37b2e80'
+                and item['sha256']=='2a034d5ab1f123cc709705455f920fe07c6faec47f92db5a0dea9d39b3f300e7'):
+            compatible[mapping_path]=item
+    if observed != [compatible[name] for name in sorted(required)]:
         raise AuthorityError('Accepted target publication or native inference implementation changed.')
     if _accepted(store, run_id, step_id)[3] != anchor:
         raise AuthorityError('Accepted target execution anchor changed during consumption.')

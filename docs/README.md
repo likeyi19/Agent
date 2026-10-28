@@ -17,6 +17,10 @@ the distinction between candidate predictions and reference evidence. The
 [SWC-2 finalization](../../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
 records automatic grouping prerequisites and genuine unclustered-H5AD acceptance.
 
+The [EpiZoo lifecycle guide](guides/epizoo-model-lifecycle.md) covers automatic
+transfer assessment, initialized and post-trained checkpoints, native zero-shot
+inference, resource acquisition and model reuse.
+
 The documentation has three locations:
 
 | Location | Purpose |

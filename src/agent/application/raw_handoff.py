@@ -235,7 +235,8 @@ def validate_arguments(arguments, field='fastq'):
 
 def declaration(value, field='fastq'):
     if field == 'epizoo':
-        if type(value) is not dict or set(value) != set(EpiZooDeclaration.__dataclass_fields__):
+        optional={'chain_source','reference_species'}
+        if type(value) is not dict or set(value)-optional != set(EpiZooDeclaration.__dataclass_fields__)-optional:
             raise ValueError('Invalid EpiZoo declaration shape.')
         return EpiZooDeclaration(**value)
     if field == 'annotation':
@@ -340,6 +341,9 @@ def merge(previous, additions, *, pending=False, unknown_fields=()):
 def declaration_dict(value):
     """Preserve the exact pre-extension declaration identity when absent."""
     result = asdict(value)
+    if isinstance(value,EpiZooDeclaration):
+        for key in ('chain_source','reference_species'):
+            if result[key] is None: result.pop(key)
     if isinstance(value, AnnotationDeclaration) and value.uploaded is None:
         result.pop('uploaded')
     if isinstance(value, AnnotationDeclaration) and value.groups_result is None:
@@ -920,11 +924,18 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
             field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
     else:
         if field == 'epizoo':
-            from .epizoo_handoff import prepare as prepare_epizoo
+            from .epizoo_handoff import prepare as prepare_epizoo, EpiZooResourcePrerequisite
             from agent.orchestration.prior_outputs import prior_output_store
-            with prior_output_store(sessions._application.run_store):
-                binding, receipt = prepare_epizoo(owner, state.session_id, binding, declared, selected, values,
-                    input_sets=input_sets, resource_owner=reference_resources, origin_turn_id=origin.turn_id)
+            try:
+                with prior_output_store(sessions._application.run_store):
+                    binding, receipt = prepare_epizoo(owner, state.session_id, binding, declared, selected, values,
+                        input_sets=input_sets, resource_owner=reference_resources, origin_turn_id=origin.turn_id)
+            except EpiZooResourcePrerequisite as exc:
+                source_evidence['transfer_resource_problem']=str(exc)
+                admitted.update(kind='clarify',reason='missing_epizoo_declarations',choices=[str(exc)],value_required=True)
+                pending=dict(origin_turn_id=origin.turn_id,binding_turn_id=interaction.turn_id,
+                    field=field,tool=target(field,declared),resource_context_sha256=digest(rows))
+                return admitted,pending
         elif field == 'annotation' and declared.groups_result is not None:
             binding, receipt = _prepare_annotation(owner, binding, declared, selected, values,
                                                    projection=projection)

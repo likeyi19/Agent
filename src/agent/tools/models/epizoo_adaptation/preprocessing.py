@@ -42,7 +42,8 @@ def corpus(matrix_bindings, *, profile=None, strategy='de_novo'):
         data=ad.read_h5ad(Path(binding['manifest_path']).parent/value['matrix']['path'])
         if not sp.isspmatrix_csr(data.X): raise ValueError('Canonical sparse CSR required.')
         nnz=data.X.getnnz(axis=1)
-        if data.n_obs==0 or np.any(nnz==0) or np.any(nnz==data.n_vars):
+        initialization = profile is not None and profile.get('purpose') == 'initialization'
+        if data.n_obs==0 or (not initialization and (np.any(nnz==0) or np.any(nnz==data.n_vars))):
             raise ValueError('SR/CCA training requires positive and inaccessible features for every cell.')
         if vocabulary is None: vocabulary=data.var_names.tolist()
         elif vocabulary!=data.var_names.tolist(): raise ValueError('Column order mismatch.')
@@ -74,7 +75,7 @@ def preprocess(joint):
     return df,sentences
 
 
-def save_preprocessing(root,joint,cells,manifests,df,sentences):
+def save_preprocessing(root,joint,cells,manifests,df,sentences,*,scope='joint-training-corpus'):
     root=Path(root)
     np.save(root/'document_frequency.npy',df,allow_pickle=False)
     np.save(root/'sentence_tokens.npy',np.asarray([x for row in sentences for x in row],dtype=np.int64),allow_pickle=False)
@@ -83,14 +84,14 @@ def save_preprocessing(root,joint,cells,manifests,df,sentences):
         from agent.schemas.verification_authority import canonical
         for value in cells: stream.write(canonical(value).decode()+'\n')
     (root/'features.txt').write_text('\n'.join(joint.var_names)+'\n')
-    metadata=describe_preprocessing(root,joint,manifests)
+    metadata=describe_preprocessing(root,joint,manifests,scope=scope)
     write_json(root/'preprocessing.json',metadata)
     return metadata
 
 
-def describe_preprocessing(root,joint,manifests):
+def describe_preprocessing(root,joint,manifests,*,scope='joint-training-corpus'):
     return dict(profile='epizoo-target-corpus-tfidf.v1',owner='epizoo.data.processing',
         matrix_identities=[m['identity_sha256'] for m in manifests],n_cells=joint.n_obs,n_features=joint.n_vars,
-        ordered_feature_sha256=manifests[0]['ordered_feature_sha256'],df_scope='joint-training-corpus',
+        ordered_feature_sha256=manifests[0]['ordered_feature_sha256'],df_scope=scope,
         df_dtype='int64',tfidf_dtype='float32',scale_factor=10000,
         files={name:file_record(root/name)['sha256'] for name in ('document_frequency.npy','sentence_tokens.npy','sentence_indptr.npy','cells.jsonl','features.txt')})

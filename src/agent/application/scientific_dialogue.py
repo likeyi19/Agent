@@ -642,6 +642,13 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         limitations.extend(view.limitations)
         limitations.extend(f'{label}: {f.field} is {f.status}.' for f in view.facts if f.status != 'available')
         values = [(f.field, f.value, f.source_pointer) for f in view.facts if f.status == 'available']
+        # Bounded summaries follow the reviewed scientific report order, not
+        # alphabetical storage order (which can exhaust a source's allowance on
+        # configuration fields before its actual result or method is reached).
+        from agent.report.analysis_report import report_fact_fields
+        priority = report_fact_fields(view.source.tool_name, {key: value for key, value, _ in values})
+        order = {key: n for n, key in reversed(tuple(enumerate(priority)))}
+        values.sort(key=lambda item: order.get(item[0], len(priority)))
         if target['subject'] is not None:
             subjects, complete = _subjects(view)
             if target['subject'] not in subjects:
@@ -687,6 +694,9 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 if independent.status == 'available':
                     detail_facts = independent.detail
         def leaves(key, val, pointer, depth=0):
+            if key in ('training_configuration', 'transfer_assessment', 'species'):
+                yield key, val, pointer
+                return
             if hasattr(val, 'items') and depth < 3:
                 # Lists of records and nested structured results retain their
                 # labels, denominators and coverage as one whole cited fact.
@@ -1017,7 +1027,7 @@ ANSWER_INSTRUCTIONS = (
     'not establish biological interpretation of a figure. A figure download descriptor identifies a pinned '
     'PNG available with the published response in the result view; it does not record a browser transfer. '
     'Do not invent a download URL or deny PNG availability because data exports list only H5AD files.',
-    'delivery.exports describes scientific data download variants and their exact accepted-result scope; '
+    'delivery.exports describes scientific data and model download variants and their exact accepted-result scope; '
     'it is not the figure inventory. '
     'available_for_preparation is an eligible recipe, not proof that bytes were already prepared or downloaded; '
     'payload checks occur on download. selected_result fields describe only that selected result, not all '
@@ -1575,16 +1585,17 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
     limitations = []
     from .dialogue_evidence import figure_inventory
     figures, relationships = (), []
+    native_figure_request = 'visualization' in requested and intent.get('visualization') is None
     try:
         figures = figure_inventory(sessions, turn, revision)
-        relationships = _figure_relationships(state, figures)
+        relationships = _figure_relationships(state, figures, figures if native_figure_request else ())
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
         limitations.append('Accepted figure identity is unavailable.')
     artifacts, composed = _compose_presentation(sessions, session_id, interaction, model)
     if composed:
         relationships.extend(_figure_relationships(state, composed, composed))
     delivery = dict(requested=list(requested), accepted_figures=len(figures),
-        visualization='delivered' if artifacts else 'unavailable' if 'visualization' in requested else 'not_requested',
+        visualization='delivered' if artifacts or native_figure_request and figures else 'unavailable' if 'visualization' in requested else 'not_requested',
         comparison=dict(status='unavailable', reason='exact_operands_not_recorded') if 'comparison' in requested else dict(status='not_requested'),
         unfulfilled=list(intent.get('unfulfilled', ())),
         figure_relationships=relationships)

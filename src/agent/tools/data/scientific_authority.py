@@ -30,6 +30,7 @@ TOOLS = {
     'prepare_neutral_bam_fragments': 'bam_fragment_production',
     'adopt_scATAC_cell_by_features': 'matrix',
     'adapt_epizoo_species': 'epizoo_adaptation',
+    'posttrain_epizoo_model': 'epizoo_adaptation',
 }
 MODULES = {
     'epizoo_adaptation': 'agent.tools.models.epizoo_adaptation.publication',
@@ -134,10 +135,14 @@ def describe(kind, path, sha, context):
             bundle = adaptation.read_json(args[key]['path'], args[key]['sha256'])
             resources.append(args[key]['path'])
             resources.extend(f['path'] for f in bundle['files'] + bundle['code']['files'])
-        if args['mapping']:
-            resources.extend(_resource_paths(args['mapping']))
-            ref = args['mapping']['source_reference']
-            resources.extend(_reference(ref['path'], ref['sha256']))
+        mappings=args['mapping'] if isinstance(args['mapping'],list) else [args['mapping']] if args['mapping'] else []
+        for mapping in mappings:
+            resources.extend(_resource_paths(mapping))
+            ref=mapping['source_reference']
+            resources.extend(_reference(ref['path'],ref['sha256']))
+        if args.get('parent'):
+            parent=args['parent']
+            dependency('initialized_model','epizoo_adaptation',parent['manifest_path'],parent['manifest_sha256'])
         profile = adaptation.profile_sha256(args['profile'])
         verifier = dict(id='epizoo.species-adaptation-structural', compatibility_version='1')
     elif kind == 'annotation':
@@ -423,6 +428,8 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
     module = _module(adoption_modules.get(tool_name, MODULES[kind]))
     if tool_name == 'adapt_epizoo_species' and 'adaptation_spec_path' in arguments:
         from agent.tools.models import species_adaptation as module
+    if tool_name == 'posttrain_epizoo_model':
+        from agent.tools.models import epizoo_posttraining as module
     publication = (module._publication(arguments, execution_identity,
         version=result['artifact_schema_version']) if kind == 'annotation'
         else module._publication(arguments, execution_identity))

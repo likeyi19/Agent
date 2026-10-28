@@ -284,7 +284,15 @@ def test_v4_sends_only_semantic_prompt_and_schema(
     assert schema != _response_schema(registry, request)
     assert secret_path not in prompt
     assert secret_path not in json.dumps(schema)
-    assert schema["$defs"]["input_name"]["enum"] == ("input_path",)
+    def request_names(value):
+        if isinstance(value, dict):
+            props = value.get('properties', {})
+            if props.get('kind', {}).get('enum') == ('input',) and 'input' in props:
+                yield from props['input'].get('enum', ())
+            for child in value.values(): yield from request_names(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value: yield from request_names(child)
+    assert set(request_names(schema)) == {'input_path'}
     assert tuple(
         step["properties"]["tool"]["enum"][0]
         for step in schema["$defs"]["step"]["anyOf"]

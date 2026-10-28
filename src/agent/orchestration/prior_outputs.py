@@ -239,6 +239,22 @@ def optional_binding_for_locator(locator, store, registry):
                                     locator.accepted_step_sha256, store, registry)
 
 
+def matrix_dataset_binding(binding, store, registry):
+    """Offer the H5AD representation of this exact accepted matrix publication.
+
+    This is an additional selectable port, never a selected consumer or input
+    fanout. A manifest and its owner-published matrix are one scientific source.
+    """
+    from agent.tools.scientific_authority import tool_kind
+    if tool_kind(binding.tool_name, registry) != 'matrix' or binding.source_port != 'matrix':
+        return None
+    semantic = registry.get(binding.tool_name).semantic_planning
+    ports = [port for port in semantic.producer_ports if port.name == 'dataset'
+             and port.semantic_type == 'scatac_matrix_h5ad.v1'
+             and tuple((m.name, m.field_name) for m in port.members) == (('dataset', 'matrix_path'),)]
+    return bind_output(store, registry, binding.run_id, binding.step_id, 'dataset') if ports else None
+
+
 def qualified_dependencies_for_locator(locator, store, registry):
     """Exact accepted argument lineage, independent of display selections.
 
@@ -297,7 +313,8 @@ def validate_active_outputs(locators, store, registry):
     """Check explicit active publications against owner-described dependency closure.
 
     No workflow completion, graph diff, science, or session-owned compatibility.
-    Multiple different publications of one owner kind require future explicit roles.
+    Different publications require distinct scientific roles. The model owner
+    explicitly describes an initialized parent separately from its trained child.
     """
     from pathlib import Path
     from agent.tools.data.authority_context import VerificationContext
@@ -322,17 +339,30 @@ def validate_active_outputs(locators, store, registry):
         _, authority, _, _ = _accepted(store, binding.run_id, binding.step_id)
         kind = tool_kind(binding.tool_name, registry)
         identity = (authority.record['publication_path'], binding.manifest_sha256)
-        if kind in active and active[kind] != identity:
-            raise AuthorityError('Multiple active publications require explicit distinct scientific roles.')
-        active[kind] = identity
+        active.setdefault(kind, set()).add(identity)
         selected.append((kind, *identity))
+    model_parents = {}
+    for path, sha in active.get('epizoo_adaptation', ()):
+        description, _ = context.describe('epizoo_adaptation', Path(path), sha)
+        parent = description['upstream'].get('initialized_model')
+        if parent is not None and parent['kind'] == 'epizoo_adaptation':
+            model_parents[(path, sha)] = (parent['manifest_path'], parent['manifest_sha256'])
+    for kind, identities in active.items():
+        if len(identities) <= 1:
+            continue
+        if (kind != 'epizoo_adaptation' or len(identities) != 2
+                or not any({child, parent} == identities for child, parent in model_parents.items())):
+            raise AuthorityError('Multiple active publications require explicit distinct scientific roles.')
     visited = set()
     def check(kind, path, sha):
         key = (kind, path, sha)
         if key in visited:
             return
         visited.add(key)
-        if kind in active and active[kind] != (path, sha):
+        allowed = active.get(kind)
+        if kind == 'epizoo_adaptation' and allowed is not None:
+            allowed = allowed | set(model_parents.values())
+        if allowed is not None and (path, sha) not in allowed:
             raise AuthorityError('Active downstream output refers to a different active upstream publication.')
         description, _ = context.describe(kind, Path(path), sha)
         for dep in description['upstream'].values():

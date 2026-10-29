@@ -1,5 +1,6 @@
 """Optional concrete planning-provider adapters."""
 
+from .alibaba_planning import AlibabaPlanningModel, AlibabaPlanningError, AlibabaPlanningDependencyError
 from .gemini_planning import (
     GeminiPlanningDependencyError,
     GeminiPlanningError,
@@ -30,6 +31,9 @@ from .openrouter_planning import (
 )
 
 __all__ = [
+    "AlibabaPlanningModel",
+    "AlibabaPlanningError",
+    "AlibabaPlanningDependencyError",
     "BUILTIN_PLANNING_PROVIDER_IDS",
     "GeminiPlanningDependencyError",
     "GeminiPlanningError",

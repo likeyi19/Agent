@@ -445,6 +445,76 @@ The appended RSD-2 report section owns this bounded CONDITIONAL GO, including th
 initial provider transport failure and its preserved failed Interaction.
 Authorized internal academic scope and the original licensing restrictions remain.
 
+RSD-3 builds on `9cd9e41231fdbc8d4e9117e93617846257a0f015` without staging,
+commit or push. The [generation guide](docs/guides/regulatory-sequence-generation.md)
+owns native pretrained DNA-Diffusion sampling (31 Registry tools), its exact four
+released conditions, 200-base synthetic candidates, count-preserving native
+batching and bounded composition/diversity descriptors. Existing sequence ports,
+scientific authority, evidence and downloads retain ownership; generation is an
+independent peer of prediction and optimization. Seed, guidance, schedule, model
+and runtime identity are recorded without promising biological activity or novelty.
+
+The [RSD-3 report](../agent-data/acceptance/regulatory-sequence-design/rsd-3/REPORT.md)
+records all-225-tensor loading proof, independent native/owner parity, remainder
+counts, isolated supported Python 3.12 runtime, explicit CPU execution and native
+cancellation. The exact qualified resource is installed in the normal library
+through its existing install API, preserving all eleven prior entries. Two real
+normal-launcher Firefox/OpenRouter requests produce 20 K562 and 5 HepG2 candidates,
+eight checked downloads and preserved historical preview/restart. Direct native
+DHS64 compatibility retains 200 real bases and 300 zero positions; it is not yet
+qualified as a live conversational continuation. A read-only comparison review
+received OpenRouter HTTP 402. Full RSD-3 closeout remains blocked pending provider
+access and the outstanding live comparison, selected-sequence prediction and
+unsupported-condition journeys. Initial unavailable prose, deterministic facts,
+renderer correction and a baseline Web-test timeout remain explicit evidence.
+No biological validation, unrestricted hosted/commercial rights, RSD-4 or ecosystem
+integration is claimed. Earlier accepted records and operator settings are preserved.
+
+The RSD-3 Qwen follow-up adds Alibaba Model Studio at the existing PlanningModel
+factory boundary. The [Qwen guide](docs/guides/alibaba-qwen-provider.md) owns normal
+Web profile selection and exact persistent credential steps through the existing
+private Conda environment. Only assistant content is consumed; unchanged strict
+schemas, shared planning/scientific/evidence/delivery owners and original profiles
+remain authoritative. Genuine 31-tool planning and the normal Firefox saved-batch
+comparison pass. The later prediction request fails before science with HTTP 403;
+a bounded access diagnostic identifies `AccessDenied.Unpurchased`. The report's
+separate Qwen section records this prerequisite, the remaining live prediction and
+unsupported-condition checks, a causal overstatement in otherwise delivered
+comparison prose, 302 passing regressions plus four reproduced baseline failures,
+four checked downloads and exact historical preservation. At that checkpoint,
+full RSD-3 closeout remained open pending restored provider access; no fallback, scientific workaround,
+new credential system, staging, commit or push occurs.
+
+The subsequent RSD-3 restored-access closeout completes both remaining genuine
+Firefox/Qwen journeys after the user reports an account recharge. One minimal
+access check succeeds with unchanged private configuration. One native CPU DHS64
+prediction reuses the exact accepted 20 K562 sequences through scientific-authority
+bindings, preserving 200 real bases and native 300-position zero padding. Four
+prediction downloads match accepted delivery bytes. Unsupported pancreatic-beta
+generation produces clarification with the four exact DNA-Diffusion conditions,
+without a Run, new Revision or substitution. The existing shared response owner
+now says sequence model rather than predictor for this model-neutral condition
+failure. Historical messages remain exact across restart.
+
+The appended report recommends closing RSD-3 as COMPLETE within its bounded
+engineering and product scope, retaining CONDITIONAL GO for authorized internal
+academic research. It preserves initial missing-citation withholding, a generated
+continuous/peak-call confusion followed by a correct read-only explanation, the
+earlier comparison overstatement and an existing concurrent-download 503 resolved
+by a serial download. These are explicit provider/presentation limits, not changes
+to accepted science. Existing successful evidence and four reproduced baseline
+test failures are reused; no scientific algorithms, credentials, model resources,
+historical provider identities, staging, commit, push or RSD-4 work change.
+
+RSD-3 final engineering review passes within this accepted scope. The user accepts
+the documented non-blocking limitations and authorizes one coherent completion
+commit and a normal push to the existing tracked branch. Earlier no-commit and
+blocked statements describe the preserved pre-closeout checkpoints. Source/native
+integration, provider boundaries, staged-content hygiene and private-resource
+preservation are reviewed without repeating successful scientific/provider
+campaigns. The report's final engineering section owns the Git closeout evidence;
+no RSD-4 or unrelated development is started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or
@@ -921,13 +991,20 @@ record owns final validation, Git closeout and provider-quality limitations.
 ## Current scientific tool inventory
 
 The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All twenty-four currently registered tools
+`src/agent/orchestration/registry.py`. All thirty-one currently registered tools
 are planner-visible and have authoritative semantic metadata. This is a
 snapshot, not a permanent tool-count constraint: future coverage must be
 derived from the registry.
 
 | Registered tool | Scientific purpose / artifact |
 | --- | --- |
+| `generate_regulatory_sequences` | Native pretrained DNA-Diffusion; exact count of synthetic 200-base candidates, GC/entropy/homopolymers/diversity, reusable FASTA and distinct generation provenance |
+| `predict_regulatory_sequences` | Native DHS64 sequence DNase prediction with exact biosamples and 500-position encoding |
+| `evaluate_regulatory_predictions` | Independent compatible observed DNase evaluation, without inference replay |
+| `optimize_regulatory_sequences` | Native constrained DeepPBMC editing of existing 2,114-base human DNA |
+| `inspect_scATAC_fragments` | Bounded native fragment structure inspection, without reference qualification |
+| `corroborate_cell_type_annotation` | Separate signature-bound CellMarker evidence, preserving native labels |
+| `posttrain_epizoo_model` | Independent native training from an exact accepted initialized model |
 | `inspect_scATAC` | Safe scATAC H5AD inspection and lightweight metadata |
 | `epizoo_embed_cells` | Sparse preprocessing, cached EpiZoo inference, `.npy` embeddings and ordered cell IDs |
 | `pca_embed_cells` | Centered sparse-safe Scanpy PCA of supplied X; exact ordered cells, fit provenance and independently verified publication |

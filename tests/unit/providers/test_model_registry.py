@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent.application.cli as cli_module
+import agent.providers.alibaba_planning as alibaba_module
 import agent.providers.gemini_planning as gemini_module
 import agent.providers.groq_planning as groq_module
 import agent.providers.openai_planning as openai_module
@@ -104,7 +105,7 @@ def test_openrouter_profile_price_policy_is_copied_immutable_and_serialized():
     assert "provider_max_price" not in _profile().to_dict()
 
 
-@pytest.mark.parametrize("provider", ["openai", "gemini", "groq", "custom"])
+@pytest.mark.parametrize("provider", ["openai", "gemini", "groq", "alibaba", "custom"])
 def test_openrouter_price_policy_is_not_silently_ignored_by_other_providers(provider):
     with pytest.raises(ValueError, match="only for OpenRouter"):
         _profile(provider_id=provider, provider_max_price={"prompt": 4, "completion": 20, "request": 0})
@@ -159,6 +160,7 @@ def test_unknown_provider_is_rejected_without_fallback() -> None:
         ("gemini", gemini_module, "GeminiPlanningModel"),
         ("groq", groq_module, "GroqPlanningModel"),
         ("openrouter", openrouter_module, "OpenRouterPlanningModel"),
+        ("alibaba", alibaba_module, "AlibabaPlanningModel"),
     ],
 )
 def test_builtin_factory_constructs_only_the_selected_adapter(

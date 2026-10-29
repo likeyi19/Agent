@@ -575,6 +575,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
     "posttrain_epizoo_model": tuple(k for k in _ADAPTATION_REPORT_FIELDS if k != "adaptation_spec_sha256") + ("parent_model_manifest_sha256",),
+    "generate_regulatory_sequences": ("n_sequences", "requested_sequences", "condition", "checkpoint_label", "condition_index", "sequence_length", "valid_alphabet", "unique_sequences", "duplicate_sequences", "gc_fraction", "entropy_bits", "longest_homopolymer", "pairwise_hamming", "seed", "guidance_scale", "sampling_schedule", "candidate_examples", "examples_omitted", "model_release", "limitations"),
     "optimize_regulatory_sequences": ("n_sequences", "target_condition", "comparison_conditions", "measurement", "iterations", "max_changes", "edit_region", "protected_ranges", "comparison_weight", "candidate_examples", "examples_omitted", "improved_candidates", "constraints_satisfied", "model_release", "limitations"),
     "predict_regulatory_sequences": ("n_sequences", "n_conditions", "conditions", "head", "measurement", "folds", "score_min", "score_max", "score_examples", "examples_omitted", "model_release", "normalization", "limitations"),
     "evaluate_regulatory_predictions": ("n_observations", "measurement", "metrics", "limitations"),
@@ -786,6 +787,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "generate_regulatory_sequences": "De novo synthetic regulatory DNA generation",
     "optimize_regulatory_sequences": "Constrained PBMC accessibility sequence optimization",
     "predict_regulatory_sequences": "DNA sequence DNase predictions",
     "evaluate_regulatory_predictions": "Matched DNase prediction evaluation",
@@ -1052,7 +1054,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
-    ("regulatory_sequence", "Regulatory sequence prediction and evaluation", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences"})),
+    ("regulatory_sequence", "Regulatory sequence analysis and design", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences", "generate_regulatory_sequences"})),
     ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
     ("cell_type_reference_evidence", "Qualified reference corroboration", frozenset({"corroborate_cell_type_annotation"})),
@@ -1111,6 +1113,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "generate_regulatory_sequences": ("model_release", "limitations"),
     "optimize_regulatory_sequences": ("measurement", "model_release", "limitations"),
     "predict_regulatory_sequences": ("measurement", "folds", "model_release", "normalization"),
     "evaluate_regulatory_predictions": ("measurement", "limitations"),
@@ -1467,7 +1470,7 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
-    if step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences'):
+    if step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences'):
         lines = [f'### {_TOOL_TITLES[step.tool_name]} {occurrence}', '']
         for fact in step.facts:
             lines.append(f'- {fact.field.replace("_", " ").capitalize()}: {_inline_code(fact.value)}')
@@ -1742,6 +1745,7 @@ def _render_summary(
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
         'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
+        "generate_regulatory_sequences": "Native pretrained generation completed; synthetic candidate composition is not biological validation",
         "optimize_regulatory_sequences": "Native constrained DeepPBMC editing completed; inspect actual objective improvement and constraints",
         "predict_regulatory_sequences": "Native DHS64 DNase predictions completed; no biological validation implied",
         "evaluate_regulatory_predictions": "Matched supplied DNase observation metrics completed",

@@ -472,10 +472,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         if reference_resources is not None and reference_resources.library is not None:
             entries = reference_resources.library.entries()
-            visible['dialogue']['sequence_predictors'] = [dict(family=e['resource']['family'],
-                conditions=e['resource']['conditions'], measurement=e['resource']['measurements'],
+            visible['dialogue']['sequence_models'] = [dict(family=e['resource']['family'], kind=e['kind'],
+                conditions=e['resource']['conditions'], measurement=e['resource'].get('measurements', {'output':'synthetic regulatory DNA candidates; no activity measurement'}),
                 genome_assemblies=[g['resource']['assembly'] for g in entries if g['kind'] == 'genome'])
-                for e in entries if e['kind'] == 'sequence_predictor']
+                for e in entries if e['kind'] in ('sequence_predictor','sequence_generator')]
         from .local_resources import available_input_view
         role_submission = available_input_view(interaction, allow_empty=True).submission
         if (submission or {}).get('available_input_overflow'):
@@ -556,7 +556,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if isinstance(decision, Clarify):
             if decision.reason == 'unavailable_model_condition':
                 conditions = tuple(model['family'] + ': ' + ', '.join(model['conditions'])
-                                   for model in visible['dialogue'].get('sequence_predictors', ()))
+                                   for model in visible['dialogue'].get('sequence_models', ()))
                 decision = Clarify(decision.reason, conditions)
             return _terminal(sessions, interaction, decision)
         if isinstance(decision, RequestResources):

@@ -26,7 +26,12 @@ PROFILES = [
 ]
 
 
-def configured_application(tmp_path, monkeypatch, *, fail_chat=False):
+QWEN_PROFILE = dict(profile_id='alibaba-qwen3-8-max', provider_id='alibaba',
+                    model_id='qwen3.8-max', display_label='Qwen3.8-Max · Alibaba Cloud',
+                    request_timeout_seconds=120)
+
+
+def configured_application(tmp_path, monkeypatch, *, fail_chat=False, include_alibaba=False):
     initialized, requests, owner_calls = [], [], []
     decision = json.dumps(dict(turn_schema_version=1,
                               decision=dict(kind='clarify', reason='ambiguous_subject')))
@@ -43,7 +48,8 @@ def configured_application(tmp_path, monkeypatch, *, fail_chat=False):
             if fail_chat:
                 raise RuntimeError('provider-secret-sentinel /private/operator/credential')
             return dict(model=kwargs['model'], choices=[dict(finish_reason='stop',
-                        message=dict(content=decision, refusal=None, tool_calls=None))])
+                        message=dict(role='assistant', content=decision, refusal=None, tool_calls=None,
+                                     reasoning_content='PRIVATE_REASONING_SENTINEL'))])
 
         def response(self, **kwargs):
             requests.append(('responses', kwargs))
@@ -54,6 +60,8 @@ def configured_application(tmp_path, monkeypatch, *, fail_chat=False):
     monkeypatch.setitem(sys.modules, 'openai', sdk)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'injected-openrouter-test-key')
     monkeypatch.setenv('GROQ_API_KEY', 'injected-groq-test-key')
+    monkeypatch.setenv('DASHSCOPE_API_KEY', 'injected-alibaba-test-key')
+    monkeypatch.setenv('DASHSCOPE_BASE_URL', 'https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1')
 
     # Scientific dispatch is prohibited for these transport/selection tests.
     from dataclasses import replace
@@ -68,7 +76,8 @@ def configured_application(tmp_path, monkeypatch, *, fail_chat=False):
                                   for name in default.names()))
     path = tmp_path / 'operator.json'
     path.write_text(json.dumps(dict(workspace_root=str(tmp_path / 'workspace'),
-                                   default_profile_id='groq-primary', model_profiles=PROFILES)))
+                                   default_profile_id='groq-primary',
+                                   model_profiles=PROFILES + ([QWEN_PROFILE] if include_alibaba else []))))
     configuration = load_web_configuration(path)
     application = build_interactive_application(configuration, registry=registry)
     return application, initialized, requests, owner_calls
@@ -89,6 +98,36 @@ def test_catalog_and_history_do_not_construct_or_complete_providers(tmp_path, mo
         assert client.post('/api/v1/sessions', json={'session_id': 'selection'}).status_code == 201
         assert client.get('/api/v1/sessions/selection').json()['turns'] == []
         assert initialized == requests == owners == []
+
+
+def test_qwen_uses_normal_web_selection_interpretation_and_saved_history(tmp_path, monkeypatch, caplog):
+    application, initialized, requests, owners = configured_application(
+        tmp_path, monkeypatch, include_alibaba=True)
+    with TestClient(create_app(application)) as client:
+        choices = client.get('/api/v1/models').json()['choices']
+        assert [item['profile_id'] for item in choices] == [
+            'openrouter-primary', 'groq-primary', 'openrouter-future', 'alibaba-qwen3-8-max']
+        assert [item['profile_id'] for item in choices if item['is_default']] == ['groq-primary']
+        assert initialized == requests == owners == []
+        client.post('/api/v1/sessions', json={'session_id': 'qwen-selection'})
+        for index in range(2):
+            accepted = client.post('/api/v1/sessions/qwen-selection/turns', json=dict(
+                turn_id=f'qwen-{index}', expected_generation=0,
+                utterance='Please clarify the intended analysis.', profile_id=QWEN_PROFILE['profile_id']))
+            assert accepted.status_code == 202
+            view = wait_turn(client, f'qwen-{index}', session='qwen-selection')
+            assert view['status'] == 'clarification' and view['profile_id'] == QWEN_PROFILE['profile_id']
+        history = client.get('/api/v1/sessions/qwen-selection').json()
+        assert history['generation'] == 0 and history['active_revision_id'] is None
+        assert len(history['turns']) == len(initialized) == len(requests) == 2
+        assert all(item['model'] == 'qwen3.8-max' and item['extra_body'] == {'enable_thinking': False}
+                   and item['response_format']['json_schema']['strict'] for _, item in requests)
+        assert all(item['base_url'].startswith('https://workspace.ap-southeast-1.maas.') for item in initialized)
+        assert 'PRIVATE_REASONING_SENTINEL' not in json.dumps(history) + caplog.text
+        assert 'injected-alibaba-test-key' not in json.dumps(history) + caplog.text
+        before = len(requests)
+        assert client.get('/api/v1/sessions/qwen-selection').json() == history
+        assert len(requests) == before and owners == []
 
 
 def test_selected_profiles_use_real_default_transport_factories_without_fallback(tmp_path, monkeypatch):

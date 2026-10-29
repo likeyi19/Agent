@@ -147,11 +147,11 @@ def clarification_text(clarification):
         return ('This request is not supported by the available scientific or conversational operations. '
                 'Please clarify or revise the request.')
     if clarification.reason == 'unavailable_model_condition':
-        return ('The requested biosample condition is not available in the installed sequence predictor. '
+        return ('The requested biosample condition is not available for the requested sequence model. '
                 'No substitute was selected and no sequence computation was started. '
                 + ('The qualified conditions are: ' + '; '.join(clarification.choices) + '. '
                    'Choose a condition only for the named model and your intended scientific question.'
-                   if clarification.choices else 'The operator must provision an appropriate qualified predictor.'))
+                   if clarification.choices else 'The operator must provision an appropriate qualified sequence model.'))
     if clarification.reason == 'unavailable_context': return UNAVAILABLE
     return ('I could not interpret or admit this request reliably. '
             'Please restate the task and identify the data or result you mean.')

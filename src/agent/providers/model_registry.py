@@ -11,7 +11,7 @@ from agent.orchestration.planning_model import PlanningModel, PlanningModelProfi
 
 
 PlanningModelFactory = Callable[[PlanningModelProfile], PlanningModel]
-BUILTIN_PLANNING_PROVIDER_IDS = ("openai", "gemini", "groq", "openrouter")
+BUILTIN_PLANNING_PROVIDER_IDS = ("openai", "gemini", "groq", "openrouter", "alibaba")
 
 
 class PlanningModelFactoryError(ValueError):
@@ -106,6 +106,11 @@ def build_planning_model_profile(
     )
 
 
+def _alibaba_factory(profile: PlanningModelProfile) -> PlanningModel:
+    from .alibaba_planning import AlibabaPlanningModel
+    return AlibabaPlanningModel(model=profile.model_id, timeout=profile.request_timeout_seconds)
+
+
 def _openai_factory(profile: PlanningModelProfile) -> PlanningModel:
     from .openai_planning import OpenAIPlanningModel
 
@@ -149,6 +154,7 @@ def build_default_planning_model_factory_registry(
 
     return PlanningModelFactoryRegistry(
         {
+            "alibaba": _alibaba_factory,
             "openai": _openai_factory,
             "gemini": _gemini_factory,
             "groq": _groq_factory,

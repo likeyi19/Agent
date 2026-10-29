@@ -46,7 +46,7 @@ def tool_specs():
         return ToolSpec(name=name, function=function, required_arguments=required, optional_arguments=optional,
             result_contract=ResultContract('RegulatorySequenceResult', fields,
                 planning_fields={k:_planning_result('Exact sequence publication and model-specific scientific result.',
-                    bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else A.SEQUENCE_PREDICTIONS)
+                    bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else (A.SEQUENCE_GENERATION if kind == 'regulatory_sequence_generation' else A.SEQUENCE_PREDICTIONS))
                     for k in fields if k.endswith(('_path','_sha256'))}),
             durable_hooks=DurableToolHooks(execute,owner.recover), exception_classifier=classify,
             recovery_policy_version=policy,
@@ -100,4 +100,20 @@ def tool_specs():
         ('No DHS64 prerequisite or score reuse. Supply direct DNA, ordinary FASTA, exact 2114-base BED3–6 with qualified human assembly, or explicitly selected accepted DNA sequences. No arbitrary cell conditions or gene-expression/enhancer-activity claims.',
          'One final candidate per starting sequence (up to 32 inputs); deterministic native search does not promise distinct alternatives. No de novo generation. Native weighted difference penalizes comparison increases, not absolute changes or hard score bounds. Clarify incompatible objectives.',
          'Return original and candidate scores under the same model, actual substitutions, constraints, native trajectory and reusable candidate sequences. Preserve explicit edit/protection coordinates and budget; do not invent user preferences. Biological improvement is unvalidated.'),policy=design.POLICY)
-    return predict,evaluate,optimize
+    from agent.tools.analysis import sequence_generation as generation
+    generation_options = {
+        'number_of_sequences': argument((int,), 'Requested number of synthetic candidates, 1–1000; default 20. Return exactly this count, retaining duplicates.', scientific_parameter=True),
+        'seed': argument((int,), 'Explicit random seed, 0–4294967295. Omit for a freshly sampled recorded seed; batching and environment also affect reproducibility.', scientific_parameter=True),
+        'guidance_scale': argument((int,float), 'Native nonnegative classifier-free guidance weight; default 1. Not predicted activity. Fixed pretrained 50-step schedule.', scientific_parameter=True),
+    }
+    generate = spec(generation.TOOL,generation.generate_regulatory_sequences,
+        dict(output_dir=output,condition=argument((str,), 'Required exact released DNA-Diffusion condition: GM12878, HepG2, K562 or hESCT0. No arbitrary tissue substitution.', scientific_parameter=True, conversational_exact_string=True)),
+        generation_options,generation.RESULT_FIELDS,
+        [scalar('output_dir',required=True),scalar('condition',required=True),*(scalar(k,required=False) for k in generation_options)],
+        [Producer('sequences','dna_sequences.v1',(member('path','sequences_path'),member('sha256','sequences_sha256'))),
+         Producer('generation','regulatory_sequence_generation.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
+        generation.KIND,generation.execute,'Generate de novo 200-base synthetic regulatory DNA candidates using pretrained native DNA-Diffusion.',
+        ('No DNA upload, scATAC input or genomic reference is required. Use the installed qualified model. A new batch or changed supported condition is an independent generation request.',
+         'Return exact count, GC, entropy, homopolymers, duplicates, pairwise Hamming diversity, model/condition/sampling provenance, FASTA and figure. These descriptors do not establish biological function or training-set novelty.',
+         'Retain sequences and generation results for later comparison and reuse. Optional explicitly requested DHS64 prediction can consume these 200-base sequences with its own native 500-position padding and actual conditions. Never invent 2114-base context for DeepPBMC.'),policy=generation.POLICY)
+    return predict,evaluate,optimize,generate

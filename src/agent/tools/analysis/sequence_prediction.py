@@ -309,10 +309,12 @@ def publication_type(kind):
                     tool=TOOL if kind == KIND else EVALUATE, names=names,
                     outputs=(('sequences','sequences.fasta'),('scores','scores.tsv')) if kind == KIND else (('metrics','metrics.json'),))
     from . import sequence_optimization as optimization
-    if kind != optimization.KIND:
-        raise AuthorityError('Unknown sequence publication')
-    return dict(contract=optimization.CONTRACT, profile=optimization.PROFILE, tool=optimization.TOOL,
-                names=optimization.FILES, outputs=optimization.OUTPUTS)
+    from . import sequence_generation as generation
+    for owner in (optimization, generation):
+        if kind == owner.KIND:
+            return dict(contract=owner.CONTRACT, profile=owner.PROFILE, tool=owner.TOOL,
+                        names=owner.FILES, outputs=owner.OUTPUTS)
+    raise AuthorityError('Unknown sequence publication')
 
 
 def publish(args, execution_identity, kind, contract, summary, sources, names, provenance):
@@ -370,9 +372,10 @@ def verify_evaluation(path, *, expected_sha256):
 def verifier(kind):
     if kind == KIND: return verify_prediction
     if kind == EVAL_KIND: return verify_evaluation
-    from .sequence_optimization import verify_optimization
-    publication_type(kind)
-    return verify_optimization
+    from . import sequence_optimization, sequence_generation
+    if kind == sequence_optimization.KIND: return sequence_optimization.verify_optimization
+    if kind == sequence_generation.KIND: return sequence_generation.verify_generation
+    raise AuthorityError('Unknown sequence publication')
 
 
 def verify_result(args, output):

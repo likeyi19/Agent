@@ -2051,7 +2051,7 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
-        elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences'):
+        elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences'):
             try:
                 from agent.tools.analysis.sequence_prediction import verify_result
                 verify_result(resolved_arguments, plain_result)

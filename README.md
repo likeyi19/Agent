@@ -660,8 +660,25 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+RSD-3 adds independent [de novo regulatory DNA generation](docs/guides/regulatory-sequence-generation.md),
+bringing the Registry to 31 tools. Ask for a batch conditioned on K562, GM12878,
+HepG2 or hESCT0 without uploading DNA or scATAC data. Native pretrained DNA-Diffusion
+returns 200-base synthetic candidates, composition/diversity summaries, FASTA,
+tables and a figure. Exact accepted sequences can enter separately requested DHS64
+prediction with its own context semantics. Generated candidates are not biologically
+validated enhancers. The normal ScientificResourceLibrary owns model discovery;
+the runtime and license scope are documented in the guide.
+The [RSD-3 report](../agent-data/acceptance/regulatory-sequence-design/rsd-3/REPORT.md)
+records genuine normal generation/downloads. Its separate Qwen section records
+full-schema planning and a delivered saved-batch comparison through normal Firefox.
+After restored Alibaba access, genuine Firefox continuation predicts DHS64 scores
+from the exact accepted DNA, delivers four checked prediction downloads and
+clarifies unsupported generation conditions without science. RSD-3 is complete
+within the report's bounded internal academic scope, with explicit generated-prose
+and download-concurrency limitations. Earlier provider failures remain historical.
+
 RSD-2 adds independent constrained editing of existing human DNA with native
-CREsted DeepPBMC, bringing the Registry to 30 tools. Ordinary FASTA, direct DNA,
+CREsted DeepPBMC, then bringing the Registry to 30 tools. Ordinary FASTA, direct DNA,
 qualified BED extraction and selected accepted candidates support target changes,
 verified edit/protection constraints and original-versus-candidate downloads.
 See the [optimization guide](docs/guides/regulatory-sequence-optimization.md) for
@@ -844,6 +861,9 @@ Open the configured address, create or reopen a Session, choose an admitted
 model and optional operator-configured scientific input set, and submit a request.
 The browser polls durable turn state and restores exact stored responses after
 refresh. Provider credentials and scientific input paths remain server-side.
+Alibaba Cloud `qwen3.8-max` is available through the same model-profile mechanism;
+the [Qwen provider guide](docs/guides/alibaba-qwen-provider.md) gives exact private
+credential setup and normal Web launch/selection steps.
 See [M18.3 configuration, API and acceptance](docs/history/m18.3-basic-web-application.md)
 for the operator JSON format, launch options and recovery limits.
 See [Post-M18.1 typed turn admission](docs/history/post-m18.1-typed-turn-admission.md)

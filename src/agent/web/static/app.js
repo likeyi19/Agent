@@ -696,7 +696,7 @@ function scientificFileNode(sessionId, artifact) {
     const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
     details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
   }
-  if (artifact.artifact_type === "scientific_sequence" && ["scores.png", "design.png"].includes(artifact.filename)) {
+  if (artifact.artifact_type === "scientific_sequence" && ["scores.png", "design.png", "composition.png"].includes(artifact.filename)) {
     const figure = document.createElement("img");
     figure.src = download.href;
     figure.alt = artifact.title + "; model predictions are not experimental validation";

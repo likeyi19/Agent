@@ -102,6 +102,7 @@ class ArtifactSemanticKind(str, Enum):
 
     DNA_SEQUENCES = "dna_sequences"
     SEQUENCE_PREDICTIONS = "sequence_predictions"
+    SEQUENCE_GENERATION = "sequence_generation"
     SEQUENCE_OBSERVATIONS = "sequence_observations"
     RAW_SCATAC = "raw_scatac"
     RAW_SCATAC_SEQUENCING = "raw_scatac_sequencing"

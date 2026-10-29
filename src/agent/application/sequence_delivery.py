@@ -6,11 +6,13 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from agent.tools.analysis import sequence_prediction as owner
 from .session_state import digest
-from agent.tools.analysis import sequence_optimization
+from agent.tools.analysis import sequence_optimization, sequence_generation
 
-CONTRACTS = (owner.CONTRACT, owner.EVAL_CONTRACT, sequence_optimization.CONTRACT)
+CONTRACTS = (owner.CONTRACT, owner.EVAL_CONTRACT, sequence_optimization.CONTRACT, sequence_generation.CONTRACT)
 
 FILES = {
+    'candidates.tsv': ('Synthetic candidate sequence characteristics', 'text/tab-separated-values; charset=utf-8'),
+    'composition.png': ('Synthetic candidate composition', 'image/png'),
     'originals.fasta': ('Original DNA sequences', 'text/plain; charset=utf-8'),
     'design-scores.tsv': ('Original and candidate accessibility scores', 'text/tab-separated-values; charset=utf-8'),
     'mutations.tsv': ('Actual nucleotide substitutions', 'text/tab-separated-values; charset=utf-8'),
@@ -117,10 +119,12 @@ def accepted_figures(sessions, turn, revision):
         seen.add(key)
         run = sessions._application.run_store.load(output.run_id)
         step = next(s for s in run.steps if s.step_id == output.step_id)
-        if step.tool_name not in (owner.TOOL, sequence_optimization.TOOL): continue
+        if step.tool_name not in (owner.TOOL, sequence_optimization.TOOL, sequence_generation.TOOL): continue
         store, run_id, step_id, step, authority, anchor, root, manifest, sha, record = _accepted_publication(
             sessions, revision, turn, output)
-        name = 'scores.png' if step.tool_name == owner.TOOL else 'design.png'
+        name, figure_kind = {owner.TOOL: ('scores.png','dnase_score_heatmap'),
+            sequence_optimization.TOOL: ('design.png','sequence_optimization_trajectory'),
+            sequence_generation.TOOL: ('composition.png','sequence_generation_composition')}[step.tool_name]
         pin = next(p for p in manifest['files'] if Path(p['path']).name == name)
         path = Path(pin['path']); path.relative_to(root)
         if pin not in record['files'] or owner.file_closure([path]) != [pin]:
@@ -131,7 +135,7 @@ def accepted_figures(sessions, turn, revision):
             output=dict(name=output.name, run_id=run_id, step_id=step_id,
                 accepted_step_sha256=accepted_step_digest(step), revision_id=revision.revision_id))
         result.append(dict(path=str(path),sha256=pin['sha256'],metadata=dict(
-            kind='dnase_score_heatmap' if step.tool_name == owner.TOOL else 'sequence_optimization_trajectory',
+            kind=figure_kind,
             figure_id=name,manifest_sha256=sha,revision_id=revision.revision_id,run_id=run_id,
             step_ids=[step_id],output_names=[o.name for o in revision.outputs if (o.run_id,o.step_id)==key],
             sources=[source])))

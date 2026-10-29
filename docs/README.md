@@ -4,6 +4,8 @@ Start with the [operating and development guide](guides/operating-and-developmen
 the repository [README](../README.md), and the detailed [engineering contract](../AGENTS.md).
 The [scientific storage guide](guides/scientific-storage.md) covers the current
 consolidated deployment and fresh UAT environment.
+The [Alibaba Qwen provider guide](guides/alibaba-qwen-provider.md) covers ordinary
+Web selection and secure persistent credentials for the existing local launcher.
 The [CWC-1 readiness report](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
 assesses every current scientific capability, records new statistical/evaluation
 acceptance and shared corrections. Its [blocker closeout](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
@@ -33,6 +35,10 @@ sequence reuse, independent matched-observation evaluation and the isolated runt
 The [sequence optimization guide](guides/regulatory-sequence-optimization.md) covers
 independent native DeepPBMC editing, exact constraints, comparison outputs and
 the academic research runtime/license scope.
+
+The [sequence generation guide](guides/regulatory-sequence-generation.md) covers
+native pretrained DNA-Diffusion, exact supported conditions, stochastic sampling,
+sequence descriptors, reusable candidates and ordinary resource deployment.
 
 The documentation has three locations:
 

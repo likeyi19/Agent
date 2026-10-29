@@ -369,7 +369,8 @@ class ScientificResourceLibrary:
             pins[str(target)] = digest(resource)
             qualifier = lambda: annotation_input.qualify_resources(resource)
         elif kind == 'sequence_predictor':
-            from agent.tools.analysis.sequence_prediction import qualify_resource
+            from agent.tools.analysis import sequence_prediction, sequence_optimization
+            qualify_resource = (sequence_optimization.qualify_resource if resource.get('schema') == sequence_optimization.RESOURCE else sequence_prediction.qualify_resource)
             pins = {r['path']: r['sha256'] for r in [*resource['checkpoints'], resource['metadata']]}
             qualifier = lambda: qualify_resource(resource)
         elif kind == 'marker_reference':

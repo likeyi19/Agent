@@ -668,9 +668,9 @@ def test_semantic_prompt_and_schema_retain_combined_size_headroom(
     # Per-port source constraints now exclude illegal bindings at generation,
     # while the older v3 schema permits a broader generic binding vocabulary.
     # Retain an absolute bounded payload budget rather than comparing different
-    # authorization contracts merely by byte count. The 27-tool lifecycle catalog
-    # uses a 72 KiB test budget (largest fixture ~66 KiB); this is not a provider
+    # authorization contracts merely by byte count. The 30-tool sequence-design catalog
+    # uses an 80 KiB test budget (largest fixture ~74 KiB); this is not a provider
     # context limit or permission to omit scientific contract metadata.
     assert len(semantic_prompt.encode("utf-8")) + schema_bytes(
         build_semantic_wire_v4_schema(registry, request)
-    ) < 72 * 1024
+    ) < 80 * 1024

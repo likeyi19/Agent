@@ -30,6 +30,10 @@ The [regulatory sequence guide](guides/regulatory-sequence-prediction.md) covers
 native DHS64 FASTA/direct DNA/BED prediction, exact biosample conditions, accepted
 sequence reuse, independent matched-observation evaluation and the isolated runtime.
 
+The [sequence optimization guide](guides/regulatory-sequence-optimization.md) covers
+independent native DeepPBMC editing, exact constraints, comparison outputs and
+the academic research runtime/license scope.
+
 The documentation has three locations:
 
 | Location | Purpose |

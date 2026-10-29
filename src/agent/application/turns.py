@@ -555,8 +555,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify):
             if decision.reason == 'unavailable_model_condition':
-                conditions = tuple(dict.fromkeys(name for model in visible['dialogue'].get('sequence_predictors', ())
-                                                 for name in model['conditions']))
+                conditions = tuple(model['family'] + ': ' + ', '.join(model['conditions'])
+                                   for model in visible['dialogue'].get('sequence_predictors', ()))
                 decision = Clarify(decision.reason, conditions)
             return _terminal(sessions, interaction, decision)
         if isinstance(decision, RequestResources):

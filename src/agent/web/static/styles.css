@@ -101,6 +101,7 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .artifact-actions button { font-size: 12px; padding: 4px 8px; }
 .scientific-file { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 0; border-bottom: 1px solid #e4eae9; font-size: 13px; }
 .scientific-file > span { overflow-wrap: anywhere; min-width: 0; flex: 1 1 220px; }
+.scientific-file > img { display: block; flex: 0 0 100%; width: 100%; min-height: 1px; height: auto; }
 .scientific-file a { color: #246b65; font-weight: 600; }
 .scientific-file a:focus-visible { outline: 3px solid #a9d6d0; outline-offset: 2px; }
 .scientific-export-note { flex-basis: 100%; color: #586b79; font-size: 12px; }

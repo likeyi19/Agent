@@ -408,6 +408,53 @@ bounded. CPU qualification does not imply GPU, biological, universal tissue or
 cross-assay qualification. RSD-2/3/4 and the Scientific Tool Ecosystem Integration
 stage are not started.
 
+RSD-2 builds on `e3c80514e2ffbaa85e098d8d0d7586199189c08f` without staging,
+commit or push. The [optimization guide](docs/guides/regulatory-sequence-optimization.md)
+owns independent native CREsted DeepPBMC editing of existing human DNA (30 tools).
+Exactly 2,114 real A/C/G/T bases, seven PBMC conditions, native weighted-difference
+objectives, explicit edit/protection intervals and actual final edit distance
+remain model-specific. DHS64 is not a prerequisite or score source. The native
+objective divides the weighted comparison sum by seven even for one comparison;
+it penalizes increases, not absolute changes. Non-improving attempts and repeated
+positions are reported honestly. No generation or custom search is introduced.
+
+The [RSD-2 report](../agent-data/acceptance/regulatory-sequence-design/rsd-2/REPORT.md)
+records four genuine Firefox/OpenRouter native paths (FASTA, selected-candidate
+continuation with a changed target, direct DNA and exact minus-strand BED), actual
+downloads, a complete final read-only explanation, preservation and restarts.
+Native GPU trajectory parity and a slow explicit CPU qualification are distinct
+from simulated regression. Shared sequence publication, source binding, scientific
+resource and figure/download owners remain authoritative. New comparison evidence
+includes exact scores and substitutions; historical outputs and displayed text
+are unchanged, including an observed factor-seven explanation error. Initial
+figure/export defects and acceptance-observation failures are retained separately.
+CONDITIONAL GO is limited to authorized internal academic research with this
+qualified model/runtime and documented prose limitations. The isolated resource
+library preserves production defaults; CREsted redistribution/hosted rights and
+biological efficacy are not established. RSD-3/4 and ecosystem integration remain
+outside scope; no commit or push is performed.
+
+RSD-2 normal deployment closeout installs the exact qualified DeepPBMC entry into
+the existing `agent-data/resources/library` through `ScientificResourceLibrary.install`,
+using its existing checkpoint, metadata and runtime in place. All ten earlier
+entries remain unchanged. The ordinary operator configuration and launcher are
+unchanged; `library-rsd-2` remains historical evidence, not a researcher prerequisite.
+One genuine normal-launcher Firefox/OpenRouter request completes native optimization,
+acceptance, generated explanation, figure rendering and seven checked downloads.
+The appended RSD-2 report section owns this bounded CONDITIONAL GO, including the
+initial provider transport failure and its preserved failed Interaction.
+Authorized internal academic scope and the original licensing restrictions remain.
+
+All scientific capabilities have equal architectural status through existing
+Registry, resource, execution, evidence and Web owners. Scientific applicability
+remains method-specific; equal status never makes DHS64 and DeepPBMC scores or
+contexts interchangeable. Select methods for scientific suitability and maturity,
+not permanent architectural preference. Future qualified methods, including
+EpiZooSeq sequence prediction, may extend or replace current choices while
+preserving historical model, objective, assay, context and score meanings.
+Generalize only for concrete scientific capabilities and consumers; do not build
+a speculative universal model/plugin framework or parallel execution path.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

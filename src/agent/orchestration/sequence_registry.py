@@ -42,14 +42,14 @@ def tool_specs():
         choices=('continuous','binary'), scientific_parameter=True, conversational_choice=True)
     output = argument((str,Path), 'Managed result destination.')
 
-    def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes):
+    def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes, policy=owner.POLICY):
         return ToolSpec(name=name, function=function, required_arguments=required, optional_arguments=optional,
             result_contract=ResultContract('RegulatorySequenceResult', fields,
-                planning_fields={k:_planning_result('Exact sequence publication and scientifically bounded DNase result.',
+                planning_fields={k:_planning_result('Exact sequence publication and model-specific scientific result.',
                     bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else A.SEQUENCE_PREDICTIONS)
                     for k in fields if k.endswith(('_path','_sha256'))}),
             durable_hooks=DurableToolHooks(execute,owner.recover), exception_classifier=classify,
-            recovery_policy_version=owner.POLICY,
+            recovery_policy_version=policy,
             scientific_authority=ScientificAuthorityHooks(kind=kind, producer_ports=tuple(p.name for p in producers),
                 describe=owner.describe, publication_record=owner.publication_record,
                 reuse_result=owner.reuse_result, proof_metadata=owner.proof_metadata,
@@ -75,4 +75,29 @@ def tool_specs():
         owner.EVAL_KIND,owner.execute_evaluation,'Evaluate accepted DHS64 predictions against explicitly supplied compatible observed DNase measurements.',
         ('Never rerun prediction for evaluation. TSV columns: sequence_id, condition, measurement, value, provenance (optional sequence_sha256); exact identity, condition and native transform are required. Correspondence is never inferred from row count.',
          'Continuous: RMSE, MAE, Pearson and Spearman; binary peak calls: AUROC, average precision, Brier and log loss. MPRA, ATAC and gene expression are not DNase ground truth. Undefined metrics are null.'))
-    return predict,evaluate
+    from agent.tools.analysis import sequence_optimization as design
+    options = dict(sequences)
+    for key, description in (
+        ('sequence', 'Exact researcher-supplied DNA, 2,114 real A/C/G/T bases. No fabricated flanks, truncation or padding.'),
+        ('assembly', 'Explicit assembly for BED coordinates and qualified human genome; not required for FASTA or direct DNA.'),
+        ('comparison_conditions', 'Comma-separated exact DeepPBMC condition names quoted from user intent. Omit to penalize increases in all six non-target conditions. This does not bound absolute changes.'),
+        ('protected_regions', 'User-specified protected 0-based half-open sequence intervals in start:end,start:end notation. Unchanged positions are verified in the returned DNA.')):
+        options[key] = argument((str,),description,scientific_parameter=True,conversational_exact_string=True)
+    for key, types, description in (
+        ('max_changes',(int,), 'Maximum final changed bases versus the starting sequence (1–100; default 5). Actual Hamming distance is verified, not inferred from iterations.'),
+        ('iterations',(int,), 'Native substitution steps, at most max_changes; default max_changes. Native search can revisit positions and can worsen the objective.'),
+        ('edit_start',(int,), 'First editable position, 0-based in supplied oriented DNA, default 0.'),
+        ('edit_end',(int,), 'Exclusive end of editable interval, default 2114. No edits outside the interval.'),
+        ('comparison_weight',(int,float), 'Nonnegative penalty for comparison-cell score increases, default 1. Native objective is target score minus one seventh weighted comparison scores; decreases improve it. Zero maximizes target alone.')):
+        options[key] = argument(types,description,scientific_parameter=True)
+    target = argument((str,), 'Exact supported DeepPBMC target condition from the installed model, required. Never substitute unsupported cell types.',scientific_parameter=True,conversational_exact_string=True)
+    optimize = spec(design.TOOL,design.optimize_regulatory_sequences,dict(output_dir=output,condition=target),options,
+        design.RESULT_FIELDS,[source,scalar('output_dir',required=True),scalar('condition',required=True),
+            *(scalar(k,required=False) for k in options if k not in sequences)],
+        [Producer('sequences','dna_sequences.v1',(member('path','sequences_path'),member('sha256','sequences_sha256'))),
+         Producer('design','regulatory_sequence_design.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
+        design.KIND,design.execute,'Optimize existing human regulatory DNA for a supported PBMC accessibility objective using native CREsted DeepPBMC in silico evolution.',
+        ('No DHS64 prerequisite or score reuse. Supply direct DNA, ordinary FASTA, exact 2114-base BED3–6 with qualified human assembly, or explicitly selected accepted DNA sequences. No arbitrary cell conditions or gene-expression/enhancer-activity claims.',
+         'One final candidate per starting sequence (up to 32 inputs); deterministic native search does not promise distinct alternatives. No de novo generation. Native weighted difference penalizes comparison increases, not absolute changes or hard score bounds. Clarify incompatible objectives.',
+         'Return original and candidate scores under the same model, actual substitutions, constraints, native trajectory and reusable candidate sequences. Preserve explicit edit/protection coordinates and budget; do not invent user preferences. Biological improvement is unvalidated.'),policy=design.POLICY)
+    return predict,evaluate,optimize

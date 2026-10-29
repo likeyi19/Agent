@@ -3,8 +3,10 @@
 RSD-1 adds `predict_regulatory_sequences` and independent
 `evaluate_regulatory_predictions` to the existing scientific Registry (29 tools).
 The qualified backend is human DHS64 from native enhancer-design. Prediction
-does not require observed measurements. Optimization, generation, DHS733,
-DHS64-MPRA and scATAC-guided design are outside this capability.
+does not require observed measurements. Generation, DHS733, DHS64-MPRA and scATAC-guided design are outside this capability.
+[Constrained optimization](regulatory-sequence-optimization.md) is an independent
+DeepPBMC tool with its own context and objective requirements; it does not consume
+DHS64 scores.
 
 ## Researcher workflow
 

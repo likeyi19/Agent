@@ -1457,6 +1457,11 @@ def _presentation_context(sessions, session_id, admitted, views, limitations):
             unavailable()
     ordered = {(f['metadata']['manifest_sha256'], f['metadata']['figure_id']): f for f in matching}
     ordered.update(figures)
+    delivery = admitted.get('completion_delivery', {})
+    if (delivery.get('visualization') == 'delivered' and not admitted.get('presentation_artifacts')
+            and 'visualization' in delivery.get('requested', ())):
+        matching = tuple(f for f in ordered.values()
+                         if f['metadata'].get('run_id') == admitted.get('completion_run_id'))
     return tuple(ordered.values()), matching
 
 

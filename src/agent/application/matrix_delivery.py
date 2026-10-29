@@ -609,7 +609,7 @@ class MatrixDownloadPreparer:
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
         from . import sequence_delivery
-        sequence = artifact.contract in (sequence_delivery.owner.CONTRACT, sequence_delivery.owner.EVAL_CONTRACT) and getattr(artifact, 'role', None) in sequence_delivery.FILES
+        sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
             and getattr(artifact, 'role', None) == corroboration_delivery.ROLE)

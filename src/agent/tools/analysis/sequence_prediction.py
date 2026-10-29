@@ -113,7 +113,7 @@ def arguments(values):
     return values
 
 
-def records(args):
+def records(args, *, context_bases=500, exact_length=False, max_records=10000):
     """Preserve original labels, order, source bytes and exact extraction semantics."""
     from Bio import SeqIO
     from Bio.Seq import Seq
@@ -137,8 +137,8 @@ def records(args):
         if first.startswith('>'):
             for r in SeqIO.parse(path, 'fasta'):
                 rows.append(dict(original_header=r.description, original_sequence=str(r.seq), sequence=str(r.seq)))
-                if len(rows) > 10000:
-                    raise ValueError('DHS64 supports at most 10,000 records per request')
+                if len(rows) > max_records:
+                    raise ValueError(f'Execution supports at most {max_records} records per request')
         else:
             import pandas as pd
             import pysam
@@ -151,12 +151,12 @@ def records(args):
                 raise ValueError('BED requires a unique qualified genome for the declared assembly')
             genome = lib.check(matches[0])
             if genome['species']['taxonomy_id'] != 9606:
-                raise ValueError('DHS64 is qualified for human DNase conditions; nonhuman BED prediction is not supported')
+                raise ValueError('This model is qualified for human conditions; nonhuman BED input is not supported')
             reference = genome
             sources += matches[0]['files']
             table = pd.read_csv(path, sep='\t', comment='#', header=None, dtype=str, keep_default_na=False)
-            if not 3 <= table.shape[1] <= 6 or not 0 < len(table) <= 10000:
-                raise ValueError('Supply BED3 through BED6 contiguous intervals, at most 10,000 records; BED12 blocks are not contiguous sequences')
+            if not 3 <= table.shape[1] <= 6 or not 0 < len(table) <= max_records:
+                raise ValueError(f'Supply BED3 through BED6 contiguous intervals, at most {max_records} records; BED12 blocks are not contiguous sequences')
             with pysam.FastaFile(genome['genome']['fasta']['path'], filepath_index=genome['genome']['fai']['path']) as fasta:
                 for i, r in table.iterrows():
                     chrom, start, end = r[0], int(r[1]), int(r[2])
@@ -165,25 +165,25 @@ def records(args):
                     if (strand not in ('+', '-') or chrom not in fasta.references
                             or not 0 <= start < end <= fasta.get_reference_length(chrom)):
                         raise ValueError('Invalid BED strand or out-of-bounds interval; no clipping or liftOver is performed')
-                    if end - start > 500:
-                        raise ValueError('DHS64 accepts at most 500 bases per interval; select an explicit shorter interval')
+                    if end - start > context_bases:
+                        raise ValueError(f'This model accepts at most {context_bases} bases per interval; select an explicit compatible interval')
                     seq = fasta.fetch(chrom, start, end)
                     if strand == '-': seq = str(Seq(seq).reverse_complement())
                     rows.append(dict(original_header=r[3] if len(r) >= 4 else f'{chrom}:{start}-{end}',
                         original_sequence=seq, sequence=seq,
                         interval=dict(chrom=chrom, start=start, end=end, strand=strand,
                                       coordinates='0-based half-open; exact interval; no genomic expansion')))
-    if not rows or len(rows) > 10000:
-        raise ValueError('Supply between one and 10,000 sequence records')
+    if not rows or len(rows) > max_records:
+        raise ValueError(f'Supply between one and {max_records} sequence records')
     for i, row in enumerate(rows):
         seq = row['sequence'].upper()
         # One model-specific guard against the native encoder's silent truncation
         # and unknown-base zero vectors. Other future models own their own policy.
-        if not 1 <= len(seq) <= 500 or set(seq) - set('ACGT'):
-            raise ValueError('DHS64 requires 1–500 A/C/G/T bases; ambiguous IUPAC bases (including N) need resolved sequence, and overlength inputs are never truncated')
+        if not (context_bases if exact_length else 1) <= len(seq) <= context_bases or set(seq) - set('ACGT'):
+            raise ValueError(f'This model requires {context_bases if exact_length else str(1)+"–"+str(context_bases)} A/C/G/T bases; ambiguous bases need resolved sequence; inputs are never padded with invented flanks or truncated')
         row.update(sequence=seq, sequence_id=f'sequence-{i + 1}',
                    sequence_sha256=hashlib.sha256(seq.encode('ascii')).hexdigest(),
-                   ordinal=i + 1, native_zero_padding=500 - len(seq))
+                   ordinal=i + 1, native_zero_padding=context_bases - len(seq))
     return rows, sorted(sources, key=lambda r: r['path']), reference
 
 
@@ -301,9 +301,23 @@ def execute(values, execution_identity=None):
                    dict(model=entry, reference=reference, runtime=receipt))
 
 
+def publication_type(kind):
+    if kind in (KIND, EVAL_KIND):
+        names = (('sequence-records.json','sequences.fasta','scores.tsv','predictions.npz','metadata.json','scores.png')
+                 if kind == KIND else ('metrics.json',))
+        return dict(contract=CONTRACT if kind == KIND else EVAL_CONTRACT, profile=PROFILE,
+                    tool=TOOL if kind == KIND else EVALUATE, names=names,
+                    outputs=(('sequences','sequences.fasta'),('scores','scores.tsv')) if kind == KIND else (('metrics','metrics.json'),))
+    from . import sequence_optimization as optimization
+    if kind != optimization.KIND:
+        raise AuthorityError('Unknown sequence publication')
+    return dict(contract=optimization.CONTRACT, profile=optimization.PROFILE, tool=optimization.TOOL,
+                names=optimization.FILES, outputs=optimization.OUTPUTS)
+
+
 def publish(args, execution_identity, kind, contract, summary, sources, names, provenance):
     root = Path(args['output_dir'])
-    value = dict(contract=contract, kind=kind, profile=PROFILE, arguments=args,
+    value = dict(contract=contract, kind=kind, profile=publication_type(kind)['profile'], arguments=args,
         execution_identity=execution_identity, result=summary,
         files=file_closure(root / name for name in names), sources=sources, provenance=provenance)
     path = root / 'manifest.json'; sha = write(path, value)
@@ -313,12 +327,12 @@ def publish(args, execution_identity, kind, contract, summary, sources, names, p
 
 def load(path, sha=None):
     value = read(path, sha)
-    if (value['kind'], value['contract']) not in ((KIND, CONTRACT), (EVAL_KIND, EVAL_CONTRACT)):
+    definition = publication_type(value['kind'])
+    if value['contract'] != definition['contract']:
         raise AuthorityError('Unknown sequence publication')
-    if value['profile'] != PROFILE or Path(path) != Path(value['arguments']['output_dir']) / 'manifest.json':
+    if value['profile'] != definition['profile'] or Path(path) != Path(value['arguments']['output_dir']) / 'manifest.json':
         raise AuthorityError('Sequence publication identity differs')
-    expected = ({'sequence-records.json','sequences.fasta','scores.tsv','predictions.npz','metadata.json','scores.png'}
-                if value['kind'] == KIND else {'metrics.json'})
+    expected = set(definition['names'])
     if {f['path'] for f in value['files']} != {str(Path(path).parent / n) for n in expected} or len(value['files']) != len(expected):
         raise AuthorityError('Sequence publication membership differs')
     return value, file_closure([path])[0]['sha256']
@@ -327,7 +341,7 @@ def load(path, sha=None):
 def result(value, path, sha):
     pins = {Path(r['path']).name:r for r in value['files']}
     output = dict(value['result'], manifest_path=str(path), manifest_sha256=sha)
-    for prefix, name in (('sequences','sequences.fasta'), ('scores','scores.tsv')) if value['kind'] == KIND else (('metrics','metrics.json'),):
+    for prefix, name in publication_type(value['kind'])['outputs']:
         output.update({prefix+'_path':pins[name]['path'], prefix+'_sha256':pins[name]['sha256']})
     return output
 
@@ -338,7 +352,7 @@ def _verify(path, sha, kind):
         raise AuthorityError('Sequence publication or source integrity changed')
     # The native receipt is bound to this producing execution and exact artifacts.
     # No inference, extraction, or observed-data metrics are rerun on reads.
-    if kind == KIND and value['provenance']['runtime']['completion'] != 'succeeded':
+    if kind != EVAL_KIND and value['provenance']['runtime']['completion'] != 'succeeded':
         raise AuthorityError('Missing completed native prediction')
     return result(value, path, actual)
 
@@ -354,7 +368,11 @@ def verify_evaluation(path, *, expected_sha256):
 
 
 def verifier(kind):
-    return verify_prediction if kind == KIND else verify_evaluation
+    if kind == KIND: return verify_prediction
+    if kind == EVAL_KIND: return verify_evaluation
+    from .sequence_optimization import verify_optimization
+    publication_type(kind)
+    return verify_optimization
 
 
 def verify_result(args, output):
@@ -382,10 +400,10 @@ def describe(path, sha, context):
     if [r for r in files if r['path'] != str(path)] != value['files']:
         raise AuthorityError('Sequence artifact integrity changed')
     identity = dict(kind=value['kind'], manifest=value, files=files, historical_sources=value['sources'],
-        execution_identity=context.execution_for(value['kind'], path), profile=PROFILE, verifier=VERIFIER)
+        execution_identity=context.execution_for(value['kind'], path), profile=value['profile'], verifier=VERIFIER)
     return dict(kind=value['kind'], manifest_path=str(path), manifest_sha256=actual, manifest=value,
         proof_identity=identity, files=files, historical_sources=value['sources'], upstream={},
-        profile=PROFILE, verifier=VERIFIER, qualification={})
+        profile=value['profile'], verifier=VERIFIER, qualification={})
 
 
 def reuse_result(kind, description, proof, kwargs):
@@ -398,7 +416,7 @@ def proof_metadata(kind, output, context):
 
 def publication_record(context, tool_name, args, output, execution_identity, result_metadata):
     value, sha = load(output['manifest_path'], output['manifest_sha256'])
-    if (tool_name != (TOOL if value['kind'] == KIND else EVALUATE)
+    if (tool_name != publication_type(value['kind'])['tool']
             or value['execution_identity'] != execution_identity or value['arguments'] != arguments(args)
             or _serialize(result_metadata) != _serialize(output) or result(value, output['manifest_path'], sha) != _serialize(output)):
         raise AuthorityError('Sequence publication lacks its exact producing execution')
@@ -408,7 +426,7 @@ def publication_record(context, tool_name, args, output, execution_identity, res
         files=description['files'], execution_identity=execution_identity, arguments_sha256=digest(arguments(args)),
         receipt_sha256=sha, upstream={'producer_inputs':digest(description['proof_identity'])},
         resources=dict(scientific_proof_sha256=key, manifest_identity=value, result_metadata=_serialize(output)),
-        science_profile=PROFILE, producer_qualification={}, verifier=VERIFIER, scope='scientific_correctness.v1',
+        science_profile=value['profile'], producer_qualification={}, verifier=VERIFIER, scope='scientific_correctness.v1',
         completion='succeeded', integrity_scope='artifact_integrity_lineage_historical_sources.v1',
         source_policy='historical_verified_sources.v1', historical_sources=description['historical_sources']))
 

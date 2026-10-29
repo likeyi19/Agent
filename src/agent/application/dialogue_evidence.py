@@ -35,6 +35,7 @@ RESULT_LIMITATIONS = {
     'inspect_scATAC_fragments': 'Structural observations cover only the inspected prefix unless reached_eof is true. Distinct barcode strings are not cells. Reference compatibility, processing history, index correspondence and QC readiness are not established.',
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
+    'optimize_regulatory_sequences': 'DeepPBMC predicts human PBMC peak accessibility, not enhancer activity or gene expression. Native weighted difference is target minus the weighted comparison sum divided by seven, even with a single comparison condition. It penalizes comparison score increases and rewards decreases; it does not bound absolute changes. Use recorded comparison_scores directly when available, never mistake the scaled penalty for the comparison score. Actual changed bases differ from iterations. Improved model objective is not biological validation. Exact candidate examples contain original and candidate scores, actual substitutions, protected-region satisfaction and non-improving steps. Never compare these scores numerically to DHS64 scores.',
     'predict_regulatory_sequences': 'DHS64 predicts human DNase accessibility. Continuous scores are transformed signal and may be negative; sigmoid scores predict peak calls, not enhancer functionality. Fold spread is disagreement, not calibrated uncertainty. Sequences are not cells. Scores are not measured biology or gene expression. All values and examples retain exact sequence/condition identity.',
     'evaluate_regulatory_predictions': 'Metrics compare only exact matched supplied observations in the native DNase measurement and transform. No inferred assay equivalence, training independence or experimental validation.',
     'corroborate_cell_type_annotation': 'Reference evidence consists of local pinned literature marker associations. Labels remain native candidates; broad lineage is not subtype validation, missing evidence is not contradiction, and mixed associations are not calibrated confidence.',
@@ -1002,4 +1003,8 @@ def figure_inventory(sessions, turn, revision=None):
             public = figure_metadata(record, manifest_sha256=file.sha256, run_id=turn.run_id, revision=revision)
             identity = (file.sha256, record['figure_id'])
             figures[identity] = dict(path=str(target), sha256=record['png_sha256'], metadata=public)
+    from .sequence_delivery import accepted_figures
+    for figure in accepted_figures(sessions, turn, revision):
+        metadata = figure['metadata']
+        figures[(metadata['manifest_sha256'], metadata['figure_id'])] = figure
     return tuple(figures.values())

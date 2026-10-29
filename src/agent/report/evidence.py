@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
+from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_prediction import RESULT_FIELDS as _SEQUENCE_FIELDS, EVAL_FIELDS as _SEQUENCE_EVAL_FIELDS
 from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
@@ -426,6 +427,13 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             ("accepted_backend_structural_proof", "exact_execution_receipt"), digest_field="manifest_sha256"),
          _ArtifactProjection("checkpoint_path", "epizoo_target_checkpoint",
             ("strict_checkpoint_compatibility", "full_artifact_sha256"), digest_field="checkpoint_sha256"))),
+    "optimize_regulatory_sequences": _ToolProjection(
+        frozenset(_DESIGN_FIELDS), tuple(k for k in _DESIGN_FIELDS if not k.endswith('_path')),
+        "regulatory-sequence-optimization-native-v1", (
+            _ArtifactProjection("manifest_path", "regulatory_sequence_design_manifest", ("native_completion", "returned_sequence_constraints", "full_artifact_sha256"), digest_field="manifest_sha256"),
+            _ArtifactProjection("sequences_path", "dna_sequences_fasta", ("exact_ordered_candidates", "full_artifact_sha256"), digest_field="sequences_sha256"),
+            _ArtifactProjection("scores_path", "accessibility_design_scores", ("same_model_original_candidate", "full_artifact_sha256"), digest_field="scores_sha256"),
+            _ArtifactProjection("mutations_path", "actual_sequence_substitutions", ("actual_final_edit_distance", "protected_positions", "full_artifact_sha256"), digest_field="mutations_sha256"))),
     "predict_regulatory_sequences": _ToolProjection(
         frozenset(_SEQUENCE_FIELDS), tuple(k for k in _SEQUENCE_FIELDS if not k.endswith('_path')),
         "regulatory-sequence-native-v1", (

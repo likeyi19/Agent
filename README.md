@@ -660,11 +660,27 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+RSD-2 adds independent constrained editing of existing human DNA with native
+CREsted DeepPBMC, bringing the Registry to 30 tools. Ordinary FASTA, direct DNA,
+qualified BED extraction and selected accepted candidates support target changes,
+verified edit/protection constraints and original-versus-candidate downloads.
+See the [optimization guide](docs/guides/regulatory-sequence-optimization.md) for
+its 2,114-base PBMC domain, native objective and academic research license scope.
+The authorized local academic deployment installs DeepPBMC alongside DHS64 in
+the normally configured ScientificResourceLibrary. Researchers use the ordinary
+Web interface; no acceptance-library switch or model manifest is required.
+
 RSD-1 adds native human DHS64 DNA prediction and compatible-observation evaluation
-through the existing Registry, bringing its inventory to 29 tools. Ordinary FASTA,
+through the existing Registry, then bringing its inventory to 29 tools. Ordinary FASTA,
 direct DNA and qualified-reference BED inputs produce reusable sequences, scores,
 figures and downloads. See the [regulatory sequence guide](docs/guides/regulatory-sequence-prediction.md)
 for DNase measurement meanings, input policy, runtime and bounded acceptance.
+
+All registered scientific capabilities share the normal planning, execution and
+result infrastructure while retaining their own scientific applicability. Current
+method choices may evolve as better alternatives are qualified, including future
+EpiZooSeq sequence support. Replacements must preserve historical model, assay,
+objective and score meanings; they do not require a speculative plugin framework.
 
 The current inventory below comes from
 [`build_default_tool_registry()`](src/agent/orchestration/registry.py).

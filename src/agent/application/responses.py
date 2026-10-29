@@ -146,6 +146,12 @@ def clarification_text(clarification):
     if clarification.reason == 'unsupported_intent':
         return ('This request is not supported by the available scientific or conversational operations. '
                 'Please clarify or revise the request.')
+    if clarification.reason == 'unavailable_model_condition':
+        return ('The requested biosample condition is not available in the installed sequence predictor. '
+                'No substitute was selected and no prediction was started. '
+                + ('The qualified conditions are: ' + '; '.join(clarification.choices) + '. '
+                   'Choose one only if it matches your intended scientific question, or request all conditions.'
+                   if clarification.choices else 'The operator must provision an appropriate qualified predictor.'))
     if clarification.reason == 'unavailable_context': return UNAVAILABLE
     return ('I could not interpret or admit this request reliably. '
             'Please restate the task and identify the data or result you mean.')

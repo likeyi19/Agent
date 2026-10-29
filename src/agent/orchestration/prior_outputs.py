@@ -344,12 +344,13 @@ def validate_active_outputs(locators, store, registry):
     """Check explicit active publications against owner-described dependency closure.
 
     No workflow completion, graph diff, science, or session-owned compatibility.
-    Different publications require distinct scientific roles. The model owner
+    Independent owner publications may coexist without claiming correspondence.
+    Coupled publications require distinct scientific roles. The model owner
     explicitly describes an initialized parent separately from its trained child.
     """
     from pathlib import Path
     from agent.tools.data.authority_context import VerificationContext
-    from agent.tools.scientific_authority import tool_kind
+    from agent.tools.scientific_authority import tool_kind, hooks_for_tool
     from agent.schemas import StepOutputRef
     from agent.schemas.verification_authority import digest
     from .verification_authority import _accepted, _accepted_step, _load_context
@@ -359,6 +360,7 @@ def validate_active_outputs(locators, store, registry):
     selected = []
     nonreusable = []
     loaded = set()
+    independent = set()
     for locator in locators:
         binding = optional_binding_for_locator(locator, store, registry)
         if binding is None or binding.verification_mode == 'accepted-file.v1':
@@ -371,6 +373,9 @@ def validate_active_outputs(locators, store, registry):
             loaded.add(binding.run_id)
         _, authority, _, _ = _accepted(store, binding.run_id, binding.step_id)
         kind = tool_kind(binding.tool_name, registry)
+        hooks = hooks_for_tool(binding.tool_name, registry)
+        if hooks is not None and hooks.independent_active_publications:
+            independent.add(kind)
         identity = (authority.record['publication_path'], binding.manifest_sha256)
         active.setdefault(kind, set()).add(identity)
         selected.append((kind, *identity))
@@ -381,7 +386,7 @@ def validate_active_outputs(locators, store, registry):
         if parent is not None and parent['kind'] == 'epizoo_adaptation':
             model_parents[(path, sha)] = (parent['manifest_path'], parent['manifest_sha256'])
     for kind, identities in active.items():
-        if len(identities) <= 1:
+        if len(identities) <= 1 or kind in independent:
             continue
         if (kind != 'epizoo_adaptation' or len(identities) != 2
                 or not any({child, parent} == identities for child, parent in model_parents.items())):

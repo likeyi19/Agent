@@ -1011,6 +1011,10 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
+                elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions'):
+                    from .sequence_delivery import accepted_sequences
+                    items.extend(accepted_sequences(self, session_id, revision, origin,
+                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'corroborate_cell_type_annotation':
                     from .corroboration_delivery import accepted_corroboration
                     items.append(accepted_corroboration(self, session_id, revision, origin,
@@ -1058,6 +1062,9 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                elif planned.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions'):
+                    from .sequence_delivery import accepted_sequences
+                    items.extend(accepted_sequences(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name == 'corroborate_cell_type_annotation':
                     from .corroboration_delivery import accepted_corroboration
                     items.append(accepted_corroboration(self, session_id, revision, origin, None,

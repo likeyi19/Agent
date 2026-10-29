@@ -575,6 +575,8 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
     "posttrain_epizoo_model": tuple(k for k in _ADAPTATION_REPORT_FIELDS if k != "adaptation_spec_sha256") + ("parent_model_manifest_sha256",),
+    "predict_regulatory_sequences": ("n_sequences", "n_conditions", "conditions", "head", "measurement", "folds", "score_min", "score_max", "score_examples", "examples_omitted", "model_release", "normalization", "limitations"),
+    "evaluate_regulatory_predictions": ("n_observations", "measurement", "metrics", "limitations"),
     "corroborate_cell_type_annotation": ("database", "database_release", "species", "context", "tissues", "n_groups", "n_records", "state_counts", "group_summary", "groups_omitted", "limitations"),
     "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
@@ -783,6 +785,8 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    "predict_regulatory_sequences": "DNA sequence DNase predictions",
+    "evaluate_regulatory_predictions": "Matched DNase prediction evaluation",
     "posttrain_epizoo_model": "EpiZooX post-training",
     'inspect_scATAC_fragments': 'Bounded fragment structure inspection',
     'pca_embed_cells': 'Centered PCA representation',
@@ -815,6 +819,13 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "n_sequences": "Sequence records",
+    "n_conditions": "Model conditions",
+    "score_examples": "Sequence scores (bounded preview)",
+    "measurement": "Scientific measurement",
+    "folds": "Released folds",
+    "model_release": "Model release",
+    "normalization": "Sequence normalization and padding",
     "model_state": "Model training state",
     "transfer_assessment": "Native mapping assessment and transfer decision",
     "parent_model_manifest_sha256": "Initialized parent model manifest",
@@ -1039,6 +1050,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("regulatory_sequence", "Regulatory sequence prediction and evaluation", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions"})),
     ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
     ("cell_type_reference_evidence", "Qualified reference corroboration", frozenset({"corroborate_cell_type_annotation"})),
@@ -1097,6 +1109,8 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "predict_regulatory_sequences": ("measurement", "folds", "model_release", "normalization"),
+    "evaluate_regulatory_predictions": ("measurement", "limitations"),
     'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
     'pca_embed_cells': ('method','representation','parameters','software_versions'),
     "corroborate_cell_type_annotation": ("database_release", "database_table_sha256", "annotation_manifest_sha256"),
@@ -1450,6 +1464,12 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
+    if step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions'):
+        lines = [f'### {_TOOL_TITLES[step.tool_name]} {occurrence}', '']
+        for fact in step.facts:
+            lines.append(f'- {fact.field.replace("_", " ").capitalize()}: {_inline_code(fact.value)}')
+        lines.extend(('', _fact_ids_line(step.facts), ''))
+        return lines
     if step.tool_name == 'epizoo_embed_cells' and any(f.field == 'target_model_method' for f in step.facts):
         lines = [f'### EpiZoo target-species embeddings {occurrence}', '',
             'Native EpiZooX inference used the qualified target vocabulary and training-corpus document frequency.', '']
@@ -1719,6 +1739,8 @@ def _render_summary(
     present_tools = {step.tool_name for step in projection.steps}
     labels = {
         'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
+        "predict_regulatory_sequences": "Native DHS64 DNase predictions completed; no biological validation implied",
+        "evaluate_regulatory_predictions": "Matched supplied DNase observation metrics completed",
         "corroborate_cell_type_annotation": "Qualified local reference evidence published separately from native candidate annotations",
         "annotate_scATAC_cell_types": "Primary marker-based cell-type annotation and annotated H5AD published",
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",

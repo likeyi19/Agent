@@ -1,0 +1,5 @@
+# Sequence parsing and qualified BED extraction in the main Agent environment.
+# TensorFlow is isolated; see dhs64-cpu.lock and the regulatory-sequence guide.
+biopython==1.85
+openpyxl==3.1.5
+pysam>=0.24,<0.25

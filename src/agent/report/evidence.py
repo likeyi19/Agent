@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 
 from agent.tools.data import raw_scatac_manifest as raw_manifest
+from agent.tools.analysis.sequence_prediction import RESULT_FIELDS as _SEQUENCE_FIELDS, EVAL_FIELDS as _SEQUENCE_EVAL_FIELDS
 from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
@@ -425,6 +426,17 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             ("accepted_backend_structural_proof", "exact_execution_receipt"), digest_field="manifest_sha256"),
          _ArtifactProjection("checkpoint_path", "epizoo_target_checkpoint",
             ("strict_checkpoint_compatibility", "full_artifact_sha256"), digest_field="checkpoint_sha256"))),
+    "predict_regulatory_sequences": _ToolProjection(
+        frozenset(_SEQUENCE_FIELDS), tuple(k for k in _SEQUENCE_FIELDS if not k.endswith('_path')),
+        "regulatory-sequence-native-v1", (
+            _ArtifactProjection("manifest_path", "regulatory_sequence_manifest_json", ("native_completion", "full_artifact_sha256"), digest_field="manifest_sha256"),
+            _ArtifactProjection("sequences_path", "dna_sequences_fasta", ("exact_ordered_sequences", "full_artifact_sha256"), digest_field="sequences_sha256"),
+            _ArtifactProjection("scores_path", "dnase_prediction_scores_tsv", ("exact_conditions_heads_folds", "full_artifact_sha256"), digest_field="scores_sha256"))),
+    "evaluate_regulatory_predictions": _ToolProjection(
+        frozenset(_SEQUENCE_EVAL_FIELDS), tuple(k for k in _SEQUENCE_EVAL_FIELDS if not k.endswith('_path')),
+        "regulatory-sequence-native-v1", (
+            _ArtifactProjection("manifest_path", "sequence_evaluation_manifest_json", ("matched_observation_identity", "full_artifact_sha256"), digest_field="manifest_sha256"),
+            _ArtifactProjection("metrics_path", "sequence_evaluation_metrics_json", ("compatible_measurement_metrics", "full_artifact_sha256"), digest_field="metrics_sha256"))),
     "corroborate_cell_type_annotation": _ToolProjection(
         frozenset(_CORROBORATION_FIELDS),
         tuple(k for k in _CORROBORATION_FIELDS

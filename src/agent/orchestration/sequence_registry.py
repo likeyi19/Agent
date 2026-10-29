@@ -1,0 +1,78 @@
+"""Sequence records and DNase predictions are distinct scientific semantic ports."""
+from pathlib import Path
+from agent.tools.analysis import sequence_prediction as owner
+
+
+def classify(exception):
+    from .registry import ErrorClassification
+    from agent.schemas import ErrorCategory
+    from agent.schemas.verification_authority import AuthorityError
+    if isinstance(exception, AuthorityError):
+        return ErrorClassification(ErrorCategory.VERIFICATION_ERROR, 'SEQUENCE_PUBLICATION_INVALID')
+    if isinstance(exception, (ValueError, FileNotFoundError)):
+        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR, 'SEQUENCE_INPUT_INVALID')
+    return ErrorClassification(ErrorCategory.TOOL_EXECUTION_ERROR, 'SEQUENCE_EXECUTION_FAILED')
+
+
+def tool_specs():
+    from .registry import (ToolSpec, ResultContract, DurableToolHooks, ScientificAuthorityHooks,
+        ArtifactSemanticKind as A, PlanningToolRole, PlanningSourceEligibility as S,
+        SemanticToolSpec, SemanticConsumerPortSpec as Consumer, SemanticProducerPortSpec as Producer,
+        _planning_argument as argument, _planning_result, _tool_planning,
+        _semantic_member as member, _semantic_request as request, _semantic_request_member as rm,
+        _semantic_argument_port as scalar)
+
+    def bundle(port, prefix, artifact, required=False, upstream=()):
+        args = {prefix+'_path':argument((str, Path), 'Exact captured scientific source or explicitly selected accepted output.',
+                                      artifacts=(artifact,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+                prefix+'_sha256':argument((str,), 'Exact source digest, bound by Agent.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)}
+        source = Consumer(port, (member('path', prefix+'_path'),member('sha256',prefix+'_sha256')), required,
+            request_sources=(request(prefix+'_path',rm('path',prefix+'_path'),rm('sha256',prefix+'_sha256')),),
+            accepted_upstream_types=upstream)
+        return args, source
+
+    sequences, source = bundle('sequences','sequence',A.DNA_SEQUENCES,upstream=('dna_sequences.v1',))
+    optional = dict(sequences)
+    for name, description in (
+        ('sequence', 'One DNA sequence quoted exactly from the researcher utterance. Never invent, truncate or rewrite bases; no upload is needed. Model-specific normalization belongs to the scientific owner.'),
+        ('condition', 'Exact DHS64 biosample name from the qualified resource. Omit for all 64 conditions. Never substitute a nearest cell type.'),
+        ('assembly', 'Explicit assembly of BED coordinates, matching a qualified library genome. Not required for supplied DNA/FASTA.')):
+        optional[name] = argument((str,), description, scientific_parameter=True, conversational_exact_string=True)
+    optional['head'] = argument((str,), 'Omit for continuous transformed DNase signal. Binary is the distinct sigmoid peak-call task, not enhancer functionality.',
+        choices=('continuous','binary'), scientific_parameter=True, conversational_choice=True)
+    output = argument((str,Path), 'Managed result destination.')
+
+    def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes):
+        return ToolSpec(name=name, function=function, required_arguments=required, optional_arguments=optional,
+            result_contract=ResultContract('RegulatorySequenceResult', fields,
+                planning_fields={k:_planning_result('Exact sequence publication and scientifically bounded DNase result.',
+                    bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else A.SEQUENCE_PREDICTIONS)
+                    for k in fields if k.endswith(('_path','_sha256'))}),
+            durable_hooks=DurableToolHooks(execute,owner.recover), exception_classifier=classify,
+            recovery_policy_version=owner.POLICY,
+            scientific_authority=ScientificAuthorityHooks(kind=kind, producer_ports=tuple(p.name for p in producers),
+                describe=owner.describe, publication_record=owner.publication_record,
+                reuse_result=owner.reuse_result, proof_metadata=owner.proof_metadata,
+                independent_active_publications=True),
+            planning=_tool_planning(PlanningToolRole.OPERATION,description,*notes),
+            semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=tuple(producers)))
+
+    predict = spec(owner.TOOL, owner.predict_regulatory_sequences, {'output_dir':output}, optional,
+        owner.RESULT_FIELDS, [source, scalar('output_dir',required=True),
+            *(scalar(k,required=False) for k in ('sequence','condition','head','assembly'))],
+        [Producer('sequences','dna_sequences.v1',(member('path','sequences_path'),member('sha256','sequences_sha256'))),
+         Producer('predictions','regulatory_predictions.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
+        owner.KIND,owner.execute,'Predict human DNase accessibility from DNA sequences using released DHS64 folds 0, 1 and 3.',
+        ('Supply exactly one sequence string or sequences source: ordinary FASTA or BED3–6 with explicit qualified assembly. Accepted sequences are reusable; no H5AD, cells or embeddings are involved.',
+         'Default continuous-head arithmetic fold mean; retain all fold values and disagreement. ACGT only, 1–500 bases, native trailing zero padding, no clipping or invented genomic context. This is not enhancer activity, expression, MPRA or ATAC prediction.',
+         'Prediction needs no observed truth. Use evaluate_regulatory_predictions separately only for supplied compatible observed DNase measurements.'))
+    prediction, prior = bundle('predictions','prediction_manifest',A.SEQUENCE_PREDICTIONS,True,('regulatory_predictions.v1',))
+    observed, truth = bundle('observations','observations',A.SEQUENCE_OBSERVATIONS,True)
+    evaluate = spec(owner.EVALUATE, owner.evaluate_regulatory_predictions,
+        dict(prediction,**observed,output_dir=output),{},owner.EVAL_FIELDS,
+        [prior,truth,scalar('output_dir',required=True)],
+        [Producer('evaluation','regulatory_prediction_evaluation.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
+        owner.EVAL_KIND,owner.execute_evaluation,'Evaluate accepted DHS64 predictions against explicitly supplied compatible observed DNase measurements.',
+        ('Never rerun prediction for evaluation. TSV columns: sequence_id, condition, measurement, value, provenance (optional sequence_sha256); exact identity, condition and native transform are required. Correspondence is never inferred from row count.',
+         'Continuous: RMSE, MAE, Pearson and Spearman; binary peak calls: AUROC, average precision, Brier and log loss. MPRA, ATAC and gene expression are not DNase ground truth. Undefined metrics are null.'))
+    return predict,evaluate

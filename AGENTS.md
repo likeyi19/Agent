@@ -387,6 +387,27 @@ user authorizes one reviewed completion commit and a normal push to `origin/main
 Earlier no-commit statements describe the pre-closeout stages. Scientific,
 biological and provider limitations remain unchanged; no next capability is started.
 
+RSD-1 builds on `2d377eaa92a61bf9261e8ffbf9b386b04c06a121` without staging,
+commit or push. The [regulatory sequence guide](docs/guides/regulatory-sequence-prediction.md)
+owns native human DHS64 FASTA/direct-DNA/qualified BED prediction and independent
+compatible-observation evaluation (29 Registry tools). ScientificResourceLibrary
+owns the sequence predictor; released folds 0/1/3 and exact ordered metadata are
+reused in an isolated TensorFlow CPU runtime. Continuous transformed DNase signal,
+binary peak-call prediction, fold disagreement and experimental truth remain
+distinct. Scientific owners reject silent truncation and unknown-base substitution.
+Sequences have their own exact reusable ports and ordinary private downloads.
+Owner-declared independent active publications may coexist without asserting
+scientific correspondence; coupled historical publication rules remain unchanged.
+
+The [RSD-1 report](../agent-data/acceptance/regulatory-sequence-design/rsd-1/REPORT.md)
+separates native parity and genuine Firefox/OpenRouter acceptance from simulated
+evaluation observations and contract tests. It preserves initial presentation and
+selection failures, explicit saved-result recovery, checked downloads, historical
+preview and missing-file continuation. Provider explanation availability remains
+bounded. CPU qualification does not imply GPU, biological, universal tissue or
+cross-assay qualification. RSD-2/3/4 and the Scientific Tool Ecosystem Integration
+stage are not started.
+
 ```text
 Planning → Orchestration → Scientific Tools → Foundation Models → Verified Output
 ```

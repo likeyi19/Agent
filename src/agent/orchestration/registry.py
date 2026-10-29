@@ -100,6 +100,9 @@ class PlanningSourceEligibility(str, Enum):
 class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
+    DNA_SEQUENCES = "dna_sequences"
+    SEQUENCE_PREDICTIONS = "sequence_predictions"
+    SEQUENCE_OBSERVATIONS = "sequence_observations"
     RAW_SCATAC = "raw_scatac"
     RAW_SCATAC_SEQUENCING = "raw_scatac_sequencing"
     RAW_SCATAC_INTAKE_MANIFEST = "raw_scatac_intake_manifest"
@@ -622,6 +625,7 @@ class ScientificAuthorityHooks:
     proof_metadata: Callable
     runtime_compatibility: Callable | None = None
     verify_sources: bool = True
+    independent_active_publications: bool = False
 
     def __post_init__(self):
         if type(self.kind) is not str or not self.kind.strip():
@@ -637,6 +641,8 @@ class ScientificAuthorityHooks:
             raise TypeError('Scientific authority runtime callback must be callable or None.')
         if type(self.verify_sources) is not bool:
             raise TypeError('Scientific authority source verification policy must be boolean.')
+        if type(self.independent_active_publications) is not bool:
+            raise TypeError('Scientific authority active-publication policy must be boolean.')
 
 
 @dataclass(frozen=True)
@@ -3684,6 +3690,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
+    from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
         inspect_spec,
         embedding_spec,
@@ -3710,6 +3717,7 @@ def build_default_tool_registry() -> ToolRegistry:
         corroboration_tool_spec(),
         *species_tool_specs(),
         fragment_feature_tool_spec(),
+        *sequence_tool_specs(),
     )
     for spec in specs:
         _assert_signature_matches(spec)

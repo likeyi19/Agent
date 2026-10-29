@@ -143,6 +143,13 @@ def test_missing_file_upload_retains_exact_intent_and_selects_one_result_for_bot
     assert selection_uses(selection) == ('comparison_result', 'visualization_labels')
     run = case.facade._application.run_store.load(outcome.run_id)
     assert run.request.prompt == OBJECTIVE and not run.steps
+    planning_prompt, = (call for call in case.calls if 'semantic_prompt_version' in call)
+    assert 'input_path' in planning_prompt['catalog']['request_inputs']
+    assert any('earlier absence does not override a currently offered input' in instruction
+               for instruction in planning_prompt['instructions'])
+    selection_prompt, = (call for call in case.calls if 'output_selection_schema_version' in call)
+    assert selection_prompt['current_utterance'] == 'Here is the matrix; continue the original request.'
+    assert all('scientific_outputs' in step for step in selection_prompt['steps'])
     assert case.coords.read_bytes() == accepted_bytes and not case.scientific_calls
 
 

@@ -502,6 +502,8 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_model', 'epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
             ('scientific_model', 'epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
         }
+        from .sequence_delivery import FILES as sequence_files
+        reviewed.update(('scientific_sequence', name, value[0]) for name,value in sequence_files.items())
         reviewed.update((kind, filename, prefix + ': ' + label)
             for kind, filename, label in tuple(reviewed) if kind == 'scientific_model'
             for prefix in ('Initialized', 'Post-trained'))

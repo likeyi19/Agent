@@ -1702,7 +1702,11 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
 
     def select_outputs(plan):
         offered = [dict(step_id=s.step_id, tool=s.tool_name,
-                        outputs=list(app.registry.get(s.tool_name).result_contract.required_fields)) for s in plan.steps]
+                        outputs=list(app.registry.get(s.tool_name).result_contract.required_fields),
+                        scientific_outputs=[dict(port=p.name, semantic_type=p.semantic_type,
+                            fields=[m.field_name for m in p.members])
+                            for p in (app.registry.get(s.tool_name).semantic_planning.producer_ports
+                                      if app.registry.get(s.tool_name).semantic_planning else ())]) for s in plan.steps]
         schema = _object(dict(outputs={'type':'array','minItems':1,'maxItems':32,
             'items':_object(dict(name={'type':'string'}, step_id={'type':'string'}, output_key={'type':'string'}))}))
         origin = _received_origin(interaction, sessions.load(sid).interactions)
@@ -1732,11 +1736,13 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 schema = _object(dict(**schema['properties'], retain={'type':'array','maxItems':32,
                     'items':{'type':'string','enum':list(retention)}}))
         selection_prompt = dict(output_selection_schema_version=2 if retained_offer else 1,
-            question=intent, steps=offered,
+            question=intent, current_utterance=interaction.utterance, steps=offered,
             instructions=(
                 'Select a relevant subset of 1 to 32 outputs of this actual plan to retain in the new revision. '
                 'Choose results that satisfy the user request; do not automatically enumerate every field from every step. '
+                'The current_utterance may add output-retention preferences while answering an earlier input prerequisite. Honor those preferences among the actual offered outputs; it never authorizes additional scientific steps. '
                 'Preserve multiple legitimate outputs when the user explicitly requests them. '
+                'The scientific_outputs metadata names reusable artifacts produced by this exact plan. Prefer retaining the relevant scientific artifact member (path or manifest) to scalar summaries alone; summaries remain readable through that artifact. Retain distinct requested artifacts separately, including DNA sequences when the requested result includes them. '
                 'For each selection, copy step_id exactly from an offered step and output_key exactly from that same step\'s outputs. '
                 'Never invent or repair step identities, output keys, scientific products or output relationships. '
                 'Each name is a nonblank string label and must be unique across all selections for the new revision, '

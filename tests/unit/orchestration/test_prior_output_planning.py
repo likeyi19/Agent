@@ -45,7 +45,10 @@ def test_scoped_context_private_identity_never_enters_prompts():
         for private in ('PRIVATE', 'private-session', 'private-revision', '1'*64, '2'*64, '3'*64):
             assert private not in value
     assert len(b.encode()) < 10000
-    assert schema['$defs']['context_source']['properties']['handle']['enum'] == ('ctx.0',)
+    selectors=schema['$defs']['step']['anyOf'][0]['properties']['sources']['items']['anyOf']
+    context_sources=[v for selector in selectors for v in selector['properties']['source']['anyOf']
+                     if v.get('properties',{}).get('kind',{}).get('enum') == ('context',)]
+    assert [v['properties']['handle']['enum'] for v in context_sources] == [('ctx.0',)]
 
 
 def test_context_lowering_roundtrip_fingerprint():

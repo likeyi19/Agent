@@ -2051,6 +2051,18 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
+        elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions'):
+            try:
+                from agent.tools.analysis.sequence_prediction import verify_result
+                verify_result(resolved_arguments, plain_result)
+            except (ValueError, OSError, TypeError, KeyError):
+                checks.add('sequence_publication_integrity', False,
+                    'Native completion, exact sequences, conditions, measurements and artifact integrity.',
+                    'Sequence verification failed.', 'SEQUENCE_VERIFICATION_FAILED', ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('sequence_publication_integrity', True,
+                    'Native completion, exact sequences, conditions, measurements and artifact integrity.',
+                    'Sequence verification failed.', 'SEQUENCE_VERIFICATION_FAILED')
         elif step.tool_name == "corroborate_cell_type_annotation":
             try:
                 from agent.tools.analysis.annotation_corroboration import verify_result

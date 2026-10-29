@@ -1,0 +1,87 @@
+"""Accepted sequence artifacts through the existing private snapshot delivery."""
+import csv
+import io
+from pathlib import Path
+
+from agent.schemas.orchestration import _serialize
+from agent.tools.analysis import sequence_prediction as owner
+from .session_state import digest
+
+FILES = {
+    'sequences.fasta': ('DNA sequences', 'text/plain; charset=utf-8'),
+    'scores.tsv': ('DNase prediction scores', 'text/tab-separated-values; charset=utf-8'),
+    'metadata.json': ('Sequence model and measurement metadata', 'application/json'),
+    'scores.png': ('DNase score comparison', 'image/png'),
+    'metrics.json': ('Matched DNase evaluation', 'application/json'),
+}
+
+
+def accepted_sequences(app, session_id, revision, origin, output, *, step_id=None):
+    from agent.orchestration.verification_authority import _accepted
+    from agent.orchestration.prior_outputs import accepted_step_digest
+    from .interactive_schemas import ScientificArtifactHandle
+    from .interactive import _ScientificMatrixArtifact
+    store = app._application.run_store
+    run_id = revision.run_id if output is None else output.run_id
+    step_id = step_id if output is None else output.step_id
+    step, authority, execution, anchor = _accepted(store, run_id, step_id)
+    result, record = _serialize(step.result), authority.to_dict()
+    workspace = app._application._workspace
+    root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
+    path = Path(result['manifest_path']); path.relative_to(root)
+    manifest, sha = owner.load(path, result['manifest_sha256'])
+    if (step.tool_name not in (owner.TOOL, owner.EVALUATE)
+            or output is not None and accepted_step_digest(step) != output.accepted_step_sha256
+            or record['artifact_contract'] != manifest['contract'] or record['science_profile'] != owner.PROFILE
+            or record['verifier'] != owner.VERIFIER or record['scope'] != 'scientific_correctness.v1'
+            or manifest['arguments'] != owner.arguments(step.resolved_arguments)
+            or manifest['execution_identity'] != execution
+            or record['resources']['manifest_identity'] != manifest
+            or record['resources']['result_metadata'] != result or owner.result(manifest,path,sha) != result):
+        raise ValueError('Sequence artifacts differ from accepted publication')
+    items = []
+    for pin in manifest['files']:
+        payload = Path(pin['path']); name = payload.name
+        if name not in FILES: continue
+        payload.relative_to(root)
+        if pin not in record['files']: raise ValueError('Sequence payload is not authority-bound')
+        identity = dict(session_id=session_id, revision_id=revision.revision_id, turn_id=origin.turn_id,
+            run_id=run_id, step_id=step_id, accepted_step_sha256=accepted_step_digest(step),
+            authority_sha256=authority.identity_sha256, manifest_sha256=sha, payload=pin)
+        ref = ScientificArtifactHandle(digest(identity), 'scientific_sequence', pin['sha256'],
+            revision.revision_id, origin.turn_id, pin['size_bytes'], name, FILES[name][0])
+        items.append(_ScientificMatrixArtifact(ref,payload,root,pin['sha256'],pin['size_bytes'],manifest['contract'],manifest,name,sha))
+    if _accepted(store,run_id,step_id)[3] != anchor:
+        raise ValueError('Accepted sequence anchor changed during inventory')
+    return items
+
+
+def prepare(stream, role):
+    """Redact path-like original labels only at delivery, retaining ordinal mapping.
+
+    Scientific private headers remain exact. Returned bytes have a separate
+    delivered checksum via the shared snapshot owner.
+    """
+    from .dialogue_evidence import _unsafe_fact_value
+    raw = stream.read()
+    if role == 'scores.tsv':
+        reader = csv.DictReader(io.StringIO(raw.decode()), delimiter='\t')
+        rows = list(reader)
+        if reader.fieldnames != list(owner.TABLE_FIELDS): raise ValueError('Score table schema changed')
+        for row in rows:
+            label = row['original_header']
+            if _unsafe_fact_value(label) or label.startswith(('=', '+', '-', '@')):
+                row['original_header'] = '[private label omitted; see sequence_id]'
+        target = io.StringIO()
+        writer = csv.DictWriter(target,fieldnames=owner.TABLE_FIELDS,delimiter='\t')
+        writer.writeheader(); writer.writerows(rows)
+        raw = target.getvalue().encode()
+    elif role == 'sequences.fasta':
+        from Bio import SeqIO
+        records = list(SeqIO.parse(io.StringIO(raw.decode()), 'fasta'))
+        # Ordinal IDs are stable even for repeated, empty, or private headers.
+        raw = ''.join(f'>sequence-{i+1}' + ('' if _unsafe_fact_value(r.description) else ' '+r.description)
+                      + '\n' + str(r.seq) + '\n' for i,r in enumerate(records)).encode()
+    elif role not in FILES:
+        raise ValueError('Unknown sequence delivery role')
+    return raw

@@ -470,6 +470,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue']['source_fields'] = [dict(source=row['source'], fields=list(row['fields']),
                                                    complete=row['complete']) for row in source_fields]
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
+        if reference_resources is not None and reference_resources.library is not None:
+            entries = reference_resources.library.entries()
+            visible['dialogue']['sequence_predictors'] = [dict(family=e['resource']['family'],
+                conditions=e['resource']['conditions'], measurement=e['resource']['measurements'],
+                genome_assemblies=[g['resource']['assembly'] for g in entries if g['kind'] == 'genome'])
+                for e in entries if e['kind'] == 'sequence_predictor']
         from .local_resources import available_input_view
         role_submission = available_input_view(interaction, allow_empty=True).submission
         if (submission or {}).get('available_input_overflow'):
@@ -548,6 +554,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify):
+            if decision.reason == 'unavailable_model_condition':
+                conditions = tuple(dict.fromkeys(name for model in visible['dialogue'].get('sequence_predictors', ())
+                                                 for name in model['conditions']))
+                decision = Clarify(decision.reason, conditions)
             return _terminal(sessions, interaction, decision)
         if isinstance(decision, RequestResources):
             from .resource_continuation import request, offers

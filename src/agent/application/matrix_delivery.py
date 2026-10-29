@@ -608,6 +608,8 @@ class MatrixDownloadPreparer:
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
+        from . import sequence_delivery
+        sequence = artifact.contract in (sequence_delivery.owner.CONTRACT, sequence_delivery.owner.EVAL_CONTRACT) and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
             and getattr(artifact, 'role', None) == corroboration_delivery.ROLE)
@@ -631,6 +633,8 @@ class MatrixDownloadPreparer:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
+        elif sequence:
+            filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
         elif reference_evidence:
             filename, content_type = corroboration_delivery.FILENAME, 'text/tab-separated-values; charset=utf-8'
         elif model:
@@ -694,7 +698,7 @@ class MatrixDownloadPreparer:
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
         reservation = size + (model_delivery.MAX_METADATA_BYTES if model_metadata else delivered_limit) if export or model_metadata else size
-        reservation += original_size + extra_size
+        reservation += original_size + extra_size + (size if sequence else 0)
         reserved, snapshot, derivative, original_snapshot = False, None, None, None
         extra_snapshots = []
         try:
@@ -756,6 +760,10 @@ class MatrixDownloadPreparer:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None
+            elif sequence:
+                data = sequence_delivery.prepare(snapshot, artifact.role)
+                snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
+                delivered_size = len(data); checksum = hashlib.sha256(data)
             elif reference_evidence:
                 corroboration_delivery.validate_table(snapshot, artifact.manifest)
             else:
@@ -763,8 +771,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export or model_metadata else size,
-                sha256=checksum.hexdigest() if export or model_metadata else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata or sequence else size,
+                sha256=checksum.hexdigest() if export or model_metadata or sequence else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

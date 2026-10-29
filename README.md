@@ -660,6 +660,12 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+RSD-1 adds native human DHS64 DNA prediction and compatible-observation evaluation
+through the existing Registry, bringing its inventory to 29 tools. Ordinary FASTA,
+direct DNA and qualified-reference BED inputs produce reusable sequences, scores,
+figures and downloads. See the [regulatory sequence guide](docs/guides/regulatory-sequence-prediction.md)
+for DNase measurement meanings, input policy, runtime and bounded acceptance.
+
 The current inventory below comes from
 [`build_default_tool_registry()`](src/agent/orchestration/registry.py).
 Planner-visible coverage is registry-derived, not a permanent tool-count limit.

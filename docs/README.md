@@ -26,6 +26,10 @@ The [EpiZoo lifecycle guide](guides/epizoo-model-lifecycle.md) covers automatic
 transfer assessment, initialized and post-trained checkpoints, native zero-shot
 inference, resource acquisition and model reuse.
 
+The [regulatory sequence guide](guides/regulatory-sequence-prediction.md) covers
+native DHS64 FASTA/direct DNA/BED prediction, exact biosample conditions, accepted
+sequence reuse, independent matched-observation evaluation and the isolated runtime.
+
 The documentation has three locations:
 
 | Location | Purpose |

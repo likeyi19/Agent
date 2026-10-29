@@ -32,6 +32,8 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('predict_regulatory_sequences', 'sequences'),
+    ('evaluate_regulatory_predictions', 'observations'),
     ('inspect_scATAC_fragments', 'source'),
     ('inspect_scATAC_fragments', 'source_index'),
     ('inspect_scATAC', 'dataset'),
@@ -790,7 +792,8 @@ def group_role_inputs(binding, roles, registry):
             fields = {m.name: m.field_name for m in port.members}
             record = binding.members[int(role['source'].split('.')[1])]
             wanted_type = 'groups' if (role['tool'], role['port']) == ('annotate_scATAC_cell_types', 'groups') else 'h5ad'
-            if record['input_type'] != wanted_type and not (binding.attachment_candidates
+            sequence_source = role['tool'] == 'predict_regulatory_sequences' and record['input_type'] == 'fasta'
+            if record['input_type'] != wanted_type and not sequence_source and not (binding.attachment_candidates
                     and record['input_type'] == 'attachment'):
                 raise ValueError('File type does not match the explicit scientific role.')
             for member in source.members:

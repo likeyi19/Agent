@@ -1028,8 +1028,8 @@ ANSWER_INSTRUCTIONS = (
     'not establish biological interpretation of a figure. A figure download descriptor identifies a pinned '
     'PNG available with the published response in the result view; it does not record a browser transfer. '
     'Do not invent a download URL or deny PNG availability because data exports list only H5AD files.',
-    'delivery.exports describes scientific data and model download variants and their exact accepted-result scope; '
-    'it is not the figure inventory. '
+    'delivery.exports describes scientific artifact download variants and their exact accepted-result scope, '
+    'including an owner-published PNG when explicitly listed; presentation figure relationships are described separately. '
     'available_for_preparation is an eligible recipe, not proof that bytes were already prepared or downloaded; '
     'payload checks occur on download. selected_result fields describe only that selected result, not all '
     'possible fields in the original source. Do not combine separate variants into an invented file or '

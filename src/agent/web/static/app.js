@@ -590,8 +590,12 @@ function renderResultSelection() {
         if (fact.status !== "available") value.textContent = `${fact.status}: ${fact.reason || "No accepted value"}`;
         else if (fact.value !== null && typeof fact.value === "object") {
           const records = document.createElement("details");
+          records.open = ["score_examples", "metrics"].includes(fact.field);
           const summary = document.createElement("summary"); summary.textContent = "Structured accepted records";
-          records.append(summary, evidenceValueNode(fact.value)); value.append(records);
+          const preview = fact.field === "score_examples" && Array.isArray(fact.value)
+            ? fact.value.map(({sequence_id, condition, mean, fold_std, fold_0, fold_1, fold_3}) =>
+                ({sequence_id, condition, mean, fold_std, fold_0, fold_1, fold_3})) : fact.value;
+          records.append(summary, evidenceValueNode(preview)); value.append(records);
         } else value.append(evidenceValueNode(fact.value));
         values.append(label, value);
       }
@@ -644,7 +648,7 @@ function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
 function supportedScientificFile(artifact) {
   // The application validates the closed descriptors. Wording and file-purpose
   // policies belong there, shared by the conversation and result inventory.
-  return ["scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
+  return ["scientific_sequence", "scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
     "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model", "scientific_composition", "scientific_statistics"]
     .includes(artifact.artifact_type) && typeof artifact.filename === "string";
 }
@@ -691,6 +695,14 @@ function scientificFileNode(sessionId, artifact) {
     const details = document.createElement("details");
     const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
     details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
+  }
+  if (artifact.artifact_type === "scientific_sequence" && artifact.filename === "scores.png") {
+    const figure = document.createElement("img");
+    figure.src = download.href;
+    figure.alt = "DHS64 mean predicted DNase scores; fold agreement is not biological validation";
+    figure.loading = "lazy";
+    figure.style.maxWidth = "100%";
+    row.append(figure);
   }
   if (artifact.artifact_type === "scientific_model") {
     const note = document.createElement("span");

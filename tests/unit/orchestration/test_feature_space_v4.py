@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 import json
+import hashlib
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -133,6 +135,9 @@ def test_feature_variants_have_exact_v3_plan_only_parity(guarded_registry, extra
         v3_steps.append(dict(step_id=step_id, tool_name=tool, arguments=bindings,
                              depends_on=list(dependencies), description="Explicit workflow"))
     v3 = json.dumps(dict(schema_version=3, status="plan", steps=v3_steps, reason=None))
+    if len(expected) > 1:
+        expected = [(sid, tool, dict(arguments, output_dir=str(Path(inputs["output_dir"]) / "steps" / hashlib.sha256(sid.encode()).hexdigest())), dependencies)
+                    for sid, tool, arguments, dependencies in expected]
     for mode, payload in ((PlanningWireMode.V3, v3), (PlanningWireMode.V4, _v4(steps))):
         result = _run(guarded_registry, inputs, payload, mode)
         assert result.status is RunStatus.PLANNED, result.errors
@@ -154,14 +159,20 @@ def test_feature_variants_have_exact_v3_plan_only_parity(guarded_registry, extra
 
 
 def test_feature_schema_exposes_only_reviewed_new_targets(guarded_registry):
-    request = AgentRequest("schema", "Validate.", _feature_inputs(COORDINATES))
+    request = AgentRequest("schema", "Validate.", _feature_inputs({
+        **COORDINATES, "layer_key": "counts", "semantics_metadata_key": "matrix_semantics"}))
     schema = build_semantic_wire_v4_schema(guarded_registry, request)
     for step in schema["$defs"]["step"]["anyOf"]:
         tool = step["properties"]["tool"]["enum"][0]
-        targets = step["properties"]["sources"]["items"]["properties"]["target"]["enum"]
-        assert set(FEATURE_PARAMETERS).intersection(targets) == (
-            set(FEATURE_PARAMETERS) if tool == FEATURE_TOOL else set()
-        )
+        source_items = step["properties"]["sources"]["items"]
+        variants = source_items.get("anyOf", (source_items,))
+        targets = {target for variant in variants
+                   if "target" in variant["properties"]
+                   for target in variant["properties"]["target"]["enum"]}
+        expected = (set(FEATURE_PARAMETERS) if tool == FEATURE_TOOL else
+            {'feature_chrom_key','feature_start_key','feature_end_key','coordinate_system'}
+            if tool == 'prepare_scatac_regulatory_sequences' else set())
+        assert set(FEATURE_PARAMETERS).intersection(targets) == expected
 
 
 @pytest.mark.parametrize("name", FEATURE_PARAMETERS)

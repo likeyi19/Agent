@@ -471,11 +471,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                                                    complete=row['complete']) for row in source_fields]
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
         if reference_resources is not None and reference_resources.library is not None:
-            entries = reference_resources.library.entries()
-            visible['dialogue']['sequence_models'] = [dict(family=e['resource']['family'], kind=e['kind'],
-                conditions=e['resource']['conditions'], measurement=e['resource'].get('measurements', {'output':'synthetic regulatory DNA candidates; no activity measurement'}),
-                genome_assemblies=[g['resource']['assembly'] for g in entries if g['kind'] == 'genome'])
-                for e in entries if e['kind'] in ('sequence_predictor','sequence_generator')]
+            visible['dialogue']['sequence_models'] = reference_resources.library.sequence_models()
         from .local_resources import available_input_view
         role_submission = available_input_view(interaction, allow_empty=True).submission
         if (submission or {}).get('available_input_overflow'):

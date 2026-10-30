@@ -1145,7 +1145,8 @@ def _parse_response(
         raise _invalid_output("Planning response has an unsupported status.")
     if payload["reason"] is not None:
         raise _invalid_output("Plan response reason must be null.")
-    return _parse_plan_steps(payload["steps"], request, registry)
+    from .semantic_compiler import isolate_output_directories
+    return isolate_output_directories(_parse_plan_steps(payload["steps"], request, registry))
 
 
 def _sanitize_model_id(model_id: object) -> str:

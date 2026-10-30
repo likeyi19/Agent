@@ -40,13 +40,16 @@ def tool_specs():
         optional[name] = argument((str,), description, scientific_parameter=True, conversational_exact_string=True)
     optional['head'] = argument((str,), 'Omit for continuous transformed DNase signal. Binary is the distinct sigmoid peak-call task, not enhancer functionality.',
         choices=('continuous','binary'), scientific_parameter=True, conversational_choice=True)
+    optional['sequence_index'] = argument((int,), 'Select one 1-based candidate from the exact source sequence order. Omit to consume all records.', scientific_parameter=True)
     output = argument((str,Path), 'Managed result destination.')
 
     def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes, policy=owner.POLICY):
+        result_artifact = (A.SCATAC_REGULATORY_REGIONS if kind == 'scatac_regulatory_sequences' else
+                           A.SEQUENCE_GENERATION if kind == 'regulatory_sequence_generation' else A.SEQUENCE_PREDICTIONS)
         return ToolSpec(name=name, function=function, required_arguments=required, optional_arguments=optional,
             result_contract=ResultContract('RegulatorySequenceResult', fields,
                 planning_fields={k:_planning_result('Exact sequence publication and model-specific scientific result.',
-                    bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else (A.SEQUENCE_GENERATION if kind == 'regulatory_sequence_generation' else A.SEQUENCE_PREDICTIONS))
+                    bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else result_artifact)
                     for k in fields if k.endswith(('_path','_sha256'))}),
             durable_hooks=DurableToolHooks(execute,owner.recover), exception_classifier=classify,
             recovery_policy_version=policy,
@@ -59,7 +62,7 @@ def tool_specs():
 
     predict = spec(owner.TOOL, owner.predict_regulatory_sequences, {'output_dir':output}, optional,
         owner.RESULT_FIELDS, [source, scalar('output_dir',required=True),
-            *(scalar(k,required=False) for k in ('sequence','condition','head','assembly'))],
+            *(scalar(k,required=False) for k in ('sequence','condition','head','assembly','sequence_index'))],
         [Producer('sequences','dna_sequences.v1',(member('path','sequences_path'),member('sha256','sequences_sha256'))),
          Producer('predictions','regulatory_predictions.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
         owner.KIND,owner.execute,'Predict human DNase accessibility from DNA sequences using released DHS64 folds 0, 1 and 3.',
@@ -77,6 +80,7 @@ def tool_specs():
          'Continuous: RMSE, MAE, Pearson and Spearman; binary peak calls: AUROC, average precision, Brier and log loss. MPRA, ATAC and gene expression are not DNase ground truth. Undefined metrics are null.'))
     from agent.tools.analysis import sequence_optimization as design
     options = dict(sequences)
+    options['sequence_index'] = optional['sequence_index']
     for key, description in (
         ('sequence', 'Exact researcher-supplied DNA, 2,114 real A/C/G/T bases. No fabricated flanks, truncation or padding.'),
         ('assembly', 'Explicit assembly for BED coordinates and qualified human genome; not required for FASTA or direct DNA.'),
@@ -116,4 +120,5 @@ def tool_specs():
         ('No DNA upload, scATAC input or genomic reference is required. Use the installed qualified model. A new batch or changed supported condition is an independent generation request.',
          'Return exact count, GC, entropy, homopolymers, duplicates, pairwise Hamming diversity, model/condition/sampling provenance, FASTA and figure. These descriptors do not establish biological function or training-set novelty.',
          'Retain sequences and generation results for later comparison and reuse. Optional explicitly requested DHS64 prediction can consume these 200-base sequences with its own native 500-position padding and actual conditions. Never invent 2114-base context for DeepPBMC.'),policy=generation.POLICY)
-    return predict,evaluate,optimize,generate
+    from .scatac_sequence_registry import tool_spec
+    return predict,evaluate,optimize,generate,tool_spec(spec, output)

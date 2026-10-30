@@ -161,7 +161,7 @@ def export_descriptions(sessions, session_id, targets):
         run = sessions._application.run_store.load(output.run_id)
         step = next(s for s in run.steps if s.step_id == output.step_id)
         from .statistical_delivery import TOOLS as STATISTICAL_TOOLS, accepted_statistical_result
-        if step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences'):
+        if step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
             from .sequence_delivery import accepted_sequences
             for artifact in accepted_sequences(sessions, session_id, revision, origin,
                     None if output.run_id == origin.run_id else output, step_id=output.step_id):

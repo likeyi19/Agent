@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import hashlib
 
 from agent.orchestration import (
     AgentRequest,
@@ -832,7 +833,11 @@ def test_every_argument_retains_request_or_step_reference_provenance(
     plan = _compile(request, _transfer_candidate(optional=True), registry)
 
     for step in plan.steps:
-        for value in step.arguments.values():
+        for name, value in step.arguments.items():
+            if name == 'output_dir':
+                assert value == str(Path(request.inputs['output_dir']) / 'steps' /
+                                    hashlib.sha256(step.step_id.encode()).hexdigest())
+                continue
             assert isinstance(value, StepOutputRef) or any(
                 value == request_value for request_value in request.inputs.values()
             )

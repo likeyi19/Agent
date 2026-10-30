@@ -274,3 +274,62 @@ def test_missing_required_comparison_dependency_does_not_silently_run_the_indepe
     assert failure['tool_name'] == 'evaluate_cell_clustering' and failure['target_port'] == 'analysis'
     state = app._application.sessions.load('session')
     assert not state.turns and not state.revisions
+
+
+def test_rejected_restatement_retains_inherited_upload_for_parameter_repair(tmp_path):
+    """Three real captures retain source authority through a new rejected request."""
+    from agent.orchestration import build_default_tool_registry
+    registry = build_default_tool_registry()
+    executor = WithholdScience(registry)
+    texts = ('Use 2 principal components for these cells.',
+             'Instead use three principal components for these cells.',
+             'Use 2 principal components.')
+    decisions = {}
+    for index, (text, literal) in enumerate(zip(texts, ('2', 'three', '2'))):
+        start = text.index(literal)
+        declaration = dict(tool='pca_embed_cells', argument='n_components',
+                           literal=literal, start=start, end=start + len(literal))
+        if index == 1:
+            declaration['literal'] = '999'  # Model supplied an ungrounded value.
+        decisions[text] = (dict(kind='answer_parameters', pending='@parameters', arguments=[declaration])
+                           if index == 2 else dict(kind='execute_plan', target='pca_embed_cells', arguments=[declaration],
+                               roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')]))
+
+    class Model:
+        model_id = PROFILE.model_id
+        def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            if 'turn_schema_version' in value:
+                return json.dumps(dict(turn_schema_version=1, decision=decisions[value['utterance']]))
+            if 'output_selection_schema_version' in value:
+                return json.dumps(dict(outputs=[dict(name='pca', step_id='pca', output_key='embedding_path')]))
+            return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=[dict(
+                step_id='pca', tool='pca_embed_cells', sources=[], control_dependencies=[])])))
+
+    app = InteractiveAgentApplication(tmp_path/'workspace', model_profiles=(PROFILE,),
+        default_profile_id=PROFILE.profile_id, registry=registry, executor=executor,
+        approved_source_roots=(tmp_path,),
+        planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda _: Model()}))
+    app.create_session('session')
+    upload_root = tmp_path/'workspace'/'uploads'; upload_root.mkdir()
+    record = upload(app, H5ADUploadAdmission(app.resources, upload_root), tmp_path)
+    first = app.submit_turn('session', 'initial', texts[0], expected_generation=0,
+                            attachment_ids=(record.resource_id,))
+    assert first.error.code == 'TEST_SCIENCE_WITHHELD', first.to_dict()
+    executor.plans.clear()
+    second = app.submit_turn('session', 'restatement', texts[1], expected_generation=0)
+    assert second.status == 'clarification', second.to_dict()
+    state = app._application.sessions.load('session')
+    origin = state.interactions[-1]
+    assert 'registered_input' not in (origin.submission or {})
+    assert origin.admitted['registered_input']
+    assert not executor.plans
+    assert [turn.turn_id for turn in state.turns] == ['initial']
+    result = app.submit_turn('session', 'correction', texts[2], expected_generation=0)
+    assert result.error.code == 'TEST_SCIENCE_WITHHELD', result.to_dict()
+    step, = executor.plans[0].steps
+    assert step.arguments['input_path'] == record.source_path
+    assert step.arguments['n_components'] == 2
+    saved = app._application.sessions.load('session')
+    assert saved.interactions[-2] == origin
+    assert not saved.revisions

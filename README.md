@@ -660,8 +660,23 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+RSD-4 adds [scATAC-informed genomic DNA preparation](docs/guides/scatac-regulatory-sequences.md),
+bringing the Registry to 32 tools. Ordinary peak-level H5AD can supply exact named
+features or descriptive group accessibility; accepted replicate DA can supply
+its actual tested contrast. The independent operation extracts matching reference
+DNA, preserves original peaks separately from expanded windows, and publishes
+FASTA, BED and observed-evidence downloads. Accepted DNA can enter separately
+requested DHS64 prediction or DeepPBMC optimization with their own scientific
+requirements. The [RSD-4 report](../agent-data/acceptance/regulatory-sequence-design/rsd-4/REPORT.md)
+owns native, browser, regression and remaining readiness evidence.
+Native handoffs, browser preparation/prediction and a genuine accepted-region
+reference-extraction/DeepPBMC design journey with checked downloads are demonstrated.
+The final closeout recommends RSD-4 COMPLETE with bounded CONDITIONAL GO for
+qualified internal academic use; biological validity and universal conversational
+reliability are not established.
+
 RSD-3 adds independent [de novo regulatory DNA generation](docs/guides/regulatory-sequence-generation.md),
-bringing the Registry to 31 tools. Ask for a batch conditioned on K562, GM12878,
+then bringing the Registry to 31 tools. Ask for a batch conditioned on K562, GM12878,
 HepG2 or hESCT0 without uploading DNA or scATAC data. Native pretrained DNA-Diffusion
 returns 200-base synthetic candidates, composition/diversity summaries, FASTA,
 tables and a figure. Exact accepted sequences can enter separately requested DHS64

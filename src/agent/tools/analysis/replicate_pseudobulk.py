@@ -9,6 +9,7 @@ from importlib import metadata
 import json
 import math
 import os
+import re
 from pathlib import Path
 import tempfile
 from typing import Literal, TypedDict
@@ -440,9 +441,20 @@ def _coordinates(
                 "FEATURE_COORDINATES_INVALID", "Coordinate arguments are prohibited when coordinates are absent."
             )
         return None, None, None, None
+    if coordinate_source == "feature_names":
+        if any(value is not None for value in keys) or coordinate_system not in _COORDINATE_SYSTEMS:
+            raise M81ScientificError("FEATURE_COORDINATES_INVALID", "Feature names require an explicit coordinate system and no column arguments.")
+        parsed = [re.fullmatch(r'([^:\s]+):(\d+)-(\d+)', str(name)) or
+                  re.fullmatch(r'([^\s]+)_(\d+)_(\d+)', str(name)) for name in adata.var_names]
+        if not parsed or any(row is None for row in parsed):
+            raise M81ScientificError("FEATURE_COORDINATES_INVALID", "Feature names must all be explicit chrom:start-end or chrom_start_end intervals.")
+        from types import SimpleNamespace
+        frame = pd.DataFrame([(r[1], int(r[2]), int(r[3])) for r in parsed], columns=['chrom', 'start', 'end'])
+        return _coordinates(SimpleNamespace(var=frame), coordinate_source='var_columns',
+            feature_chrom_key='chrom', feature_start_key='start', feature_end_key='end', coordinate_system=coordinate_system)
     if coordinate_source != "var_columns":
         raise M81ScientificError(
-            "FEATURE_COORDINATES_INVALID", "`coordinate_source` must be 'none' or 'var_columns'."
+            "FEATURE_COORDINATES_INVALID", "`coordinate_source` must be 'none', 'var_columns' or 'feature_names'."
         )
     if any(value is None for value in keys) or coordinate_system not in _COORDINATE_SYSTEMS:
         raise M81ScientificError(
@@ -645,6 +657,8 @@ def _feature_manifest(snapshot: _FeatureSpaceSnapshot, *, version: int = FEATURE
     if type(version) is not int or version not in (1, 2):
         raise M81ScientificError("FEATURE_SPACE_ARTIFACT_INVALID", "Unsupported feature-space version.")
     if version == 1:
+        if snapshot.coordinate_source not in ('none', 'var_columns'):
+            raise M81ScientificError('FEATURE_SPACE_ARTIFACT_INVALID', 'Historical feature-space coordinates cannot acquire a new encoding.')
         # Bounded historical reader: old qualification claims keep their meaning.
         coordinates = list(zip(snapshot.chromosomes or (), snapshot.starts or (), snapshot.ends or ()))
         if ({"human": "hg38", "mouse": "mm10"}.get(snapshot.species) != snapshot.genome_assembly
@@ -654,9 +668,9 @@ def _feature_manifest(snapshot: _FeatureSpaceSnapshot, *, version: int = FEATURE
             raise M81ScientificError("FEATURE_SPACE_ARTIFACT_INVALID", "Invalid historical feature-space claims.")
     coordinates: dict[str, object] = {
         "source": snapshot.coordinate_source,
-        "available": snapshot.coordinate_source == "var_columns",
+        "available": snapshot.coordinate_source != "none",
     }
-    if snapshot.coordinate_source == "var_columns":
+    if snapshot.coordinate_source != "none":
         coordinates.update(
             {
                 "chrom_key": snapshot.feature_chrom_key,
@@ -1183,10 +1197,10 @@ def _artifact_provenance(
     library_sizes: tuple[int, ...],
 ) -> dict[str, object]:
     coordinate: dict[str, object] = {
-        "available": source.coordinate_source == "var_columns",
+        "available": source.coordinate_source != "none",
         "source": source.coordinate_source,
     }
-    if source.coordinate_source == "var_columns":
+    if source.coordinate_source != "none":
         coordinate.update(
             {
                 "coordinate_system": source.coordinate_system,

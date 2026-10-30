@@ -26,7 +26,8 @@ def strings(item, selection):
     return result
 
 
-def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True):
+def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True,
+            max_logical_bytes=MAX_LOGICAL_BYTES):
     """Reject indirect storage, unsafe filters and excessive allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
         required = {'X','obs','var'} if require_matrix else {'obs','var'}
@@ -83,7 +84,7 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                     size += (item.size or 0) * item.dtype.itemsize
                 else:
                     raise ValueError('Unsupported H5AD value dtype')
-                if size > MAX_LOGICAL_BYTES:
+                if max_logical_bytes is not None and size > max_logical_bytes:
                     raise ValueError('H5AD decoded values exceed 2 GiB limit')
         if observation_fields is not None:
             if not isinstance(f.get('obs', getlink=True), h5py.HardLink):

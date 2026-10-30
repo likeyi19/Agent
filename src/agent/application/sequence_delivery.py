@@ -6,11 +6,14 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from agent.tools.analysis import sequence_prediction as owner
 from .session_state import digest
-from agent.tools.analysis import sequence_optimization, sequence_generation
+from agent.tools.analysis import sequence_optimization, sequence_generation, scatac_regulatory_sequences
 
-CONTRACTS = (owner.CONTRACT, owner.EVAL_CONTRACT, sequence_optimization.CONTRACT, sequence_generation.CONTRACT)
+CONTRACTS = (owner.CONTRACT, owner.EVAL_CONTRACT, sequence_optimization.CONTRACT, sequence_generation.CONTRACT, scatac_regulatory_sequences.CONTRACT)
 
 FILES = {
+    'regions.bed': ('Selected source peak intervals', 'text/plain; charset=utf-8'),
+    'windows.bed': ('Extracted reference DNA windows', 'text/plain; charset=utf-8'),
+    'selection.tsv': ('scATAC region selection and observed evidence', 'text/tab-separated-values; charset=utf-8'),
     'candidates.tsv': ('Synthetic candidate sequence characteristics', 'text/tab-separated-values; charset=utf-8'),
     'composition.png': ('Synthetic candidate composition', 'image/png'),
     'originals.fasta': ('Original DNA sequences', 'text/plain; charset=utf-8'),
@@ -82,24 +85,38 @@ def prepare(stream, role):
     """
     from .dialogue_evidence import _unsafe_fact_value
     raw = stream.read()
-    if role == 'scores.tsv':
+    if role in ('scores.tsv', 'selection.tsv'):
         reader = csv.DictReader(io.StringIO(raw.decode()), delimiter='\t')
         rows = list(reader)
-        if reader.fieldnames != list(owner.TABLE_FIELDS): raise ValueError('Score table schema changed')
+        fields = owner.TABLE_FIELDS if role == 'scores.tsv' else scatac_regulatory_sequences.TABLE_FIELDS
+        if reader.fieldnames != list(fields): raise ValueError('Sequence table schema changed')
         for row in rows:
-            label = row['original_header']
+            key = 'original_header' if role == 'scores.tsv' else 'feature_id'
+            label = row[key]
             if _unsafe_fact_value(label) or label.startswith(('=', '+', '-', '@')):
-                row['original_header'] = '[private label omitted; see sequence_id]'
+                row[key] = '[private label omitted; see sequence_id]'
         target = io.StringIO()
-        writer = csv.DictWriter(target,fieldnames=owner.TABLE_FIELDS,delimiter='\t')
+        writer = csv.DictWriter(target,fieldnames=fields,delimiter='\t')
         writer.writeheader(); writer.writerows(rows)
         raw = target.getvalue().encode()
     elif role in ('sequences.fasta','originals.fasta'):
         from Bio import SeqIO
         records = list(SeqIO.parse(io.StringIO(raw.decode()), 'fasta'))
         # Ordinal IDs are stable even for repeated, empty, or private headers.
-        raw = ''.join(f'>sequence-{i+1}' + ('' if _unsafe_fact_value(r.description) else ' '+r.description)
+        import re
+        raw = ''.join('>' + (r.id if re.fullmatch(r'sequence-\d+', r.id) else f'sequence-{i+1}') + ('' if _unsafe_fact_value(r.description) else ' '+r.description)
                       + '\n' + str(r.seq) + '\n' for i,r in enumerate(records)).encode()
+    elif role == 'metadata.json':
+        import json
+        def public(value):
+            if isinstance(value, dict):
+                return {k:public(v) for k,v in value.items() if not (k == 'path' or k.endswith('_path'))}
+            if isinstance(value, list):
+                return [public(v) for v in value]
+            if isinstance(value, str) and _unsafe_fact_value(value):
+                return '[private label omitted]'
+            return value
+        raw = json.dumps(public(json.loads(raw)),ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
     elif role not in FILES:
         raise ValueError('Unknown sequence delivery role')
     return raw

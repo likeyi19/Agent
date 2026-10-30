@@ -147,8 +147,9 @@ def test_evaluation_correspondence_and_scale(tmp_path,native,monkeypatch):
     monkeypatch.setattr(owner,'native_predict',lambda *a:pytest.fail('evaluation repeated inference'))
     e=owner.execute_evaluation(args('eval'))
     assert e['metrics'][0]['rmse'] == .5 and e['metrics'][0]['pearson'] is None
-    row['measurement']='MPRA';save()
-    with pytest.raises(ValueError,match='compatible DNase'):owner.execute_evaluation(args('bad'))
+    for incompatible in ('MPRA', 'ATAC', 'peak_counts'):
+        row['measurement']=incompatible;save()
+        with pytest.raises(ValueError,match='compatible DNase'):owner.execute_evaluation(args('bad'))
     row['measurement']=r['measurement'];row['sequence_id']='unmatched';save()
     with pytest.raises(ValueError,match='unique exact'):owner.execute_evaluation(args('bad2'))
 

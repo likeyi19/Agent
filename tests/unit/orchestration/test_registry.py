@@ -57,6 +57,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "evaluate_regulatory_predictions",
         "optimize_regulatory_sequences",
         "generate_regulatory_sequences",
+        "prepare_scatac_regulatory_sequences",
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
@@ -305,6 +306,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "predict_regulatory_sequences": "regulatory-sequence-native-v1",
         "optimize_regulatory_sequences": "regulatory-sequence-optimization-native-v1",
         "generate_regulatory_sequences": "regulatory-sequence-generation-native-v1",
+        "prepare_scatac_regulatory_sequences": "scatac-regulatory-sequences-v1",
         "evaluate_regulatory_predictions": "regulatory-sequence-native-v1",
         "inspect_scATAC": "inspect-scatac-v2",
         "inspect_raw_scATAC": "inspect-raw-scatac-v1",

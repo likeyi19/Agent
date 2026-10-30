@@ -8,9 +8,10 @@ metadata and describes tool interfaces, never workflows.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
+from pathlib import Path
 from typing import Mapping, TypeAlias
 
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, StepOutputRef
@@ -1054,7 +1055,7 @@ def compile_semantic_plan(
                     )
                 state.lineages[channel.target_port] = lineage
 
-    compiled_steps = tuple(
+    compiled_steps = isolate_output_directories(tuple(
         PlanStep(
             step_id=step.step_id,
             tool_name=step.tool_name,
@@ -1069,7 +1070,7 @@ def compile_semantic_plan(
             ),
         )
         for step in candidate.steps
-    )
+    ))
     try:
         return AgentPlan(
             plan_id=_plan_id(request, planner_name, compiled_steps),
@@ -1082,6 +1083,26 @@ def compile_semantic_plan(
             "INVALID_SEMANTIC_GRAPH",
             "The semantic candidate does not form a valid executable DAG.",
         ) from exc
+
+
+def isolate_output_directories(steps: tuple[PlanStep, ...]) -> tuple[PlanStep, ...]:
+    """Compile shared destination bindings into stable, disjoint step paths.
+
+    Only new plans call this: persisted plans already own their exact paths.
+    No directories are created and no publication/recovery policy is changed.
+    A sole consumer retains its requested destination.
+    """
+    destinations: dict[Path, list[str]] = defaultdict(list)
+    for step in steps:
+        destination = step.arguments.get('output_dir')
+        if isinstance(destination, (str, Path)):
+            destinations[Path(destination)].append(step.step_id)
+    shared = {path for path, members in destinations.items() if len(members) > 1}
+    return tuple(replace(step, arguments=dict(step.arguments, output_dir=str(
+        Path(step.arguments['output_dir']) / 'steps' /
+        hashlib.sha256(step.step_id.encode('utf-8')).hexdigest())))
+        if isinstance(step.arguments.get('output_dir'), (str, Path))
+        and Path(step.arguments['output_dir']) in shared else step for step in steps)
 
 
 def build_semantic_compiler_contract(

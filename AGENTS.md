@@ -515,6 +515,57 @@ preservation are reviewed without repeating successful scientific/provider
 campaigns. The report's final engineering section owns the Git closeout evidence;
 no RSD-4 or unrelated development is started.
 
+RSD-4 builds on `7508a11c4440a007506536a2bea4a4392cd13420` without staging,
+commit or push. The [scATAC regulatory sequence guide](docs/guides/scatac-regulatory-sequences.md)
+owns the independent `prepare_scatac_regulatory_sequences` operation (32 tools):
+descriptive accessibility, exact named features, accepted replicate DA and exact
+reference DNA. Original peaks remain separate from real midpoint-expanded windows.
+Accepted region continuation retains source evidence without reopening the original
+matrix. Existing DNA ports, scientific resource/library, native DHS64/DeepPBMC,
+publication, evidence and download owners remain authoritative. ATAC is not DNase
+truth, supplied groups are not validated cell identities, and model improvement
+is not enhancer validation. Known nonhuman genomic ancestry remains incompatible
+with the qualified human models.
+
+The [RSD-4 report](../agent-data/acceptance/regulatory-sequence-design/rsd-4/REPORT.md)
+records genuine native grouped extraction, accepted mouse DA reuse, DHS64 and
+constrained DeepPBMC, separately from actual Firefox/Qwen candidate preparation,
+selected-DNA prediction and nine checked downloads. A confirmed inherited-source
+parameter-repair defect is fixed in its existing owner; current H5AD offers no
+longer misrepresent a matrix as a DNA source. Historical records remain readable.
+The initial decision was **NO-GO for RSD-4 completion**: live accepted-region/window/design
+composition was unqualified after preserved interpretation/binding failures;
+an OpenRouter correction also returned HTTP 402 and was not retried there.
+Native/scripted evidence does not substitute for the missing browser journey.
+The focused completion review corrects general hyphenated numeric-quantity
+admission while preserving saved rejection replay, clarifies original-file
+candidates versus accepted results and producer-parameter retention, and shares
+installed model metadata with guidance and its existing review. One further
+normal Firefox/Qwen C/D attempt remains unqualified: C omits the extraction
+declarations/source and fails at the owner before DeepPBMC; D is withheld for
+missing evidence despite the supplied model metadata. No further paid retries,
+provider-specific repairs or evidence-review bypass are introduced. The report's
+focused-completion section owns these findings, regressions and preservation.
+Existing successful results, failures, resources and source files are preserved.
+The report owns regression, restart, cleanup and exact uncommitted state. No next
+capability or broader deployment is authorized by this record.
+
+The final shared-ownership closeout (report Section 14) recommends **RSD-4 COMPLETE
+with bounded CONDITIONAL GO**. New v3/v4 compiled plans isolate shared output
+destinations by stable step identity before fingerprinting; saved plans and
+single-consumer paths retain their meanings. Numeric grounding shares whole-token
+boundaries while saved rejected declarations retain historical replay. Common
+Interpreter instructions distinguish installed-model applicability guidance from
+unsupported biological inference; existing factual review remains mandatory.
+One genuine official OpenAI/Firefox continuation verifies real 2,114-base reference
+extraction, native constrained DeepPBMC optimization and 12 checked downloads.
+One read-only model-condition question receives reviewed guidance without science
+or automatic target substitution. Initial provider failures and partially withheld
+completion prose remain recorded. This is qualified internal academic use, not
+biological validation, universal language reliability or unrestricted deployment.
+Historical outputs, resources, provider configuration and credentials are preserved.
+No staging, commit, push, STE or next milestone is authorized or performed.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

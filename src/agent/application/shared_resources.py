@@ -333,6 +333,16 @@ class ScientificResourceLibrary:
         if len(matches) != 1: _fail('Scientific resource is unavailable.')
         return matches[0]
 
+    def sequence_models(self):
+        """Installed model metadata, without file locators or execution authority."""
+        entries = self.entries()
+        return [dict(family=e['resource']['family'], kind=e['kind'],
+            conditions=e['resource']['conditions'],
+            measurement=e['resource'].get('measurements',
+                {'output': 'synthetic regulatory DNA candidates; no activity measurement'}),
+            genome_assemblies=[g['resource']['assembly'] for g in entries if g['kind'] == 'genome'])
+            for e in entries if e['kind'] in ('sequence_predictor', 'sequence_generator')]
+
     def check(self, entry):
         from agent.tools.data.authority_context import VerificationContext
         if self.get(entry['id']) != entry: _fail('Scientific resource index changed.')

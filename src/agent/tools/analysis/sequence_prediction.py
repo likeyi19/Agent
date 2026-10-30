@@ -116,7 +116,6 @@ def arguments(values):
 def records(args, *, context_bases=500, exact_length=False, max_records=10000):
     """Preserve original labels, order, source bytes and exact extraction semantics."""
     from Bio import SeqIO
-    from Bio.Seq import Seq
     rows, sources, reference = [], [], None
     inline = args.get('sequence')
     path = args.get('sequence_path')
@@ -144,16 +143,12 @@ def records(args, *, context_bases=500, exact_length=False, max_records=10000):
             import pysam
             if not args.get('assembly'):
                 raise ValueError('BED coordinates require an explicit genome assembly')
-            lib = library()
-            matches = [r for r in lib.entries() if r['kind'] == 'genome'
-                       and r['resource']['assembly'] == args['assembly']]
-            if len(matches) != 1:
-                raise ValueError('BED requires a unique qualified genome for the declared assembly')
-            genome = lib.check(matches[0])
+            from .sequence_reference import resolve_genome, extract
+            genome, genome_entry = resolve_genome(args['assembly'])
             if genome['species']['taxonomy_id'] != 9606:
                 raise ValueError('This model is qualified for human conditions; nonhuman BED input is not supported')
             reference = genome
-            sources += matches[0]['files']
+            sources += genome_entry['files']
             table = pd.read_csv(path, sep='\t', comment='#', header=None, dtype=str, keep_default_na=False)
             if not 3 <= table.shape[1] <= 6 or not 0 < len(table) <= max_records:
                 raise ValueError(f'Supply BED3 through BED6 contiguous intervals, at most {max_records} records; BED12 blocks are not contiguous sequences')
@@ -167,21 +162,46 @@ def records(args, *, context_bases=500, exact_length=False, max_records=10000):
                         raise ValueError('Invalid BED strand or out-of-bounds interval; no clipping or liftOver is performed')
                     if end - start > context_bases:
                         raise ValueError(f'This model accepts at most {context_bases} bases per interval; select an explicit compatible interval')
-                    seq = fasta.fetch(chrom, start, end)
-                    if strand == '-': seq = str(Seq(seq).reverse_complement())
+                    seq = extract(fasta, chrom, start, end, strand)
                     rows.append(dict(original_header=r[3] if len(r) >= 4 else f'{chrom}:{start}-{end}',
                         original_sequence=seq, sequence=seq,
                         interval=dict(chrom=chrom, start=start, end=end, strand=strand,
                                       coordinates='0-based half-open; exact interval; no genomic expansion')))
     if not rows or len(rows) > max_records:
         raise ValueError(f'Supply between one and {max_records} sequence records')
+    index = args.get('sequence_index')
+    if index is not None:
+        if type(index) is not int or not 1 <= index <= len(rows):
+            raise ValueError('sequence_index must identify an existing 1-based candidate in the selected source')
+        rows = [rows[index-1]]
+    # Exact accepted genomic ancestry is available through the existing operation
+    # proof context. A FASTA port does not erase a known nonhuman origin.
+    context = current()
+    accepted_sequence_source = False
+    if path and context is not None:
+        manifests = [p.description.get('manifest', {}) for p in context.proofs.values()]
+        manifests += [a['record'].get('resources', {}).get('manifest_identity', {}) for a in context.accepted.values()]
+        for manifest in manifests:
+            if any(f['path'] == path and f['sha256'] == args.get('sequence_sha256') for f in manifest.get('files', ())):
+                accepted_sequence_source = True
+                ref = manifest.get('provenance', {}).get('reference')
+                if ref is not None:
+                    if ref['species']['taxonomy_id'] != 9606:
+                        raise ValueError('This sequence model is qualified for human DNA; accepted nonhuman genomic ancestry is incompatible')
+                    reference = _serialize(ref)
     for i, row in enumerate(rows):
         seq = row['sequence'].upper()
         # One model-specific guard against the native encoder's silent truncation
         # and unknown-base zero vectors. Other future models own their own policy.
         if not (context_bases if exact_length else 1) <= len(seq) <= context_bases or set(seq) - set('ACGT'):
             raise ValueError(f'This model requires {context_bases if exact_length else str(1)+"–"+str(context_bases)} A/C/G/T bases; ambiguous bases need resolved sequence; inputs are never padded with invented flanks or truncated')
-        row.update(sequence=seq, sequence_id=f'sequence-{i + 1}',
+        sequence_id = f'sequence-{index if index is not None else i + 1}'
+        if accepted_sequence_source:
+            import re
+            source_id = row['original_header'].split()[0]
+            if re.fullmatch(r'sequence-[1-9][0-9]*', source_id):
+                sequence_id = source_id
+        row.update(sequence=seq, sequence_id=sequence_id,
                    sequence_sha256=hashlib.sha256(seq.encode('ascii')).hexdigest(),
                    ordinal=i + 1, native_zero_padding=context_bases - len(seq))
     return rows, sorted(sources, key=lambda r: r['path']), reference
@@ -310,7 +330,8 @@ def publication_type(kind):
                     outputs=(('sequences','sequences.fasta'),('scores','scores.tsv')) if kind == KIND else (('metrics','metrics.json'),))
     from . import sequence_optimization as optimization
     from . import sequence_generation as generation
-    for owner in (optimization, generation):
+    from . import scatac_regulatory_sequences as preparation
+    for owner in (optimization, generation, preparation):
         if kind == owner.KIND:
             return dict(contract=owner.CONTRACT, profile=owner.PROFILE, tool=owner.TOOL,
                         names=owner.FILES, outputs=owner.OUTPUTS)
@@ -372,9 +393,10 @@ def verify_evaluation(path, *, expected_sha256):
 def verifier(kind):
     if kind == KIND: return verify_prediction
     if kind == EVAL_KIND: return verify_evaluation
-    from . import sequence_optimization, sequence_generation
+    from . import sequence_optimization, sequence_generation, scatac_regulatory_sequences
     if kind == sequence_optimization.KIND: return sequence_optimization.verify_optimization
     if kind == sequence_generation.KIND: return sequence_generation.verify_generation
+    if kind == scatac_regulatory_sequences.KIND: return scatac_regulatory_sequences.verify_preparation
     raise AuthorityError('Unknown sequence publication')
 
 
@@ -393,7 +415,7 @@ def recover(args, execution_identity):
 
 
 def predict_regulatory_sequences(output_dir, sequence_path=None, sequence_sha256=None, sequence=None,
-                                  condition=None, head=None, assembly=None):
+                                  condition=None, head=None, assembly=None, sequence_index=None):
     return execute({k:v for k,v in locals().items() if v is not None})
 
 

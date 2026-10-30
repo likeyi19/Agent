@@ -32,6 +32,7 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('prepare_scatac_regulatory_sequences', 'dataset'),
     ('predict_regulatory_sequences', 'sequences'),
     ('optimize_regulatory_sequences', 'sequences'),
     ('evaluate_regulatory_predictions', 'observations'),
@@ -596,6 +597,12 @@ def group_choices(binding, registry):
     roles = []
     for tool, name in _GROUP_PORTS:
         if tool not in registry.names():
+            continue
+        # A registered H5AD is a cell matrix, not a FASTA/BED sequence source.
+        # Narrow new offers only; persisted associations retain their readers,
+        # and generic attachments still require the selected owner's inspection.
+        if (name == 'sequences' and binding.members
+                and all(m['input_type'] == 'h5ad' for m in binding.members)):
             continue
         _, source, argument = _group_port(registry, tool, name)
         role = source.lineage or argument.planning.provenance_role

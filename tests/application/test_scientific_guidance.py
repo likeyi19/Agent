@@ -71,6 +71,48 @@ def guard(app, monkeypatch):
     return app
 
 
+@pytest.mark.parametrize('failure', [None, 'uncited_finding', 'unsupported', 'changed_metadata'])
+def test_installed_model_conditions_reach_generation_and_review_without_science(app, monkeypatch, tmp_path, failure):
+    from agent.application.local_resources import LocalResourceAdmission
+    resources = LocalResourceAdmission(tmp_path / 'resources', scientific_resource_root=tmp_path / 'library')
+    # Contract fixture only: no weights, native execution or real qualification.
+    entries = [dict(kind='sequence_predictor', resource=dict(family='DeepPBMC',
+        conditions=['B_cell', 'CD4_T_cell'], measurements={'accessibility': 'fixture'},
+        checkpoint='/private/model'))]
+    monkeypatch.setattr(resources.library, 'entries', lambda: entries)
+    app = guard(app, monkeypatch)
+
+    class Conditions(Model):
+        def complete(self, *, prompt, response_schema):
+            p = json.loads(prompt)
+            if 'guidance_schema_version' in p:
+                self.metadata = p['context']['sequence_models']
+                assert self.metadata[0]['conditions'] == ['B_cell', 'CD4_T_cell']
+                assert '/private/model' not in prompt
+                assert not p['context']['evidence']['claims']
+                return json.dumps(dict(advice=dict(support='insufficient_evidence', paragraphs=[dict(
+                    text='The installed DeepPBMC model conditions include B_cell, not MemoryBcells. '
+                         'These labels do not establish biological or model equivalence.',
+                    kind='finding' if failure == 'uncited_finding' else 'limitation', citations=[], comparisons=[])]), candidates=[]))
+            if 'grounding_review_version' in p:
+                self.reviewed = True
+                assert p['guidance']['advice']['sequence_models'] == self.metadata
+                if failure == 'changed_metadata':
+                    entries[0]['resource']['conditions'] = ['Changed']
+                return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(
+                    verdict='unsupported' if failure == 'unsupported' else 'entailed', independent=True)
+                    for row in p['paragraphs']}))
+            return super().complete(prompt=prompt, response_schema=response_schema)
+
+    model = Conditions(choice=decision(), direct=True)
+    outcome = ask(app, model=model, utterance='Is MemoryBcells an exact DeepPBMC condition?',
+                  reference_resources=resources)
+    assert outcome.status == ('answered' if failure is None else 'unavailable'), outcome.text
+    assert getattr(model, 'reviewed', False) is (failure != 'uncited_finding')
+    state = app.sessions.load('session')
+    assert not state.revisions and not state.turns
+
+
 def test_general_guidance_exact_references_and_no_science(app, monkeypatch):
     rid, path, _ = accepted(app, 'inspect_scATAC')
     original = path.read_bytes()

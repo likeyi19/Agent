@@ -563,7 +563,7 @@ def _parameter_source(reference, preceding):
     return origin, source, _serialize(source.admitted['inputs'])
 
 
-def _repair_declarations(raw, utterance, registry):
+def _repair_declarations(raw, utterance, registry, *, historical_missing=()):
     """Retain only valid declarations from a structurally valid new objective."""
     import json
     from .turn_decisions import (parse_decision, _ground_declaration,
@@ -581,7 +581,15 @@ def _repair_declarations(raw, utterance, registry):
         # Registry identity is checked even when the literal cannot be located.
         _parameter_input(registry, item['tool'], item['argument'])
         try:
-            grounded = _ground_declaration(item, utterance)
+            grounded = _ground_declaration(item, utterance,
+                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing)
+            if (item['tool'], item['argument']) in historical_missing:
+                # Saved rejections used the original numeric boundary. Keep
+                # their meaning without imposing it on newly admitted values.
+                from .turn_decisions import admit_scientific_argument
+                admit_scientific_argument(_scientific_arguments([grounded])[0], utterance,
+                    _parameter_input(registry, item['tool'], item['argument'])[1],
+                    _legacy_numeric_boundary=True)
             _bind_arguments(registry, utterance, {}, _scientific_arguments([grounded]))
             good.append(grounded)
         except IntentError as exc:
@@ -647,7 +655,8 @@ def _validate_parameter_prerequisite(interaction, preceding):
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
             if 'parameter_rejection' in admitted:
-                safe, rejected = _repair_declarations(admitted['parameter_rejection'], interaction.utterance, registry)
+                safe, rejected = _repair_declarations(admitted['parameter_rejection'], interaction.utterance, registry,
+                    historical_missing={(pending['tool'], name) for name in pending['missing']})
                 if (safe.target != admitted['tool'] or any(t != tool.name for t, _ in rejected)
                         or sorted(n for _, n in rejected) != list(pending['missing'])
                         or any(_parameter_input(registry, t, n)[0] in values for t, n in rejected)
@@ -758,7 +767,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         from .local_resources import LocalResourceAdmission
         original_metadata = (origin.submission or {}).get('registered_input')
         if original_metadata is None:
-            original_metadata = _received_origin(origin, state.interactions).submission['registered_input']
+            original_metadata = (_received_origin(origin, state.interactions).submission or {}).get(
+                'registered_input', original_submission['registered_input'])
         current_metadata = (interaction.submission or {}).get('registered_input')
         if (current_metadata is not None
                 and (original_metadata.get('composition') == 'scientific-role-selection.v1'

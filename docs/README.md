@@ -40,6 +40,10 @@ The [sequence generation guide](guides/regulatory-sequence-generation.md) covers
 native pretrained DNA-Diffusion, exact supported conditions, stochastic sampling,
 sequence descriptors, reusable candidates and ordinary resource deployment.
 
+The [scATAC regulatory sequence guide](guides/scatac-regulatory-sequences.md) covers
+descriptive or accepted-DA region selection, exact genomic extraction, explicit
+model windows and accepted-candidate continuation.
+
 The documentation has three locations:
 
 | Location | Purpose |

@@ -232,5 +232,5 @@ def verify_optimization(path, *, expected_sha256):
 
 def optimize_regulatory_sequences(output_dir,condition,sequence_path=None,sequence_sha256=None,sequence=None,
         assembly=None,comparison_conditions=None,comparison_weight=None,max_changes=None,iterations=None,
-        edit_start=None,edit_end=None,protected_regions=None):
+        edit_start=None,edit_end=None,protected_regions=None,sequence_index=None):
     return execute({k:v for k,v in locals().items() if v is not None})

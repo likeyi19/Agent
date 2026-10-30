@@ -101,6 +101,7 @@ class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
     DNA_SEQUENCES = "dna_sequences"
+    SCATAC_REGULATORY_REGIONS = "scatac_regulatory_regions"
     SEQUENCE_PREDICTIONS = "sequence_predictions"
     SEQUENCE_GENERATION = "sequence_generation"
     SEQUENCE_OBSERVATIONS = "sequence_observations"
@@ -1548,7 +1549,7 @@ def _validate_feature_space_result(result: Mapping[str, object]) -> None:
         or result["matrix_semantics"]
         not in {"fragment_counts", "insertion_counts", "binary_accessibility"}
         or result["matrix_source"] not in {"X", "layer"}
-        or result["coordinate_source"] not in {"none", "var_columns"}
+        or result["coordinate_source"] not in {"none", "var_columns", "feature_names"}
         or result["semantics_assertion_source"]
         not in {"structured_request", "structured_request_and_raw_uns"}
     ):
@@ -3160,8 +3161,8 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
             "coordinate_source": _planning_argument(
                 (str,),
-                "Whether genomic coordinates are absent or supplied by var columns.",
-                choices=("none", "var_columns"),
+                "Whether coordinates are absent, supplied by var columns, or explicitly encoded in feature names; the coordinate convention remains required.",
+                choices=("none", "var_columns", "feature_names"),
                 source=direct,
                 scientific_parameter=True,
                 conversational_choice=True,
@@ -3619,6 +3620,7 @@ def build_default_tool_registry() -> ToolRegistry:
                     "differential_accessibility",
                     "differential_accessibility.v1",
                     (_semantic_member("artifact", "da_path"),),
+                    accepted_file_sha256_field="da_sha256",
                 ),
             ),
         ),

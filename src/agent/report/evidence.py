@@ -17,6 +17,7 @@ import numpy as np
 from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
+from agent.tools.analysis.scatac_regulatory_sequences import RESULT_FIELDS as _REGION_SEQUENCE_FIELDS
 from agent.tools.analysis.sequence_prediction import RESULT_FIELDS as _SEQUENCE_FIELDS, EVAL_FIELDS as _SEQUENCE_EVAL_FIELDS
 from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
@@ -403,6 +404,12 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    'prepare_scatac_regulatory_sequences': _ToolProjection(
+        frozenset(_REGION_SEQUENCE_FIELDS), tuple(k for k in _REGION_SEQUENCE_FIELDS if not k.endswith('_path')),
+        'scatac-regulatory-sequences-v1', (
+            _ArtifactProjection('manifest_path', 'scatac_region_selection_manifest', ('exact_feature_lineage', 'reference_extraction', 'full_artifact_sha256'), digest_field='manifest_sha256'),
+            _ArtifactProjection('sequences_path', 'dna_sequences_fasta', ('exact_ordered_reference_sequences', 'full_artifact_sha256'), digest_field='sequences_sha256'),
+            _ArtifactProjection('selection_path', 'scatac_observed_region_evidence', ('descriptive_or_accepted_DA', 'full_artifact_sha256'), digest_field='selection_sha256'))),
     'inspect_scATAC_fragments': _ToolProjection(
         frozenset(_FRAGMENT_INSPECTION_FIELDS), _FRAGMENT_INSPECTION_FIELDS,
         'inspect-fragment-structure-v1'),

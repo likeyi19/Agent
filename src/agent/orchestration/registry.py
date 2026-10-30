@@ -100,6 +100,7 @@ class PlanningSourceEligibility(str, Enum):
 class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
+    MOTIF_ACCESSIBILITY = "motif_accessibility"
     DNA_SEQUENCES = "dna_sequences"
     SCATAC_REGULATORY_REGIONS = "scatac_regulatory_regions"
     SEQUENCE_PREDICTIONS = "sequence_predictions"
@@ -663,12 +664,17 @@ class ToolSpec:
     semantic_planning: SemanticToolSpec | None = None
     durable_hooks: DurableToolHooks | None = None
     scientific_authority: ScientificAuthorityHooks | None = None
+    # Optional native-owner projection of unresolved parameters from bound
+    # request inputs. This supplies questions, never execution/validity authority.
+    parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("ToolSpec `name` must be a non-empty string.")
         if not callable(self.function):
             raise TypeError("ToolSpec `function` must be callable.")
+        if self.parameter_prerequisites is not None and not callable(self.parameter_prerequisites):
+            raise TypeError('Tool parameter prerequisites must be callable.')
         if self.durable_hooks is not None and not isinstance(self.durable_hooks, DurableToolHooks):
             raise TypeError('Invalid durable tool hooks.')
         if self.scientific_authority is not None and not isinstance(self.scientific_authority, ScientificAuthorityHooks):
@@ -3693,9 +3699,11 @@ def build_default_tool_registry() -> ToolRegistry:
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
+    from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
         inspect_spec,
+        chromvar_tool_spec(),
         embedding_spec,
         pca_spec,
         neighbors_spec,

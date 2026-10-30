@@ -32,6 +32,8 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('compute_motif_accessibility', 'dataset'),
+    ('compute_motif_accessibility', 'genome'),
     ('prepare_scatac_regulatory_sequences', 'dataset'),
     ('predict_regulatory_sequences', 'sequences'),
     ('optimize_regulatory_sequences', 'sequences'),
@@ -601,7 +603,7 @@ def group_choices(binding, registry):
         # A registered H5AD is a cell matrix, not a FASTA/BED sequence source.
         # Narrow new offers only; persisted associations retain their readers,
         # and generic attachments still require the selected owner's inspection.
-        if (name == 'sequences' and binding.members
+        if (name in ('sequences','genome') and binding.members
                 and all(m['input_type'] == 'h5ad' for m in binding.members)):
             continue
         _, source, argument = _group_port(registry, tool, name)
@@ -800,7 +802,7 @@ def group_role_inputs(binding, roles, registry):
             fields = {m.name: m.field_name for m in port.members}
             record = binding.members[int(role['source'].split('.')[1])]
             wanted_type = 'groups' if (role['tool'], role['port']) == ('annotate_scATAC_cell_types', 'groups') else 'h5ad'
-            sequence_source = role['tool'] in ('predict_regulatory_sequences', 'optimize_regulatory_sequences') and record['input_type'] == 'fasta'
+            sequence_source = (role['tool'] in ('predict_regulatory_sequences', 'optimize_regulatory_sequences') or (role['tool'], role['port']) == ('compute_motif_accessibility', 'genome')) and record['input_type'] == 'fasta'
             if record['input_type'] != wanted_type and not sequence_source and not (binding.attachment_candidates
                     and record['input_type'] == 'attachment'):
                 raise ValueError('File type does not match the explicit scientific role.')
@@ -1466,9 +1468,21 @@ class LocalResourceAdmission:
             from agent.orchestration.registry import build_default_tool_registry
             self._registry = build_default_tool_registry()
         declarations = {}
-        for name in _H5AD_COMPANION_TOOLS:
+        from agent.orchestration.registry import ArtifactSemanticKind
+        for name in self._registry.names():
             spec = self._registry.get(name)
             arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
+            if name not in _H5AD_COMPANION_TOOLS:
+                # New ordinary H5AD consumers declare their dataset semantics in
+                # the Registry; do not grow a second companion/source-name list.
+                ports = spec.semantic_planning.consumer_ports if spec.semantic_planning else ()
+                if not any(port.request_sources and any(
+                        arguments[m.field_name].planning is not None
+                        and ArtifactSemanticKind.RAW_SCATAC in arguments[m.field_name].planning.accepted_artifact_kinds
+                        for m in port.members) for port in ports):
+                    continue
+                arguments = {key:arg for key,arg in arguments.items()
+                    if arg.planning is not None and arg.planning.scientific_parameter}
             for key, argument in arguments.items():
                 if key not in _H5AD_SOURCE_ARGUMENTS:
                     declarations.setdefault(key, []).append((key, argument))
@@ -1478,7 +1492,7 @@ class LocalResourceAdmission:
                     for source in port.request_sources:
                         for member in source.members:
                             key = fields[member.name]
-                            if key not in _H5AD_SOURCE_ARGUMENTS:
+                            if key in arguments and key not in _H5AD_SOURCE_ARGUMENTS:
                                 declarations.setdefault(member.input_name, []).append((key, arguments[key]))
         adoption = self._registry.get('adopt_scATAC_cell_by_features')
         declarations['input_sha256'] = [('source_sha256', adoption.required_arguments['source_sha256'])]
@@ -1486,10 +1500,18 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         try:
             for key, value in values.items():
+                if key == 'overwrite' and value is True:
+                    raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
                 for field, argument in declarations[key]:
-                    if field == 'overwrite' and value is True:
-                        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-                    argument.validate(key, value)
+                    try:
+                        argument.validate(key, value)
+                    except (ValueError, TypeError):
+                        continue
+                    break
+                else:
+                    raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+                # As in group_role_inputs, shared declaration names are a union.
+                # The compiled selected consumer owns its scientific constraints.
             if 'expected_resource_identity' in values:
                 from agent.tools.analysis.epizoo_embedding import validate_expected_resource_identity
                 values['expected_resource_identity'] = validate_expected_resource_identity(values['expected_resource_identity'])

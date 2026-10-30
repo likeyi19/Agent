@@ -608,7 +608,9 @@ class MatrixDownloadPreparer:
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
-        from . import sequence_delivery
+        from . import sequence_delivery, chromvar_delivery
+        motif = artifact.contract == chromvar_delivery.owner.CONTRACT and getattr(artifact, 'role', None) in chromvar_delivery.FILES
+        motif_h5ad = motif and artifact.role == 'motif-accessibility.h5ad'
         sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
@@ -626,13 +628,15 @@ class MatrixDownloadPreparer:
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
         composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
                     and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
-        export = processed or annotation or compact or integrated or composed or statistical
+        export = processed or annotation or compact or integrated or composed or statistical or motif_h5ad
         exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
+        elif motif:
+            filename, content_type = artifact.role, chromvar_delivery.FILES[artifact.role][1]
         elif sequence:
             filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
         elif reference_evidence:
@@ -741,7 +745,7 @@ class MatrixDownloadPreparer:
                         artifact.manifest, source_sha256=artifact.sha256, max_bytes=delivered_limit)
                     original_snapshot.close(); original_snapshot = None
                 else:
-                    create_export = (statistical_delivery.create_statistical_export if statistical else
+                    create_export = (statistical_delivery.create_statistical_export if statistical or motif_h5ad else
                                      analysis_delivery.create_analysis_export if compact else
                                      annotation_delivery.create_annotation_export if annotation
                                      else neighbors_delivery.create_neighbors_export)
@@ -760,8 +764,8 @@ class MatrixDownloadPreparer:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None
-            elif sequence:
-                data = sequence_delivery.prepare(snapshot, artifact.role)
+            elif sequence or motif:
+                data = (chromvar_delivery if motif else sequence_delivery).prepare(snapshot, artifact.role)
                 snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
                 delivered_size = len(data); checksum = hashlib.sha256(data)
             elif reference_evidence:
@@ -771,8 +775,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export or model_metadata or sequence else size,
-                sha256=checksum.hexdigest() if export or model_metadata or sequence else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata or sequence or motif else size,
+                sha256=checksum.hexdigest() if export or model_metadata or sequence or motif else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

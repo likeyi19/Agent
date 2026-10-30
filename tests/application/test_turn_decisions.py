@@ -349,3 +349,28 @@ def test_ambiguous_column_association_keeps_provider_authored_clarification():
             return decision_wire(dict(kind='clarify', reason='ambiguous_parameter'))
 
     assert interpret(Model(), utterance, string_public()) == Clarify('ambiguous_parameter')
+
+
+def test_compact_schema_preserves_complete_registry_domains_and_shares_small_enums():
+    from agent.application.turn_decisions import _compact_decision_schema
+    from agent.application.dialogue_execution import scientific_parameters
+    registry=build_default_tool_registry()
+    parameters=scientific_parameters(registry)
+    public=dict(bases={},relations=['current'],dialogue=dict(outputs=[],tools=list(registry.names()),
+        scientific_parameters=parameters,selected_sources=[dict(source='source.0',input_type='h5ad')],
+        source_fields=[dict(source='source.0',fields=['group','label'],complete=True)],
+        input_roles=[dict(tool=p['tool'],port=p['observation_source']) for p in parameters if p.get('observation_source')]))
+    original=decision_schema(public);compact=_compact_decision_schema(original)
+    def expand(value):
+        if isinstance(value,dict):
+            if '$ref' in value:return expand(compact['$defs'][value['$ref'].split('/')[-1]])
+            return {k:expand(v) for k,v in value.items() if k!='$defs'}
+        if isinstance(value,list):return [expand(v) for v in value]
+        return value
+    assert expand(compact)==original  # Every branch, domain and source association is unchanged.
+    def enums(value):
+        if isinstance(value,dict):return len(value.get('enum',[]))+sum(enums(v) for v in value.values())
+        if isinstance(value,list):return sum(enums(v) for v in value)
+        return 0
+    assert enums(compact)<1000
+    assert any(v.get('enum')==['compute_motif_accessibility'] for v in compact['$defs'].values())

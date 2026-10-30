@@ -660,6 +660,19 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-1 adds [native motif accessibility](docs/guides/motif-accessibility.md), bringing
+the current Registry to 33 tools. Ordinary dense/CSR/CSC peak-count H5AD and selected
+layers can enter chromVAR directly, including truthfully declared Cell Ranger
+insertion counts. Results separate bias-corrected deviations from z-scores and
+retain native backgrounds, motif matches, source mappings, figures and downloads.
+No PCA, EpiZoo, adoption or clustering prerequisite is introduced. Optional shared
+genome/motif resources and the isolated R runtime retain their own identities.
+The [STE-1 report](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/REPORT.md)
+owns native, independent-comparison and ordinary Web acceptance evidence and limits.
+The [final closeout](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/closeout/REPORT.md)
+records owner-driven count clarification, the shared structured-output correction,
+and the genuine default-provider continuation with checked downloads and read-only interpretation.
+
 RSD-4 adds [scATAC-informed genomic DNA preparation](docs/guides/scatac-regulatory-sequences.md),
 bringing the Registry to 32 tools. Ordinary peak-level H5AD can supply exact named
 features or descriptive group accessibility; accepted replicate DA can supply

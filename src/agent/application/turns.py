@@ -46,10 +46,10 @@ def sessions_id(sessions):
     return sessions._interaction_session_id
 
 
-def _failed_admission(sessions, interaction, decision):
+def _failed_admission(sessions, interaction, decision, *, preserve_pending=False):
     changes = dict(status='failed')
     reference = interaction.snapshot.get('prerequisite')
-    if reference and isinstance(decision, (SpeciesAnswer, ParameterAnswer, RoleAnswer, ResourceAnswer)):
+    if reference and (preserve_pending or isinstance(decision, (SpeciesAnswer, ParameterAnswer, RoleAnswer, ResourceAnswer))):
         # Failed binding is not authority to retry. A later explicit reply can
         # still address the same pending objective and last valid association.
         changes['prerequisite'] = {k: _serialize(v) for k, v in reference.items()
@@ -519,18 +519,33 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from agent.tools.analysis.pca_embedding import observe_methods
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
             suitability = []
+            motif_requirements = []
             for index, member in enumerate(members):
                 record = owner.load(member['resource_id'])
                 if record.input_type != 'h5ad':
                     continue
+                verified = False
                 try:
                     owner._verify_records([record])
+                    verified = True
                     observation = observe_methods(record.source_path, epizoo_resources)
                 except (ValueError, OSError):
                     observation = dict(pca='unavailable', epizoo=[])
                 suitability.append(dict(source=f'source.{index}', **observation))
+                if not verified:
+                    continue
+                from agent.tools.analysis.chromvar import observe_input
+                try:
+                    motif_observation = observe_input(record.source_path)
+                    from .dialogue_evidence import _unsafe_fact_value
+                    if not _unsafe_fact_value(motif_observation):
+                        motif_requirements.append(dict(source=f'source.{index}', **motif_observation))
+                except (ValueError, OSError, KeyError, TypeError):
+                    pass
             if suitability:
                 visible['dialogue']['embedding_suitability'] = suitability
+            if motif_requirements:
+                visible['dialogue']['motif_input_declarations'] = motif_requirements
         diagnostic_stage = 'interpretation'
         decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
         diagnostic_stage = 'admission'
@@ -550,6 +565,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify):
+            if decision.choices and decision.reason in ('missing_parameter_value','ambiguous_parameter'):
+                offered_parameters = {p['tool']+'.'+p['argument'] for p in visible['dialogue'].get('scientific_parameters',())}
+                if any('.' in name and name not in offered_parameters for name in decision.choices):
+                    raise IntentError('invalid_decision')
             if decision.reason == 'unavailable_model_condition':
                 conditions = tuple(model['family'] + ': ' + ', '.join(model['conditions'])
                                    for model in visible['dialogue'].get('sequence_models', ()))
@@ -625,6 +644,17 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
             admitted = admit_execution(sessions, interaction, decision, execution_inputs,
                                        epizoo_resources=epizoo_resources)
+            selected_tool = sessions._application.registry.get(admitted['tool'])
+            owner_missing = (() if selected_tool.parameter_prerequisites is None else
+                             selected_tool.parameter_prerequisites(admitted['inputs']))
+            missing_parameters = tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters)))
+            if missing_parameters:
+                from .dialogue_execution import request_parameters
+                admitted, prerequisite = request_parameters(sessions, interaction, admitted,
+                    missing_parameters, epizoo_resources)
+                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+                choices = tuple(decision.target+'.'+name for name in prerequisite['missing'])
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', choices, True))
             if visible['dialogue'].get('resource_source'):
                 from .resource_continuation import catalog
                 admitted['resource_catalog'] = catalog(input_sets)
@@ -643,7 +673,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .interactive_schemas import ClientError
             code = exc.code if exc.code in BUILTIN_ERROR_CODES else 'PLANNING_PROVIDER_ERROR'
             error = ClientError(code, safe_message_for(code))
-            _failed_admission(sessions, interaction, decision)
+            _failed_admission(sessions, interaction, decision,
+                preserve_pending=diagnostic_stage == 'interpretation')
             return TurnOutcome('execute', 'failed', text=error.message, error=error)
         if not isinstance(exc, IntentError):
             # Preparation and application failures are not model decisions.

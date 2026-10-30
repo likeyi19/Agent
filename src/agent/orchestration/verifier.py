@@ -2051,6 +2051,16 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
+        elif step.tool_name == 'compute_motif_accessibility':
+            try:
+                from agent.tools.analysis.chromvar import verify_result
+                verify_result(resolved_arguments, plain_result)
+            except (ValueError, TypeError, OSError, RuntimeError, KeyError):
+                checks.add('motif_publication_integrity', False, 'Native completion and exact motif/source/axis integrity.',
+                    'Motif verification failed.', 'MOTIF_VERIFICATION_FAILED', ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('motif_publication_integrity', True, 'Native completion and exact motif/source/axis integrity.',
+                    'Motif verification failed.', 'MOTIF_VERIFICATION_FAILED')
         elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
             try:
                 from agent.tools.analysis.sequence_prediction import verify_result

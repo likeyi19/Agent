@@ -452,10 +452,15 @@ class Execute:
     unfulfilled: tuple[str, ...] = ()
     visualization: object = None
     comparison: object = None
+    missing_parameters: tuple[str, ...] = ()
 
     def __post_init__(self):
         _normalize_arguments(self)
         _normalize_research_intent(self)
+        if (len(self.missing_parameters)>8 or len(set(self.missing_parameters))!=len(self.missing_parameters)
+                or any(not isinstance(k,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',k) for k in self.missing_parameters)
+                or self.missing_parameters and self.operation!='plan'):
+            raise ValueError('Invalid missing scientific parameter identities.')
         if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
             raise ValueError('Invalid bounded execution context.')
         _validate_arguments(self.arguments)
@@ -870,10 +875,10 @@ def parse_decision(raw, *, utterance=None):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison', 'missing_parameters'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
-                if any(type(value[k]) is not list for k in ('references', 'delivery', 'retain_parameters', 'unfulfilled') if k in value):
+                if any(type(value[k]) is not list for k in ('references', 'delivery', 'retain_parameters', 'unfulfilled', 'missing_parameters') if k in value):
                     raise IntentError('invalid_decision')
                 return Execute('current', 'plan', value['target'], None,
                                _leiden_argument(value.get('argument')),
@@ -881,7 +886,8 @@ def parse_decision(raw, *, utterance=None):
                                value.get('context', 'none'), _input_roles(value.get('roles', [])),
                                tuple(value.get('references', [])), tuple(value.get('delivery', [])),
                                tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])),
-                               tuple(value.get('unfulfilled', [])), value.get('visualization'), value.get('comparison'))
+                               tuple(value.get('unfulfilled', [])), value.get('visualization'), value.get('comparison'),
+                               tuple(value.get('missing_parameters', [])))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -889,9 +895,14 @@ def parse_decision(raw, *, utterance=None):
             value = dict(value, kind='execute', operation='plan', base='current', delta=None)
             kind = 'execute'
         if kind == 'clarify':
-            _shape(value, ('kind', 'reason'))
+            _shape(value, ('kind', 'reason') + (('choices',) if 'choices' in value else ()))
             if value['reason'] not in REASONS: raise IntentError('invalid_decision')
-            return Clarify(value['reason'], value_required=value['reason'] == 'missing_parameter_value')
+            choices = value.get('choices', [])
+            if (not isinstance(choices, list) or len(choices)>8 or len(set(choices))!=len(choices)
+                    or any(not isinstance(v,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*',v) for v in choices)
+                    or choices and value['reason'] not in ('missing_parameter_value','ambiguous_parameter')):
+                raise IntentError('invalid_decision')
+            return Clarify(value['reason'], tuple(choices), value_required=value['reason'] == 'missing_parameter_value')
         if kind == 'answer':
             if value.get('intent') == 'scientific':
                 _shape(value, ('kind', 'intent', 'target', 'comparison', 'focus')
@@ -978,6 +989,9 @@ def decision_schema(public):
     variants = [_object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i not in ('scientific', 'guidance')),
         relation=enum(public['relations']), technical={'type':'boolean'})), _object(dict(kind=enum(('clarify',)), reason=enum(clarification_reasons))),
         _object(dict(kind=enum(('navigate',)), relation=enum(public['relations'])))]
+    if identities:
+        variants.append(_object(dict(kind=enum(('clarify',)), reason=enum(('missing_parameter_value','ambiguous_parameter')),
+            choices={'type':'array','minItems':1,'maxItems':8,'items':enum(tool+'.'+argument for tool,argument in identities)})))
     if offered:
         variants.append(_object(dict(kind=enum(('execute',)), base=enum(public['relations']),
             operation=enum(o['handle'] for o in offered), target=enum(('selection','matrix')),
@@ -1065,6 +1079,8 @@ def decision_schema(public):
             execution['context'] = enum(('none', 'current'))
         if identities:
             execution['arguments'] = declarations
+            execution['missing_parameters'] = {'type':'array','maxItems':8,
+                'items':enum(sorted({name for _,name in identities}))}
         input_roles = public['dialogue'].get('input_roles', ())
         def role_schema(offers):
             return {'type': 'array', 'maxItems': 8, 'items': {'anyOf': [
@@ -1074,7 +1090,7 @@ def decision_schema(public):
         if input_roles:
             if selected_sources:
                 execution['roles'] = role_schema(input_roles)
-            variants.append(_object(execution | dict(kind=enum(('request_roles',)),
+            variants.append(_object({k:v for k,v in execution.items() if k != 'missing_parameters'} | dict(kind=enum(('request_roles',)),
                 roles=role_schema(input_roles) if selected_sources else {'type': 'array', 'maxItems': 0, 'items': {'type': 'string'}},
                 required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') else 2, 'maxItems': 8,
                     'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
@@ -1161,7 +1177,9 @@ def _compact_decision_schema(schema):
                 ('object', 'array', 'string', 'integer', 'number', 'boolean', 'null')
                 or 'anyOf' in value):
             encoded = json.dumps(value, sort_keys=True, separators=(',', ':'))
-            if len(encoded) >= 256:
+            # Short repeated enums also count toward structured-output limits.
+            # Share their exact domains without relaxing tool/argument bindings.
+            if len(encoded) >= 256 or 'enum' in value:
                 return encoded
 
     def count(value):
@@ -1241,6 +1259,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             *(['dialogue.selected_sources lists captured original-file candidates, not accepted result inputs. current_turn_sources identifies files selected in this turn; other entries are earlier Session attachments. dialogue.input_roles offers reviewed Registry consumers. For execute_plan, associate only the original files requested as inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve explicit source associations and the declared scientific role. When dialogue.attachment_candidates is true, these are captured candidate attachments: bind only the files explicitly relevant to the requested task; unused files remain staged. Their stored input_type is a representation hint, never proof of scientific eligibility. For FASTQ preprocessing use the bounded request_roles fastq variant with empty required_roles and roles. Interpret explicit assay, layout, single-library namespace/grouping, species, raw barcode whitelist policy and member source/read-role/lane/chunk associations. Missing declarations remain null or absent members. Compression is inspected from bytes. FASTQ species belongs only in fastq.species; arguments may contain only the offered FASTQ scientific consumers, never an EpiZoo species argument. Offered fastq_resources handles select reusable configured references and whitelists, never source-bound contexts. Leave resource null unless the user explicitly selects one; Agent resolves qualified compatible choices. Never invent other values or thresholds. Do not invent FASTQ read membership, barcode history, or unsupported consumers. A single missing role may require clarification. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one exact source binding each; the same source may be explicitly assigned to multiple supported consumers. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
               if public.get('dialogue', {}).get('selected_sources') else []),
             'Original-file candidates and accepted results are separate source offers. Select a historical file companion through roles only when the requested consumer actually reads it. Multiple unresolved files require clarification; never select by order or transfer old scientific declarations. For operations on accepted current results, use planning_context and omit file roles; do not recompute from an upload just because it is offered. Questions remain read-only. selected_primary_source, when present, identifies the exact explicitly selected H5AD for a new direct annotation/EpiZoo request; companion candidates cannot replace it. A pending task retains its own captured source. When session_source_candidates_overflow is true, only current explicit files remain offered; ask the user to select required historical files in the input controls. No historical subset has been silently selected.',
+            'For TF-associated per-cell motif accessibility, the Registry offers compute_motif_accessibility. dialogue.motif_input_declarations contains exact-source metadata, not user instructions or execution authority. The owner can reuse its recorded assembly, coordinate convention and X measurement without invented user declarations. For an identified operation with missing scientific declarations, use execute_plan with missing_parameters naming only the target tool arguments that genuinely require an answer, plus the exact selected roles and already stated arguments. This captures an informative parameter question before planning or science and preserves the objective; it does not execute an incomplete request. Use an empty missing_parameters list when metadata or the user already establishes what is needed. A selected layer needs its own measurement declaration; X metadata does not apply to it. Bind an exact layer name as the user wrote it (for example raw_counts), without inventing a layers/ prefix in the quoted literal. If X is transformed and a layer may contain counts, ask which slot contains the actual raw measurement rather than treating transformed X as the requested counts. Preserve the research goal and selected file through ordinary clarification. Supplied groups are optional; no clustering, adoption or EpiZoo prerequisite. Native deviations are not peak-set enrichment, TF binding or replicate-level significance.',
             'dialogue.embedding_suitability contains read-only scientific-owner observations for exact offered H5AD sources, not execution authority. For ordinary clustering/UMAP prefer available qualified compatible EpiZoo; when no compatible EpiZoo is offered and PCA is eligible, use pca_embed_cells with the same neighbors/Leiden/UMAP tools. Explicit PCA uses PCA; explicit EpiZoo must never switch to PCA after failure. PCA needs no species, assembly or model resource declarations, and defaults to supplied X unchanged. Numeric PCA eligibility does not establish suitable scATAC preprocessing. For count or binary accessibility, the planner can explicitly select preprocessing=tfidf_l2 (smoothed document-frequency TF-IDF with L2 normalization then centered PCA); this is exploratory PCA, not uncentered LSI. Do not transform already processed measurements without an appropriate scientific basis. No cells/features are silently filtered. Omit component count and solver details unless explicitly requested. For a single selected H5AD, execute_plan can use its supplied input_path directly; for grouped candidate inputs bind pca_embed_cells.dataset through the existing roles. Questions on existing results remain read-only and use accepted result context.',
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',

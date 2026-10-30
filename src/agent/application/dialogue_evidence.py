@@ -35,6 +35,7 @@ RESULT_LIMITATIONS = {
     'inspect_scATAC_fragments': 'Structural observations cover only the inspected prefix unless reached_eof is true. Distinct barcode strings are not cells. Reference compatibility, processing history, index correspondence and QC readiness are not established.',
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
+    'compute_motif_accessibility': 'Native chromVAR measures motif-associated accessibility with GC/accessibility-matched backgrounds. X is bias-corrected deviation; z-scores are separate. High variability or group mean is descriptive, not motif enrichment, expression, uniquely identified TF activity, physical binding, causality or replicate-level condition significance. Related TF motifs may be indistinguishable. Supplied groups, including vendor clusters, are not validated cell types. Preserve undefined values, original axes, actual source count semantics, collection and genome identities. Downloads and the native heatmap are available from accepted results without repeating science.',
     'prepare_scatac_regulatory_sequences': 'Observed scATAC region selection and exact reference extraction, without model inference. Detection fractions and differences are descriptive, never statistical significance or FDR. DA statistics retain the actual group and numerator-versus-denominator condition contrast, never inferred cell-type comparisons. Source peaks and real extracted windows are distinct. Midpoint anchors are not measured summits. Unstranded regions use reference plus orientation. Exact FASTA, BED and evidence downloads are available. An annotation is not automatically a supported model target; model predictions and observed ATAC remain separate, with no enhancer-function or experimental-validation claim.',
     'generate_regulatory_sequences': 'Synthetic regulatory DNA candidates, not verified enhancers or functional cCREs. Exact condition is a training label, not predicted or measured activity. GC fractions, entropy in bits (maximum 2), homopolymers and all-pairs position-wise Hamming describe batch composition; they do not establish training novelty, repeat-family annotation or biological diversity. Duplicate sequences are retained; duplicate_sequences is total minus unique. Compare sets only using pinned descriptors with exact result attribution. Optional DHS64 predictions are separate padded in silico evidence, not generator validation. Never fabricate genomic coordinates or flanks.',
     'optimize_regulatory_sequences': 'DeepPBMC predicts human PBMC peak accessibility, not enhancer activity or gene expression. Native weighted difference is target minus the weighted comparison sum divided by seven, even with a single comparison condition. It penalizes comparison score increases and rewards decreases; it does not bound absolute changes. Use recorded comparison_scores directly when available, never mistake the scaled penalty for the comparison score. Actual changed bases differ from iterations. Improved model objective is not biological validation. Exact candidate examples contain original and candidate scores, actual substitutions, protected-region satisfaction and non-improving steps. Never compare these scores numerically to DHS64 scores.',
@@ -573,6 +574,13 @@ def _project(sessions, state, revision, output, fields, detail):
         unselected_fields=tuple(sorted((set(facts) | set(parameters)) - set(selected))))
     if step.tool_name in RESULT_LIMITATIONS:
         result = replace(result, limitations=result.limitations + (RESULT_LIMITATIONS[step.tool_name],))
+    if (step.tool_name == 'compute_motif_accessibility'
+            and facts.get('parameters', {}).get('p_cutoff') == 0):
+        result = replace(result, limitations=result.limitations + (
+            'Known historical receipt recording defect: p_cutoff=0 was rounded during JSON serialization. '
+            'It is not the actual motifmatchr cutoff and must not be described as the executed threshold. '
+            'The actual cutoff cannot be recovered from this accepted summary field. '
+            'The recorded value and accepted scientific arrays remain unchanged; do not invent a corrected historical record.',))
     if step.tool_name == 'annotate_scATAC_cell_types' and step.resolved_arguments.get('source_path'):
         result = replace(result, limitations=result.limitations + (
             'Native MAESTRO uses exact supplied contig names. Peaks without native transcript weights do not contribute; this is not biological absence. No alias correction is performed. Feature participation, when recorded, is available in annotation details. Annotation is a computational result, not independent biological validation.',))
@@ -893,6 +901,12 @@ def field_semantics(registry, tool, field):
     if field in _REPORT_FIELDS.get(tool, ()) and field in _FIELD_LABELS:
         semantics['label'] = _FIELD_LABELS[field]
         semantics['label_source'] = 'reviewed_report_field'
+    if tool == 'compute_motif_accessibility' and field == 'parameters':
+        semantics['label'] = 'Applied motif method parameters'
+        semantics['description'] = ('Native execution settings. A historical p_cutoff of zero is a known '
+            'JSON precision recording defect, not an actual executed threshold. Preserve it as a recorded '
+            'value with that discrepancy; never infer the actual historical cutoff from current defaults.')
+        semantics['description_source'] = 'reviewed_native_motif_parameter_meaning'
     description = spec.result_contract.planning_fields.get(field)
     if description is not None:
         semantics['description'] = description.description
@@ -1006,7 +1020,8 @@ def figure_inventory(sessions, turn, revision=None):
             identity = (file.sha256, record['figure_id'])
             figures[identity] = dict(path=str(target), sha256=record['png_sha256'], metadata=public)
     from .sequence_delivery import accepted_figures
-    for figure in accepted_figures(sessions, turn, revision):
+    from .chromvar_delivery import accepted_figures as motif_figures
+    for figure in (*accepted_figures(sessions, turn, revision), *motif_figures(sessions, turn, revision)):
         metadata = figure['metadata']
         figures[(metadata['manifest_sha256'], metadata['figure_id'])] = figure
     return tuple(figures.values())

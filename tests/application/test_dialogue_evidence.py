@@ -307,3 +307,15 @@ print(json.dumps(view.to_dict()))
 def test_invalid_field_request(app, fields):
     with pytest.raises(ValueError):
         app.sessions.evidence('session', 'revision', 'output', fields=fields)
+
+
+@pytest.mark.parametrize('cutoff,defect',[(0,True),(5e-5,False)])
+def test_motif_historical_cutoff_is_recorded_not_reinterpreted(app,monkeypatch,cutoff,defect):
+    revision,path,_=accepted(app,'compute_motif_accessibility',overrides={'parameters':{'p_cutoff':cutoff}})
+    before=path.read_bytes();forbid_work(app,monkeypatch)
+    result=de.read_evidence(app.sessions,'session',revision,'output0',fields=['parameters'])
+    assert result.status=='available' and result.facts[0].value['p_cutoff']==cutoff
+    assert any('Known historical receipt recording defect' in item for item in result.limitations)==defect
+    meaning=de.field_semantics(app.registry,'compute_motif_accessibility','parameters')
+    assert 'never infer the actual historical cutoff from current defaults' in meaning['description']
+    assert path.read_bytes()==before

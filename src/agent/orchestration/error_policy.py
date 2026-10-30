@@ -422,6 +422,12 @@ _ERROR_POLICY_CATALOG.update({
         "The planned EpiZoo resources do not match the selected approved resources.", _NO),
 })
 
+_ERROR_POLICY_CATALOG.update({
+    'MOTIF_INPUT_OR_RESOURCE_INVALID': ErrorPolicyEntry('Motif analysis needs a compatible raw count slot, exact genomic coordinates and convention, a matching genome, and a taxon-appropriate motif collection. Check the selected scientific declarations and resources.', _NO),
+    'MOTIF_NATIVE_EXECUTION_FAILED': ErrorPolicyEntry('The isolated native chromVAR operation did not complete. Its private runtime diagnostic is retained; no alternative method or automatic retry was used.', _NO),
+    'MOTIF_PUBLICATION_INVALID': ErrorPolicyEntry('The motif result no longer matches its exact accepted source, resource or output identity.', _NO),
+})
+
 ERROR_POLICY_CATALOG: Mapping[str, ErrorPolicyEntry] = MappingProxyType(
     _ERROR_POLICY_CATALOG
 )

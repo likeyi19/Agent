@@ -648,7 +648,7 @@ function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
 function supportedScientificFile(artifact) {
   // The application validates the closed descriptors. Wording and file-purpose
   // policies belong there, shared by the conversation and result inventory.
-  return ["scientific_sequence", "scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
+  return ["scientific_motifs", "scientific_sequence", "scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
     "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model", "scientific_composition", "scientific_statistics"]
     .includes(artifact.artifact_type) && typeof artifact.filename === "string";
 }
@@ -696,10 +696,12 @@ function scientificFileNode(sessionId, artifact) {
     const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
     details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
   }
-  if (artifact.artifact_type === "scientific_sequence" && ["scores.png", "design.png", "composition.png"].includes(artifact.filename)) {
+  if ((artifact.artifact_type === "scientific_sequence" && ["scores.png", "design.png", "composition.png"].includes(artifact.filename)) ||
+      (artifact.artifact_type === "scientific_motifs" && artifact.filename === "patterns.png")) {
     const figure = document.createElement("img");
     figure.src = download.href;
-    figure.alt = artifact.title + "; model predictions are not experimental validation";
+    figure.alt = artifact.title + (artifact.artifact_type === "scientific_motifs"
+      ? "; descriptive motif accessibility is not TF binding" : "; model predictions are not experimental validation");
     figure.loading = "lazy";
     figure.style.maxWidth = "100%";
     row.append(figure);

@@ -20,6 +20,11 @@ ROLES = {
     'compute_scATAC_qc': 'QC', SELECTION: 'cell selection', MATRIX: 'matrix',
 }
 LABELS = {
+    'compute_motif_accessibility.matrix_semantics': 'the actual count measurement (raw peak counts, insertion/cut-site counts, fragment-overlap counts, or binary accessibility)',
+    'compute_motif_accessibility.coordinate_system': 'the peak coordinate convention (zero-based half-open or one-based closed)',
+    'compute_motif_accessibility.assembly': 'the genome assembly used for these peaks',
+    'compute_motif_accessibility.count_slot': 'the count matrix to analyze (X or a named layer)',
+
     'min_tss_enrichment': 'Minimum TSS enrichment',
     'min_qc_fragment_records': 'Minimum QC fragment depth',
     'min_tss_flank_evidence': 'Minimum TSS flank evidence',

@@ -40,6 +40,8 @@ The [sequence generation guide](guides/regulatory-sequence-generation.md) covers
 native pretrained DNA-Diffusion, exact supported conditions, stochastic sampling,
 sequence descriptors, reusable candidates and ordinary resource deployment.
 
+The [motif accessibility guide](guides/motif-accessibility.md) covers native chromVAR, ordinary H5AD counts, versioned motifs, reference requirements and scientifically bounded interpretation.
+
 The [scATAC regulatory sequence guide](guides/scatac-regulatory-sequences.md) covers
 descriptive or accepted-DA region selection, exact genomic extraction, explicit
 model windows and accepted-candidate continuation.

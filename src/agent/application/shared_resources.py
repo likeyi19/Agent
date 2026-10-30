@@ -321,7 +321,7 @@ class ScientificResourceLibrary:
         identities = set()
         for row in value['resources']:
             if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
-                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator')
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator', 'motif_collection')
                     or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
                     or row['id'] in identities):
                 _fail('Scientific resource identity is corrupt.')
@@ -378,6 +378,10 @@ class ScientificResourceLibrary:
                 pins[resource['contig_scope']['path']] = resource['contig_scope']['sha256']
             pins[str(target)] = digest(resource)
             qualifier = lambda: annotation_input.qualify_resources(resource)
+        elif kind == 'motif_collection':
+            from agent.tools.analysis import chromvar
+            pins = {resource[k]['path']:resource[k]['sha256'] for k in ('pfm','metadata')}
+            qualifier = lambda: chromvar.qualify_resource(resource)
         elif kind == 'sequence_generator':
             from agent.tools.analysis import sequence_generation
             pins = {resource[k]['path']:resource[k]['sha256'] for k in ('checkpoint','config','metadata')}
@@ -614,7 +618,7 @@ class ScientificResourceLibrary:
     def choices(self):
         result = []
         for row in self.entries():
-            if row['kind'] in ('epizoo', 'marker_reference', 'liftover_chain', 'sequence_predictor', 'sequence_generator'): continue
+            if row['kind'] in ('epizoo', 'marker_reference', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection'): continue
             result.append(self.input_set(row))
             if row['kind'] == 'qc':
                 try:

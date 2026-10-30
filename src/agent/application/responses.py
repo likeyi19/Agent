@@ -142,6 +142,9 @@ def clarification_text(clarification):
         names = [LABELS.get(name, name).lower() for name in clarification.choices]
         return 'Please provide values for ' + ' and '.join(names) + '.'
     if clarification.reason in {'invalid_parameter_value', 'ungrounded_operand'}:
+        if clarification.choices:
+            names = [LABELS.get(name, name).lower() for name in clarification.choices]
+            return 'Please clarify ' + ' and '.join(names) + ' using the exact name or value you intend.'
         return 'Please provide a valid explicit value for the scientific parameter.'
     if clarification.reason == 'unsupported_intent':
         return ('This request is not supported by the available scientific or conversational operations. '

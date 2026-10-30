@@ -639,6 +639,29 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
     return admitted, pending
 
 
+def _requested_parameters(registry, admitted, names):
+    """Validate a semantic question's scalar scope, not scientific readiness."""
+    if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8
+            or any(not isinstance(name, str) for name in names)
+            or len(set(names)) != len(names)):
+        raise IntentError('invalid_prerequisite')
+    for name in names:
+        input_name, _ = _parameter_input(registry, admitted['tool'], name)
+        if input_name in admitted['inputs']:
+            raise IntentError('conflicting_scientific_parameter')
+    return sorted(names)
+
+
+def request_parameters(sessions, interaction, admitted, names, resources):
+    """Use the existing parameter continuation before any planning reservation."""
+    missing = _requested_parameters(sessions._application.registry, admitted, names)
+    admitted = dict(admitted, parameter_request=missing)
+    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
+        field='parameters', tool=admitted['tool'], missing=missing,
+        resource_context_sha256=resource_context_digest(resources))
+    return admitted, pending
+
+
 def _validate_parameter_prerequisite(interaction, preceding):
     from .session_state import SessionError
     from agent.orchestration.registry import build_default_tool_registry
@@ -654,6 +677,13 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 raise ValueError('No originating execution.')
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
+            if 'parameter_request' in admitted:
+                if (admitted['tool'] != tool.name
+                        or _requested_parameters(registry, admitted, admitted['parameter_request']) != list(pending['missing'])
+                        or _replay_initial_inputs(registry, interaction,
+                            _scientific_arguments(_serialize(admitted.get('arguments', [])))) != _serialize(values)):
+                    raise ValueError('Requested parameter scope changed.')
+                return
             if 'parameter_rejection' in admitted:
                 safe, rejected = _repair_declarations(admitted['parameter_rejection'], interaction.utterance, registry,
                     historical_missing={(pending['tool'], name) for name in pending['missing']})
@@ -731,7 +761,7 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    if 'parameter_rejection' not in origin.admitted:
+    if not {'parameter_rejection', 'parameter_request'}.intersection(origin.admitted):
         stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         original_error = next((e for e in stored.errors
             if _missing_parameters(e, origin.admitted, sessions._application.registry, historical=True) ==

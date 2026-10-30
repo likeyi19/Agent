@@ -566,6 +566,74 @@ biological validation, universal language reliability or unrestricted deployment
 Historical outputs, resources, provider configuration and credentials are preserved.
 No staging, commit, push, STE or next milestone is authorized or performed.
 
+STE-1 builds on `abb796a4560ac5c2e02cd8a0562fe43a0a9fb879` without staging,
+commit or push. The [motif accessibility guide](docs/guides/motif-accessibility.md)
+owns `compute_motif_accessibility` (33 Registry tools), using isolated native
+chromVAR 1.32.0 and motifmatchr 1.32.0 with independently identified genome and
+JASPAR CORE resources. Ordinary dense/CSR/CSC H5AD counts, explicit layers,
+insertion counts and original coordinate/axis meanings do not require dataset
+certification, upstream adoption or EpiZoo qualification. Selected-source integrity
+and actual method requirements remain authoritative. Registry-derived companion
+declarations and exact-source metadata observations use existing owners.
+
+The [STE-1 report](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/REPORT.md)
+records independent native full-PBMC agreement, genuine ordinary Firefox/OpenAI
+execution on full and prepared-layer inputs, figures, checked downloads and
+completed-result restart/history reuse without native reruns. The decision is
+**CONDITIONAL GO** for controlled research use; generic clarification, literal
+binding and incomplete provider follow-ups limit ordinary conversational readiness.
+Final receipt serialization preserves the actual small motif cutoff and download
+preparation omits private runtime sessionInfo. Earlier erroneous rounded receipt
+values and initial downloads remain historical evidence, never corrected history.
+Native undefined values remain explicit; descriptive motif accessibility is not
+TF binding, expression, enrichment, causality or replicate-level significance.
+Existing scientific/resource boundaries remain; STE-2 is not started.
+
+The [STE-1 final closeout review](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/closeout/REPORT.md)
+supersedes that readiness decision with **Outcome B — BLOCKED / NOT READY**.
+Shared typed parameter questions now preserve the objective and source before
+planning; exact layer names bind without internal path syntax. Provider failures
+before interpretation retain the exact pending question without retry authority.
+Historical zero-cutoff evidence carries an explicit recording-defect explanation;
+accepted bytes and historical displayed responses remain unchanged. Focused
+regression and actual historical browser downloads pass, but the essential live
+natural-answer continuation returned an empty incomplete provider response before
+science. Its final acceptance is unverified, not CONDITIONAL GO. No staging,
+commit or push is performed; STE-2 remains outside scope.
+
+The subsequent [provider isolation](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/closeout/provider-isolation/REPORT.md)
+retains Outcome B. Official OpenAI completes a minimal strict JSON request but
+returns empty incomplete responses for the recorded interpreter request, both
+with its default budget and an explicit 32,768-token budget. The configured Qwen
+provider completes that structured request, but its one live Web attempt omits
+the necessary raw-count clarification and reaches an input-owner refusal of
+transformed X before native R. No result is accepted. Interface completion and
+scientific conversational readiness remain separate; no production code or
+provider configuration correction is established by these observations.
+
+The [shared-interface closeout](../agent-data/acceptance/scientific-tool-ecosystem/ste-1/closeout/shared-interface/REPORT.md)
+supersedes the preceding blocked decisions with **Outcome A — READY**, bounded to
+controlled research use. The shared schema compactor now also reuses short enum
+domains: the recorded interpreter schema falls from 1,072 to 477 enum values,
+preserving every tool/argument/source branch. Controlled ablation and an unchanged
+official OpenAI profile establish the correction; output budgets and defaults
+are unchanged. A Registry-owned optional parameter-prerequisite callable lets the
+selected scientific owner ask for unresolved declarations before planning, even
+when the model reports none. chromVAR reuses its execution declaration logic;
+other tools keep their own requirements, and numeric/resource validation remains
+at execution. No new readiness state or scientific algorithm is introduced.
+
+The genuine Firefox journey clarifies the count slot/measurement, accepts the
+natural raw_counts answer without reupload, executes native chromVAR once and
+accepts one Revision. Eleven actual downloads, exact prior-small-result values,
+ordinary-launcher restart and a subsequent reviewed read-only explanation pass.
+Initial completion prose was withheld for an uncited finding and remains exact;
+this is not universal prose reliability. The 147 focused and 499 affected tests
+pass; 43 optional/native checks are skipped. Historical protected files and
+scientific resources remain unchanged. The user authorizes one reviewed STE-1
+completion commit and normal upstream push; earlier no-commit records describe
+pre-closeout stages. STE-2 is not started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

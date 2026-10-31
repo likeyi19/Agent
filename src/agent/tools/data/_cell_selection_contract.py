@@ -49,11 +49,7 @@ def validate_lineage(value):
     for key in ('reference_identity_sha256','qc_resource_identity_sha256','science_profile_sha256','ordered_barcode_sha256'):
         v2.sha(value[key])
     if value['science_profile_sha256']!=qc.PROFILE_SHA256: fail('SELECTION_QC_LINEAGE_INVALID')
-    qualification=value['resource_qualification'];v2.shape(qualification,('mode','catalog_sha256','basis'));v2.token(qualification['basis'])
-    if qualification['mode']=='synthetic_only':
-        if qualification['catalog_sha256'] is not None: fail('SELECTION_QC_LINEAGE_INVALID')
-    elif qualification['mode']=='operator_qualified':v2.sha(qualification['catalog_sha256'])
-    else:fail('SELECTION_QC_LINEAGE_INVALID')
+    qc.validate_resource_qualification(value['resource_qualification'])
     producer=value['producer_authority'];v2.shape(producer,('kind','profile_ids','verification_basis','history'))
     if producer['kind'] not in ('fastq_fragment_production','bam_fragment_production','external_fragment_adoption'):
         fail('SELECTION_QC_LINEAGE_INVALID')

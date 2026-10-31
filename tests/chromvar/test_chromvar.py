@@ -300,4 +300,34 @@ def test_owner_questions_follow_selected_slot_metadata_without_layer_inference(s
     assert owner.parameter_prerequisites(args)==('assembly','coordinate_system','matrix_semantics')
     assert owner.parameter_prerequisites({})==()
     registry=build_default_tool_registry()
-    assert [n for n in registry.names() if registry.get(n).parameter_prerequisites is not None]==[owner.TOOL]
+    assert [n for n in registry.names() if registry.get(n).parameter_prerequisites is not None]==[owner.TOOL,'call_scATAC_peaks']
+
+
+def test_installed_genome_selection_is_exact_and_never_an_assembly_alias(tmp_path,monkeypatch):
+    from agent.application.shared_resources import ScientificResourceLibrary
+    import pysam
+    library=ScientificResourceLibrary(tmp_path/'library')
+    fa=tmp_path/'genome.fa';fa.write_text('>chr1\n'+('ACGT'*200)+'\n');pysam.faidx(str(fa))
+    entries=[]
+    for assembly,label in [('hg38','original'),('hg38','another'),('GRCh38','different declaration')]:
+        source=fa
+        if label=='another':
+            source=tmp_path/'other.fa';source.write_text('>chr1\n'+('TGCA'*200)+'\n');pysam.faidx(str(source))
+        entries.append(library.install_genome(source,str(source)+'.fai',species=dict(scientific_name='Homo sapiens',taxonomy_id=9606),
+            assembly=assembly,label=label,version='1',provenance='Explicit fixture declaration',usage='Test only'))
+    motif=dict(kind='motif_collection',id='motifs',label='test',resource=dict(applicable_taxonomy_ids=[9606]),files=[])
+    from types import SimpleNamespace
+    monkeypatch.setattr(owner,'library',lambda:SimpleNamespace(entries=lambda:[*entries,motif],
+        check=lambda e:e['resource'] if e is motif else library.check(e)))
+    peaks=pd.DataFrame(dict(feature_id=['p'],chrom=['chr1'],start=[1],end=[10]))
+    with pytest.raises(ValueError,match='unambiguous'):owner.resolve_resources(dict(assembly='hg38'),peaks,tmp_path)
+    for selector in ('original',entries[0]['id']):
+        path,identity,*_=owner.resolve_resources(dict(assembly='hg38',genome_resource=selector),peaks,tmp_path)
+        assert path==str(fa) and identity['resource_id']==entries[0]['id']
+    with pytest.raises(ValueError,match='unambiguous'):
+        owner.resolve_resources(dict(assembly='hg38',genome_resource=entries[2]['id']),peaks,tmp_path)
+    with pytest.raises(ValueError,match='either'):
+        owner.resolve_resources(dict(assembly='hg38',genome_resource='original',genome_path=str(fa)),peaks,tmp_path)
+    fa.write_text('>chr1\nT\n')
+    with pytest.raises(ValueError,match='invalid_reference'):
+        owner.resolve_resources(dict(assembly='hg38',genome_resource='original'),peaks,tmp_path)

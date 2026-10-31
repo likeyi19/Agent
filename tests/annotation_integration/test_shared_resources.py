@@ -307,7 +307,7 @@ def test_shared_annotation_survives_upload_loss_and_restart(resources, tmp_path,
 def test_qc_durable_closure_survives_original_source_loss(resources, tmp_path, monkeypatch):
     values = resources[-1].inputs()
     library = shared.ScientificResourceLibrary(tmp_path/'library')
-    before, pins, _ = shared._qc_closure(values['qc_reference_manifest_path'], values['qc_reference_manifest_sha256'])
+    before, pins = shared._qc_closure(values['qc_reference_manifest_path'], values['qc_reference_manifest_sha256'])
     args = dict(label='Simulated QC',version='fixture',provenance='Simulated',usage='test',own_files=True)
     entry = library.install('qc', values, **args)
     assert all(Path(f['path']).is_relative_to(library.root) for f in entry['files'])

@@ -40,7 +40,11 @@ reference bytes; the operation never renames, clips or drops unmatched intervals
 A task-provided FASTA can enter through the existing `genome` source role with
 assembly and species taxonomy ID; its index is generated privately, without
 changing the upload. Otherwise the unique exact-assembly genome in the configured
-ScientificResourceLibrary is used.
+ScientificResourceLibrary is used. When several entries match, `genome_resource`
+selects the exact installed label or ID through the ordinary scientific parameter
+interface. Its declared assembly must still match; matching bytes do not silently
+alias `hg38` and `GRCh38`. Operators may install a qualified reference's explicit
+assembly declaration and exact genome in place, preserving all existing entries.
 
 Native `filterPeaks(min_fragments_per_peak=1, non_overlapping=FALSE)` excludes
 zero-total peaks and records their original positions. Overlap pruning and sample

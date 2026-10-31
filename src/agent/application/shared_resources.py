@@ -46,9 +46,7 @@ def validate_review(value, files, *, legacy=True):
 
 def _qc_closure(path, sha):
     from agent.tools.data import scatac_qc_reference as owner
-    from agent.tools.data._barcode_qc_binding import resource_qualification
     _, bundle, _ = owner.load_scatac_qc_reference_bundle(path, expected_sha256=sha)
-    qualification = resource_qualification(bundle)
     # Existing human/mouse QC scope only; no new annotation parser or format.
     if bundle.contract_version != 'scatac-qc-reference-bundle.v1':
         _fail('This resource handoff supports the existing qualified human/mouse QC bundle.')
@@ -58,7 +56,7 @@ def _qc_closure(path, sha):
     pins[str(path)] = sha
     if parent.annotation is not None:
         pins[parent.annotation.resource.path] = parent.annotation.resource.sha256
-    return bundle, pins, qualification
+    return bundle, pins
 
 
 def _qc_parent(bundle):
@@ -152,7 +150,9 @@ def persist(resources, inputs, *, session_id, origin_turn_id, label, qualificati
         paths = []
     elif set(inputs) == {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}:
         source = inputs['qc_reference_manifest_path']
-        bundle, pins, qualification = _qc_closure(source, inputs['qc_reference_manifest_sha256'])
+        bundle, pins = _qc_closure(source, inputs['qc_reference_manifest_sha256'])
+        from agent.tools.data._barcode_qc_binding import resource_qualification
+        qualification = resource_qualification(bundle)
         from agent.tools.data import scatac_qc_reference
         # Source reconstruction is a qualification step, not a discovery/read step.
         scatac_qc_reference.reinspect_scatac_qc_reference_bundle_sources(bundle)
@@ -412,7 +412,7 @@ class ScientificResourceLibrary:
             if set(resource) != {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}: _fail('Exact QC reference required.')
             from agent.tools.data import scatac_qc_reference as owner
             # Existing QC owner supplies its content closure and scientific identity.
-            bundle, pins, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
+            bundle, pins = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
             qualifier = lambda: owner.reinspect_scatac_qc_reference_bundle_sources(bundle)
         elif kind == 'liftover_chain':
             from agent.tools.data.liftover_chain import qualify
@@ -570,7 +570,7 @@ class ScientificResourceLibrary:
             return dict(resource, **{key: copy(resource[key])
                 for key in ('chain', 'input_fai', 'destination_fai')})
         if kind == 'qc':
-            bundle, _, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
+            bundle, _ = _qc_closure(resource['qc_reference_manifest_path'], resource['qc_reference_manifest_sha256'])
             _, original, _ = parent.load_scatac_reference_bundle(bundle.parent_manifest.path,
                 expected_sha256=bundle.parent_manifest.sha256)
             values = original.to_dict()

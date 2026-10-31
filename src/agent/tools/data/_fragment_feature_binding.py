@@ -5,8 +5,7 @@ import json
 
 from . import explicit_cells as cells, regulatory_matrix_contract as reference
 from . import fragment_feature_matrix_contract as contract, scatac_matrix_contract as m
-from .scatac_fragment_reader import open_verified_fragments
-from .scatac_fragments_v2_verifier import FragmentVerificationRuntime, take_snapshots, check_snapshots
+from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots
 
 
 @dataclass
@@ -17,16 +16,10 @@ class BoundFeatures:
     upstream: dict
     snapshots: tuple
     contract: object = contract
-    qc_reference: object = None
-    qualification: object = None
 
     def unchanged(self):
         check_snapshots(self.snapshots)
         self.fragments.verification.check_unchanged()
-        if self.qc_reference is not None:
-            from ._barcode_qc_binding import resource_qualification
-            if resource_qualification(self.qc_reference) != self.qualification:
-                m.fail('MATRIX_LINEAGE_INVALID')
 
 
 def cell_input(pointer):
@@ -59,7 +52,6 @@ def bind(upstream, limits):
     snapshots += take_snapshots([ref.genome.fasta.path, ref.genome.fai.path, ref.ccre.bed.path,
                                 Path(cp['manifest_path']).parent / ('cells.tsv.gz' if explicit else 'selected.tsv.gz')])
     reference.reinspect_reference(ref)
-    qc_reference = qualification = None
     if explicit:
         selected = cells.verify_explicit_cells(cp['manifest_path'], expected_sha256=cp['manifest_sha256'])
     else:
@@ -67,14 +59,12 @@ def bind(upstream, limits):
         from ._barcode_qc_contract import load_manifest as load_qc
         from .scatac_qc_reference import load_scatac_qc_reference_bundle
         from .neutral_qc_reference import NeutralQCReference, resources as qc_resources
-        from ._barcode_qc_binding import resource_qualification
         selected = verify_cell_selection(cp['manifest_path'], expected_sha256=cp['manifest_sha256']).to_dict()
         args = selected['qc_lineage']['arguments']
         if (args['fragments_manifest_path'] != fp['manifest_path']
                 or args['fragments_manifest_sha256'] != fp['manifest_sha256']): m.fail('MATRIX_LINEAGE_INVALID')
         _, qc_reference, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'],
             expected_sha256=args['qc_reference_manifest_sha256'])
-        qualification = resource_qualification(qc_reference)
         qa = selected['arguments']; qp = Path(qa['barcode_qc_manifest_path'])
         qvalue = load_qc(qp, qa['barcode_qc_manifest_sha256']).to_dict()
         resources = (qc_resources(qc_reference) if type(qc_reference) is NeutralQCReference else
@@ -83,49 +73,20 @@ def bind(upstream, limits):
             *[r.path for r in resources],
             *[qp.parent / qvalue[k]['path'] for k in ('table', 'histogram')],
             Path(cp['manifest_path']).parent / 'decisions.tsv.gz'])
-    from .external_fragments_verifier import verify_external_fragments
-    from .external_fragment_manifest import load_adoption_record
-    from ._external_fragment_io import resource
-    from .scatac_fragments_v2 import load_fragments_manifest_v2
-    manifest = load_fragments_manifest_v2(fp['manifest_path'], expected_sha256=fp['manifest_sha256'])
-    kinds = {e['provenance']['kind'] for e in manifest['libraries']}
-    if kinds == {'external_fragment_adoption'}:
-        verified = verify_external_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
-                                             runtime=FragmentVerificationRuntime())
-        record_pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
-        record = load_adoption_record(record_pointer['path'], record_pointer['sha256'])
-        if 'primary_preparation' in record:
-            from .primary_fragment_preparation import verify_preparation, dependencies
-            pointer = record['primary_preparation']
-            prep = verify_preparation(pointer['path'], pointer['sha256'],
-                reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'], deep=False)
-            snapshots += take_snapshots([pointer['path'], *[r['path'] for r in dependencies(prep)]])
-        for source in (record['source']['resource'], record['source_index']):
-            if source is not None:
-                snapshots += take_snapshots([source['path']])
-                if resource(source['path']) != source: m.fail('MATRIX_LINEAGE_INVALID')
-    elif kinds == {'bam_fragment_production'}:
-        from .bam_fragments_verifier import verify_bam_fragments
-        from .bam_fragment_manifest import NEUTRAL_PROFILE_ID, load_record
-        from .neutral_bam import load, dependencies
-        from .primary_contigs import verify_scope
-        if any(e['provenance']['profile']['id'] != NEUTRAL_PROFILE_ID for e in manifest['libraries']):
-            m.fail('MATRIX_REFERENCE_MISMATCH')
-        verified = verify_bam_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
-                                       runtime=FragmentVerificationRuntime())
-        pointer = verified.fragments.manifest['libraries'][0]['provenance']['producer_record']
-        record = load_record(pointer['path'], pointer['sha256'])
-        pointer = record['input_binding']; spec = load(pointer['path'], pointer['sha256'])
-        verify_scope(spec['primary_scope']['path'], spec['primary_scope']['sha256'],
-            reference_path=rp['manifest_path'], reference_sha256=rp['manifest_sha256'])
-        resources = dependencies(spec)
-        snapshots += take_snapshots([pointer['path'], *[r['path'] for r in resources]])
-        for source in resources:
-            if resource(source['path']) != source: m.fail('MATRIX_LINEAGE_INVALID')
-    else:
-        m.fail('MATRIX_REFERENCE_MISMATCH')
-    fragments = open_verified_fragments(fp['manifest_path'], expected_sha256=fp['manifest_sha256'],
-                                        runtime=FragmentVerificationRuntime())
+    # The producer owns source history and original scope; downstream features
+    # need exact genome compatibility, not the producer's feature vocabulary.
+    from .scatac_fragment_reader import qualified_fragments
+    fragments, producer = qualified_fragments(fp['manifest_path'], fp['manifest_sha256'])
+    # A new matrix binds current sources, even when the producer science was
+    # already verified in this operation. Accepted matrix reads use their proof.
+    from .authority_context import current, VerificationContext
+    from .fastq_verification_authority import file_closure
+    context = current() or VerificationContext()
+    description, _ = context.describe(producer['kind'], Path(fp['manifest_path']), fp['manifest_sha256'])
+    sources = description['historical_sources']
+    if file_closure(r['path'] for r in sources) != sources:
+        m.fail('MATRIX_LINEAGE_INVALID')
+    snapshots += take_snapshots(r['path'] for r in sources)
     fr = fragments.manifest['reference']
     from .scatac_reference import species_identity
     species = fr['species'] if type(fr['species']) is dict else species_identity(fr['species'])
@@ -147,6 +108,6 @@ def bind(upstream, limits):
                         identity_sha256=i, contract_version=c)
                 for k, i, c in zip(('fragments', 'cells', 'reference'), ids, contracts)}
     result = BoundFeatures(fragments, selected, ref, pointers, tuple(sorted(set(snapshots))),
-                           selected_contract, qc_reference, qualification)
+                           selected_contract)
     result.unchanged()
     return result

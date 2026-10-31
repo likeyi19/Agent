@@ -26,7 +26,7 @@ def validate_result(value):
             or type(value['artifact_schema_version']) is not int or value['artifact_schema_version']!=1
             or value['contract_version']!=m.CONTRACT or value['selection_method']!=METHOD
             or value['cell_call_method']!='none' or value['cell_call_state']!='not_assessed'
-            or value['resource_qualification'] not in ('synthetic_only','operator_qualified')): raise ValueError()
+            or value['resource_qualification'] not in m.qc.QUALIFICATION_MODES): raise ValueError()
         v2.absolute_path(value['manifest_path'])
         for key in ('manifest_sha256','ordered_selected_sha256','qc_identity_sha256'): v2.sha(value[key])
         for key in ('n_observed_barcodes','n_selected','n_rejected'):

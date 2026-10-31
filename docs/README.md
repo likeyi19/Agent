@@ -42,6 +42,8 @@ sequence descriptors, reusable candidates and ordinary resource deployment.
 
 The [motif accessibility guide](guides/motif-accessibility.md) covers native chromVAR, ordinary H5AD counts, versioned motifs, reference requirements and scientifically bounded interpretation.
 
+The [peak calling guide](guides/macs3-peak-calling.md) covers native MACS3, exact fragment populations, unit-record semantics, derived experimental peaks and reuse by the existing feature-matrix owner.
+
 The [scATAC regulatory sequence guide](guides/scatac-regulatory-sequences.md) covers
 descriptive or accepted-DA region selection, exact genomic extraction, explicit
 model windows and accepted-candidate continuation.

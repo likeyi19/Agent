@@ -254,3 +254,53 @@ def test_resource_answer_can_continue_to_missing_namespace_without_reupload(frag
         assert run.request.prompt == OBJECTIVE
         assert run.steps[0].resolved_arguments['namespace'] == 'research-b'
         assert run.steps[0].resolved_arguments['source_path'] == backend.service.resources.load(source['resource_id']).source_path
+
+
+def test_empty_input_resource_continuation_reuses_accepted_fragments(tmp_path, monkeypatch):
+    from test_external_fragments_execution import downstream_inputs
+    from agent.application.input_sets import ScientificInputSet
+    from agent.application.session_state import AnalysisSession, SessionError
+    monkeypatch.setenv('AGENT_QC_BEDTOOLS','/usr/bin/bedtools')
+    monkeypatch.setenv('AGENT_QC_ALLOW_SYNTHETIC','1')
+    monkeypatch.delenv('AGENT_QC_RESOURCE_CATALOG',raising=False)
+    arguments=downstream_inputs(tmp_path)
+    objective='Compute QC on the accepted fragments with a matching reference.'
+    class Model(ScriptedModel):
+        def complete(self, *, prompt, response_schema):
+            value=json.loads(prompt)
+            if value.get('utterance')==objective:
+                assert any(r['handle']=='resource.qc' for r in value['dialogue']['resource_choices'])
+                return json.dumps(dict(turn_schema_version=1,decision=dict(kind='request_resources',target='compute_scATAC_qc',arguments=[],context='current')))
+            if value.get('utterance')=='Use the matching QC reference.':
+                return json.dumps(dict(turn_schema_version=1,decision=dict(kind='answer_resources',pending='@resources',choice='resource.qc',arguments=[])))
+            if value.get('user_request')==objective:
+                fragments=next(r for r in value['active_outputs'] if r['semantic_type']=='scatac_fragments.v2')
+                return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(step_id='qc',tool='compute_scATAC_qc',sources=[
+                    dict(target='fragments',source=dict(kind='context',handle=fragments['handle'])),
+                    dict(target='qc_reference',source=dict(kind='input',input='qc_reference_manifest_path')),
+                    dict(target='output_dir',source=dict(kind='input',input='output_dir'))],control_dependencies=[])])))
+            if 'output_selection_schema_version' in value and value['steps'][0]['tool']=='compute_scATAC_qc':
+                return json.dumps(dict(outputs=[dict(name='QC',step_id='qc',output_key='manifest_path')],retain=[]))
+            return super().complete(prompt=prompt,response_schema=response_schema)
+    qc=ScientificInputSet('qc','Matching QC reference',{k:v for k,v in arguments.items() if k.startswith('qc_reference_')})
+    upstream={k:v for k,v in arguments.items() if not k.startswith(('qc_reference_','reference_manifest_','min_'))}
+    backend=web_fragments(tmp_path,upstream,companions=(fragment_companion(upstream),qc),model_type=Model)
+    with TestClient(backend.app) as client:
+        source=upload_fragments(client,arguments)
+        client.post('/api/v1/sessions',json={'session_id':'analysis'})
+        first=execute(client,fragment_body(source))
+        assert first['status']=='succeeded',first
+        original=backend.service._application.run_store.load(first['run_id'])
+        pending=execute(client,dict(turn_id='qc-request',expected_generation=1,utterance=objective))
+        assert pending['status']=='clarification',pending
+        assert len(backend.service._application.sessions.load('analysis').turns)==1
+        result=execute(client,dict(turn_id='qc-answer',expected_generation=1,utterance='Use the matching QC reference.'),timeout=60)
+        assert result['status']=='succeeded',(result,backend.errors)
+        run=backend.service._application.run_store.load(result['run_id'])
+        assert len(run.steps)==1 and run.steps[0].tool_name=='compute_scATAC_qc'
+        assert run.steps[0].resolved_arguments['fragments_manifest_path']==original.steps[0].result['manifest_path']
+        state=backend.service._application.sessions.load('analysis')
+        assert state.interactions[-1].admitted['context']=='current'
+        changed=_serialize(state.to_dict());changed['interactions'][-1]['admitted'].pop('context')
+        with pytest.raises(SessionError):AnalysisSession.from_dict(changed)
+        assert backend.service._application.run_store.load(first['run_id'])==original

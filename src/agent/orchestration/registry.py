@@ -101,6 +101,7 @@ class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
     MOTIF_ACCESSIBILITY = "motif_accessibility"
+    SCATAC_PEAKS = "scatac_peaks"
     DNA_SEQUENCES = "dna_sequences"
     SCATAC_REGULATORY_REGIONS = "scatac_regulatory_regions"
     SEQUENCE_PREDICTIONS = "sequence_predictions"
@@ -3699,11 +3700,13 @@ def build_default_tool_registry() -> ToolRegistry:
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
+    from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
         inspect_spec,
         chromvar_tool_spec(),
+        macs3_tool_spec(),
         embedding_spec,
         pca_spec,
         neighbors_spec,

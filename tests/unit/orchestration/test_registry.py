@@ -28,6 +28,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
     assert registry.names() == (
         "inspect_scATAC",
         "compute_motif_accessibility",
+        "call_scATAC_peaks",
         "epizoo_embed_cells",
         "pca_embed_cells",
         "build_cell_neighbors",
@@ -305,6 +306,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         name: registry.get(name).recovery_policy_version for name in registry.names()
     } == {
         "compute_motif_accessibility": "chromvar-native-v1",
+        "call_scATAC_peaks": "macs3-frag-unit-record-v1",
         "predict_regulatory_sequences": "regulatory-sequence-native-v1",
         "optimize_regulatory_sequences": "regulatory-sequence-optimization-native-v1",
         "generate_regulatory_sequences": "regulatory-sequence-generation-native-v1",

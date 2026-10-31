@@ -14,7 +14,7 @@ def validate_result(value):
         if (value['status']!='success' or value['artifact_type']!=m.ARTIFACT
             or type(value['artifact_schema_version']) is not int or value['artifact_schema_version']!=1
             or value['contract_version']!=m.CONTRACT or value['science_profile_sha256']!=PROFILE_SHA256
-            or value['resource_qualification'] not in ('synthetic_only','operator_qualified')): raise ValueError()
+            or value['resource_qualification'] not in m.QUALIFICATION_MODES): raise ValueError()
         v2.absolute_path(value['manifest_path'])
         for k in ('manifest_sha256','qc_resource_identity_sha256'): v2.sha(value[k])
         for k in ('n_observed_barcodes','n_fragment_records','n_qc_fragment_records','tss_defined','tss_undefined'): m.unsigned(value[k])

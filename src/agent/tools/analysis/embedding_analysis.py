@@ -805,3 +805,16 @@ def method_facts(path):
     if 'parameters' in metadata:
         facts['embedding_parameters'] = dict(metadata['parameters'])
     return facts
+
+
+def source_bound_cluster_rows(cell_ids, analysis_path, analysis_sha256, source_sha256):
+    """Project fixed labels only for the exact original file and ordered cells."""
+    from .marker_annotation import checked_file
+    grouped = _read_analysis(checked_file(analysis_path, analysis_sha256))
+    ids, _, _ = _validate_neighbors_artifact(grouped, expected_stages=frozenset({'clustering'}))
+    _validate_cluster_labels(grouped)
+    if _provenance(grouped).get('embedding', {}).get('source_sha256') != source_sha256:
+        raise ValueError('Clustering must retain the exact original count-file identity')
+    if tuple(cell_ids) != ids:
+        raise ValueError('Clustering and annotation require identical ordered cells')
+    return list(zip(ids, grouped.obs[LEIDEN_KEY].astype(str)))

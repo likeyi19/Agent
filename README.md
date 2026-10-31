@@ -660,8 +660,18 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-2A adds [native MACS3 peak calling](docs/guides/macs3-peak-calling.md), bringing
+the Registry to 34 tools. One exact fragment population supplies experimental
+peaks, native statistics and an ordered peak-set reference for existing
+fragment-overlap matrix construction. Effective genome size and its basis are
+explicit; source support is not silently used as independent fragment weight.
+The [STE-2A report](../agent-data/acceptance/scientific-tool-ecosystem/ste-2/REPORT.md)
+records native and researcher acceptance. Its
+[finalization](../agent-data/acceptance/scientific-tool-ecosystem/ste-2/finalization/REPORT.md)
+records ordinary-library new-QC readiness, parameter provenance and Git closeout.
+
 STE-1 adds [native motif accessibility](docs/guides/motif-accessibility.md), bringing
-the current Registry to 33 tools. Ordinary dense/CSR/CSC peak-count H5AD and selected
+the Registry at that stage to 33 tools. Ordinary dense/CSR/CSC peak-count H5AD and selected
 layers can enter chromVAR directly, including truthfully declared Cell Ranger
 insertion counts. Results separate bias-corrected deviations from z-scores and
 retain native backgrounds, motif matches, source mappings, figures and downloads.

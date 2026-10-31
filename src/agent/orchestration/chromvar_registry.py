@@ -31,6 +31,7 @@ def tool_spec():
     for name,description in (
         ('count_slot','X by default, or the exact AnnData layer name as supplied by the researcher (e.g. raw_counts); layers/exact_name also works. Source counts and axes are never changed.'),
         ('assembly','Actual genome assembly, matching a configured genome or supplied FASTA. Standard uns assembly or a unique var genome value may supply it.'),
+        ('genome_resource','Optional exact installed genome label or identity when multiple genomes match. The declared assembly must still match; this never aliases assemblies.'),
         ('feature_chrom_key','Exact chromosome var column, default chrom.'),('feature_start_key','Exact start var column, default start.'),
         ('feature_end_key','Exact end var column, default end.'),('motif_collection','Optional exact installed motif collection label or identity; omit for the unique taxon-compatible collection.')):
         optional[name]=arg((str,),description,scientific_parameter=True,conversational_exact_string=True)

@@ -32,6 +32,7 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('call_scATAC_peaks', 'barcodes'),
     ('compute_motif_accessibility', 'dataset'),
     ('compute_motif_accessibility', 'genome'),
     ('prepare_scatac_regulatory_sequences', 'dataset'),
@@ -89,7 +90,7 @@ _BAM_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
     'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
 _FRAGMENTS_COMPANION_TOOLS = ('import_scATAC_fragments', 'compute_scATAC_qc',
-                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features') + _RAW_ANALYSIS_TOOLS
+                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features', 'call_scATAC_peaks') + _RAW_ANALYSIS_TOOLS
 _FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_path',
     'source_index_sha256', 'output_dir', 'fragments_manifest_path', 'fragments_manifest_sha256',
     'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',

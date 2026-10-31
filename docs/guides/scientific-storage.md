@@ -84,10 +84,16 @@ and scientific algorithms are unchanged.
 
 The other existing operator bindings remain
 `AGENT_ANNOTATION_{MAESTRO_ROOT,RSCRIPT,R_LIBRARY}`,
-`AGENT_CHROMAP_{BIN,INDEX_ROOT}`, `AGENT_QC_{RESOURCE_CATALOG,BEDTOOLS}` and
+`AGENT_CHROMAP_{BIN,INDEX_ROOT}`, `AGENT_QC_BEDTOOLS` and
 `AGENT_MATRIX_BEDTOOLS`. OS executables and the existing Conda R installation
 remain in their qualified installation locations. Relocating that entire
 environment is outside this deployment.
+
+Ordinary Web QC uses the configured ScientificResourceLibrary installation and
+exact file closure. It needs no separate qualification catalog.
+`AGENT_QC_RESOURCE_CATALOG` remains the legacy standalone-owner route outside
+a configured library; accepted historical catalog closures retain their meaning.
+See the [peak calling guide](macs3-peak-calling.md) for the installation example.
 
 Qualified macaque normalized TSS/QC assets are optional and use the existing
 explicit neutral-reference owner/catalog workflow. Shared-library discovery of

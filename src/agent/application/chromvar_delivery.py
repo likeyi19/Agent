@@ -20,7 +20,7 @@ FILES = {
 }
 
 
-def _publication(app,revision,origin,output,step_id=None):
+def _publication(app,revision,origin,output,step_id=None,*,owner=owner):
     from agent.orchestration.verification_authority import _accepted
     from agent.orchestration.prior_outputs import accepted_step_digest
     store=app._application.run_store;run_id=revision.run_id if output is None else output.run_id
@@ -37,20 +37,22 @@ def _publication(app,revision,origin,output,step_id=None):
     return store,run_id,step_id,step,authority,anchor,root,manifest,sha,record
 
 
-def accepted_artifacts(app,session_id,revision,origin,output,*,step_id=None):
+def accepted_artifacts(app,session_id,revision,origin,output,*,step_id=None,owner=owner,files=FILES,artifact_type="scientific_motifs"):
     from agent.orchestration.verification_authority import _accepted
     from agent.orchestration.prior_outputs import accepted_step_digest
     from .interactive import _ScientificMatrixArtifact
     from .interactive_schemas import ScientificArtifactHandle
     from .session_state import digest
-    store,run_id,step_id,step,authority,anchor,root,manifest,sha,record=_publication(app,revision,origin,output,step_id)
+    store,run_id,step_id,step,authority,anchor,root,manifest,sha,record=_publication(app,revision,origin,output,step_id,owner=owner)
     items=[]
     for pin in manifest['files']:
         path=Path(pin['path']);name=path.name;path.relative_to(root)
-        if name not in FILES or pin not in record['files']:raise ValueError('Unbound motif artifact')
+        if name not in files:continue
+        if pin not in record['files']:raise ValueError('Unbound native artifact')
+        if pin['size_bytes']==0:continue
         identity=dict(session_id=session_id,revision_id=revision.revision_id,turn_id=origin.turn_id,run_id=run_id,
             step_id=step_id,accepted_step_sha256=accepted_step_digest(step),authority_sha256=authority.identity_sha256,manifest_sha256=sha,payload=pin)
-        ref=ScientificArtifactHandle(digest(identity),'scientific_motifs',pin['sha256'],revision.revision_id,origin.turn_id,pin['size_bytes'],name,FILES[name][0])
+        ref=ScientificArtifactHandle(digest(identity),artifact_type,pin['sha256'],revision.revision_id,origin.turn_id,pin['size_bytes'],name,files[name][0])
         delivery=dict(manifest,tool_name=owner.TOOL,accepted_step_sha256=accepted_step_digest(step))
         items.append(_ScientificMatrixArtifact(ref,path,root,pin['sha256'],pin['size_bytes'],owner.CONTRACT,delivery,name,sha))
     if _accepted(store,run_id,step_id)[3]!=anchor:raise ValueError('Motif accepted anchor changed')
@@ -82,7 +84,7 @@ def prepare(stream,role):
     return raw
 
 
-def accepted_figures(app,turn,revision):
+def accepted_figures(app,turn,revision,*,owner=owner,figure_name="patterns.png",figure_kind="motif_accessibility_heatmap"):
     from agent.orchestration.verification_authority import _accepted
     from agent.orchestration.prior_outputs import accepted_step_digest
     if revision is None:return ()
@@ -93,13 +95,13 @@ def accepted_figures(app,turn,revision):
         seen.add(key);run=app._application.run_store.load(output.run_id)
         step=next(s for s in run.steps if s.step_id==output.step_id)
         if step.tool_name!=owner.TOOL:continue
-        store,run_id,step_id,step,authority,anchor,root,manifest,sha,record=_publication(app,revision,turn,output)
-        pin=next(p for p in manifest['files'] if Path(p['path']).name=='patterns.png');path=Path(pin['path']);path.relative_to(root)
+        store,run_id,step_id,step,authority,anchor,root,manifest,sha,record=_publication(app,revision,turn,output,owner=owner)
+        pin=next(p for p in manifest['files'] if Path(p['path']).name==figure_name);path=Path(pin['path']);path.relative_to(root)
         if pin not in record['files'] or owner.file_closure([path])!=[pin]:raise ValueError('Motif figure integrity changed')
         if _accepted(store,run_id,step_id)[3]!=anchor:raise ValueError('Motif figure anchor changed')
         source=dict(tool_name=owner.TOOL,role='native_scientific_figure',output=dict(name=output.name,run_id=run_id,
             step_id=step_id,accepted_step_sha256=accepted_step_digest(step),revision_id=revision.revision_id))
-        figures.append(dict(path=str(path),sha256=pin['sha256'],metadata=dict(kind='motif_accessibility_heatmap',figure_id='patterns.png',
+        figures.append(dict(path=str(path),sha256=pin['sha256'],metadata=dict(kind=figure_kind,figure_id=figure_name,
             manifest_sha256=sha,revision_id=revision.revision_id,run_id=run_id,step_ids=[step_id],
             output_names=[o.name for o in revision.outputs if (o.run_id,o.step_id)==key],sources=[source])))
     return tuple(figures)

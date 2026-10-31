@@ -2051,6 +2051,16 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
+        elif step.tool_name == 'call_scATAC_peaks':
+            try:
+                from agent.tools.analysis.macs3 import verify_result
+                verify_result(resolved_arguments, plain_result)
+            except (ValueError, TypeError, OSError, RuntimeError, KeyError):
+                checks.add('peak_publication_integrity', False, 'Native completion and exact peak/source/population integrity.',
+                    'Peak verification failed.', 'PEAK_VERIFICATION_FAILED', ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add('peak_publication_integrity', True, 'Native completion and exact peak/source/population integrity.',
+                    'Peak verification failed.', 'PEAK_VERIFICATION_FAILED')
         elif step.tool_name == 'compute_motif_accessibility':
             try:
                 from agent.tools.analysis.chromvar import verify_result

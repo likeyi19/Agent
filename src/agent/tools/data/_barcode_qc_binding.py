@@ -5,20 +5,15 @@ algorithms receive one common v2 reader and never branch on producer origin.
 """
 import json
 import os
-from pathlib import Path
 from dataclasses import dataclass
 
 from . import _barcode_qc_contract as m, scatac_qc_reference as qr
 from . import scatac_fragments_v2 as v2
-from .scatac_fragment_reader import open_verified_fragments
-from .scatac_fragments_v2_verifier import FragmentVerificationRuntime, take_snapshots, check_snapshots
+from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots
 from .scatac_qc_profile import fail
 from . import neutral_qc_reference as neutral
 from ._qc_bedtools import verify_qc_bedtools
 from agent.tools._cancellation import cancellation_checkpoint
-
-
-def packaging_runtime(): return FragmentVerificationRuntime()
 
 
 def backend_runtime():
@@ -34,6 +29,23 @@ def resource_qualification(bundle):
         if (os.environ.get('AGENT_QC_ALLOW_SYNTHETIC')!='1' or bundle.tss_rows>1000
             or sum(c.length for c in bundle.contigs)>1_000_000): fail('QC_RESOURCE_UNQUALIFIED')
         return dict(mode='synthetic_only',catalog_sha256=None,basis='explicit_runtime_synthetic_opt_in')
+    from agent.application.shared_resources import current_scientific_library
+    library = current_scientific_library()
+    if library is not None:
+        # Installation owns qualification; exact installed bytes own reuse.
+        # A configured library is authoritative, never a catalog fallback.
+        for entry in library.entries():
+            if entry['kind'] != 'qc':
+                continue
+            resource = entry['resource']
+            _, installed, _ = qr.load_scatac_qc_reference_bundle(
+                resource['qc_reference_manifest_path'],
+                expected_sha256=resource['qc_reference_manifest_sha256'])
+            if installed == bundle:
+                library.check(entry)
+                return dict(mode='library_qualified', resource_id=entry['id'],
+                            basis='scientific_resource_library_installation')
+        fail('QC_RESOURCE_UNQUALIFIED')
     configured=os.environ.get('AGENT_QC_RESOURCE_CATALOG')
     if not configured: fail('QC_RESOURCE_UNQUALIFIED')
     v2.absolute_path(configured)
@@ -62,41 +74,13 @@ def resource_qualification(bundle):
     return dict(mode='operator_qualified',catalog_sha256=hashlib.sha256(raw).hexdigest(),basis=matches[0]['qualification_basis'])
 
 
-def qualified_fragments(path,sha, *, fragments_authority=None):
-    # The declared producer kind selects its reviewed verifier, never a QC algorithm.
-    value=v2.load_fragments_manifest_v2(path,expected_sha256=sha)
-    if (sum(e['n_fragment_records'] for e in value['libraries'])>m.MAX_RECORDS
-        or sum(e['n_distinct_barcodes'] for e in value['libraries'])>m.MAX_BARCODES): fail('QC_RESOURCE_LIMIT')
-    kinds={e['provenance']['kind'] for e in value['libraries']}
-    if len(kinds)!=1: fail('QC_PRODUCER_UNQUALIFIED')
-    kind=next(iter(kinds)); runtime=packaging_runtime()
-    if fragments_authority is not None:
-        from .fragments_authority_contract import StoredFragmentAuthority
-        from agent.schemas.verification_authority import AuthorityError
-        if type(fragments_authority) is not StoredFragmentAuthority:
-            raise AuthorityError('QC requires stored producer-specific scientific authority.')
-        fragments_authority.validate(path,sha,producer_kind=kind)
-    if kind=='fastq_fragment_production':
-        from .fastq_fragments_verifier import verify_fragments
-        from .scatac_fragments import verification_runtime
-        if fragments_authority is None:
-            verify_fragments(path,expected_sha256=sha,runtime=verification_runtime())
-        basis='qualified_fastq_source_and_producer_record';history='alignment_not_rerun'
-    elif kind=='bam_fragment_production':
-        from .bam_fragments_verifier import verify_bam_fragments
-        if fragments_authority is None:
-            verify_bam_fragments(path,expected_sha256=sha,runtime=runtime)
-        basis='independent_bam_transformation';history='upstream_history_declared'
-    elif kind=='external_fragment_adoption':
-        from .external_fragments_verifier import verify_external_fragments
-        if fragments_authority is None:
-            verify_external_fragments(path,expected_sha256=sha,runtime=runtime)
-        basis='independent_external_conservation';history='upstream_history_declared'
-    else: fail('QC_PRODUCER_UNQUALIFIED')
-    view=open_verified_fragments(path,expected_sha256=sha,runtime=runtime)
-    if view.manifest!=value: fail('QC_SOURCE_CHANGED')
-    return view,dict(kind=kind,profile_ids=sorted({e['provenance']['profile']['id'] for e in value['libraries']}),
-        verification_basis=basis,history=history)
+def qualified_fragments(path, sha, *, fragments_authority=None):
+    from .scatac_fragment_reader import qualified_fragments as qualify
+    value = v2.load_fragments_manifest_v2(path, expected_sha256=sha)
+    if (sum(e['n_fragment_records'] for e in value['libraries']) > m.MAX_RECORDS
+            or sum(e['n_distinct_barcodes'] for e in value['libraries']) > m.MAX_BARCODES):
+        fail('QC_RESOURCE_LIMIT')
+    return qualify(path, sha, fragments_authority=fragments_authority)
 
 
 @dataclass(frozen=True)
@@ -131,7 +115,10 @@ def bind(arguments, *, fragments_authority=None):
         neutral.verify_integrity(bundle)
         if qualification['mode'] == 'synthetic_only':
             neutral.verify_normalized(bundle)
-    else:
+    elif qualification['mode'] != 'library_qualified':
+        # Installed resources were reconstructed at installation and their
+        # complete pinned closure was just checked. Legacy standalone catalogs
+        # do not carry that qualification closure.
         qr.reinspect_scatac_qc_reference_bundle_sources(bundle)
     view,producer=qualified_fragments(args['fragments_manifest_path'],args['fragments_manifest_sha256'],
                                     fragments_authority=fragments_authority)

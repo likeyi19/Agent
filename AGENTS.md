@@ -632,7 +632,55 @@ this is not universal prose reliability. The 147 focused and 499 affected tests
 pass; 43 optional/native checks are skipped. Historical protected files and
 scientific resources remain unchanged. The user authorizes one reviewed STE-1
 completion commit and normal upstream push; earlier no-commit records describe
-pre-closeout stages. STE-2 is not started.
+pre-closeout stages. STE-2 is not started by that record.
+
+STE-2A builds on `931a87a74380d1093120aa46990ccd6da9f59d46` without staging,
+commit or push. The [peak calling guide](docs/guides/macs3-peak-calling.md) owns
+optional native MACS3 3.1.0 single-population FRAG calling (34 Registry tools).
+Exact namespace/population, already-adjusted intervals, explicit effective genome
+size/basis and unit-record `--max-count 1` semantics remain authoritative. Source
+support is not independent fragment count. Experimental peaks use the existing
+feature-reference representation and matrix owner; they are not shared references.
+Producer-neutral binding reuses existing FASTQ/BAM/external verification and exact
+genome identity without requiring the producer's original feature vocabulary.
+
+The [STE-2A report](../agent-data/acceptance/scientific-tool-ecosystem/ste-2/REPORT.md)
+records **COMPLETE / CONDITIONAL GO** for controlled research use. Independent
+native full-PBMC calling and genuine Firefox calling agree on 61,359 peaks. The
+ordinary multi-turn journey produces a 571-cell peak count matrix, explicit
+TF-IDF/L2 PCA, neighbors, eight Leiden groups, UMAP and native chromVAR with 1,019
+motifs. Twenty-one actual scientific downloads, normal-launcher restarts and a
+complete read-only interpretation pass. Native undefined values remain NaN.
+Exact uploaded genome bytes preserve the source's `hg38` declaration; no assembly
+alias, contig renaming or chromVAR admission weakening is introduced.
+
+Resource clarification retains explicitly selected accepted context with no new
+upload. QC historical publication identity uses its recorded qualification and
+original catalog closure, while new execution still needs current qualification.
+Original identities and displayed failures remain unchanged. The report separates
+native/browser evidence, simulated regressions, initial failures and resource/prose
+limitations. This is not universal assay/species, biological, provider or deployment
+qualification. No next capability, staging, commit or push is authorized here.
+
+STE-2A finalization closes ordinary resource deployment on the same baseline.
+The [finalization report](../agent-data/acceptance/scientific-tool-ecosystem/ste-2/finalization/REPORT.md)
+owns the reviewed completion scope. ScientificResourceLibrary installation now
+qualifies QC once and supplies exact closure-checked eligibility to ordinary Web
+execution, without a second acceptance catalog. New library-qualified records
+retain the installed resource ID; accepted legacy publications keep their original
+qualification and closure. Selection and matrix reuse do not requalify completed QC.
+The original 10x/GENCODE resource and its explicitly declared genome are installed
+in place in the normal library, with all prior entries preserved. Optional exact
+chromVAR genome selection retains assembly checks and introduces no aliases.
+Genuine normal-launcher Firefox execution performs one new QC step on the accepted
+original fragments; its tables and numerical summary equal the original result.
+The explicitly requested TSS threshold of 2 is confirmed; the default remains 4.
+The MACS3 genome-size constant retains its conventional, not sample-estimated,
+meaning. The 331 affected-owner and 114 interface tests pass. Earlier provider planning refusal and
+all historical science/text remain preserved. The user authorizes one reviewed
+STE-2A completion commit and normal push; earlier no-commit statements describe
+the pre-closeout stages. Controlled research limitations and scope exclusions
+remain unchanged.
 
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability

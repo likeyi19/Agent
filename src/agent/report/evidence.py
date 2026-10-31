@@ -17,6 +17,7 @@ import numpy as np
 from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
+from agent.tools.analysis.macs3 import RESULT_FIELDS as _PEAK_FIELDS, FACT_FIELDS as _PEAK_FACTS
 from agent.tools.analysis.chromvar import RESULT_FIELDS as _MOTIF_FIELDS, FACT_FIELDS as _MOTIF_FACTS
 from agent.tools.analysis.scatac_regulatory_sequences import RESULT_FIELDS as _REGION_SEQUENCE_FIELDS
 from agent.tools.analysis.sequence_prediction import RESULT_FIELDS as _SEQUENCE_FIELDS, EVAL_FIELDS as _SEQUENCE_EVAL_FIELDS
@@ -405,6 +406,8 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    'call_scATAC_peaks': _ToolProjection(frozenset(_PEAK_FIELDS), _PEAK_FACTS, 'macs3-frag-unit-record-v1', (
+        _ArtifactProjection('manifest_path','scatac_peaks_manifest',('native_completion','exact_population','resource_and_artifact_integrity'),digest_field='manifest_sha256'),)),
     'compute_motif_accessibility': _ToolProjection(frozenset(_MOTIF_FIELDS), _MOTIF_FACTS, 'chromvar-native-v1', (
         _ArtifactProjection('manifest_path','motif_accessibility_manifest',('native_completion','exact_ordered_axes','resource_and_artifact_integrity'),digest_field='manifest_sha256'),
         _ArtifactProjection('scores_path','cell_motif_deviations_h5ad',('distinct_deviations_and_z_scores','original_cell_order'),digest_field='scores_sha256'))),

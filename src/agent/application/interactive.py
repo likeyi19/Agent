@@ -1011,6 +1011,10 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
+                elif step.tool_name == 'call_scATAC_peaks':
+                    from .macs3_delivery import accepted_artifacts
+                    items.extend(accepted_artifacts(self, session_id, revision, origin,
+                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'compute_motif_accessibility':
                     from .chromvar_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin,
@@ -1066,6 +1070,9 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                elif planned.tool_name == 'call_scATAC_peaks':
+                    from .macs3_delivery import accepted_artifacts
+                    items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name == 'compute_motif_accessibility':
                     from .chromvar_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))

@@ -21,7 +21,10 @@ def source_kind(submission):
         if submission['registered_input'].get('composition') == 'scientific-role-selection.v1':
             return 'roles'
         return COMPOSITIONS.get(submission['registered_input'].get('composition'))
-    return 'structured' if submission.get('execution_inputs') else None
+    # An accepted-result continuation can have no new file/parameter inputs.
+    # Its empty captured mapping still supports explicit resource selection;
+    # it grants no dataset or execution authority.
+    return 'structured' if 'execution_inputs' in submission else None
 
 
 def _offered(submission, input_sets):
@@ -99,7 +102,7 @@ def request(sessions, interaction, decision, input_sets):
     if source_kind(interaction.submission) is None:
         raise IntentError('invalid_prerequisite')
     admitted = admit(sessions, interaction, Execute('current', 'plan', decision.target, None,
-        arguments=decision.arguments, roles=decision.roles), interaction.submission['execution_inputs'])
+        arguments=decision.arguments, roles=decision.roles, context=decision.context), interaction.submission['execution_inputs'])
     rows = catalog(input_sets)
     admitted.update(kind='request_resources', resource_catalog=rows)
     if decision.reference_category is not None:
@@ -194,6 +197,7 @@ def answer(sessions, interaction, decision, input_sets, *, reference_resources=N
         revision_id=interaction.base_revision_id,
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
         inputs=completed['execution_inputs'],
+        **({'context': origin.admitted['context']} if 'context' in origin.admitted else {}),
         **({'registered_input': completed['registered_input']} if 'registered_input' in completed else {}),
         arguments=[asdict(d) for d in decision.arguments], resource_handle=decision.choice,
         **({'reference_record': reference_record.to_dict(), 'reference_source': reference_source.to_dict()}
@@ -210,6 +214,10 @@ def validate(interaction, preceding):
     reference = interaction.snapshot.get('prerequisite')
     pending = interaction.prerequisite
     try:
+        if 'context' in admitted and (admitted['context'] != 'current'
+                or interaction.base_revision_id is None
+                or interaction.snapshot['relations'].get('current') != interaction.base_revision_id):
+            raise ValueError('Invalid captured resource execution context.')
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
             interaction.snapshot.get('dialogue', {}).get('requested_predecessor'),
@@ -265,6 +273,7 @@ def validate(interaction, preceding):
                 or admitted['revision_id'] != interaction.base_revision_id
                 or _serialize(admitted['inputs']) != completed['execution_inputs']
                 or _serialize(admitted.get('registered_input')) != completed.get('registered_input')
+                or admitted.get('context') != origin.admitted.get('context')
                 or admitted['continuation'] != {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}):
             raise ValueError('Changed resource continuation.')
     except (ValueError, TypeError, KeyError, StopIteration, AttributeError) as exc:

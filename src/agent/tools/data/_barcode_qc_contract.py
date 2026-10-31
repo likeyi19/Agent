@@ -32,6 +32,25 @@ MANIFEST_FIELDS = ('artifact_type','schema_version','contract_version','policy',
     'ordered_barcode_sha256','row_count','table','histogram','summary','identity_sha256')
 
 
+QUALIFICATION_MODES = ('synthetic_only', 'operator_qualified', 'library_qualified')
+
+def validate_resource_qualification(qualification):
+    if type(qualification) is not dict: fail('QC_RESOURCE_UNQUALIFIED')
+    v2.shape(qualification, ('mode','resource_id','basis') if qualification.get('mode') == 'library_qualified'
+             else ('mode','catalog_sha256','basis'))
+    v2.token(qualification['basis'])
+    if qualification['mode']=='synthetic_only':
+        if qualification['catalog_sha256'] is not None: fail('QC_RESOURCE_UNQUALIFIED')
+    elif qualification['mode']=='operator_qualified': v2.sha(qualification['catalog_sha256'])
+    elif qualification['mode']=='library_qualified':
+        identity = qualification['resource_id']
+        if (type(identity) is not str or len(identity) != 56
+                or any(c not in '0123456789abcdef' for c in identity)
+                or qualification['basis'] != 'scientific_resource_library_installation'):
+            fail('QC_RESOURCE_UNQUALIFIED')
+    else: fail('QC_RESOURCE_UNQUALIFIED')
+
+
 def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
@@ -142,12 +161,7 @@ def validate_manifest(value):
         if type(a['profile_ids']) is not list or not 1<=len(a['profile_ids'])<=3: fail('QC_PRODUCER_UNQUALIFIED')
         for p in a['profile_ids']: v2.token(p)
         for k in ('verification_basis','history'): v2.token(a[k])
-        v2.shape(value['resource_qualification'],('mode','catalog_sha256','basis'))
-        qualification=value['resource_qualification'];v2.token(qualification['basis'])
-        if qualification['mode']=='synthetic_only':
-            if qualification['catalog_sha256'] is not None: fail('QC_RESOURCE_UNQUALIFIED')
-        elif qualification['mode']=='operator_qualified': v2.sha(qualification['catalog_sha256'])
-        else: fail('QC_RESOURCE_UNQUALIFIED')
+        validate_resource_qualification(value['resource_qualification'])
         v2.shape(value['backend_identity'],('profile','executable_sha256','runtime_sha256','compression'))
         backend=value['backend_identity'];v2.sha(backend['executable_sha256']);v2.sha(backend['runtime_sha256'])
         if backend['profile']!='bedtools-qc-point-incidence.v1' or backend['compression']!='gzip-mtime0-level6.v1': fail('QC_BACKEND_INVALID')

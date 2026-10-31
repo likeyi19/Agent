@@ -78,6 +78,8 @@ def resolve_resources(args, peaks, stage):
     assembly = args.get('assembly')
     if not assembly:
         raise ValueError('Establish the peak genome assembly from source metadata or a declaration')
+    if args.get('genome_path') and args.get('genome_resource'):
+        raise ValueError('Select either an installed genome or a task FASTA')
     if args.get('genome_path'):
         # Existing ordinary source binding supplies this private FASTA. Build only
         # its task-local index; never modify the uploaded source or shared library.
@@ -93,7 +95,8 @@ def resolve_resources(args, peaks, stage):
             raise ValueError('A task FASTA requires its species taxonomy_id to select appropriate motifs')
         genome_identity = dict(assembly=assembly,taxonomy_id=args['taxonomy_id'],fasta_sha256=pin['sha256'],fai_sha256=file_closure([str(local)+'.fai'])[0]['sha256'],source='task FASTA')
     else:
-        candidates = [e for e in lib.entries() if e['kind']=='genome' and e['resource']['assembly']==assembly]
+        candidates = [e for e in lib.entries() if e['kind']=='genome' and e['resource']['assembly']==assembly
+            and (not args.get('genome_resource') or args['genome_resource'] in (e['id'],e['label']))]
         if len(candidates)!=1:
             raise ValueError('Choose an unambiguous matching genome or supply a task FASTA; no contig renaming is inferred')
         entry=candidates[0]; genome=lib.check(entry); sources.extend(entry['files'])
@@ -377,7 +380,7 @@ def execute(values, execution_identity=None):
 
 def compute_motif_accessibility(input_path,output_dir,input_sha256=None,count_slot=None,matrix_semantics=None,assembly=None,
     coordinate_source=None,coordinate_system=None,feature_chrom_key=None,feature_start_key=None,feature_end_key=None,
-    group_key=None,genome_path=None,genome_sha256=None,taxonomy_id=None,motif_collection=None,seed=None,background_iterations=None,p_cutoff=None):
+    group_key=None,genome_path=None,genome_sha256=None,genome_resource=None,taxonomy_id=None,motif_collection=None,seed=None,background_iterations=None,p_cutoff=None):
     return execute({k:v for k,v in locals().items() if v is not None})
 
 

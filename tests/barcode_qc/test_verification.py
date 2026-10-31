@@ -124,12 +124,13 @@ def test_fabricated_producer_is_not_generically_qualified(qc_case):
     args,*_=qc_case
     from agent.tools.data import scatac_fragments_v2 as v2
     from agent.tools.data.scatac_fragment_reader import open_verified_fragments
+    from agent.tools.data.scatac_fragments_v2_verifier import FragmentVerificationRuntime
     path=Path(args['fragments_manifest_path']);value=json.loads(path.read_bytes())
     value['libraries'][0]['provenance']['profile']['id']='fabricated-profile.v1'
     value['fragments_identity_sha256']=v2.fragments_identity(value)
     path.write_bytes(v2.canonical_fragments_manifest_v2_bytes(value));args['fragments_manifest_sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
     # Generic verification explicitly accepts opaque bound profile identity.
-    view=open_verified_fragments(path,expected_sha256=args['fragments_manifest_sha256'],runtime=binding.packaging_runtime())
+    view=open_verified_fragments(path,expected_sha256=args['fragments_manifest_sha256'],runtime=FragmentVerificationRuntime())
     assert view.verification.producer_profile_qualification=='not_established'
     with pytest.raises(ValueError):public.compute_scATAC_qc(**args)
     assert not Path(args['output_dir']).exists()

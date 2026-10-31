@@ -39,7 +39,9 @@ def tool_spec():
                          ('selected_cells','selected_cells_manifest'), ('reference','reference_manifest')):
         cell_port = port in ('explicit_cells', 'selected_cells')
         upstream = (('scatac_cell_selection.v1',) if port == 'selected_cells' else
-                    ('scatac_fragments.v2',) if port == 'fragments' else ())
+                    ('scatac_fragments.v2',) if port == 'fragments' else
+                    ('regulatory_feature_reference.v1',) if port == 'reference' else
+                    ('scatac_explicit_cells.v1',) if port == 'explicit_cells' else ())
         for suffix in ('path','sha256'):
             key = prefix+'_'+suffix
             spec = _planning_argument((str,Path) if suffix=='path' else (str,),

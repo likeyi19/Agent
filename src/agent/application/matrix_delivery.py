@@ -608,7 +608,8 @@ class MatrixDownloadPreparer:
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
-        from . import sequence_delivery, chromvar_delivery
+        from . import sequence_delivery, chromvar_delivery, macs3_delivery
+        peaks = artifact.contract == macs3_delivery.owner.CONTRACT and getattr(artifact, "role", None) in macs3_delivery.FILES
         motif = artifact.contract == chromvar_delivery.owner.CONTRACT and getattr(artifact, 'role', None) in chromvar_delivery.FILES
         motif_h5ad = motif and artifact.role == 'motif-accessibility.h5ad'
         sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
@@ -635,6 +636,8 @@ class MatrixDownloadPreparer:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
+        elif peaks:
+            filename, content_type = artifact.role, macs3_delivery.FILES[artifact.role][1]
         elif motif:
             filename, content_type = artifact.role, chromvar_delivery.FILES[artifact.role][1]
         elif sequence:
@@ -764,8 +767,8 @@ class MatrixDownloadPreparer:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None
-            elif sequence or motif:
-                data = (chromvar_delivery if motif else sequence_delivery).prepare(snapshot, artifact.role)
+            elif sequence or motif or peaks:
+                data = (macs3_delivery if peaks else chromvar_delivery if motif else sequence_delivery).prepare(snapshot, artifact.role)
                 snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
                 delivered_size = len(data); checksum = hashlib.sha256(data)
             elif reference_evidence:
@@ -775,8 +778,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export or model_metadata or sequence or motif else size,
-                sha256=checksum.hexdigest() if export or model_metadata or sequence or motif else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata or sequence or motif or peaks else size,
+                sha256=checksum.hexdigest() if export or model_metadata or sequence or motif or peaks else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

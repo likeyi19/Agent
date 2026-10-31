@@ -71,15 +71,8 @@ def group_rows(a, spec):
         rows=list(frame.itertuples(index=False,name=None))
     elif 'analysis_path' in selected:
         from . import embedding_analysis as analysis
-        grouped = analysis._read_analysis(legacy.checked_file(selected['analysis_path'], selected['analysis_sha256']))
-        ids, _, _ = analysis._validate_neighbors_artifact(grouped, expected_stages=frozenset({'clustering'}))
-        analysis._validate_cluster_labels(grouped)
-        embedding = analysis._provenance(grouped).get('embedding', {})
-        if embedding.get('source_sha256') != selected['source_sha256']:
-            raise ValueError('Clustering must retain the exact original count-file identity')
-        if tuple(a.obs_names) != ids:
-            raise ValueError('Clustering and annotation require identical ordered cells')
-        rows = list(zip(ids, grouped.obs[analysis.LEIDEN_KEY].astype(str)))
+        rows = analysis.source_bound_cluster_rows(a.obs_names, selected['analysis_path'],
+            selected['analysis_sha256'], selected['source_sha256'])
     else:
         name=selected['obs_column']
         if name not in a.obs or a.obs[name].isna().any(): raise ValueError('Selected grouping column absent or contains missing values')

@@ -55,7 +55,7 @@ def test_details_report_and_figure_controls_remain_available():
 def test_chat_and_details_use_server_file_descriptions_without_a_duplicate_label_policy():
     source = (STATIC / 'app.js').read_text()
     policy = source[source.index('function supportedScientificFile'):source.index('function scientificFileNode')]
-    for artifact_type in ('scientific_matrix', 'scientific_qc_table', 'scientific_selection_table',
+    for artifact_type in ('scientific_peaks', 'scientific_matrix', 'scientific_qc_table', 'scientific_selection_table',
                           'scientific_integrated', 'scientific_analysis'):
         assert artifact_type in policy
     assert 'Original accepted matrix' not in policy and 'safe export' not in policy

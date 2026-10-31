@@ -48,6 +48,16 @@ def _publication(arguments,execution_identity):
     return args,Path(args['output_dir'])/('barcode-qc-'+token),token
 
 
+def _recorded_publication(arguments, execution_identity, path, sha):
+    """Reconstruct publication identity from pinned evidence, without requalifying execution."""
+    args=m.validate_arguments(arguments)
+    value=m.load_manifest(path,sha).to_dict()
+    if value['arguments']!=args: fail('QC_RESULT_MISMATCH')
+    token=_publication_token(args,execution_identity,value['qc_resource_identity_sha256'],
+        value['resource_qualification'],value['backend_identity'])
+    return args,Path(args['output_dir'])/('barcode-qc-'+token),token
+
+
 def _summary(value,path,sha):
     return BarcodeQCResult(status='success',manifest_path=str(path),manifest_sha256=sha,
         artifact_type=m.ARTIFACT,artifact_schema_version=1,contract_version=m.CONTRACT,

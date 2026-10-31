@@ -1076,6 +1076,9 @@ def _fragments_identity(candidates, declared, selected):
 
 def _fragments_values(declared, selected, arguments, reference):
     values = {} if selected is None else selected.inputs()
+    # Species already binds the selected reference at resource resolution; it
+    # is not a second import argument. Shared BAM/fragment InputSets may carry it.
+    values.pop('species', None)
     if selected is None:
         values.update(reference_bundle_path=reference['manifest_path'], reference_bundle_sha256=reference['manifest_sha256'])
     # Sample declarations belong to the task, not to a reusable reference.

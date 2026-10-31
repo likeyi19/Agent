@@ -267,7 +267,15 @@ def describe(kind, path, sha, context):
         from .neutral_qc_reference import NeutralQCReference
         resources.extend(_reference(bundle.parent_manifest.path, bundle.parent_manifest.sha256,
                                     neutral=type(bundle) is NeutralQCReference))
-        if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
+        accepted = context.accepted.get((str(path), actual))
+        if accepted is not None:
+            # Retain the exact original catalog closure; the current operator
+            # selection cannot redefine an already accepted QC publication.
+            catalog_sha = value['resource_qualification'].get('catalog_sha256')
+            resources.extend(f['path'] for f in accepted['record']['files']
+                             if catalog_sha is not None and f['sha256'] == catalog_sha)
+        elif (value['resource_qualification']['mode'] == 'operator_qualified'
+              and os.environ.get('AGENT_QC_RESOURCE_CATALOG')):
             resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
         profile = PROFILE_SHA256
         verifier = dict(id='agent.barcode-qc-independent', compatibility_version='1')
@@ -367,6 +375,12 @@ def runtime_compatibility(kind, description, kwargs):
                 raise AuthorityError('QC requires an issued dependency authority.')
             supplied.validate(args['fragments_manifest_path'], args['fragments_manifest_sha256'],
                               producer_kind=description['upstream']['fragments']['kind'])
+        from .authority_context import current
+        context = current()
+        if context is not None and (description['manifest_path'], description['manifest_sha256']) in context.accepted:
+            # Accepted authority has already checked this exact publication and
+            # closure. Current installation governs new QC, not completed QC.
+            return
         _, bundle, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'], expected_sha256=args['qc_reference_manifest_sha256'])
         if backend_runtime()[1] != value['backend_identity'] or resource_qualification(bundle) != value['resource_qualification']:
             raise AuthorityError('QC runtime/resource qualification changed.')
@@ -430,7 +444,9 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
         from agent.tools.models import species_adaptation as module
     if tool_name == 'posttrain_epizoo_model':
         from agent.tools.models import epizoo_posttraining as module
-    publication = (module._publication(arguments, execution_identity,
+    publication = (module._recorded_publication(arguments, execution_identity,
+        result['manifest_path'], result['manifest_sha256']) if kind == 'qc' else
+        module._publication(arguments, execution_identity,
         version=result['artifact_schema_version']) if kind == 'annotation'
         else module._publication(arguments, execution_identity))
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]

@@ -502,12 +502,9 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_model', 'epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
             ('scientific_model', 'epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
         }
-        from .macs3_delivery import FILES as peak_files
-        reviewed.update(("scientific_peaks", name, value[0]) for name,value in peak_files.items())
-        from .chromvar_delivery import FILES as motif_files
-        reviewed.update(('scientific_motifs', name, value[0]) for name,value in motif_files.items())
-        from .motifmatchr_delivery import FILES as match_files
-        reviewed.update(('scientific_motif_matches', name, value[0]) for name,value in match_files.items())
+        from .native_delivery import definitions
+        for _, spec in definitions():
+            reviewed.update((spec.artifact_type, name, value[0]) for name, value in spec.files.items())
         from .sequence_delivery import FILES as sequence_files
         reviewed.update(('scientific_sequence', name, value[0]) for name,value in sequence_files.items())
         reviewed.update((kind, filename, prefix + ': ' + label)

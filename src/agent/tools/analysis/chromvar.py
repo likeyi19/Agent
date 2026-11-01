@@ -2,10 +2,8 @@
 
 No dataset certification, upstream reconstruction, or scientific replay on reads.
 """
-import hashlib
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 
 import h5py
@@ -17,11 +15,11 @@ from scipy.io import mmread, mmwrite
 
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
-from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import current, owned_verification
 from agent.tools.data.fastq_verification_authority import file_closure
 from .sequence_prediction import read, write, library, arguments
 from . import peak_h5ad
+from .sequence_reference import resolve_motif_resources, metadata_declarations, coordinates, check_declarations
 
 TOOL = 'compute_motif_accessibility'
 KIND = 'motif_accessibility'
@@ -71,74 +69,13 @@ def qualify_resource(resource):
     return resource
 
 
-def resolve_resources(args, peaks, stage):
-    import pysam
-    lib = library()
-    sources = []
-    assembly = args.get('assembly')
-    if not assembly:
-        raise ValueError('Establish the peak genome assembly from source metadata or a declaration')
-    if args.get('genome_path') and args.get('genome_resource'):
-        raise ValueError('Select either an installed genome or a task FASTA')
-    if args.get('genome_path'):
-        # Existing ordinary source binding supplies this private FASTA. Build only
-        # its task-local index; never modify the uploaded source or shared library.
-        fasta = Path(args['genome_path'])
-        pin = file_closure([fasta])[0]
-        if args.get('genome_sha256') and pin['sha256'] != args['genome_sha256']:
-            raise AuthorityError('Selected genome bytes changed')
-        sources.append(pin)
-        local = stage/'genome.fa'; os.symlink(fasta,local)
-        pysam.faidx(str(local))
-        fasta_path = str(local)
-        if not args.get('taxonomy_id'):
-            raise ValueError('A task FASTA requires its species taxonomy_id to select appropriate motifs')
-        genome_identity = dict(assembly=assembly,taxonomy_id=args['taxonomy_id'],fasta_sha256=pin['sha256'],fai_sha256=file_closure([str(local)+'.fai'])[0]['sha256'],source='task FASTA')
-    else:
-        candidates = [e for e in lib.entries() if e['kind']=='genome' and e['resource']['assembly']==assembly
-            and (not args.get('genome_resource') or args['genome_resource'] in (e['id'],e['label']))]
-        if len(candidates)!=1:
-            raise ValueError('Choose an unambiguous matching genome or supply a task FASTA; no contig renaming is inferred')
-        entry=candidates[0]; genome=lib.check(entry); sources.extend(entry['files'])
-        fasta_path=genome['genome']['fasta']['path']
-        genome_identity=dict(assembly=assembly,taxonomy_id=genome['species']['taxonomy_id'],
-            resource_id=entry['id'],fasta_sha256=genome['genome']['fasta']['sha256'],fai_sha256=genome['genome']['fai']['sha256'])
-        if args.get('taxonomy_id') is not None and args['taxonomy_id']!=genome_identity['taxonomy_id']:
-            raise ValueError('Declared species differs from selected genome')
-    with pysam.FastaFile(fasta_path) as fasta:
-        lengths=dict(zip(fasta.references,fasta.lengths))
-        invalid=[r.feature_id for r in peaks.itertuples() if r.chrom not in lengths or not 0<=r.start<r.end<=lengths[r.chrom]]
-        if invalid:
-            raise ValueError(f'{len(invalid)} peaks have absent contigs or invalid bounds in this reference; select a compatible FASTA, without clipping or renaming')
-    choices=[e for e in lib.entries() if e['kind']=='motif_collection'
-        and genome_identity['taxonomy_id'] in e['resource']['applicable_taxonomy_ids']
-        and (not args.get('motif_collection') or args['motif_collection'] in (e['id'],e['label']))]
-    if len(choices)!=1:
-        raise ValueError('Install or select one versioned, taxon-appropriate motif collection in the scientific resource library')
-    motif=lib.check(choices[0]);sources.extend(choices[0]['files'])
-    return fasta_path,genome_identity,motif,choices[0],sources
-
-
-def _metadata_declarations(handle, slot, args, var):
-    """Read explicit AnnData metadata once; observations and execution agree."""
-    effective=dict(args);uns=handle.get('uns')
-    for key in ('assembly','coordinate_system','matrix_semantics'):
-        if key=='matrix_semantics' and slot!='X':continue
-        if key not in effective and uns is not None and key in uns:
-            value=read_elem(uns[key])
-            if isinstance(value,str):effective[key]=value.replace('-','_') if key=='coordinate_system' else value
-    if 'assembly' not in effective and 'genome' in var:
-        values=var['genome'].dropna().unique()
-        if len(values)==1 and isinstance(values[0],str):effective['assembly']=values[0]
-    return effective
-
 
 def observe_input(path):
     """Read-only declarations for exact offered sources, not a readiness gate."""
     peak_h5ad.inspect(path,require_matrix=False,max_logical_bytes=None)
     with h5py.File(path,'r') as handle:
         var=read_elem(handle['var'])
-        known=_metadata_declarations(handle,'X',{},var)
+        known=metadata_declarations(handle,'X',{},var)
         slots=(['X'] if 'X' in handle else [])+['layers/'+key for key in handle.get('layers',{})]
     return dict(default_slot='X',slots=slots,recorded_declarations=known,
         missing_declarations=[key for key in ('assembly','coordinate_system','matrix_semantics') if key not in known],
@@ -152,7 +89,7 @@ def _count_declarations(handle, args, var):
         slot='layers/'+slot
     if slot not in handle:
         raise ValueError('Selected count matrix is absent')
-    effective=_metadata_declarations(handle,slot,args,var)
+    effective=metadata_declarations(handle,slot,args,var)
     effective['count_slot']=slot
     missing=[key for key in ('assembly','coordinate_system') if not effective.get(key)]
     if effective.get('matrix_semantics') not in ('peak_counts','fragment_counts','insertion_counts','binary_accessibility'):
@@ -179,14 +116,13 @@ def parameter_prerequisites(inputs):
 
 
 def prepare_input(args, stage):
-    from .scatac_regulatory_sequences import _coordinates, _check_declarations
     from .replicate_pseudobulk import _strict_ids
     peak_h5ad.inspect(args['input_path'], require_matrix=False, max_logical_bytes=None)
     with h5py.File(args['input_path'],'r') as f:
         obs,var=read_elem(f['obs']),read_elem(f['var'])
         effective,missing=_count_declarations(f,args,var)
         slot=effective['count_slot']
-        _check_declarations(args['input_path'],effective)
+        check_declarations(args['input_path'],effective)
         if 'matrix_semantics' in missing:
             raise ValueError('Declare actual raw peak/fragment/insertion counts or binary accessibility for the selected slot; normalized or transformed values are not native counts')
         semantics=effective['matrix_semantics']
@@ -195,7 +131,7 @@ def prepare_input(args, stage):
             raise ValueError('Tab/newline axis labels exceed the bounded TSV exchange; use ordinary unique labels')
         if 'coordinate_source' not in effective:
             effective['coordinate_source']='var_columns' if {'chrom','start','end'}<=set(var) else 'feature_names'
-        intervals,_=_coordinates(var,effective)
+        intervals,_=coordinates(var,effective)
         peaks=pd.DataFrame(intervals,columns=['chrom','start','end']);peaks.insert(0,'feature_id',features)
         peaks.insert(0,'source_index',np.arange(len(var)))
         group=args.get('group_key')
@@ -203,23 +139,7 @@ def prepare_input(args, stage):
         element=f[slot]
         matrix=sparse_dataset(element) if isinstance(element,h5py.Group) else element
         if matrix.shape!=(len(obs),len(var)):raise ValueError('Count matrix and ordered axes differ')
-        # Bound materialized sparse storage, not the mostly-zero logical matrix.
-        blocks=[];stored=0
-        chunk=max(1,min(256,1_000_000//max(1,len(var)))) if not isinstance(element,h5py.Group) else 256
-        for start in range(0,len(obs),chunk):
-            cancellation_checkpoint();block=sparse.csr_matrix(matrix[start:start+chunk])
-            if np.any(block.data > 2**53):
-                raise ValueError('Counts exceed exact native double precision; no rounding is permitted')
-            block=block.astype(np.float64)
-            block.sum_duplicates();block.eliminate_zeros();v=block.data
-            if not np.isfinite(v).all() or (v<0).any() or (v!=np.floor(v)).any():
-                raise ValueError('Native chromVAR requires finite nonnegative integer counts, not transformed measurements')
-            if semantics=='binary_accessibility' and (v>1).any():raise ValueError('Declared binary accessibility contains values above one')
-            stored+=block.data.nbytes+block.indices.nbytes+block.indptr.nbytes
-            if stored>2*1024**3:raise ValueError('Selected sparse matrix exceeds the 2 GiB exchange allocation budget; this is a runtime limitation')
-            blocks.append(block)
-    if not cells or not features:raise ValueError('Nonempty cell and peak axes are required')
-    x=sparse.vstack(blocks,format='csr')
+        x=peak_h5ad.read_native_counts(matrix,semantics)
     mmwrite(stage/'counts.mtx',x.T.tocsc())
     peaks.to_csv(stage/'peaks.tsv',sep='\t',index=False)
     pd.DataFrame(dict(cell_id=cells,source_index=np.arange(len(cells)))).to_csv(stage/'cells.tsv',sep='\t',index=False)
@@ -240,21 +160,9 @@ def native(args, stage, fasta, motif):
     if isinstance(request['p_cutoff'],bool) or not 0<float(request['p_cutoff'])<1:
         raise ValueError('Motif scan probability cutoff must be strictly between zero and one')
     write(stage/'request.json',request)
-    environment=dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',R_ENVIRON_USER='/dev/null',R_PROFILE_USER='/dev/null')
-    environment.pop('R_LIBS_USER',None);environment.pop('R_LIBS',None);environment.pop('R_LIBS_SITE',None)
-    with (stage/'native.log').open('wb') as log:
-        process=subprocess.Popen([rscript,'--vanilla',str(script),str(stage/'request.json')],env=environment,
-            stdin=subprocess.DEVNULL,stdout=log,stderr=log)
-        try:
-            while True:
-                cancellation_checkpoint()
-                try:code=process.wait(timeout=.2);break
-                except subprocess.TimeoutExpired:pass
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:process.wait(timeout=5)
-                except subprocess.TimeoutExpired:process.kill();process.wait()
+    from agent.tools._native_process import run, r_environment
+    code = run([rscript, '--vanilla', str(script), str(stage/'request.json')],
+        stage/'native.log', environment=r_environment())
     if code:
         # Keep native diagnostics private but expose the actionable method failure.
         diagnostic=(stage/'native.log').read_bytes()
@@ -303,7 +211,7 @@ def execute(values, execution_identity=None):
     with tempfile.TemporaryDirectory(prefix='.chromvar-',dir=root) as temp:
         stage=Path(temp)
         effective,obs,peaks,x=prepare_input(args,stage)
-        fasta,genome,motif,entry,sources=resolve_resources(effective,peaks,stage)
+        fasta,genome,motif,entry,sources=resolve_motif_resources(effective,peaks,stage)
         receipt=native(effective,stage,fasta,motif)
         retained=pd.read_csv(stage/'retained.tsv',sep='\t');motifs=pd.read_csv(stage/'motifs.tsv',sep='\t')
         ids=retained.source_index.to_numpy();m=len(motifs);n=len(obs)
@@ -443,3 +351,18 @@ def publication_record(context,tool_name,args,output,execution_identity,result_m
         resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=PROFILE,
         producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',completion='succeeded',
         integrity_scope='artifact_integrity_lineage_historical_sources.v1',source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))
+
+
+DELIVERY_FILES = {
+    'motif-accessibility.h5ad': ('Cell-by-motif deviations and separate z-scores','application/octet-stream'),
+    'peaks.tsv': ('Original peak mapping, exclusions, GC and sequence identities','text/tab-separated-values; charset=utf-8'),
+    'cells.tsv': ('Original ordered cells','text/tab-separated-values; charset=utf-8'),
+    'motifs.tsv': ('Versioned motif annotations and native match fractions','text/tab-separated-values; charset=utf-8'),
+    'motif-summary.tsv': ('Descriptive motif variability','text/tab-separated-values; charset=utf-8'),
+    'group-summary.tsv': ('Descriptive supplied-group motif means','text/tab-separated-values; charset=utf-8'),
+    'motif-matches.npz': ('Sparse retained-peak by motif matches','application/octet-stream'),
+    'background-peaks.npy': ('Native background retained-peak indices','application/octet-stream'),
+    'patterns.png': ('Motif-associated accessibility patterns','image/png'),
+    'metadata.json': ('Motif method, source and resource metadata','application/json'),
+    'native-receipt.json': ('Native completion and software versions','application/json'),
+}

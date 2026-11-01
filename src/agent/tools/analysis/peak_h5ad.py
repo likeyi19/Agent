@@ -93,3 +93,26 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
         else:
             visit(f,0)
         return size
+
+
+def read_native_counts(matrix, semantics):
+    """Bounded dense/CSR/CSC exchange; never densify a complete sparse matrix."""
+    from scipy import sparse
+    from agent.tools._cancellation import cancellation_checkpoint
+    blocks=[];stored=0
+    chunk=max(1,min(256,1_000_000//max(1,matrix.shape[1]))) if not hasattr(matrix, 'format') else 256
+    for start in range(0,matrix.shape[0],chunk):
+        cancellation_checkpoint();block=sparse.csr_matrix(matrix[start:start+chunk])
+        if np.any(block.data > 2**53):
+            raise ValueError('Counts exceed exact native double precision; no rounding is permitted')
+        block=block.astype(np.float64)
+        block.sum_duplicates();block.eliminate_zeros();v=block.data
+        if not np.isfinite(v).all() or (v<0).any() or (v!=np.floor(v)).any():
+            raise ValueError('Native chromVAR requires finite nonnegative integer counts, not transformed measurements')
+        if semantics=='binary_accessibility' and (v>1).any():raise ValueError('Declared binary accessibility contains values above one')
+        stored+=block.data.nbytes+block.indices.nbytes+block.indptr.nbytes
+        if stored>2*1024**3:raise ValueError('Selected sparse matrix exceeds the 2 GiB exchange allocation budget; this is a runtime limitation')
+        blocks.append(block)
+    if not all(matrix.shape):
+        raise ValueError('Nonempty cell and peak axes are required')
+    return sparse.vstack(blocks, format='csr')

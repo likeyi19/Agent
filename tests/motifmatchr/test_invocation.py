@@ -34,7 +34,7 @@ def native(tmp_path,monkeypatch):
     metadata.write_text('matrix_id\tclass\nMA1.1\tclass1\nMA2.1\tclass2\n')
     resource = dict(metadata=dict(path=str(metadata)),release='simulated',collection='CORE',tax_group='vertebrates',
         citation='simulated',license='simulated')
-    monkeypatch.setattr(owner.chromvar,'resolve_resources',lambda args,peaks,stage:
+    monkeypatch.setattr(owner.sequence_reference,'resolve_motif_resources',lambda args,peaks,stage:
         ('',dict(assembly='test'),resource,dict(id='simulated'),owner.file_closure([metadata])))
     def run(args,stage,fasta,motif):
         calls.append(args)
@@ -101,14 +101,18 @@ def test_cancellation_terminates_native_process_and_publishes_nothing(source,tmp
     monkeypatch.setenv('AGENT_CHROMVAR_RSCRIPT',str(script))
     monkeypatch.setattr(owner,'library',lambda:SimpleNamespace(root=tmp_path/'library'))
     stage=tmp_path/'stage';stage.mkdir();calls=[]
+    from agent.tools import _native_process as process_owner
     class Process:
+        pid=12345
         stopped=False
         def poll(self):return 0 if self.stopped else None
         def terminate(self):self.stopped=True;calls.append('terminate')
         def wait(self,timeout):calls.append('wait');return 0
-    monkeypatch.setattr(owner.subprocess,'Popen',lambda *a,**k:Process())
+    process=Process()
+    monkeypatch.setattr(process_owner.subprocess,'Popen',lambda *a,**k:process)
+    monkeypatch.setattr(process_owner.os,'killpg',lambda *a:process.terminate())
     def cancel():raise ToolWorkCancelled('simulated cancellation')
-    monkeypatch.setattr(owner,'cancellation_checkpoint',cancel)
+    monkeypatch.setattr(process_owner,'cancellation_checkpoint',cancel)
     with pytest.raises(ToolWorkCancelled):
         owner.native(source,stage,'/authorized/genome.fa',dict(pfm=dict(path='/authorized/motifs.pfm')))
     assert calls==['terminate','wait'] and not (stage/'native-receipt.json').exists()
@@ -150,7 +154,7 @@ def test_accepted_delivery_restart_and_historical_sources(source,native,tmp_path
     from agent.application import ResearchAgentApplication,OutputSelection
     from agent.orchestration import AgentPlan,AgentRequest,PlanStep
     from agent.application.workspace import ManagedWorkspace
-    from agent.application.motifmatchr_delivery import accepted_artifacts
+    from agent.application.native_delivery import accepted_artifacts
     from agent.application.matrix_delivery import MatrixDownloadPreparer
     from agent.orchestration.prior_outputs import bind_output
     root=tmp_path/'workspace';args=dict(source,output_dir=str(root/'runs'/ManagedWorkspace.run_digest('first:run')/'scientific'/'matches'))

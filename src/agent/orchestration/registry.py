@@ -677,6 +677,32 @@ class ScientificAuthorityHooks:
 
 
 @dataclass(frozen=True)
+class ScientificDeliverySpec:
+    """Reviewed publication files; execution authority remains in ToolRegistry."""
+    contract: str
+    artifact_type: str
+    files: Mapping[str, tuple[str, str]]
+    publication: Callable
+    prepare: Callable
+    projected_roles: tuple[str, ...] = ()
+    h5ad_roles: tuple[str, ...] = ()
+    figure: tuple[str, str] | None = None
+
+    def __post_init__(self):
+        if not self.contract or not self.artifact_type or not self.files:
+            raise ValueError('Scientific delivery requires a contract and reviewed files.')
+        for name, value in self.files.items():
+            if Path(name).name != name or name in ('.', '..') or len(value) != 2:
+                raise ValueError('Invalid scientific delivery file declaration.')
+        if not callable(self.publication) or not callable(self.prepare):
+            raise TypeError('Scientific delivery callbacks must be callable.')
+        if (set(self.h5ad_roles + self.projected_roles) - set(self.files)
+                or self.figure and self.figure[0] not in self.files):
+            raise ValueError('Scientific delivery roles must name reviewed files.')
+        object.__setattr__(self, 'files', MappingProxyType(dict(self.files)))
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """Immutable executable-tool specification owned by the registry."""
 
@@ -692,6 +718,7 @@ class ToolSpec:
     semantic_planning: SemanticToolSpec | None = None
     durable_hooks: DurableToolHooks | None = None
     scientific_authority: ScientificAuthorityHooks | None = None
+    scientific_delivery: ScientificDeliverySpec | None = None
     # Optional native-owner projection of unresolved parameters from bound
     # request inputs. This supplies questions, never execution/validity authority.
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
@@ -707,6 +734,9 @@ class ToolSpec:
             raise TypeError('Invalid durable tool hooks.')
         if self.scientific_authority is not None and not isinstance(self.scientific_authority, ScientificAuthorityHooks):
             raise TypeError('Invalid scientific authority hooks.')
+        if self.scientific_delivery is not None and (not isinstance(self.scientific_delivery, ScientificDeliverySpec)
+                or self.scientific_authority is None):
+            raise TypeError('Scientific delivery requires reviewed metadata and scientific authority.')
         required = dict(self.required_arguments)
         optional = dict(self.optional_arguments)
         overlap = set(required).intersection(optional)
@@ -3738,11 +3768,13 @@ def build_default_tool_registry() -> ToolRegistry:
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .motifmatchr_registry import tool_spec as motifmatchr_tool_spec
+    from .chromvar_native_registry import tool_spec as chromvar_native_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
         inspect_spec,
         chromvar_tool_spec(),
         motifmatchr_tool_spec(),
+        chromvar_native_tool_spec(),
         macs3_tool_spec(),
         embedding_spec,
         pca_spec,

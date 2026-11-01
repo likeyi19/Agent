@@ -2061,9 +2061,11 @@ def verify_step(
             else:
                 checks.add('peak_publication_integrity', True, 'Native completion and exact peak/source/population integrity.',
                     'Peak verification failed.', 'PEAK_VERIFICATION_FAILED')
-        elif step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
+        elif step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr', 'run_chromvar'):
             try:
-                if step.tool_name == 'run_motifmatchr':
+                if step.tool_name == 'run_chromvar':
+                    from agent.tools.analysis.chromvar_native import verify_result
+                elif step.tool_name == 'run_motifmatchr':
                     from agent.tools.analysis.motifmatchr import verify_result
                 else:
                     from agent.tools.analysis.chromvar import verify_result

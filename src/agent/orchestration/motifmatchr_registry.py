@@ -49,7 +49,8 @@ def tool_spec():
         Consumer('genome',(member('path','genome_path'),member('sha256','genome_sha256')),False,
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genome_path','genome_sha256'))]
-    return ToolSpec(name=owner.TOOL,function=owner.run_motifmatchr,required_arguments=required,optional_arguments=optional,
+    from .native_delivery import delivery_spec
+    return ToolSpec(scientific_delivery=delivery_spec(owner,'scientific_motif_matches'),name=owner.TOOL,function=owner.run_motifmatchr,required_arguments=required,optional_arguments=optional,
         parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('NativeMotifMatchesResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact native boolean peak-by-motif matches; no cell accessibility analysis.',bindable=True,artifact=A.MOTIF_MATCHES)

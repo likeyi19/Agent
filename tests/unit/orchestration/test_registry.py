@@ -29,6 +29,7 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "inspect_scATAC",
         "compute_motif_accessibility",
         "run_motifmatchr",
+        "run_chromvar",
         "call_scATAC_peaks",
         "epizoo_embed_cells",
         "pca_embed_cells",
@@ -308,6 +309,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
     } == {
         "compute_motif_accessibility": "chromvar-native-v1",
         "run_motifmatchr": "motifmatchr-native-v1",
+        "run_chromvar": "chromvar-native-statistics-v1",
         "call_scATAC_peaks": "macs3-frag-unit-record-v1",
         "predict_regulatory_sequences": "regulatory-sequence-native-v1",
         "optimize_regulatory_sequences": "regulatory-sequence-optimization-native-v1",

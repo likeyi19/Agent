@@ -3,7 +3,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
 
 import h5py
@@ -14,12 +13,11 @@ from scipy import sparse
 from scipy.io import mmread
 
 from agent.schemas.orchestration import _serialize
-from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
-from agent.tools._cancellation import cancellation_checkpoint
-from agent.tools.data.authority_context import current, owned_verification
+from agent.schemas.verification_authority import AuthorityError, digest
+from agent.tools.data.authority_context import current
 from agent.tools.data.fastq_verification_authority import file_closure
 from .sequence_prediction import read, write, library, arguments as _arguments
-from . import chromvar, peak_h5ad
+from . import sequence_reference, peak_h5ad
 
 TOOL = 'run_motifmatchr'
 KIND = 'native_motif_matches'
@@ -82,7 +80,7 @@ def native_arguments(args):
 def declarations(path, args):
     with h5py.File(path,'r') as handle:
         var = read_elem(handle['var'])
-        effective = chromvar._metadata_declarations(handle,'X',args,var)
+        effective = sequence_reference.metadata_declarations(handle,'X',args,var)
     # Matrix measurements belong to count consumers, not genomic ranges.
     effective.pop('matrix_semantics',None)
     return var,effective
@@ -115,16 +113,16 @@ def parameter_prerequisites(inputs):
 
 
 def prepare_input(args,stage):
-    from .scatac_regulatory_sequences import _coordinates, _check_declarations
+    from .sequence_reference import coordinates, check_declarations
     from .replicate_pseudobulk import _strict_ids
     peak_h5ad.inspect(args['input_path'],require_matrix=False,max_logical_bytes=None)
     var,effective = declarations(args['input_path'],args)
-    _check_declarations(args['input_path'],effective)
+    check_declarations(args['input_path'],effective)
     features = _strict_ids(var.index,'feature')
     if not features or any(any(c in s for c in '\t\r\n') for s in features):
         raise ValueError('Nonempty unique peak labels without tabs/newlines are required for native exchange')
     effective.setdefault('coordinate_source','var_columns' if {'chrom','start','end'}<=set(var) else 'feature_names')
-    intervals,_ = _coordinates(var,effective)
+    intervals,_ = coordinates(var,effective)
     peaks = pd.DataFrame(intervals,columns=['chrom','start','end'])
     peaks.insert(0,'feature_id',features);peaks.insert(0,'source_index',np.arange(len(var)))
     peaks.to_csv(stage/'peaks.tsv',sep='\t',index=False)
@@ -140,26 +138,9 @@ def native(args,stage,fasta,motif):
     implementation = file_closure([rscript,script])
     request = dict(stage=str(stage),function_name=args['function_name'],fasta=fasta,motifs=motif['pfm']['path'],kwargs=kwargs)
     request_sha = write(stage/'request.json',request)
-    environment = dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',R_ENVIRON_USER='/dev/null',R_PROFILE_USER='/dev/null')
-    for key in ('R_LIBS_USER','R_LIBS','R_LIBS_SITE'):
-        environment.pop(key,None)
-    with (stage/'native.log').open('wb') as log:
-        process = subprocess.Popen([rscript,'--vanilla',str(script),str(stage/'request.json')],env=environment,
-            stdin=subprocess.DEVNULL,stdout=log,stderr=log)
-        try:
-            while True:
-                cancellation_checkpoint()
-                try:
-                    code = process.wait(timeout=.2);break
-                except subprocess.TimeoutExpired:
-                    pass
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill();process.wait()
+    from agent.tools._native_process import run, r_environment
+    code = run([rscript, '--vanilla', str(script), str(stage/'request.json')],
+        stage/'native.log', environment=r_environment())
     if code:
         shutil.copyfile(stage/'native.log',stage.parent/'native-failure.log')
         diagnostic = 'See the retained private runtime diagnostic; no arguments were changed'
@@ -193,7 +174,7 @@ def execute(values,execution_identity=None):
     with tempfile.TemporaryDirectory(prefix='.matchmotifs-',dir=root) as temp:
         stage = Path(temp)
         effective,peaks = prepare_input(args,stage)
-        fasta,genome,motif,entry,sources = chromvar.resolve_resources(effective,peaks,stage)
+        fasta,genome,motif,entry,sources = sequence_reference.resolve_motif_resources(effective,peaks,stage)
         receipt = native(effective,stage,fasta,motif)
         motifs = pd.read_csv(stage/'motifs.tsv',sep='\t',keep_default_na=False)
         matches = mmread(stage/'matches.mtx').tocsc()
@@ -240,68 +221,25 @@ def run_motifmatchr(input_path,output_dir,function_name,kwargs=None,input_sha256
     return execute({k:v for k,v in locals().items() if v is not None})
 
 
-def load(path,sha=None):
-    value = read(path,sha);root = Path(path).parent
-    if (value['contract']!=CONTRACT or value['profile']!=PROFILE or root!=Path(value['arguments']['output_dir'])
-            or Path(path).name!='manifest.json' or value['native_completion']!='succeeded'
-            or {r['path'] for r in value['files']}!={str(root/name) for name in FILES} or len(value['files'])!=len(FILES)):
-        raise AuthorityError('Invalid native motif publication identity or membership')
-    return value,file_closure([path])[0]['sha256']
+from .native_publication import NativePublication
+publication = NativePublication(tool=TOOL, kind=KIND, contract=CONTRACT, profile=PROFILE, verifier=VERIFIER,
+    files=FILES, arguments=arguments, outputs={'matches': 'motif-matches.npz'})
+load = publication.load
+result = publication.result
+verify_publication = publication.verify_publication
+verify_result = publication.verify_result
+recover = publication.recover
+describe = publication.describe
+reuse_result = publication.reuse_result
+proof_metadata = publication.proof_metadata
+publication_record = publication.publication_record
 
 
-def result(value,path,sha):
-    pin = next(r for r in value['files'] if Path(r['path']).name=='motif-matches.npz')
-    return dict(value['result'],manifest_path=str(path),manifest_sha256=sha,matches_path=pin['path'],matches_sha256=pin['sha256'])
-
-
-@owned_verification(KIND)
-def verify_publication(path,*,expected_sha256):
-    value,sha = load(path,expected_sha256)
-    if file_closure(r['path'] for r in value['files']+value['sources'])!=sorted(value['files']+value['sources'],key=lambda r:r['path']):
-        raise AuthorityError('Native motif publication or source integrity changed')
-    return result(value,path,sha)
-
-
-def verify_result(args,output):
-    value,sha = load(output['manifest_path'],output['manifest_sha256'])
-    if value['arguments']!=arguments(args) or _serialize(output)!=verify_publication(output['manifest_path'],expected_sha256=sha):
-        raise AuthorityError('Native motif result differs from its producing request')
-
-
-def recover(args,execution_identity):
-    args = arguments(args);path = Path(args['output_dir'])/'manifest.json';value,sha = load(path)
-    if value['arguments']!=args or value['execution_identity']!=execution_identity:
-        raise AuthorityError('Recovery cannot authorize a native retry')
-    return verify_publication(path,expected_sha256=sha)
-
-
-def describe(path,sha,context):
-    value,actual = load(path,sha);files = context.files([path,*(r['path'] for r in value['files'])])
-    if [r for r in files if r['path']!=str(path)]!=value['files']:
-        raise AuthorityError('Native motif artifact integrity changed')
-    identity = dict(kind=KIND,manifest=value,files=files,historical_sources=value['sources'],upstream={},
-        execution_identity=context.execution_for(KIND,path),profile=PROFILE,verifier=VERIFIER,qualification={})
-    return dict(kind=KIND,manifest_path=str(path),manifest_sha256=actual,manifest=value,proof_identity=identity,
-        files=files,historical_sources=value['sources'],upstream={},profile=PROFILE,verifier=VERIFIER,qualification={})
-
-
-def reuse_result(kind,description,proof,kwargs):
-    return result(description['manifest'],description['manifest_path'],description['manifest_sha256'])
-
-
-def proof_metadata(kind,output,context):
-    return dict(output)
-
-
-def publication_record(context,tool_name,args,output,execution_identity,result_metadata):
-    value,sha = load(output['manifest_path'],output['manifest_sha256'])
-    if (tool_name!=TOOL or value['execution_identity']!=execution_identity or value['arguments']!=arguments(args)
-            or _serialize(result_metadata)!=_serialize(output) or result(value,output['manifest_path'],sha)!=_serialize(output)):
-        raise AuthorityError('Native motif publication lacks its exact producing execution')
-    description,key = context.describe(KIND,Path(output['manifest_path']),sha)
-    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.'+KIND,artifact_contract=CONTRACT,
-        publication_path=output['manifest_path'],manifest_sha256=sha,files=description['files'],execution_identity=execution_identity,
-        arguments_sha256=digest(arguments(args)),receipt_sha256=sha,upstream={'producer_inputs':digest(description['proof_identity'])},
-        resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=PROFILE,
-        producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',completion='succeeded',
-        integrity_scope='artifact_integrity_lineage_historical_sources.v1',source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))
+DELIVERY_FILES = {
+    'matches.mtx': ('Native peak-by-motif matches (Matrix Market)', 'application/octet-stream'),
+    'motif-matches.npz': ('Native peak-by-motif matches (SciPy sparse)', 'application/octet-stream'),
+    'peaks.tsv': ('All original ordered genomic peaks', 'text/tab-separated-values; charset=utf-8'),
+    'motifs.tsv': ('Native ordered motif names and versioned annotations', 'text/tab-separated-values; charset=utf-8'),
+    'metadata.json': ('Native motif matching source, parameters and resources', 'application/json'),
+    'native-receipt.json': ('Native matchMotifs completion and software versions', 'application/json'),
+}

@@ -46,6 +46,7 @@ _MANUAL = RecoveryDisposition.MANUAL_RECONCILIATION
 # unknown code deliberately receives the fail-closed defaults below.
 _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     'NATIVE_FUNCTION_REJECTED': ErrorPolicyEntry('The native function rejected the supplied arguments. No values were changed or retried.', _NO, True),
+    'CHROMVAR_FUNCTION_INPUT_INVALID': ErrorPolicyEntry('The selected chromVAR function needs compatible H5AD input and its supported native arguments. Count functions need the actual count slot and measurement; computeVariability needs separately identified chromVAR deviations and z_scores. No function, input object or parameter was substituted.', _NO),
     'NATIVE_FUNCTION_INPUT_INVALID': ErrorPolicyEntry('matchMotifs needs genomic peaks with their assembly and coordinate convention, a compatible genome and motif collection. Supported kwargs are p.cutoff, bg and out="matches"; other functions, output forms and input paths inside kwargs are not supported. Counts and clustering are not required.', _NO),
     'NATIVE_FUNCTION_PUBLICATION_INVALID': ErrorPolicyEntry('The native result differs from its exact source, reference or output identity.', _NO),
     'NATIVE_FUNCTION_EXECUTION_FAILED': ErrorPolicyEntry('The isolated native function did not complete. Its private diagnostic is retained; no fallback or automatic retry was used.', _NO),

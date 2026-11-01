@@ -188,21 +188,8 @@ def native(parameters,stage):
     command=[str(executable),'callpeak','-t',str(stage/'input.frag'),'-f','FRAG','--max-count','1',
         '--threads','2','--process-backend','auto','-g',str(parameters['effective_genome_size']),'-q',str(parameters['qvalue']),'-n','peaks','--outdir',str(stage)]
     start=time.monotonic()
-    with (stage/'native.log').open('wb') as log:
-        process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=log,
-            env=dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1'),start_new_session=True)
-        try:
-            while True:
-                cancellation_checkpoint()
-                if time.monotonic()-start>7200:raise ValueError('Native peak calling exceeded the two-hour execution bound')
-                try:code=process.wait(timeout=.2);break
-                except subprocess.TimeoutExpired:pass
-        finally:
-            if process.poll() is None:
-                import signal
-                os.killpg(process.pid,signal.SIGTERM)
-                try:process.wait(timeout=5)
-                except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);process.wait()
+    from agent.tools._native_process import run
+    code = run(command, stage/'native.log', environment=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
     if code:
         shutil.copyfile(stage/'native.log',stage.parent/'native-failure.log')
         raise RuntimeError('Native MACS3 failed; diagnostics retained, no fallback or threshold change')
@@ -361,3 +348,14 @@ def publication_record(context,tool_name,args,output,execution_identity,result_m
         resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=PROFILE,
         producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',completion='succeeded',
         integrity_scope='artifact_integrity_lineage_historical_sources.v1',source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))
+
+
+DELIVERY_FILES = {
+    'peaks_peaks.narrowPeak': ('Native MACS3 narrowPeak', 'text/plain; charset=utf-8'),
+    'peaks_summits.bed': ('Native peak summits', 'text/plain; charset=utf-8'),
+    'peaks_peaks.xls': ('Native peak statistics (private command paths omitted)', 'text/tab-separated-values; charset=utf-8'),
+    'features.bed': ('Exact ordered experimental peak features', 'text/plain; charset=utf-8'),
+    'distributions.png': ('Peak length and enrichment distributions', 'image/png'),
+    'metadata.json': ('Peak parameters, population and provenance', 'application/json'),
+    'native-receipt.json': ('Native MACS3 completion and runtime identity', 'application/json'),
+}

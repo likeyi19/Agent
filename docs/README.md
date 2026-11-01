@@ -1,5 +1,7 @@
 # Documentation
 
+The [native scientific functions guide](guides/native-functions.md) describes package-level invocation, reviewed chromVAR functions and shared accepted-result delivery.
+
 The [native motif invocation guide](guides/native-motif-invocation.md) covers the
 bounded `motifmatchr::matchMotifs()` pilot, grounded native arguments from prose or JSON, and its acceptance limits.
 

@@ -25,7 +25,7 @@ def native(tmp_path,monkeypatch):
     calls=[];metadata=tmp_path/'motif_metadata.tsv'
     metadata.write_text('matrix_id\tclass\tfamily\ttax_id\tspecies\nMA1.1\tx\ty\t9606\thuman\nMA2.1\tx\ty\t9606\thuman\n')
     resource=dict(metadata=dict(path=str(metadata)),release='simulated',collection='CORE',tax_group='vertebrates',license='simulated',citation='simulated')
-    monkeypatch.setattr(owner,'resolve_resources',lambda args,peaks,stage:('',dict(assembly='test'),resource,dict(id='simulated'),owner.file_closure([metadata])))
+    monkeypatch.setattr(owner,'resolve_motif_resources',lambda args,peaks,stage:('',dict(assembly='test'),resource,dict(id='simulated'),owner.file_closure([metadata])))
     def run(args,stage,fasta,motif):
         calls.append(1);x=mmread(stage/'counts.mtx').tocsr();keep=np.flatnonzero(np.asarray(x.sum(1)).ravel()>0)
         n=x.shape[1];m=2
@@ -82,7 +82,7 @@ def test_accepted_delivery_restart_does_not_run_native(source,native,tmp_path):
     from agent.orchestration import AgentPlan,AgentRequest,PlanStep
     from agent.application.workspace import ManagedWorkspace
     from agent.application.dialogue_evidence import figure_inventory
-    from agent.application.chromvar_delivery import accepted_artifacts
+    from agent.application.native_delivery import accepted_artifacts
     from agent.application.matrix_delivery import MatrixDownloadPreparer
     from agent.orchestration.prior_outputs import bind_output
     a,args=source;root=tmp_path/'workspace'
@@ -142,16 +142,16 @@ def test_task_genome_uses_private_index_and_exact_contigs(tmp_path,monkeypatch):
     fa=tmp_path/'ordinary.fa';fa.write_text('>chr1\n'+('ACGT'*200)+'\n');before=fa.read_bytes()
     motif=dict(applicable_taxonomy_ids=[9606])
     entry=dict(kind='motif_collection',id='collection',label='test',resource=motif,files=[])
-    monkeypatch.setattr(owner,'library',lambda:SimpleNamespace(entries=lambda:[entry],check=lambda e:e['resource']))
+    monkeypatch.setattr(__import__('agent.tools.analysis.sequence_reference',fromlist=['library']),'library',lambda:SimpleNamespace(entries=lambda:[entry],check=lambda e:e['resource']))
     stage=tmp_path/'stage';stage.mkdir()
     peaks=pd.DataFrame(dict(feature_id=['p'],chrom=['chr1'],start=[1],end=[10]))
     args=dict(genome_path=str(fa),assembly='declared',taxonomy_id=9606)
-    fasta,genome,_,_,_=owner.resolve_resources(args,peaks,stage)
+    fasta,genome,_,_,_=owner.resolve_motif_resources(args,peaks,stage)
     assert Path(fasta).is_relative_to(stage) and genome['source']=='task FASTA'
     assert not Path(str(fa)+'.fai').exists() and fa.read_bytes()==before
     assert len(genome['fai_sha256'])==64
     other=tmp_path/'invalid';other.mkdir();peaks.chrom='missing'
-    with pytest.raises(ValueError,match='absent contigs'):owner.resolve_resources(args,peaks,other)
+    with pytest.raises(ValueError,match='absent contigs'):owner.resolve_motif_resources(args,peaks,other)
 
 
 def test_named_clarification_uses_existing_contract_and_plain_scientific_wording():
@@ -180,7 +180,7 @@ def test_undefined_group_means_and_missing_labels_remain_explicit():
 
 def test_receipt_download_omits_embedded_runtime_paths():
     import io
-    from agent.application.chromvar_delivery import prepare
+    from agent.application.native_delivery import prepare
     receipt=dict(session=['BLAS: /private/runtime/libblas.so'],versions={'chromVAR':'1.32.0'},p_cutoff=5e-5)
     for value in (receipt,dict(receipt=receipt)):
         public=json.loads(prepare(io.BytesIO(json.dumps(value).encode()),'native-receipt.json'))
@@ -300,7 +300,7 @@ def test_owner_questions_follow_selected_slot_metadata_without_layer_inference(s
     assert owner.parameter_prerequisites(args)==('assembly','coordinate_system','matrix_semantics')
     assert owner.parameter_prerequisites({})==()
     registry=build_default_tool_registry()
-    assert [n for n in registry.names() if registry.get(n).parameter_prerequisites is not None]==[owner.TOOL,'run_motifmatchr','call_scATAC_peaks']
+    assert [n for n in registry.names() if registry.get(n).parameter_prerequisites is not None]==[owner.TOOL,'run_motifmatchr','run_chromvar','call_scATAC_peaks']
 
 
 def test_installed_genome_selection_is_exact_and_never_an_assembly_alias(tmp_path,monkeypatch):
@@ -317,17 +317,58 @@ def test_installed_genome_selection_is_exact_and_never_an_assembly_alias(tmp_pat
             assembly=assembly,label=label,version='1',provenance='Explicit fixture declaration',usage='Test only'))
     motif=dict(kind='motif_collection',id='motifs',label='test',resource=dict(applicable_taxonomy_ids=[9606]),files=[])
     from types import SimpleNamespace
-    monkeypatch.setattr(owner,'library',lambda:SimpleNamespace(entries=lambda:[*entries,motif],
+    monkeypatch.setattr(__import__('agent.tools.analysis.sequence_reference',fromlist=['library']),'library',lambda:SimpleNamespace(entries=lambda:[*entries,motif],
         check=lambda e:e['resource'] if e is motif else library.check(e)))
     peaks=pd.DataFrame(dict(feature_id=['p'],chrom=['chr1'],start=[1],end=[10]))
-    with pytest.raises(ValueError,match='unambiguous'):owner.resolve_resources(dict(assembly='hg38'),peaks,tmp_path)
+    with pytest.raises(ValueError,match='unambiguous'):owner.resolve_motif_resources(dict(assembly='hg38'),peaks,tmp_path)
     for selector in ('original',entries[0]['id']):
-        path,identity,*_=owner.resolve_resources(dict(assembly='hg38',genome_resource=selector),peaks,tmp_path)
+        path,identity,*_=owner.resolve_motif_resources(dict(assembly='hg38',genome_resource=selector),peaks,tmp_path)
         assert path==str(fa) and identity['resource_id']==entries[0]['id']
     with pytest.raises(ValueError,match='unambiguous'):
-        owner.resolve_resources(dict(assembly='hg38',genome_resource=entries[2]['id']),peaks,tmp_path)
+        owner.resolve_motif_resources(dict(assembly='hg38',genome_resource=entries[2]['id']),peaks,tmp_path)
     with pytest.raises(ValueError,match='either'):
-        owner.resolve_resources(dict(assembly='hg38',genome_resource='original',genome_path=str(fa)),peaks,tmp_path)
+        owner.resolve_motif_resources(dict(assembly='hg38',genome_resource='original',genome_path=str(fa)),peaks,tmp_path)
     fa.write_text('>chr1\nT\n')
     with pytest.raises(ValueError,match='invalid_reference'):
-        owner.resolve_resources(dict(assembly='hg38',genome_resource='original'),peaks,tmp_path)
+        owner.resolve_motif_resources(dict(assembly='hg38',genome_resource='original'),peaks,tmp_path)
+
+
+def test_native_variability_reuses_exact_accepted_scores_without_upstream_replay(source,native,tmp_path,monkeypatch):
+    from agent.application import ResearchAgentApplication,OutputSelection
+    from agent.orchestration import AgentPlan,AgentRequest,PlanStep
+    from agent.application.workspace import ManagedWorkspace
+    from agent.orchestration.prior_outputs import bind_output
+    from agent.schemas.prior_output import PriorOutputRef
+    from agent.tools.analysis import chromvar_native as consumer
+    a,args=source;root=tmp_path/'workspace'
+    args['output_dir']=str(root/'runs'/ManagedWorkspace.run_digest('first:run')/'scientific'/'motifs')
+    class Planner:
+        selected=None
+        def plan(self,request,registry):return self.selected
+    planner=Planner();planner.selected=AgentPlan('first','first','Simulated chromVAR',(PlanStep('motifs',owner.TOOL,args),))
+    app=ResearchAgentApplication(root,planner=planner);app.sessions.create('reuse')
+    state=app.sessions.run('reuse','first',AgentRequest('first','Compute motif accessibility',{}),
+        (OutputSelection('scores','motifs','scores_path'),),expected_generation=0)
+    assert state.turn('first').status=='activated'
+    binding=bind_output(app.run_store,app.registry,'first:run','motifs','scores')
+    assert binding.semantic_type=='chromvar_scores_h5ad.v1'
+    calls=[]
+    def simulated(args,stage):
+        calls.append(args)
+        cells=pd.read_csv(stage/'cells.tsv',sep='\t');features=pd.read_csv(stage/'features.tsv',sep='\t')
+        table=pd.DataFrame(dict(source_index=range(len(features)),source_id=features.feature_id,variability=1.))
+        table.to_csv(stage/'result.tsv',sep='\t',index=False)
+        return dict(completion='succeeded',input_dim=[len(features),len(cells)],rows=len(table),columns=list(table),
+            native_output_type='data.frame',undefined_values=0,versions={'chromVAR':'simulated'},implementation=[])
+    monkeypatch.setattr(consumer,'native',simulated)
+    # The native result stays usable after the historical source disappears.
+    Path(args['input_path']).unlink()
+    follow=dict(input_path=PriorOutputRef(binding,'scores_path'),function_name='computeVariability',kwargs={'bootstrap_error':False},
+        output_dir=str(root/'runs'/ManagedWorkspace.run_digest('second:run')/'scientific'/'statistics'))
+    planner.selected=AgentPlan('second','second','Independent native variability',(PlanStep('statistics',consumer.TOOL,follow),))
+    state=app.sessions.run('reuse','second',AgentRequest('second','Compute variability of the accepted scores',{}),
+        (OutputSelection('statistics','statistics','manifest_path'),),expected_generation=1)
+    assert state.turn('second').status=='activated',app.run_store.load('second:run').errors
+    assert len(native)==1 and len(calls)==1
+    assert calls[0]['input_path']==app.run_store.load('first:run').steps[0].result['scores_path']
+    assert len(ResearchAgentApplication(root,planner=planner).sessions.load('reuse').revisions)==2

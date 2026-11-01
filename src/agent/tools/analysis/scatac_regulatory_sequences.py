@@ -4,7 +4,6 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -17,7 +16,7 @@ from agent.tools.data.authority_context import owned_verification
 from agent.tools.data.fastq_verification_authority import file_closure
 from . import replicate_pseudobulk as features
 from . import sequence_prediction as shared
-from .sequence_reference import resolve_genome, extract
+from .sequence_reference import resolve_genome, extract, coordinates, check_declarations
 
 TOOL = 'prepare_scatac_regulatory_sequences'
 KIND = 'scatac_regulatory_sequences'
@@ -62,38 +61,6 @@ def _metadata(path):
     with h5py.File(path, 'r') as handle:
         return read_elem(handle['obs']), read_elem(handle['var'])
 
-
-def _check_declarations(path, args):
-    """Corroborate standard source metadata; never substitute it silently."""
-    with h5py.File(path, 'r') as handle:
-        uns = handle.get('uns')
-        if uns is None:
-            return
-        for key in ('species', 'assembly', 'coordinate_system'):
-            if key in uns and args.get(key) is not None:
-                saved = read_elem(uns[key])
-                if key == 'coordinate_system' and isinstance(saved, str):
-                    saved = saved.replace('-', '_')
-                if isinstance(saved, str) and saved != args[key]:
-                    raise ValueError(f'Declared {key} conflicts with recorded source metadata')
-        if args.get('count_slot', 'X') == 'X' and 'matrix_semantics' in uns and args.get('matrix_semantics'):
-            saved = read_elem(uns['matrix_semantics'])
-            if isinstance(saved, str) and saved != args['matrix_semantics']:
-                raise ValueError('Declared X measurement conflicts with source metadata')
-
-
-def _coordinates(var, args):
-    source = args.get('coordinate_source')
-    keys = [args.get('feature_'+name+'_key') for name in ('chrom', 'start', 'end')]
-    if source == 'var_columns' and not any(keys):
-        keys = ['chrom', 'start', 'end']
-    chrom, start, end, sha = features._coordinates(SimpleNamespace(var=var, var_names=var.index),
-        coordinate_source=source, feature_chrom_key=keys[0], feature_start_key=keys[1],
-        feature_end_key=keys[2], coordinate_system=args.get('coordinate_system'))
-    if chrom is None:
-        raise ValueError('Genomic coordinates and their explicit coordinate convention are required')
-    offset = int(args['coordinate_system'] == 'one_based_closed')
-    return list(zip(chrom, (x-offset for x in start), end)), sha
 
 
 def _annotation_groups(args, cells, source_pin):
@@ -208,7 +175,7 @@ def _da(args):
         if args.get('coordinate_system', convention) != convention:
             raise ValueError('Requested coordinate convention conflicts with accepted feature-space lineage')
         coordinate_args = dict(coordinate_source='var_columns', coordinate_system=convention)
-        intervals, coordinate_sha = _coordinates(var, coordinate_args)
+        intervals, coordinate_sha = coordinates(var, coordinate_args)
         if coordinate_sha != manifest['coordinates']['coordinates_sha256']:
             raise ValueError('DA coordinates differ from the feature-space coordinate identity')
     else:
@@ -220,8 +187,8 @@ def _da(args):
         _, original_var = _metadata(original['path'])
         if not original_var.index.equals(var.index):
             raise ValueError('Original genomic features differ from the accepted DA feature axis')
-        _check_declarations(original['path'], args)
-        intervals, coordinate_sha = _coordinates(original_var, args)
+        check_declarations(original['path'], args)
+        intervals, coordinate_sha = coordinates(original_var, args)
         lineage_sources.append(original)
     biology = manifest['biology']
     for key, value in (('species', biology['species']), ('assembly', biology['genome_assembly'])):
@@ -302,10 +269,10 @@ def execute(values, execution_identity=None):
         if not args.get('input_path'):
             raise ValueError('Supply the scATAC H5AD whose genomic features should be selected')
         pin = _pin(args['input_path'], args.get('input_sha256'))
-        _check_declarations(pin['path'], args)
+        check_declarations(pin['path'], args)
         obs, var = _metadata(pin['path'])
         ids = features._strict_ids(var.index, 'feature')
-        intervals, coordinate_sha = _coordinates(var, args)
+        intervals, coordinate_sha = coordinates(var, args)
         identity = dict(pin, feature_ids_sha256=features._ordered_strings_digest(ids,
             domain='agent.regulatory-feature-identities.v1'), coordinates_sha256=coordinate_sha)
         species, assembly = args.get('species'), args.get('assembly')

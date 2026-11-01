@@ -660,6 +660,13 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-NFI-1A adds [native scientific functions](docs/guides/native-functions.md)
+(36 registered tools): `run_chromvar` selects reviewed expectations, count-total
+and variability functions independently of the existing motif workflow. Native
+packages share Registry-declared delivery, bounded subprocess execution and
+existing scientific lifecycle owners. The [acceptance report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1a/REPORT.md)
+separates genuine execution/downloads from scripted reuse and provider limitations.
+
 STE-NFI-0 adds the bounded [native motif invocation pilot](docs/guides/native-motif-invocation.md)
 (35 registered tools). Researchers can explicitly request `motifmatchr::matchMotifs()`
 on ordinary H5AD peak coordinates with grounded native arguments from prose or JSON.

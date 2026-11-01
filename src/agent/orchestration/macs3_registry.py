@@ -49,7 +49,8 @@ def tool_spec():
     optional['qvalue']=arg((int,float),'Native MACS3 peak-calling q-value cutoff, default 0.05; not differential accessibility significance.',scientific_parameter=True)
     optional['exclude_contigs']=arg((list,),'Explicit exact reference contig names to exclude; default none. No automatic aliases or mitochondrial filtering.',scientific_parameter=True)
     ports.extend(scalar(k,required=k in required) for k in ('output_dir','effective_genome_size','genome_size_basis','library_namespace','qvalue','exclude_contigs'))
-    return ToolSpec(name=owner.TOOL,function=owner.call_scATAC_peaks,required_arguments=required,optional_arguments=optional,
+    from .native_delivery import delivery_spec
+    return ToolSpec(scientific_delivery=delivery_spec(owner,'scientific_peaks', figure=('distributions.png','peak_distributions')),name=owner.TOOL,function=owner.call_scATAC_peaks,required_arguments=required,optional_arguments=optional,
         parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('ScATACPeaksResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact experimental peak publication, derived feature reference and ordered population. Empty calls have no usable reference.',bindable=True,artifact=A.SCATAC_PEAKS)

@@ -1011,15 +1011,8 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
-                elif step.tool_name == 'call_scATAC_peaks':
-                    from .macs3_delivery import accepted_artifacts
-                    items.extend(accepted_artifacts(self, session_id, revision, origin,
-                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
-                elif step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
-                    if step.tool_name == 'run_motifmatchr':
-                        from .motifmatchr_delivery import accepted_artifacts
-                    else:
-                        from .chromvar_delivery import accepted_artifacts
+                elif self._application.registry.get(step.tool_name).scientific_delivery is not None:
+                    from .native_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
@@ -1073,14 +1066,8 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                elif planned.tool_name == 'call_scATAC_peaks':
-                    from .macs3_delivery import accepted_artifacts
-                    items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
-                elif planned.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
-                    if planned.tool_name == 'run_motifmatchr':
-                        from .motifmatchr_delivery import accepted_artifacts
-                    else:
-                        from .chromvar_delivery import accepted_artifacts
+                elif self._application.registry.get(planned.tool_name).scientific_delivery is not None:
+                    from .native_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
                     from .sequence_delivery import accepted_sequences

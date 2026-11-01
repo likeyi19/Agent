@@ -57,7 +57,7 @@ def test_accepted_delivery_ports_and_restart(factory,native,tmp_path):
     from agent.application import ResearchAgentApplication,OutputSelection
     from agent.application.workspace import ManagedWorkspace
     from agent.orchestration import AgentPlan,AgentRequest,PlanStep
-    from agent.application.macs3_delivery import accepted_artifacts
+    from agent.application.native_delivery import accepted_artifacts
     from agent.application.dialogue_evidence import figure_inventory
     from agent.application.matrix_delivery import MatrixDownloadPreparer
     from agent.orchestration.prior_outputs import bind_output
@@ -177,3 +177,23 @@ def test_native_command_must_belong_to_pinned_runtime(tmp_path,monkeypatch):
     (runtime/'runtime.json').write_text(json.dumps(dict(version='3.1.0',files=[])))
     monkeypatch.setenv('AGENT_MACS3_EXECUTABLE',str(binary))
     with pytest.raises(ValueError,match='runtime changed'):owner.native({},tmp_path)
+
+
+def test_native_wrapper_keeps_runtime_identity_parameters_and_elapsed_time(tmp_path,monkeypatch):
+    """Exercise the actual wrapper; the CLI stand-in performs no peak science."""
+    import sys
+    exe=tmp_path/'runtime/env/bin/macs3';exe.parent.mkdir(parents=True)
+    exe.write_text('#!'+sys.executable+'\nimport sys\nprint("macs3 3.1.0" if "--version" in sys.argv else "test native completion")\n')
+    exe.chmod(0o755)
+    runtime=tmp_path/'runtime/runtime.json'
+    owner.write(runtime,dict(version='3.1.0',python=sys.version,files=owner.file_closure([exe])))
+    monkeypatch.setenv('AGENT_MACS3_EXECUTABLE',str(exe))
+    stage=tmp_path/'stage';stage.mkdir()
+    parameters=dict(effective_genome_size=12345,qvalue=.03)
+    result=owner.native(parameters,stage)
+    assert result['completion']=='succeeded' and result['parameters']==parameters
+    assert result['elapsed_seconds']>=0
+    assert result['runtime']['identity']==owner.file_closure([runtime])[0]
+    assert result['command']==[str(exe),'callpeak','-t',str(stage/'input.frag'),'-f','FRAG','--max-count','1',
+        '--threads','2','--process-backend','auto','-g','12345','-q','0.03','-n','peaks','--outdir',str(stage)]
+    assert result['log_sha256']==owner.file_closure([stage/'native.log'])[0]['sha256']

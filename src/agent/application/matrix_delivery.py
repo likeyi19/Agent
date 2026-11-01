@@ -603,16 +603,22 @@ class MatrixDownloadPreparer:
             self._active -= 1
             self._reserved_bytes -= size
 
+    def _reserve_growth(self, size):
+        """Admit measured growth of an already held snapshot, without a new slot."""
+        with self._lock:
+            if shutil.disk_usage(tempfile.gettempdir()).free < size + self._reserved_bytes + _DISK_MARGIN_BYTES:
+                raise MatrixDeliveryError('MATRIX_DOWNLOAD_BUSY')
+            self._reserved_bytes += size
+
     def prepare(self, artifact):
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
         from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
-        from . import sequence_delivery, chromvar_delivery, macs3_delivery, motifmatchr_delivery
-        matches = artifact.contract == motifmatchr_delivery.owner.CONTRACT and getattr(artifact, 'role', None) in motifmatchr_delivery.FILES
-        peaks = artifact.contract == macs3_delivery.owner.CONTRACT and getattr(artifact, "role", None) in macs3_delivery.FILES
-        motif = artifact.contract == chromvar_delivery.owner.CONTRACT and getattr(artifact, 'role', None) in chromvar_delivery.FILES
-        motif_h5ad = motif and artifact.role == 'motif-accessibility.h5ad'
+        from . import sequence_delivery, native_delivery
+        native = native_delivery.for_artifact(artifact)
+        native_h5ad = native is not None and artifact.role in native.h5ad_roles
+        native_projection = native is not None and artifact.role in native.projected_roles
         sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
@@ -630,19 +636,15 @@ class MatrixDownloadPreparer:
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
         composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
                     and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
-        export = processed or annotation or compact or integrated or composed or statistical or motif_h5ad
+        export = processed or annotation or compact or integrated or composed or statistical or native_h5ad
         exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
-        elif matches:
-            filename, content_type = artifact.role, motifmatchr_delivery.FILES[artifact.role][1]
-        elif peaks:
-            filename, content_type = artifact.role, macs3_delivery.FILES[artifact.role][1]
-        elif motif:
-            filename, content_type = artifact.role, chromvar_delivery.FILES[artifact.role][1]
+        elif native is not None:
+            filename, content_type = artifact.role, native.files[artifact.role][1]
         elif sequence:
             filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
         elif reference_evidence:
@@ -751,7 +753,7 @@ class MatrixDownloadPreparer:
                         artifact.manifest, source_sha256=artifact.sha256, max_bytes=delivered_limit)
                     original_snapshot.close(); original_snapshot = None
                 else:
-                    create_export = (statistical_delivery.create_statistical_export if statistical or motif_h5ad else
+                    create_export = (statistical_delivery.create_statistical_export if statistical or native_h5ad else
                                      analysis_delivery.create_analysis_export if compact else
                                      annotation_delivery.create_annotation_export if annotation
                                      else neighbors_delivery.create_neighbors_export)
@@ -770,10 +772,22 @@ class MatrixDownloadPreparer:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None
-            elif sequence or motif or peaks or matches:
-                data = (motifmatchr_delivery if matches else macs3_delivery if peaks else chromvar_delivery if motif else sequence_delivery).prepare(snapshot, artifact.role)
+            elif sequence or native_projection:
+                data = (native if native is not None else sequence_delivery).prepare(snapshot, artifact.role)
+                if native_projection:
+                    if len(data) > MAX_MATRIX_BYTES:
+                        raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
+                    # The source snapshot is overwritten, not duplicated. Admit
+                    # only actual growth before writing, including short-label
+                    # redaction and row-dependent CSV expansion. Keep its slot.
+                    growth = max(0, len(data) - size)
+                    if growth:
+                        self._reserve_growth(growth)
+                        reservation += growth
                 snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
                 delivered_size = len(data); checksum = hashlib.sha256(data)
+            elif native is not None:
+                pass  # Exact accepted binary bytes already pinned in the private snapshot.
             elif reference_evidence:
                 corroboration_delivery.validate_table(snapshot, artifact.manifest)
             else:
@@ -781,8 +795,8 @@ class MatrixDownloadPreparer:
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export or model_metadata or sequence or motif or peaks or matches else size,
-                sha256=checksum.hexdigest() if export or model_metadata or sequence or motif or peaks or matches else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata or sequence or native_projection else size,
+                sha256=checksum.hexdigest() if export or model_metadata or sequence or native_projection else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

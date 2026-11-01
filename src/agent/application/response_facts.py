@@ -20,6 +20,8 @@ ROLES = {
     'compute_scATAC_qc': 'QC', SELECTION: 'cell selection', MATRIX: 'matrix',
 }
 LABELS = {
+    'run_chromvar.matrix_semantics': 'the actual raw measurement in the selected count matrix',
+    'run_chromvar.count_slot': 'X or the exact layer holding those counts',
     'run_motifmatchr.assembly': 'the genome assembly used for these peaks',
     'run_motifmatchr.genome_resource': 'a unique installed genome matching the declared peak assembly; select its resource label, supply a matching FASTA, or ask the operator to install it',
     'run_motifmatchr.motif_collection': 'a unique installed motif collection appropriate for this species; select its resource label or ask the operator to install it',

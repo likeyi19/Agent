@@ -46,17 +46,19 @@ def tool_spec():
         Consumer('genome',(member('path','genome_path'),member('sha256','genome_sha256')),False,
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         scalar('output_dir',required=True),*(scalar(k,required=False) for k in optional if k not in ('genome_path','genome_sha256'))]
-    return ToolSpec(name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
+    from .native_delivery import delivery_spec
+    return ToolSpec(scientific_delivery=delivery_spec(owner,'scientific_motifs', h5ad_roles=('motif-accessibility.h5ad',), figure=('patterns.png','motif_accessibility_heatmap')),name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
         parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('MotifAccessibilityResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact native cell-by-motif result; deviations and z-scores are distinct, never peak counts.',bindable=True,artifact=A.MOTIF_ACCESSIBILITY)
             for k in owner.RESULT_FIELDS if k.endswith(('_path','_sha256'))}),
         durable_hooks=DurableToolHooks(owner.execute,owner.recover),exception_classifier=classify,recovery_policy_version=owner.POLICY,
-        scientific_authority=ScientificAuthorityHooks(kind=owner.KIND,producer_ports=('motifs',),describe=owner.describe,
+        scientific_authority=ScientificAuthorityHooks(kind=owner.KIND,producer_ports=('motifs','scores'),describe=owner.describe,
             publication_record=owner.publication_record,reuse_result=owner.reuse_result,proof_metadata=owner.proof_metadata,independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Examine TF-associated motif accessibility across cells and optional supplied groups using native chromVAR and motifmatchr.',
             'Consumes ordinary dense/CSR/CSC H5AD raw peak counts, including insertion/cut-site counts, fragment counts and declared binary accessibility. No EpiZoo, feature adoption, upstream pipeline, biological replicate or clustering prerequisite.',
             'Requires exact genomic coordinates/convention, assembly-matched genome and taxon-appropriate JASPAR CORE motifs. Use installed resources or a task FASTA. Ask only for missing scientific declarations. Native zero-total peak filtering retains original mappings; zero-total cells retain undefined values.',
             'Publishes per-cell bias-corrected deviations and separate z-scores, matched backgrounds, motif/GC evidence, descriptive summaries, a heatmap and downloads. This is not peak-set motif enrichment, TF expression/binding, causality or replicate-level condition testing.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(Producer('motifs','motif_accessibility.v1',
-            (member('path','manifest_path'),member('sha256','manifest_sha256'))),)))
+            (member('path','manifest_path'),member('sha256','manifest_sha256'))),
+            Producer('scores','chromvar_scores_h5ad.v1',(member('dataset','scores_path'),))),))

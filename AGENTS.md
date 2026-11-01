@@ -729,6 +729,50 @@ within scope / CONDITIONAL GO. The user authorizes one coherent reviewed commit
 and normal push to origin/main; earlier no-commit statements describe prior stages.
 No STE-NFI-1, STE-3 or broader native execution is started.
 
+STE-NFI-1A builds on `f8ec12bde3a72a6d7e06f907cc584131e9fbb49d` without
+staging, commit or push. The [native functions guide](docs/guides/native-functions.md)
+owns package-level `run_chromvar` dispatch for computeExpectations,
+getFragmentsPerPeak, getFragmentsPerSample and computeVariability (36 Registry
+tools). Native functions are independent capabilities; complete scientific
+workflows remain optional, demand-driven compositions. Existing Interpreter
+members, typed sources, Compiler, RunStore and scientific authority remain the
+owners. Exact accepted chromVAR scores have a reusable typed port; native
+variability does not recompute motifs, backgrounds or deviations.
+
+Registry-declared scientific delivery replaces the three duplicated native
+package delivery modules. Existing private snapshots retain separate accepted
+source and delivered-byte identities, bounded projection capacity and historical
+artifact meanings. Shared process cancellation/completion mechanics do not change
+native algorithms. Genomic coordinates and genome/motif resolution belong to
+the existing sequence-reference owner, not the chromVAR workflow.
+
+The [STE-NFI-1A report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1a/REPORT.md)
+records COMPLETE within bounded engineering scope / CONDITIONAL GO: genuine
+native parity for all four functions, Firefox/Qwen expectations execution and
+five checked downloads, exact scripted native accepted-score reuse, and restart
+retrieval including six unchanged historical motifmatchr artifacts. Provider
+continuation failures remain distinct from scripted selection and native science.
+The 131 delivery/owner checks and four final process/projection checks pass;
+three baseline detailed-planning size failures remain, with only 13 bytes of
+inspection headroom. Source data, resources, configuration and historical records
+remain preserved. Uninstalled toolkit APIs are proposals, not integrated
+capabilities. No STE-NFI-1B/1C/1D or broader workflow is started.
+
+STE-NFI-1A final architecture closeout retains that bounded decision. Review
+corrects an accidentally removed MACS3 timing import and replaces worst-case
+text-download reservations with measured snapshot growth under existing capacity
+and size limits. Native scientific contracts and accepted artifacts stay exact.
+The final affected suite passes 338 checks; only the three documented baseline
+planning-size checks fail. Offline source review preserves strict duplicate-port
+and unused-input rejection; valid explicit choices compile without source repair.
+Five historical publications and 34 artifacts retain their delivery semantics,
+and all 77 preserved Sessions remain byte-identical during closeout. The appended
+[report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1a/REPORT.md)
+records source inventory, measured scaling debt and the unstarted STE-NFI-1B
+recommendation. The user's final closeout instruction authorizes one coherent
+reviewed completion commit and normal push to `origin/main`; earlier no-commit
+statements describe the pre-closeout stages.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

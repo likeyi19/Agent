@@ -18,6 +18,7 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
 from agent.tools.analysis.macs3 import RESULT_FIELDS as _PEAK_FIELDS, FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis.chromvar_native import RESULT_FIELDS as _CHROMVAR_NATIVE_FIELDS, FACT_FIELDS as _CHROMVAR_NATIVE_FACTS
 from agent.tools.analysis.motifmatchr import RESULT_FIELDS as _MATCH_FIELDS, FACT_FIELDS as _MATCH_FACTS
 from agent.tools.analysis.chromvar import RESULT_FIELDS as _MOTIF_FIELDS, FACT_FIELDS as _MOTIF_FACTS
 from agent.tools.analysis.scatac_regulatory_sequences import RESULT_FIELDS as _REGION_SEQUENCE_FIELDS
@@ -407,6 +408,9 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    'run_chromvar': _ToolProjection(frozenset(_CHROMVAR_NATIVE_FIELDS), _CHROMVAR_NATIVE_FACTS, 'chromvar-native-statistics-v1', (
+        _ArtifactProjection('manifest_path','native_chromvar_manifest',('native_completion','exact_ordered_axes','artifact_integrity'),digest_field='manifest_sha256'),
+        _ArtifactProjection('table_path','native_chromvar_table',('native_statistics','ordered_input_identity'),digest_field='table_sha256'))),
     'run_motifmatchr': _ToolProjection(frozenset(_MATCH_FIELDS), _MATCH_FACTS, 'motifmatchr-native-v1', (
         _ArtifactProjection('manifest_path','native_motif_matches_manifest',('native_completion','exact_ordered_peaks_and_motifs','resource_and_artifact_integrity'),digest_field='manifest_sha256'),
         _ArtifactProjection('matches_path','native_motif_matches_sparse',('native_boolean_matches','all_source_peaks'),digest_field='matches_sha256'))),

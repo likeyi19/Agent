@@ -32,6 +32,7 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('run_chromvar', 'dataset'),
     ('run_motifmatchr', 'dataset'),
     ('run_motifmatchr', 'genome'),
     ('call_scATAC_peaks', 'barcodes'),

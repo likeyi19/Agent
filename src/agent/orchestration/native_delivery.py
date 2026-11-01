@@ -5,7 +5,9 @@ from .registry import ScientificDeliverySpec
 def delivery_spec(owner, artifact_type, *, h5ad_roles=(), figure=None):
     def publication(args, output, authority):
         value, sha = owner.load(output['manifest_path'], output['manifest_sha256'])
-        if (authority['artifact_contract'] != owner.CONTRACT or authority['science_profile'] != owner.PROFILE
+        # The owner has admitted this exact current or historical profile.
+        # Accepted authority must match the publication, not today's catalog.
+        if (authority['artifact_contract'] != owner.CONTRACT or authority['science_profile'] != value['profile']
                 or authority['verifier'] != owner.VERIFIER or value['arguments'] != owner.arguments(args)
                 or owner.result(value, output['manifest_path'], sha) != output):
             raise ValueError('Scientific delivery differs from its exact producing request')

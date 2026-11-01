@@ -42,7 +42,7 @@ def _assert_equivalent(original, compact):
 def test_complete_fixture_grammars_are_identical(monkeypatch, registry, case):
     original, compact = _pair(monkeypatch, registry, _request(case))
     _assert_equivalent(original, compact)
-    assert len(compact['$defs']['step']['anyOf']) == len(registry.names()) == 36
+    assert len(compact['$defs']['step']['anyOf']) == len(registry.names()) == 39
 
 
 @pytest.mark.parametrize('mode', ('no_inputs', 'all_inputs', 'one_missing_member', 'native_inputs'))

@@ -3768,6 +3768,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .motifmatchr_registry import tool_spec as motifmatchr_tool_spec
+    from .native_matrix_registry import tool_specs as native_matrix_tool_specs
     from .chromvar_native_registry import tool_spec as chromvar_native_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
@@ -3775,6 +3776,7 @@ def build_default_tool_registry() -> ToolRegistry:
         chromvar_tool_spec(),
         motifmatchr_tool_spec(),
         chromvar_native_tool_spec(),
+        *native_matrix_tool_specs(),
         macs3_tool_spec(),
         embedding_spec,
         pca_spec,

@@ -802,6 +802,32 @@ Future native batches must measure actual metadata and provider costs without
 sacrificing scientific information to the project byte budget. STE-NFI-1C is
 the next priority and is not started by this closeout.
 
+STE-NFI-1C builds on `72044396227db5832cdb252b7001c037adbecf13`, initially with
+source changes unstaged and uncommitted. Three package interfaces expose nine reviewed
+native matrix functions: Signac 1.16.0, epiScanpy 0.4.0 and SnapATAC2 2.9.0.
+The [native guide](docs/guides/native-functions.md) owns exact slots, native
+defaults, method distinctions, isolated installation and unsupported object forms.
+The existing native publication, Registry authority, source binding and declared
+H5AD download owners remain authoritative. Scientific completion, generated
+explanation and conversational reuse are distinct acceptance claims. The
+[STE-NFI-1C report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1c/REPORT.md)
+records actual parity/Web evidence and the unchanged planning-budget failure.
+The original partial assessment and pre-closeout no-commit restriction describe
+that earlier stage. STE-NFI-1C finalization corrects signed `pp.log1p` admission,
+preserves ordinary AnnData annotations/reductions, forwards bounded ordinary JSON
+kwargs, and exposes installed chunk/thread/progress options. Adapter profiles no
+longer depend on catalog membership; exact earlier profiles are read-only and
+retain their accepted authority/delivery identities. No new function or workflow
+is added. The appended report owns installed-API extension costs, fresh native
+parity, historical retrieval, restarted Firefox downloads and regression evidence.
+Engineering is complete within this bounded scope; overall Web coverage remains
+PARTIAL. Genuine SnapATAC2 missing-file clarification succeeds, but uploaded-file
+continuation and Signac-to-epiScanpy conversational reuse remain unqualified.
+The unchanged 83,894-byte paired-DA fixture exceeds the 81,920-byte maintenance
+budget; this is documented catalog growth, not a demonstrated provider hard limit.
+The user's finalization instruction authorizes one reviewed completion commit and
+normal push to `origin/main`. STE-NFI-1D and broader ecosystem work are not started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

@@ -57,8 +57,10 @@ def accepted_statistical_result(service, session_id, revision, origin, output, *
 def create_statistical_export(source_stream, destination_stream, manifest, *, source_sha256,
                               source_size_bytes, manifest_sha256, max_bytes):
     from agent.tools.analysis.peak_h5ad import inspect
-    matrix._reject(manifest['tool_name'] not in {*TOOLS, 'compute_motif_accessibility'} or not 0 < max_bytes <= matrix.MAX_MATRIX_BYTES)
-    require_matrix = manifest['tool_name'] in ('build_replicate_pseudobulk', 'compute_motif_accessibility')
+    from .native_delivery import definitions
+    native_h5ad = any(name == manifest['tool_name'] and spec.h5ad_roles for name, spec in definitions())
+    matrix._reject(manifest['tool_name'] not in TOOLS and not native_h5ad or not 0 < max_bytes <= matrix.MAX_MATRIX_BYTES)
+    require_matrix = native_h5ad or manifest['tool_name'] == 'build_replicate_pseudobulk'
     destination_stream.seek(0, 2)
     matrix._reject(destination_stream.tell() != 0)
     with h5py.File(source_stream, 'r') as source:

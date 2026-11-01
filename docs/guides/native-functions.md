@@ -107,3 +107,141 @@ genuine Firefox/provider execution and remaining conversational limitations. It
 also records prompt/schema costs and the package-neutral future integration matrix.
 This initial interface work does not integrate every API of any package or start
 STE-NFI-1B/1C/1D.
+
+## STE-NFI-1C matrix package batch
+
+Three additional package interfaces share bounded AnnData adaptation and native
+completion/publication: `run_signac`, `run_episcanpy`, and `run_snapatac2`.
+They take `input_path`, `output_dir`, `function_name`, optional `kwargs`,
+`input_sha256`, `count_slot`, and `matrix_semantics`. Functions are fixed reviewed
+public APIs, not arbitrary imported callables. Each call runs in its package's
+isolated runtime; source files and shared environments are never mutated.
+
+| Package/version | Function names | Native result represented in H5AD |
+| --- | --- | --- |
+| Signac 1.16.0 | `RunTFIDF`, `BinarizeCounts` | Transformed or binary `X`; sparse features × cells are passed to R, then returned to cells × features |
+| Signac 1.16.0 | `FindTopFeatures` | Native count/percentile statistics in `var.Signac_count` / `var.Signac_percentile`; `var.Signac_native_rank` preserves native descending-count order while H5AD retains original feature order |
+| epiScanpy 0.4.0 | `pp.binarize`, `pp.log1p` | Binary or log-transformed `X`; `copy` is forwarded faithfully on the task-local object |
+| epiScanpy 0.4.0 | `pp.tfidf` | Native TF-IDF layer, default `tf-idf`, with original `X` retained |
+| epiScanpy 0.4.0 | `pp.lsi` | Native `obsm.X_lsi`, consuming the specified existing TF-IDF layer |
+| SnapATAC2 2.9.0 | `pp.select_features` | `var.selected`; native in-place mode also records `var.count`. The matrix is not subset |
+| SnapATAC2 2.9.0 | `tl.spectral` | Native `obsm.X_spectral` and `uns.spectral_eigenvalue`; `X` stays unchanged |
+
+The actual installed APIs own default values and numerical validity. Omitted
+kwargs stay omitted. Signac's matrix `FindTopFeatures` method accepts but ignores
+`min.cutoff`; it does not perform the assay method's variable-feature selection.
+Its native rank is mapped by exact feature identity, never assumed to match row
+order. Signac's four TF-IDF methods differ from sklearn TF-IDF. In epiScanpy 0.4.0,
+`pp.tfidf` defaults to `norm='l1'` despite the inconsistent docstring. Native LSI's
+missing-layer behavior is not repaired: supply a compatible existing layer or
+explicitly request TF-IDF as a separate operation. SnapATAC2 spectral's default
+`features='selected'` requires that actual field; explicit `features=null` uses
+all features. Native return-array modes are mapped to their named slots.
+
+These methods consume finite numeric matrix measurements, without a genome
+or reference prerequisite. `pp.log1p` also accepts signed transformed values;
+its installed native implementation judges the logarithm domain and base.
+The other reviewed functions retain nonnegative admission. This does not claim
+that fractional measurements are integer counts or that all methods are suitable
+for every declared measurement. Exact unique cell/feature IDs are required. H5AD
+storage bounds apply; matrices are never expanded from sparse to dense by the
+adapter. `count_slot` selects X or one exact layer and preserves its declared
+measurement; an independently selected layer needs its own declaration. Original
+layers, obs/var, obsm/varm, obsp/varp, raw and ordinary serialized uns metadata
+are retained through AnnData's own copy/read/write operations. Bounded HDF5
+storage inspection excludes external links, unsafe filters and unsupported
+objects. Native-written slots replace existing values; retained reductions and
+annotations are not recomputed or asserted to describe the new X. Agent updates
+measurement and invocation provenance explicitly. Privacy projection remains a
+separate download responsibility.
+Source-file identity remains pinned separately from transformed-result identity.
+These preserved annotations do not acquire biological validation.
+
+The supported kwargs are exposed by Registry metadata and the package dispatch
+in `tools/analysis/native_matrix.py`. Precomputed Signac IDF vectors, SnapATAC2
+whitelist/blacklist files and feature-weight arrays, serialized Seurat/ArchR/CDS/
+Cistopic objects, plotting APIs and arbitrary package exports are not supported
+by these interfaces. They require their own exact typed adapters. No method is
+substituted. The two-hour native process limit, bounded iteration/dimension
+arguments, and 16-million-element limit for quadratic non-cosine spectral calls
+are execution limits, not scientific recommendations. Nonfinite native matrix
+results fail publication rather than being repaired. Native errors retain private
+diagnostics and never authorize automatic retries.
+
+Reviewed ordinary kwargs retain their JSON types and values, including invalid
+native values, within an 8-KiB/depth-four bound. Arrays or objects do not authorize
+scientific inputs: spectral masks must name an existing var field, and external
+files, feature-weight/IDF vectors and executable callbacks need separate typed
+adapters. No dynamic import or code evaluation is available. `pp.log1p` exposes
+native `chunked`/`chunk_size`, spectral exposes `num_threads` (cap 32, also its
+installed default), and `BinarizeCounts` accepts native `verbose` (ignored by its
+matrix method). Omitted options remain native defaults.
+
+Downloads use Registry-declared `ScientificDeliverySpec` and the existing shared
+H5AD privacy exporter: `result.h5ad`, `metadata.json`, `native-receipt.json`.
+Accepted `native_matrix_h5ad.v1` ports permit exact cross-package reuse. A new
+native result is not automatically a canonical raw count matrix or an Agent
+embedding bundle. Preserve the appropriate measurement and output slot when
+using it elsewhere. Reopening and downloading never rerun native computation.
+
+Finalization adapter profiles preserve ordinary AnnData contents and are
+independent of catalog membership. Each publication still pins the exact native
+function, parameters, runtime and implementation. The three exact earlier
+profiles remain read-only; accepted authority and delivery retain their original
+profile identities. They cannot create new publications under an old profile.
+
+### Extending compatible functions
+
+The function/member table and descriptions are declarations; the fixed callable
+map invokes the installed implementation. For an ordinary AnnData function that
+changes X and returns None or AnnData, extension requires its catalog row/member
+descriptions, one fixed callable entry, result-slot/measurement declarations and
+parity tests. An annotation-only function also joins the unchanged-X check.
+There is no new ToolSpec, source binder, lifecycle, evidence projector or download
+handler. A returned array/tuple needs an explicit slot mapping, as feature masks
+and spectral results already do. Catalog growth no longer changes adapter identity.
+
+Installed-API review identifies epiScanpy `pp.normalize_total` in-place use as
+compatible with this family, including its optional obs/layer outputs. Its wrapper
+discards Scanpy's dictionary return in non-inplace mode, which must not be invented
+by an adapter. SnapATAC2 `tl.umap` fits the existing embedding slots, with a small
+return-array mapping; `pp.knn` needs an explicit graph slot/return mapping. These
+are extension candidates, not registered capabilities.
+
+Signac `RunSVD.default` accepts the matrix exchange but returns Seurat `DimReduc`:
+embeddings, loadings, standard deviations and miscellaneous components need an
+accurate thin result adapter. `AverageCounts` requires Seurat metadata/identities;
+`RegionStats` needs a qualified genome; `corSparse` produces a potentially dense
+square/cross correlation matrix with different axes. They cannot truthfully share
+the existing X-transform contract unchanged. Fragment imports/exports, plot saves
+and file-path mutations need explicit managed file authorization. Filtering or
+aggregation that changes axes needs its own lineage contract. No function quota
+or package priority follows from these distinctions.
+
+### Operator installation
+
+Install once outside Sessions. Python 3.11 venvs and the exact dependency locks
+are separate because epiScanpy requires an older compatible AnnData/numpy stack.
+From the repository root, using the existing operator Python/Conda executables:
+
+```bash
+python3.11 -m venv ../agent-data/resources/runtimes/episcanpy-0.4.0/env
+../agent-data/resources/runtimes/episcanpy-0.4.0/env/bin/pip install -r requirements/native/episcanpy-0.4.0.txt
+python3.11 -m venv ../agent-data/resources/runtimes/native-matrix-1/env
+../agent-data/resources/runtimes/native-matrix-1/env/bin/pip install -r requirements/native/snapatac2-2.9.0.txt
+conda create -p ../agent-data/resources/runtimes/signac-1/env --file requirements/native/signac-1.16.0-linux-64.txt
+```
+
+The Signac explicit lock is Linux x86-64 specific. Python wheels and package
+compilation retain their platform requirements; this is CPU qualification, with
+no RTX-specific implementation. Defaults resolve beside the configured resource
+library. Operator overrides are `AGENT_SIGNAC_RSCRIPT`, `AGENT_EPISCANPY_PYTHON`,
+and `AGENT_SNAPATAC2_PYTHON`. The Python executable must identify a venv with its
+`pyvenv.cfg`; deployment is not a researcher Session responsibility. Signac and
+SnapATAC2 retain MIT notices, epiScanpy retains BSD-3-Clause, and dependencies
+retain their own licenses; these locks do not redistribute package code.
+
+The [STE-NFI-1C report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1c/REPORT.md)
+separates direct native parity, genuine Firefox/provider acceptance, simulated
+binding checks, actual downloads and unresolved language/schema limits. This is
+partial ecosystem coverage, not complete integration of any package API.

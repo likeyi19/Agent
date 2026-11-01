@@ -1,4 +1,5 @@
 import json
+import pytest
 from agent.orchestration._catalog_compaction import share_catalog_values
 from catalog_expansion import expand_catalog
 
@@ -41,3 +42,27 @@ def test_real_v3_phrase_expansion_preserves_all_catalog_meanings():
                     raw=payload['meanings'][metadata[0]['m']]
                     metadata[0]=re.sub(re.escape(marker)+r'(\d+)'+re.escape(marker),lambda m:payload['catalog_phrases'][int(m[1])],raw)
     assert expanded==json.loads(json.dumps(_prompt_catalog(r)))
+
+
+@pytest.mark.parametrize('case', (
+    'inspect_canonical', 'downstream_canonical', 'label_transfer_canonical',
+    'differential_accessibility_paired_covariates',
+))
+def test_complete_v4_catalog_roundtrip_preserves_scientific_metadata(case):
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.semantic_prompt import (
+        build_semantic_planning_catalog, build_semantic_planning_prompt,
+    )
+    from test_semantic_wire_v4 import _request
+    registry = build_default_tool_registry()
+    request = _request(case)
+    catalog = json.loads(build_semantic_planning_prompt(request, registry))['catalog']
+    expanded = expand_catalog(catalog)
+    for tool in expanded.values():
+        for port in tool[1].values():
+            port[1] = catalog['catalog_format']['request_source_mode'][port[1]]
+            if port[5] is not None:
+                port[5].extend([None] * (5 - len(port[5])))
+    original = build_semantic_planning_catalog(request, registry)['tools']
+    assert expanded == json.loads(json.dumps(original))
+    assert set(expanded) == set(registry.names())

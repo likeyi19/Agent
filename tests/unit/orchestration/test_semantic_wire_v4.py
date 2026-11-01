@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from schema_expansion import expand_schema
 
 from agent.orchestration import (
     AgentRequest,
@@ -854,10 +855,11 @@ def test_v4_representative_responses_remain_materially_smaller(
 
 
 def _target_schemas(schema):
+    steps = expand_schema(schema, schema["$defs"]["step"])["anyOf"]
     return {step["properties"]["tool"]["enum"][0]: {"enum": tuple(
         name for item in step["properties"]["sources"]["items"].get("anyOf", ())
         for name in item["properties"]["target"]["enum"])}
-        for step in schema["$defs"]["step"]["anyOf"]}
+        for step in steps}
 
 
 def _accepts_target(schema, value):
@@ -975,12 +977,11 @@ def test_schema_excludes_all_structured_input_values(registry) -> None:
 @pytest.mark.parametrize("inputs", ({}, {"input_path": "/private/data.h5ad"}))
 def test_source_variants_have_only_kind_as_enum_discriminator(registry, inputs) -> None:
     schema = build_semantic_wire_v4_schema(registry, AgentRequest("schema", "Plan.", inputs))
-    for step in schema['$defs']['step']['anyOf']:
+    for step in expand_schema(schema, schema['$defs']['step'])['anyOf']:
         for selector in step['properties']['sources']['items'].get('anyOf', ()):
             assert selector['additionalProperties'] is False
             assert selector['required'] == ('target', 'source')
-            variants = [schema['$defs'][v['$ref'].removeprefix('#/$defs/')]
-                if '$ref' in v else v for v in selector['properties']['source']['anyOf']]
+            variants = selector['properties']['source']['anyOf']
             assert all('target' not in v['properties'] for v in variants)
             assert all(len(v['properties']['kind']['enum']) == 1 for v in variants)
             assert len({v['properties']['kind']['enum'][0] for v in variants}) == len(variants)
@@ -990,7 +991,7 @@ def test_source_schema_excludes_unrelated_resources_and_illegal_handoffs(registr
     schema = build_semantic_wire_v4_schema(registry, AgentRequest('request', 'Annotate', {
         'source_path':'/private/source.h5ad', 'source_sha256':'a'*64,
         'annotation_spec_path':'/private/maestro.json', 'annotation_spec_sha256':'b'*64}))
-    by_tool = {s['properties']['tool']['enum'][0]: s for s in schema['$defs']['step']['anyOf']}
+    by_tool = {s['properties']['tool']['enum'][0]: s for s in expand_schema(schema, schema['$defs']['step'])['anyOf']}
     def ports(tool):
         return {s['properties']['target']['enum'][0]: s['properties']['source']['anyOf']
             for s in by_tool[tool]['properties']['sources']['items']['anyOf']}
@@ -998,7 +999,7 @@ def test_source_schema_excludes_unrelated_resources_and_illegal_handoffs(registr
     source = ports('annotate_scATAC_cell_types')['source']
     assert len(source) == 1 and source[0]['properties']['kind']['enum'] == ('input',)
     assert source[0]['properties']['input']['enum'] == ('source_path',)
-    assert all('$ref' in option or option['properties']['kind']['enum'] == ('step_port',)
+    assert all(option['properties']['kind']['enum'] in (('step',), ('step_port',))
         for option in ports('pca_embed_cells')['dataset'])
     clustering = ports('annotate_scATAC_cell_types')['clustering']
     assert clustering[1]['properties']['source_port']['enum'] == ('clustered_analysis',)

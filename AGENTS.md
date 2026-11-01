@@ -773,6 +773,35 @@ recommendation. The user's final closeout instruction authorizes one coherent
 reviewed completion commit and normal push to `origin/main`; earlier no-commit
 statements describe the pre-closeout stages.
 
+STE-NFI-1B builds on `b78e123b2e23ab56d16f434fd5cd85baac6b5cd9` without
+staging, commit or push. The existing wire-v4 schema owner shares exactly
+identical closed objects through standard local references, preserving complete
+tool/port/source correlations and all 36 tools. Catalog prose, Interpretation,
+parser, Compiler, scientific contracts and historical authority stay unchanged.
+The four unchanged 80-KiB size tests pass at 72,924–80,733 combined bytes;
+paired DA retains only 1,187 bytes of headroom. Exact schema expansion, positive
+and negative validation, compiled plan identity and catalog round trips check
+meaning independently of byte savings. The
+[STE-NFI-1B report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1b/REPORT.md)
+records bounded metadata growth, genuine normal-launcher Firefox/Qwen inspection
+with one successful detailed-planning call, and preservation of 831 pinned files.
+An initial advisory misinterpretation and inaccurate generated execution prose
+remain visible limitations. Nine broader regression failures reproduce without
+the new factoring pass and remain explicit baseline debt. This is bounded shared
+interface completion, not unlimited catalog growth or universal provider
+qualification. New package integration and subsequent work are not started.
+
+STE-NFI-1B final closeout reviews all eight paths and finds no material defect
+requiring another implementation change. Exact source hashes retain the existing
+138 focused passes, 849 broader passes and nine reproduced baseline failures;
+the three capability-indexed PlanningScope cases remain separately unqualified.
+The appended report records READY FOR COMMIT, preservation and authorized
+closeout. The user authorizes one coherent completion commit and normal push to
+`origin/main`; earlier unstaged/no-commit statements describe the review stage.
+Future native batches must measure actual metadata and provider costs without
+sacrificing scientific information to the project byte budget. STE-NFI-1C is
+the next priority and is not started by this closeout.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

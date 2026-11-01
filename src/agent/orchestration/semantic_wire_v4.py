@@ -6,6 +6,8 @@ The registry-driven semantic compiler remains authoritative for source legality.
 
 from __future__ import annotations
 
+from collections import Counter
+import json
 from typing import Mapping
 
 from agent.schemas import AgentRequest, ErrorCategory, JsonValue
@@ -45,6 +47,86 @@ def _closed_object_schema(
         "required": tuple(properties),
         "additionalProperties": False,
     }
+
+
+def _share_closed_objects(schema):
+    """Factor exact closed objects, retaining complete port/source correlations.
+
+    Standard local refs are already part of wire v4. Only repeated complete
+    objects are shared; no enum domains or union branches are merged. Count
+    references after parent sharing so nested duplicates do not create unused
+    or single-use definitions. The input is not mutated, and existing
+    definition names are reserved.
+    """
+    counts = Counter()
+
+    def identity(value):
+        if isinstance(value, dict) and value.get("additionalProperties") is False:
+            return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+    def children(value):
+        return (value.values() if isinstance(value, dict)
+                else value if isinstance(value, (tuple, list)) else ())
+
+    def count(value):
+        key = identity(value)
+        if key is not None:
+            counts[key] += 1
+        for child in children(value):
+            count(child)
+
+    count(schema)
+    names, shared = {}, {}
+    occupied = set(schema.get("$defs", {}))
+
+    def encode(value):
+        key = identity(value)
+        if key is not None and counts[key] > 1:
+            if key not in names:
+                name = f"s{len(names)}"
+                while name in occupied:
+                    name += "_"
+                occupied.add(name)
+                names[key] = name
+                shared[name] = {k: encode(v) for k, v in value.items()}
+            return {"$ref": "#/$defs/" + names[key]}
+        if isinstance(value, dict):
+            return {k: encode(v) for k, v in value.items()}
+        if isinstance(value, (tuple, list)):
+            return tuple(encode(v) for v in value)
+        return value
+
+    result = encode(schema)
+    while shared:
+        references = Counter()
+
+        def count_refs(value):
+            if isinstance(value, dict) and set(value) == {"$ref"}:
+                references[value["$ref"]] += 1
+            for child in children(value):
+                count_refs(child)
+
+        count_refs(result)
+        count_refs(shared)
+        single = {"#/$defs/" + name: value for name, value in shared.items()
+                  if references["#/$defs/" + name] <= 1}
+        if not single:
+            break
+
+        def inline(value):
+            if isinstance(value, dict):
+                if set(value) == {"$ref"} and value["$ref"] in single:
+                    return inline(single[value["$ref"]])
+                return {k: inline(v) for k, v in value.items()}
+            if isinstance(value, (tuple, list)):
+                return tuple(inline(v) for v in value)
+            return value
+
+        result = inline(result)
+        shared = {name: inline(value) for name, value in shared.items()
+                  if "#/$defs/" + name not in single}
+    result["$defs"].update(shared)
+    return result
 
 
 def _planner_visible_tool_names(registry: ToolRegistry) -> tuple[str, ...]:
@@ -207,7 +289,7 @@ def build_semantic_wire_v4_schema(
         elif isinstance(value, (tuple, list)):
             for child in value: prune_enum_types(child)
     prune_enum_types(root)
-    return root
+    return _share_closed_objects(root)
 
 
 def _parse_source(

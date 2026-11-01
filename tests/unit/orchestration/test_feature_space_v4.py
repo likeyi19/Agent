@@ -159,10 +159,11 @@ def test_feature_variants_have_exact_v3_plan_only_parity(guarded_registry, extra
 
 
 def test_feature_schema_exposes_only_reviewed_new_targets(guarded_registry):
+    from schema_expansion import expand_schema
     request = AgentRequest("schema", "Validate.", _feature_inputs({
         **COORDINATES, "layer_key": "counts", "semantics_metadata_key": "matrix_semantics"}))
     schema = build_semantic_wire_v4_schema(guarded_registry, request)
-    for step in schema["$defs"]["step"]["anyOf"]:
+    for step in expand_schema(schema, schema["$defs"]["step"])["anyOf"]:
         tool = step["properties"]["tool"]["enum"][0]
         source_items = step["properties"]["sources"]["items"]
         variants = source_items.get("anyOf", (source_items,))

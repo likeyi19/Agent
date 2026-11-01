@@ -645,8 +645,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             admitted = admit_execution(sessions, interaction, decision, execution_inputs,
                                        epizoo_resources=epizoo_resources)
             selected_tool = sessions._application.registry.get(admitted['tool'])
-            owner_missing = (() if selected_tool.parameter_prerequisites is None else
-                             selected_tool.parameter_prerequisites(admitted['inputs']))
+            from .shared_resources import scientific_resource_scope
+            reference_owner = getattr(sessions, '_reference_resources', None)
+            with scientific_resource_scope(None if reference_owner is None else reference_owner.library):
+                owner_missing = (() if selected_tool.parameter_prerequisites is None else
+                                 selected_tool.parameter_prerequisites(admitted['inputs']))
             missing_parameters = tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters)))
             if missing_parameters:
                 from .dialogue_execution import request_parameters

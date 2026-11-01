@@ -506,6 +506,8 @@ class ScientificArtifactHandle(ArtifactHandle):
         reviewed.update(("scientific_peaks", name, value[0]) for name,value in peak_files.items())
         from .chromvar_delivery import FILES as motif_files
         reviewed.update(('scientific_motifs', name, value[0]) for name,value in motif_files.items())
+        from .motifmatchr_delivery import FILES as match_files
+        reviewed.update(('scientific_motif_matches', name, value[0]) for name,value in match_files.items())
         from .sequence_delivery import FILES as sequence_files
         reviewed.update(('scientific_sequence', name, value[0]) for name,value in sequence_files.items())
         reviewed.update((kind, filename, prefix + ': ' + label)

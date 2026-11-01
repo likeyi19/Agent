@@ -367,7 +367,26 @@ def test_compact_schema_preserves_complete_registry_domains_and_shares_small_enu
             return {k:expand(v) for k,v in value.items() if k!='$defs'}
         if isinstance(value,list):return [expand(v) for v in value]
         return value
-    assert expand(compact)==original  # Every branch, domain and source association is unchanged.
+    def canonical(value):
+        if isinstance(value, list):
+            return [canonical(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        value = {k: canonical(v) for k, v in value.items()}
+        if set(value) == {'anyOf'}:
+            branches = []
+            for item in value['anyOf']:
+                branches.extend(item['anyOf'] if set(item) == {'anyOf'} else [item])
+            return {'anyOf': [json.loads(v) for v in sorted({json.dumps(v, sort_keys=True) for v in branches})]}
+        argument = value.get('properties', {}).get('argument', {})
+        if len(argument.get('enum', [])) > 1:
+            return canonical({'anyOf': [value | {'properties': value['properties'] |
+                {'argument': argument | {'enum': [name]}}} for name in argument['enum']]})
+        return value
+    # Expanding the argument domains independently yields exactly the same
+    # complete branches, including tool/source/port and member-name constraints.
+    assert canonical(expand(compact)) == canonical(original)
+    assert len(json.dumps(compact)) < len(json.dumps(original)) * .6
     def enums(value):
         if isinstance(value,dict):return len(value.get('enum',[]))+sum(enums(v) for v in value.values())
         if isinstance(value,list):return sum(enums(v) for v in value)

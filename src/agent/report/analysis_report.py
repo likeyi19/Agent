@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from agent.tools.analysis.macs3 import FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis.motifmatchr import FACT_FIELDS as _MATCH_FACTS
 from agent.tools.analysis.chromvar import FACT_FIELDS as _MOTIF_FACTS
 
 from agent.tools.analysis.scatac_regulatory_sequences import FACT_FIELDS as _REGION_SEQUENCE_FACTS
@@ -581,6 +582,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
     "posttrain_epizoo_model": tuple(k for k in _ADAPTATION_REPORT_FIELDS if k != "adaptation_spec_sha256") + ("parent_model_manifest_sha256",),
     "call_scATAC_peaks": _PEAK_FACTS,
+    "run_motifmatchr": _MATCH_FACTS,
     "compute_motif_accessibility": _MOTIF_FACTS,
     "prepare_scatac_regulatory_sequences": _REGION_SEQUENCE_FACTS,
     "generate_regulatory_sequences": ("n_sequences", "requested_sequences", "condition", "checkpoint_label", "condition_index", "sequence_length", "valid_alphabet", "unique_sequences", "duplicate_sequences", "gc_fraction", "entropy_bits", "longest_homopolymer", "pairwise_hamming", "seed", "guidance_scale", "sampling_schedule", "candidate_examples", "examples_omitted", "model_release", "limitations"),
@@ -796,6 +798,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 
 _TOOL_TITLES: Mapping[str, str] = {
     "call_scATAC_peaks": "Experimental accessible peaks",
+    "run_motifmatchr": "Native sequence motif matches",
     "compute_motif_accessibility": "Native motif-associated accessibility",
     "prepare_scatac_regulatory_sequences": "scATAC regions and exact genomic DNA",
     "generate_regulatory_sequences": "De novo synthetic regulatory DNA generation",
@@ -834,6 +837,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    "function_name": "Native function",
     "population": "Selected fragment population",
     "window_policy": "Genomic extraction window policy",
     "n_sequences": "Sequence records",
@@ -1068,6 +1072,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("scatac_peaks", "Experimental accessible peaks", frozenset({"call_scATAC_peaks"})),
+    ("native_motif_matches", "Native sequence motif matches", frozenset({"run_motifmatchr"})),
     ("motif_accessibility", "Motif-associated accessibility", frozenset({"compute_motif_accessibility"})),
     ("regulatory_sequence", "Regulatory sequence analysis and design", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences", "generate_regulatory_sequences", "prepare_scatac_regulatory_sequences"})),
     ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
@@ -1129,6 +1134,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "call_scATAC_peaks": ("population", "limitations"),
+    "run_motifmatchr": ("function_name", "measurement", "limitations"),
     "compute_motif_accessibility": ("method", "measurement", "limitations"),
     "prepare_scatac_regulatory_sequences": ("selection_method", "window_policy", "limitations"),
     "generate_regulatory_sequences": ("model_release", "limitations"),
@@ -1488,7 +1494,7 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
-    if step.tool_name in ('call_scATAC_peaks', 'compute_motif_accessibility', 'predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
+    if step.tool_name in ('run_motifmatchr', 'call_scATAC_peaks', 'compute_motif_accessibility', 'predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
         lines = [f'### {_TOOL_TITLES[step.tool_name]} {occurrence}', '']
         for fact in step.facts:
             lines.append(f'- {fact.field.replace("_", " ").capitalize()}: {_inline_code(fact.value)}')
@@ -1764,6 +1770,7 @@ def _render_summary(
     labels = {
         'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
         "call_scATAC_peaks": "Native experimental peaks called; peak enrichment is not differential accessibility",
+        "run_motifmatchr": "Native sequence motif matches computed; not TF binding or accessibility deviations",
         "compute_motif_accessibility": "Native motif deviations and z-scores computed; descriptive accessibility, not TF binding or causality",
         "prepare_scatac_regulatory_sequences": "Observed regions and actual reference DNA prepared; no model inference or functional validation",
         "generate_regulatory_sequences": "Native pretrained generation completed; synthetic candidate composition is not biological validation",

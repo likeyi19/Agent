@@ -20,6 +20,12 @@ ROLES = {
     'compute_scATAC_qc': 'QC', SELECTION: 'cell selection', MATRIX: 'matrix',
 }
 LABELS = {
+    'run_motifmatchr.assembly': 'the genome assembly used for these peaks',
+    'run_motifmatchr.genome_resource': 'a unique installed genome matching the declared peak assembly; select its resource label, supply a matching FASTA, or ask the operator to install it',
+    'run_motifmatchr.motif_collection': 'a unique installed motif collection appropriate for this species; select its resource label or ask the operator to install it',
+    'run_motifmatchr.taxonomy_id': 'the species NCBI taxonomy ID for the supplied genome FASTA',
+    'run_motifmatchr.coordinate_system': 'the peak coordinate convention (zero-based half-open or one-based closed)',
+    'run_motifmatchr.kwargs': "native arguments with their requested values, for example p.cutoff=0.0001, bg='even', out='matches' (an explicit JSON object is also supported)",
     'compute_motif_accessibility.matrix_semantics': 'the actual count measurement (raw peak counts, insertion/cut-site counts, fragment-overlap counts, or binary accessibility)',
     'compute_motif_accessibility.coordinate_system': 'the peak coordinate convention (zero-based half-open or one-based closed)',
     'compute_motif_accessibility.assembly': 'the genome assembly used for these peaks',

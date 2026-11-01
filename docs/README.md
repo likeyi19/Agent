@@ -1,5 +1,8 @@
 # Documentation
 
+The [native motif invocation guide](guides/native-motif-invocation.md) covers the
+bounded `motifmatchr::matchMotifs()` pilot, grounded native arguments from prose or JSON, and its acceptance limits.
+
 Start with the [operating and development guide](guides/operating-and-development.md),
 the repository [README](../README.md), and the detailed [engineering contract](../AGENTS.md).
 The [scientific storage guide](guides/scientific-storage.md) covers the current

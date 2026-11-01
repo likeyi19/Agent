@@ -170,8 +170,11 @@ def export_descriptions(sessions, session_id, targets):
                     **{name:getattr(reference,name) for name in ('handle','artifact_type','filename','title','purpose','description','size_bytes')},
                     payload_checks='performed_on_download', actual_download_status='NOT_RECORDED'))
             continue
-        if step.tool_name == 'compute_motif_accessibility':
-            from .chromvar_delivery import accepted_artifacts
+        if step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
+            if step.tool_name == 'run_motifmatchr':
+                from .motifmatchr_delivery import accepted_artifacts
+            else:
+                from .chromvar_delivery import accepted_artifacts
             for artifact in accepted_artifacts(sessions, session_id, revision, origin,
                     None if output.run_id == origin.run_id else output, step_id=output.step_id):
                 reference = artifact.reference

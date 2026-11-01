@@ -660,8 +660,15 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-NFI-0 adds the bounded [native motif invocation pilot](docs/guides/native-motif-invocation.md)
+(35 registered tools). Researchers can explicitly request `motifmatchr::matchMotifs()`
+on ordinary H5AD peak coordinates with grounded native arguments from prose or JSON.
+Native sparse matches retain all supplied peaks; no count analysis or chromVAR deviations are added.
+The [pilot report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-0/REPORT.md)
+records native parity and the separate ordinary-Web acceptance decision.
+
 STE-2A adds [native MACS3 peak calling](docs/guides/macs3-peak-calling.md), bringing
-the Registry to 34 tools. One exact fragment population supplies experimental
+the Registry at that stage to 34 tools. One exact fragment population supplies experimental
 peaks, native statistics and an ordered peak-set reference for existing
 fragment-overlap matrix construction. Effective genome size and its basis are
 explicit; source support is not silently used as independent fragment weight.

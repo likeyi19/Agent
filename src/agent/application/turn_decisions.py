@@ -1,5 +1,5 @@
 """Bounded turn interpretation and exact, utterance-grounded scalar admission."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .raw_handoff import FastqDeclaration, BamDeclaration, FragmentsDeclaration, AnnotationDeclaration
@@ -120,6 +120,43 @@ class SourceScopedChoiceArgument(ScalarChoiceArgument):
     def __post_init__(self):
         super().__post_init__()
         InputRole(self.tool, self.port, self.source)
+
+
+@dataclass(frozen=True)
+class ArgumentMember:
+    """One reviewed object member, grounded in the same user utterance."""
+
+    name: str
+    kind: str
+    literal: str
+    start: int
+    end: int
+
+    def __post_init__(self):
+        ScopedArgument('member', 'value', self.literal, self.start, self.end)
+        if (type(self.name) is not str or not 0 < len(self.name) <= 128
+                or self.kind not in ('string', 'number', 'json')):
+            raise ValueError('Invalid structured argument member.')
+
+
+@dataclass(frozen=True)
+class StructuredArgument(ScopedArgument):
+    """An ordinary scientific declaration with individually grounded members."""
+
+    members: tuple[ArgumentMember, ...]
+
+    def __post_init__(self):
+        super().__post_init__()
+        if (type(self.members) is not tuple or not 1 <= len(self.members) <= 32
+                or any(not isinstance(m, ArgumentMember) or not self.start <= m.start < m.end <= self.end
+                       for m in self.members)
+                or len({m.name for m in self.members}) != len(self.members)):
+            raise ValueError('Invalid or conflicting structured argument members.')
+
+
+@dataclass(frozen=True)
+class SourceScopedStructuredArgument(StructuredArgument, SourceScopedArgument):
+    """Structured values keep the existing exact dataset source scope."""
 
 
 def argument_identity(item):
@@ -679,6 +716,10 @@ def _scientific_arguments(value):
     for item in value:
         cls, keys = _argument_shape(item)
         _shape(item, keys + ('start', 'end'))
+        if 'members' in item:
+            if type(item['members']) not in (list, tuple):
+                raise IntentError('invalid_decision')
+            item = dict(item, members=tuple(ArgumentMember(**m) for m in item['members']))
         result.append(cls(**item))
     return tuple(result)
 
@@ -687,6 +728,10 @@ def _argument_shape(value):
     choice = type(value) is dict and 'value' in value
     source = type(value) is dict and 'source' in value
     scoped = type(value) is dict and 'port' in value
+    if type(value) is dict and 'members' in value:
+        keys = ('tool', 'argument', 'literal', 'members')
+        return ((SourceScopedStructuredArgument, keys + ('source', 'port')) if scoped
+                else (StructuredArgument, keys))
     keys = ('tool', 'argument', 'literal') + (('value',) if choice else ())
     if scoped:
         return (SourceScopedChoiceArgument if choice else SourceScopedArgument), keys + ('source', 'port')
@@ -741,6 +786,22 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
     if value is None:
         return None
     cls, keys = _argument_shape(value)
+    def members():
+        if type(value['members']) not in (list, tuple) or not 1 <= len(value['members']) <= 32:
+            raise IntentError('invalid_decision')
+        grounded = []
+        for member in value['members']:
+            _shape(member, ('name', 'kind', 'literal', 'evidence'))
+            span = _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
+                literal=member['literal'], evidence=member['evidence']), utterance)
+            grounded.append(dict(name=member['name'], kind=member['kind'],
+                **{k: span[k] for k in ('literal', 'start', 'end')}))
+        return grounded
+    if 'members' in value and 'literal' not in value:
+        _shape(value, tuple(k for k in keys if k != 'literal'))
+        grounded = members()
+        start, end = min(m['start'] for m in grounded), max(m['end'] for m in grounded)
+        return dict(value, members=grounded, literal=utterance[start:end], start=start, end=end)
     quoted = type(value) is dict and 'evidence' in value
     _shape(value, keys + (('evidence',) if quoted else ('start', 'end')))
     literal = value['literal']
@@ -765,7 +826,10 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
     numeric = (not _legacy_numeric_grounding and re.fullmatch(
         r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:/[+-]?\d+)?', literal) is not None)
     start = unique(utterance, evidence, numeric=numeric and evidence == literal) + unique(evidence, literal, numeric=numeric)
-    return {key: value[key] for key in keys} | dict(start=start, end=start + len(literal))
+    result = {key: value[key] for key in keys} | dict(start=start, end=start + len(literal))
+    if 'members' in result:
+        result['members'] = members()
+    return result
 
 
 def parse_decision(raw, *, utterance=None):
@@ -796,7 +860,12 @@ def parse_decision(raw, *, utterance=None):
                     failure = exc.reason
                     # Structural validation only; these placeholders never leave
                     # this parser or become admitted parameter evidence.
-                    return {k: v for k, v in item.items() if k not in {'evidence', 'start', 'end'}} | dict(start=0, end=1)
+                    placeholder = {k: v for k, v in item.items() if k not in {'evidence', 'start', 'end'}} | dict(start=0, end=1)
+                    if 'members' in placeholder:
+                        placeholder.setdefault('literal', '?')
+                        placeholder['members'] = [dict(name=m['name'], kind=m['kind'], literal=m['literal'],
+                            start=0, end=1) for m in placeholder['members']]
+                    return placeholder
             if 'argument' in value:
                 value['argument'] = ground(value['argument'])
             if 'arguments' in value:
@@ -973,13 +1042,19 @@ def decision_schema(public):
                 return {'anyOf': variants}
         if 'choices' in item:
             properties['value'] = enum(item['choices'])
-        plain = _object(properties)
+        forms = [properties]
+        if item.get('members'):
+            forms.append({k: v for k, v in properties.items() if k not in ('literal', 'evidence')} | dict(members={'type': 'array', 'minItems': 1,
+                'maxItems': len(item['members']), 'items': _object(dict(
+                    name=enum(item['members']), kind=enum(('string', 'number', 'json')),
+                    literal={'type': 'string', 'minLength': 1, 'maxLength': 4096},
+                    evidence={'type': 'string', 'minLength': 1, 'maxLength': 4096}))}))
         ports = [row['port'] for row in public.get('dialogue', {}).get('input_roles', ())
                  if row['tool'] == item['tool']]
+        variants = [_object(form) for form in forms]
         if source_ids and ports:
-            return {'anyOf': [plain, _object(properties | dict(
-                source=enum(sorted(source_ids)), port=enum(ports)))]}
-        return plain
+            variants.extend(_object(form | dict(source=enum(sorted(source_ids)), port=enum(ports))) for form in forms)
+        return variants[0] if len(variants) == 1 else {'anyOf': variants}
     declarations = {'type': 'array', 'maxItems': MAX_SCIENTIFIC_ARGUMENTS, 'items': {'anyOf': [
         declaration_schema(item) for item in parameters]}}
     exact = [item for item in parameters if 'choices' not in item or item.get('observation_source')]
@@ -1095,7 +1170,7 @@ def decision_schema(public):
                 execution['roles'] = role_schema(input_roles)
             variants.append(_object({k:v for k,v in execution.items() if k != 'missing_parameters'} | dict(kind=enum(('request_roles',)),
                 roles=role_schema(input_roles) if selected_sources else {'type': 'array', 'maxItems': 0, 'items': {'type': 'string'}},
-                required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') else 2, 'maxItems': 8,
+                required_roles={'type': 'array', 'minItems': 1 if public['dialogue'].get('attachment_candidates') or not selected_sources else 2, 'maxItems': 8,
                     'items': {'anyOf': [_object(dict(tool=enum((item['tool'],)),
                         port=enum((item['port'],)))) for item in input_roles]}})))
         if public['dialogue'].get('attachment_candidates'):
@@ -1176,6 +1251,37 @@ def _compact_decision_schema(schema):
     from collections import Counter
     counts = Counter()
 
+    def factor_arguments(value):
+        if isinstance(value, list):
+            return [factor_arguments(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        value = {k: factor_arguments(v) for k, v in value.items()}
+        if 'anyOf' not in value:
+            return value
+        # Union identical declaration shapes by argument enum. The tool,
+        # source, port, choice domain and every other constraint must agree.
+        # This preserves correlations and does not hide any capability.
+        branches, groups = [], {}
+        for branch in value['anyOf']:
+            for item in branch['anyOf'] if set(branch) == {'anyOf'} else [branch]:
+                argument = item.get('properties', {}).get('argument', {})
+                if not argument.get('enum'):
+                    branches.append(item)
+                    continue
+                shape = item | {'properties': item['properties'] | {
+                    'argument': {k: v for k, v in argument.items() if k != 'enum'}}}
+                identity = json.dumps(shape, sort_keys=True, separators=(',', ':'))
+                if identity not in groups:
+                    item = item | {'properties': item['properties'] | {'argument': dict(argument, enum=list(argument['enum']))}}
+                    groups[identity] = item
+                    branches.append(item)
+                else:
+                    domain = groups[identity]['properties']['argument']['enum']
+                    domain.extend(v for v in argument['enum'] if v not in domain)
+        return value | {'anyOf': branches}
+
+    schema = factor_arguments(schema)
     def key(value):
         if isinstance(value, dict) and (value.get('type') in
                 ('object', 'array', 'string', 'integer', 'number', 'boolean', 'null')
@@ -1210,6 +1316,34 @@ def _compact_decision_schema(schema):
         return value
 
     result = encode(schema)
+    # Factoring a parent may leave its shared children referenced only once.
+    # Inline those definitions instead of retaining reference/definition overhead.
+    while definitions:
+        references = Counter()
+        def count_refs(value):
+            if isinstance(value, dict):
+                if set(value) == {'$ref'}:
+                    references[value['$ref'].removeprefix('#/$defs/')] += 1
+                for child in value.values():
+                    count_refs(child)
+            elif isinstance(value, list):
+                for child in value:
+                    count_refs(child)
+        count_refs(result)
+        count_refs(definitions)
+        single = {name: value for name, value in definitions.items() if references[name] <= 1}
+        if not single:
+            break
+        def inline(value):
+            if isinstance(value, dict):
+                if set(value) == {'$ref'} and value['$ref'].removeprefix('#/$defs/') in single:
+                    return inline(single[value['$ref'].removeprefix('#/$defs/')])
+                return {k: inline(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [inline(v) for v in value]
+            return value
+        result = inline(result)
+        definitions = {name: inline(value) for name, value in definitions.items() if name not in single}
     if definitions:
         result['$defs'] = definitions
     return result
@@ -1289,8 +1423,11 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'For selected scientific uploads, structured inputs or accepted-result continuations, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. Set context=current to preserve explicitly requested accepted-result reuse through resource clarification; no re-upload is needed. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. When dialogue.reference_supplementation is available, a missing genome for declared species/assembly and an uploaded regulatory H5AD can use request_resources with explicit reference_category peak_set or regulatory_regions. This asks for plain FASTA (optional FAI) and preserves the objective. Qualified pending reference choices can answer that original request. Otherwise an operator must provision missing resources. Never fabricate resources.',
             'A supported scientific operation with missing files is not an unsupported capability. Use request_roles with the offered Registry input roles and only exact existing source associations; leave roles empty when no file is available. This captures the original objective for a later upload. Do not construct a workflow or invent source handles. If a required declaration is omitted for a selected input, choose execute_plan and omit that declaration from arguments; the compiler determines its exact prerequisite. Use missing_species only while answering an offered pending species prerequisite. Unsupported capabilities, ambiguous sources, conflicting declarations and incompatible inputs remain distinct.',
             'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
+            'Input-role required flags come from Registry ports. Required user files and optional user-provided resources are distinct. Ask for a missing required dataset; request an optional resource file only when the user explicitly selects that source or the scientific owner identifies a missing resource. Do not turn an offered optional port into a mandatory upload. Compatible installed resources remain available through their existing owners; never invent compatibility or replace an explicitly supplied file.',
             'Registered default_when_omitted values apply when the user has no special preference. Do not ask for optional scientific parameters merely because no explicit value was supplied. Preserve explicit requested values; defaults do not supply literal evidence for a user declaration.',
-            'execute_plan.arguments contains explicit scalar declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. For numeric parameters, literal is only the numeric token, without the parameter name or units: for example literal="2" with evidence="use 2 components". The evidence clause locates the token; do not put the whole clause into literal. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. For repeated operations, declare each explicit source separately using source and port from the offered input_roles for that tool. This scopes the value to the operation consuming that exact dataset, without step identifiers. A value explicitly applying to both files needs one declaration per source; the same evidence clause may support both. Unscoped values never authorize repeated operations. source and port name captured attachments, not accepted result outputs. When consuming an accepted result, do not attach its producer\'s original file as a role or scope scalar choices to that file unless the requested consumer actually reads that file again. Use current accepted context and its exact offered result instead. Do not repeat the same tool/argument/source/port identity.',
+            'execute_plan.arguments contains explicit declarations for canonical tool/argument pairs offered in dialogue.scientific_parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. For numeric parameters, literal is only the numeric token, without the parameter name or units: for example literal="2" with evidence="use 2 components". The evidence clause locates the token; do not put the whole clause into literal. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. For repeated operations, declare each explicit source separately using source and port from the offered input_roles for that tool. This scopes the value to the operation consuming that exact dataset, without step identifiers. A value explicitly applying to both files needs one declaration per source; the same evidence clause may support both. Unscoped values never authorize repeated operations. source and port name captured attachments, not accepted result outputs. When consuming an accepted result, do not attach its producer\'s original file as a role or scope scalar choices to that file unless the requested consumer actually reads that file again. Use current accepted context and its exact offered result instead. Do not repeat the same tool/argument/source/port identity.',
+            *(['For a json_object parameter, explicit JSON remains one verbatim literal without members. When reviewed members are offered, ordinary name=value or natural-language assignments use one declaration with members, each with its own exact literal/evidence. Do not supply an enclosing literal or invented JSON text; Agent builds the mapping from the grounded members. Select each canonical member name semantically from its description, never by an alias parser. kind=number preserves numeric tokens; kind=string copies the full string excluding quotation delimiters; kind=json copies an explicitly supplied JSON value (including arrays, booleans or null). Preserve explicit types, including invalid native values. Do not fabricate, repair or default omitted members. Do not combine contradictory assignments or explicit JSON and prose values that disagree; clarify ambiguous, conflicting or unrepresentable values. Source/port scope remains the same as any other scientific declaration.']
+              if any(item.get('json_object') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             *(['For an offered exact_string parameter without observation_source, literal is the explicitly supplied value (observation column, processing namespace or DNA sequence as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For a parameter with observation_source and an offered H5AD source, declare source, value, mode, literal and evidence. source explicitly selects that tool\'s observation_source dataset port; a matching roles entry is optional and must agree. Other dataset ports still need their own explicit roles. In mode=offered, value is an exact field name from that source\'s source_fields row, while literal/evidence quotes the researcher\'s natural reference to supplied annotations or the field. The researcher need not spell an internal column name. In mode=literal, the researcher explicitly names the column: value must equal the exact verbatim literal, excluding surrounding quotation marks; this may identify a name outside the bounded metadata offer. Never change modes after a rejected binding, omit value, borrow another file\'s field, infer ground truth from field presence, or invent a column from a descriptive phrase. Native owners qualify the selected data and exact axes. With no supported source yet offered, only an explicitly supplied exact column-name literal may be retained in the existing source-free declaration form; otherwise preserve the objective and request its file roles without inventing a name.',
@@ -1368,6 +1505,12 @@ def is_exact_string_argument(argument_spec):
              or planning.observation_source is not None))
 
 
+def is_json_object_argument(argument_spec):
+    planning = argument_spec.planning
+    return (argument_spec.accepted_types == (dict,) and not argument_spec.choices
+        and planning is not None and planning.conversational_json_object)
+
+
 def admit_scientific_argument(declaration, utterance, argument_spec, *, observation_fields=None,
                               _legacy_numeric_boundary=False):
     """Check one semantic declaration's literal identity, then delegate its science."""
@@ -1377,6 +1520,50 @@ def admit_scientific_argument(declaration, utterance, argument_spec, *, observat
     if (type(utterance) is not str or end > len(utterance)
             or utterance[start:end] != literal):
         raise IntentError('ungrounded_operand')
+    if is_json_object_argument(argument_spec):
+        # One exact utterance span remains the declaration. JSON is data, never
+        # evaluated code; the selected scientific owner reviews native keys.
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError('Duplicate JSON key')
+                result[key] = value
+            return result
+        def invalid_constant(value):
+            raise ValueError('Non-finite JSON value')
+        try:
+            if isinstance(declaration, StructuredArgument):
+                allowed = dict(argument_spec.planning.conversational_members)
+                if any(m.name not in allowed for m in declaration.members):
+                    raise ValueError('Unregistered structured member')
+                value = {}
+                for member in declaration.members:
+                    if utterance[member.start:member.end] != member.literal:
+                        raise IntentError('ungrounded_operand')
+                    if member.kind == 'json':
+                        value[member.name] = json.loads(member.literal, object_pairs_hook=pairs,
+                                                       parse_constant=invalid_constant)
+                    else:
+                        # Reuse scalar lexical admission. These temporary specs
+                        # add no scientific choices, defaults or range rules.
+                        numeric = member.kind == 'number'
+                        types = ((int,) if member.literal.lstrip('+-').isdigit() else (float,)) if numeric else (str,)
+                        scalar = replace(argument_spec, accepted_types=types, planning=replace(
+                            argument_spec.planning, conversational_json_object=False,
+                            conversational_members=(), conversational_exact_string=not numeric))
+                        value[member.name] = admit_scientific_argument(ScopedArgument(
+                            declaration.tool, declaration.argument, member.literal, member.start, member.end),
+                            utterance, scalar)
+            else:
+                value = json.loads(literal, object_pairs_hook=pairs, parse_constant=invalid_constant)
+            if type(value) is not dict:
+                raise ValueError('Expected a JSON object')
+            freeze_json_mapping(value, 'scientific argument')
+            argument_spec.validate(declaration.argument, value)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise IntentError('invalid_parameter_value') from exc
+        return value
     if isinstance(declaration, ScalarChoiceArgument):
         if (start and utterance[start - 1].isalnum()
                 or end < len(utterance) and utterance[end].isalnum()):

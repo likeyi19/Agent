@@ -32,6 +32,8 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('run_motifmatchr', 'dataset'),
+    ('run_motifmatchr', 'genome'),
     ('call_scATAC_peaks', 'barcodes'),
     ('compute_motif_accessibility', 'dataset'),
     ('compute_motif_accessibility', 'genome'),
@@ -607,9 +609,10 @@ def group_choices(binding, registry):
         if (name in ('sequences','genome') and binding.members
                 and all(m['input_type'] == 'h5ad' for m in binding.members)):
             continue
-        _, source, argument = _group_port(registry, tool, name)
+        port, source, argument = _group_port(registry, tool, name)
         role = source.lineage or argument.planning.provenance_role
-        roles.append(dict(tool=tool, port=name, role=role.value if role is not None else None))
+        roles.append(dict(tool=tool, port=name, role=role.value if role is not None else None,
+                          required=port.required, **({} if port.required else dict(description=argument.planning.description))))
     return dict(sources=[dict(source=f'source.{i}', position=i + 1,
         label=m['label'], input_type=m['input_type']) for i, m in enumerate(binding.members)], roles=roles)
 
@@ -803,7 +806,7 @@ def group_role_inputs(binding, roles, registry):
             fields = {m.name: m.field_name for m in port.members}
             record = binding.members[int(role['source'].split('.')[1])]
             wanted_type = 'groups' if (role['tool'], role['port']) == ('annotate_scATAC_cell_types', 'groups') else 'h5ad'
-            sequence_source = (role['tool'] in ('predict_regulatory_sequences', 'optimize_regulatory_sequences') or (role['tool'], role['port']) == ('compute_motif_accessibility', 'genome')) and record['input_type'] == 'fasta'
+            sequence_source = (role['tool'] in ('predict_regulatory_sequences', 'optimize_regulatory_sequences') or (role['tool'], role['port']) in (('compute_motif_accessibility', 'genome'), ('run_motifmatchr', 'genome'))) and record['input_type'] == 'fasta'
             if record['input_type'] != wanted_type and not sequence_source and not (binding.attachment_candidates
                     and record['input_type'] == 'attachment'):
                 raise ValueError('File type does not match the explicit scientific role.')

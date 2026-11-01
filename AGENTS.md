@@ -682,6 +682,53 @@ STE-2A completion commit and normal push; earlier no-commit statements describe
 the pre-closeout stages. Controlled research limitations and scope exclusions
 remain unchanged.
 
+STE-NFI-0 builds on `bd5454e75cac2eeab8d2037ce265509421bb2123` without staging,
+commit or push. The [native motif guide](docs/guides/native-motif-invocation.md)
+describes fixed `motifmatchr::matchMotifs` dispatch (35 Registry tools), exact
+conversational JSON kwargs and native matches publication through existing owners.
+Ordered genomic peaks require no count measurement, positive-count filter or
+chromVAR workflow. The [pilot report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-0/REPORT.md)
+records exact full-data native parity and simulated integration checks separately
+from genuine Firefox uploads and provider failures. Live interpretation captured
+the function and kwargs but required coordinate grounding clarification; its
+continuation timed out before science. No live accepted result, download or
+accepted-result restart retrieval was achieved. Recommendation is **NO-GO for
+ordinary researcher readiness** in that initial assessment. Existing credentials,
+configuration, resources and historical results are preserved. Broader NFI and
+STE-3 remain outside scope.
+
+STE-NFI-0 bounded Web finalization supersedes that initial decision with
+**COMPLETE / CONDITIONAL GO** for the documented matches workflow. Genuine
+normal-launcher Firefox/Qwen interpretation and planning execute one native
+matchMotifs step on the original PBMC peaks. Six actual downloads match accepted
+bytes or existing privacy projections; matrix values and order match preserved
+independent R evidence. Restart retrieval and a generated evidence-only follow-up
+retain the exact Run/Revision without science. A reproduced omission in shared
+download snapshot metadata now uses the delivered size/checksum for native-match
+privacy projections; accepted source bytes remain unchanged. Initial unavailable
+prose, earlier provider failures and an overbroad missing-file question requesting
+the optional genome remain explicit limitations. Exact JSON kwargs and qualified
+function/output scope remain required. The appended pilot report owns the evidence
+and 132 passing focused delivery checks. No provider configuration change, repeat independent
+native parity run, staging, commit, push or next capability is performed.
+
+STE-NFI-0 final usability review adds individually grounded native argument members
+through the existing Interpreter and parameter binder; explicit JSON remains
+supported. Registry role offers expose required/optional status, and an empty
+selection can request one dataset without an optional genome. Interpretation
+schema factoring preserves complete declaration domains and reduces the measured
+schema from 123,310 to 69,911 bytes. All 35 tools remain available. The report's
+final review records genuine non-JSON Firefox/Qwen execution on 82,579 original
+PBMC peaks with no cells or X matrix, six verified downloads, exact restart reuse
+and a dataset-only missing-input question. Two preceding grounding failures remain
+historical evidence; provider wording/prose reliability is bounded. The 177 final
+binding tests pass; three detailed-planning size checks reproduce on the baseline
+and remain documented debt. Existing native parity, historical science, private
+configuration and resources are preserved. The final reviewed decision is COMPLETE
+within scope / CONDITIONAL GO. The user authorizes one coherent reviewed commit
+and normal push to origin/main; earlier no-commit statements describe prior stages.
+No STE-NFI-1, STE-3 or broader native execution is started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or
@@ -740,6 +787,7 @@ VRAM, VS Code Remote SSH, Python, PyTorch, and Scanpy / AnnData.
 - Do not add workflow heuristics, first-match behavior, step-name inference,
   hidden step-order inference, generic input fanout, hidden scientific inference,
   or automatic workflow completion to resolve LLM ambiguity.
+
 
 ## Scientific resource acquisition and user continuation
 

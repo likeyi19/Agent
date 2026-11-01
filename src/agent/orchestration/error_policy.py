@@ -33,6 +33,7 @@ UNREGISTERED_TOOL_POLICY_VERSION = "unregistered-v1"
 class ErrorPolicyEntry:
     message: str
     recovery_disposition: RecoveryDisposition
+    public_diagnostic: bool = False
 
 
 _NO = RecoveryDisposition.NO_AUTOMATIC_RECOVERY
@@ -44,6 +45,10 @@ _MANUAL = RecoveryDisposition.MANUAL_RECONCILIATION
 # Safe messages and static recovery classes for production boundary codes.  An
 # unknown code deliberately receives the fail-closed defaults below.
 _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
+    'NATIVE_FUNCTION_REJECTED': ErrorPolicyEntry('The native function rejected the supplied arguments. No values were changed or retried.', _NO, True),
+    'NATIVE_FUNCTION_INPUT_INVALID': ErrorPolicyEntry('matchMotifs needs genomic peaks with their assembly and coordinate convention, a compatible genome and motif collection. Supported kwargs are p.cutoff, bg and out="matches"; other functions, output forms and input paths inside kwargs are not supported. Counts and clustering are not required.', _NO),
+    'NATIVE_FUNCTION_PUBLICATION_INVALID': ErrorPolicyEntry('The native result differs from its exact source, reference or output identity.', _NO),
+    'NATIVE_FUNCTION_EXECUTION_FAILED': ErrorPolicyEntry('The isolated native function did not complete. Its private diagnostic is retained; no fallback or automatic retry was used.', _NO),
     "RESOURCE_NOT_FOUND": ErrorPolicyEntry(
         "A required input or resource was not found.", _USER
     ),
@@ -458,6 +463,16 @@ def safe_message_for(code: str, *, fallback: str | None = None) -> str:
     if entry is not None:
         return entry.message
     return fallback or "The operation failed."
+
+
+def public_error_message(error: AgentError) -> str:
+    """Only reviewed classifications may publish an owner-sanitized condition."""
+    entry = ERROR_POLICY_CATALOG.get(error.code)
+    diagnostic = error.details.get('public_diagnostic')
+    if (entry is not None and entry.public_diagnostic and type(diagnostic) is str
+            and 0 < len(diagnostic) <= 2000 and not any(ord(c)<32 for c in diagnostic)):
+        return entry.message + ' Native diagnostic: ' + diagnostic
+    return safe_message_for(error.code)
 
 
 def classified_agent_error(

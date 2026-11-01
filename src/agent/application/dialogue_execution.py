@@ -15,7 +15,7 @@ from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
 from .turn_decisions import (IntentError, LeidenResolution, ScalarChoiceArgument, SourceFieldArgument, SourceScopedArgument, SourceScopedChoiceArgument, InputRole,
-    _input_roles, _scientific_arguments, is_exact_string_argument, _object, _shape,
+    _input_roles, _scientific_arguments, is_exact_string_argument, is_json_object_argument, _object, _shape,
 )
 
 
@@ -35,11 +35,12 @@ def _parameter_input(registry, tool_name, argument_name):
         and bool(argument.choices) and all(v is None or type(v) is str and v.strip() for v in argument.choices)
         and not argument.planning.accepted_artifact_kinds)
     exact_string = argument is not None and is_exact_string_argument(argument)
+    json_object = argument is not None and is_json_object_argument(argument)
     if (argument is None or argument.planning is None or not argument.planning.scientific_parameter
-            or not (choice or exact_string or any(t in argument.accepted_types for t in (int, float)))
+            or not (choice or exact_string or json_object or any(t in argument.accepted_types for t in (int, float)))
             or tool.semantic_planning is None):
         raise IntentError('unsupported_intent')
-    if exact_string:
+    if exact_string or json_object:
         ports = [port for port in tool.semantic_planning.consumer_ports
                  if any(member.field_name == argument_name for member in port.members)]
         if (len(ports) != 1 or len(ports[0].members) != 1
@@ -207,6 +208,10 @@ def scientific_parameters(registry):
                 item['default_when_omitted'] = _safe_registered_value(spec.planning.default_when_omitted)
             if spec.planning.conversational_choice:
                 item['choices'] = [value for value in spec.choices if value is not None]
+            elif is_json_object_argument(spec):
+                item['json_object'] = True
+                if spec.planning.conversational_members:
+                    item['members'] = dict(spec.planning.conversational_members)
             elif is_exact_string_argument(spec):
                 item.update(exact_string=True, provenance_role=(spec.planning.provenance_role.value if spec.planning.provenance_role is not None else None))
                 if spec.planning.observation_source is not None:

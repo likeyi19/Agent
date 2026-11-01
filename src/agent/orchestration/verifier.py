@@ -2061,9 +2061,12 @@ def verify_step(
             else:
                 checks.add('peak_publication_integrity', True, 'Native completion and exact peak/source/population integrity.',
                     'Peak verification failed.', 'PEAK_VERIFICATION_FAILED')
-        elif step.tool_name == 'compute_motif_accessibility':
+        elif step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
             try:
-                from agent.tools.analysis.chromvar import verify_result
+                if step.tool_name == 'run_motifmatchr':
+                    from agent.tools.analysis.motifmatchr import verify_result
+                else:
+                    from agent.tools.analysis.chromvar import verify_result
                 verify_result(resolved_arguments, plain_result)
             except (ValueError, TypeError, OSError, RuntimeError, KeyError):
                 checks.add('motif_publication_integrity', False, 'Native completion and exact motif/source/axis integrity.',

@@ -99,7 +99,16 @@ def test_field_source_assertion_supplies_only_its_registry_dataset_port(tmp_path
     assert argument['mode'] == 'offered'
     roles = {(row['tool'],row['port']):row['source'] for row in interaction.admitted['roles']}
     assert len(roles) == 2 and roles[('transfer_cell_labels','reference_dataset')] == argument['source']
-    schema = calls[0]['schema']
+    compact = calls[0]['schema']
+    def expand(value):
+        if isinstance(value, dict):
+            if '$ref' in value:
+                return expand(compact['$defs'][value['$ref'].split('/')[-1]])
+            return {k: expand(v) for k, v in value.items() if k != '$defs'}
+        if isinstance(value, list):
+            return [expand(v) for v in value]
+        return value
+    schema = expand(compact)
     variants = [row['properties'] for row in nodes(schema) if set(row.get('properties', {})) ==
                 {'tool','argument','source','mode','value','literal','evidence'}
                 and row['properties']['tool'].get('enum') == ['transfer_cell_labels']]

@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from agent.orchestration import PlanningModelProfile, PlanningRecoveryPolicy, PlanningWireMode
-from agent.orchestration.error_policy import safe_message_for
+from agent.orchestration.error_policy import safe_message_for, public_error_message
 from agent.orchestration.run_store import RunNotFoundError
 from agent.providers import PlanningModelFactoryRegistry, build_default_planning_model_factory_registry
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
@@ -752,7 +752,7 @@ class InteractiveAgentApplication:
                     status = 'failed'
                     error = _fail('INTERACTIVE_APPLICATION_FAILED').error
                 if run.errors:
-                    error = ClientError(run.errors[0].code, safe_message_for(run.errors[0].code))
+                    error = ClientError(run.errors[0].code, public_error_message(run.errors[0]))
         if (interaction is None and turn is not None and turn.request_id is None
                 and turn.status == 'activated' and turn.revision_id is not None):
             # Metadata-only navigation has no assistant wording to regenerate.
@@ -1015,8 +1015,11 @@ class InteractiveAgentApplication:
                     from .macs3_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
-                elif step.tool_name == 'compute_motif_accessibility':
-                    from .chromvar_delivery import accepted_artifacts
+                elif step.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
+                    if step.tool_name == 'run_motifmatchr':
+                        from .motifmatchr_delivery import accepted_artifacts
+                    else:
+                        from .chromvar_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
@@ -1073,8 +1076,11 @@ class InteractiveAgentApplication:
                 elif planned.tool_name == 'call_scATAC_peaks':
                     from .macs3_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
-                elif planned.tool_name == 'compute_motif_accessibility':
-                    from .chromvar_delivery import accepted_artifacts
+                elif planned.tool_name in ('compute_motif_accessibility', 'run_motifmatchr'):
+                    if planned.tool_name == 'run_motifmatchr':
+                        from .motifmatchr_delivery import accepted_artifacts
+                    else:
+                        from .chromvar_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
                     from .sequence_delivery import accepted_sequences

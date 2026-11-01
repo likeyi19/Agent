@@ -71,6 +71,7 @@ class ErrorClassification:
 
     category: ErrorCategory
     code: str
+    public_diagnostic: str | None = None
 
 
 ExceptionClassifier = Callable[[Exception], ErrorClassification]
@@ -101,6 +102,7 @@ class ArtifactSemanticKind(str, Enum):
     """Bounded planning vocabulary for composable scientific artifacts."""
 
     MOTIF_ACCESSIBILITY = "motif_accessibility"
+    MOTIF_MATCHES = "motif_matches"
     SCATAC_PEAKS = "scatac_peaks"
     DNA_SEQUENCES = "dna_sequences"
     SCATAC_REGULATORY_REGIONS = "scatac_regulatory_regions"
@@ -175,6 +177,8 @@ class ArgumentPlanningSemantics:
     conversational_choice: bool = False
     planner_choice: bool = False
     conversational_exact_string: bool = False
+    conversational_json_object: bool = False
+    conversational_members: tuple[tuple[str, str], ...] = ()
     observation_source: str | None = None
 
     def __post_init__(self) -> None:
@@ -208,6 +212,21 @@ class ArgumentPlanningSemantics:
             raise ValueError('Planner choices require a registered scientific scalar.')
         if type(self.conversational_exact_string) is not bool:
             raise TypeError("`conversational_exact_string` must be a boolean.")
+        if type(self.conversational_json_object) is not bool or self.conversational_json_object and (
+                not self.scientific_parameter or self.accepted_artifact_kinds
+                or self.conversational_choice or self.conversational_exact_string or self.planner_choice
+                or self.observation_source or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
+            raise ValueError('JSON objects require a direct scientific declaration.')
+        if (type(self.conversational_members) is not tuple or len(self.conversational_members) > 32
+                or self.conversational_members and not self.conversational_json_object):
+            raise ValueError('Structured members require a reviewed JSON argument.')
+        for member in self.conversational_members:
+            if type(member) is not tuple or len(member) != 2:
+                raise ValueError('Invalid structured member metadata.')
+            _planning_text(member[0], 'native member name', 128)
+            _planning_text(member[1], 'native member description', _MAX_PLANNING_DESCRIPTION_LENGTH)
+        if len({name for name, _ in self.conversational_members}) != len(self.conversational_members):
+            raise ValueError('Duplicate structured member metadata.')
         if self.conversational_exact_string and (self.conversational_choice
                 or not self.scientific_parameter or self.accepted_artifact_kinds
                 or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
@@ -454,6 +473,8 @@ class ArgumentSpec:
             raise TypeError(
                 "`planning` must be ArgumentPlanningSemantics or None."
             )
+        if self.planning is not None and self.planning.conversational_json_object and self.accepted_types != (dict,):
+            raise ValueError('Conversational JSON object arguments must declare dict values.')
 
     def validate(self, name: str, value: object) -> None:
         from agent.schemas.prior_output import PriorOutputRef
@@ -463,6 +484,12 @@ class ArgumentSpec:
             raise ToolArgumentError(
                 f"Argument {name!r} does not accept an unresolved StepOutputRef."
             )
+        if self.planning is not None and self.planning.conversational_json_object and isinstance(value, MappingABC):
+            # AgentRequest/PlanStep retain immutable JSON mappings. Validate their
+            # ordinary serialized value without changing the captured argument.
+            from agent.schemas.orchestration import _serialize, freeze_json_mapping
+            freeze_json_mapping(value, name)
+            value = _serialize(value)
         if isinstance(value, bool) and bool not in self.accepted_types:
             valid_type = False
         else:
@@ -1079,7 +1106,7 @@ class ToolRegistry:
         spec = self.get(name)
         classification = spec.exception_classifier(exception)
         retryable = classification.code in spec.retryable_error_codes
-        return classified_agent_error(
+        error = classified_agent_error(
             category=classification.category,
             code=classification.code,
             step_id=step_id,
@@ -1087,7 +1114,11 @@ class ToolRegistry:
             exception_type=type(exception).__name__,
             same_step_retry_eligible=retryable,
             attempt=attempt,
+            details=({} if classification.public_diagnostic is None else
+                     {'public_diagnostic': classification.public_diagnostic}),
         )
+        from .error_policy import public_error_message
+        return dataclass_replace(error, message=public_error_message(error))
 
 
 def _classify_tool_exception(exception: Exception) -> ErrorClassification:
@@ -1730,6 +1761,8 @@ def _planning_argument(
     conversational_choice: bool = False,
     planner_choice: bool = False,
     conversational_exact_string: bool = False,
+    conversational_json_object: bool = False,
+    conversational_members: tuple[tuple[str, str], ...] = (),
     observation_source: str | None = None,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
@@ -1745,6 +1778,8 @@ def _planning_argument(
             conversational_choice=conversational_choice,
             planner_choice=planner_choice,
             conversational_exact_string=conversational_exact_string,
+            conversational_json_object=conversational_json_object,
+            conversational_members=conversational_members,
             observation_source=observation_source,
             provenance_role=provenance,
             conditional_note=conditional_note,
@@ -3702,10 +3737,12 @@ def build_default_tool_registry() -> ToolRegistry:
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
+    from .motifmatchr_registry import tool_spec as motifmatchr_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
         inspect_spec,
         chromvar_tool_spec(),
+        motifmatchr_tool_spec(),
         macs3_tool_spec(),
         embedding_spec,
         pca_spec,

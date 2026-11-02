@@ -828,6 +828,45 @@ budget; this is documented catalog growth, not a demonstrated provider hard limi
 The user's finalization instruction authorizes one reviewed completion commit and
 normal push to `origin/main`. STE-NFI-1D and broader ecosystem work are not started.
 
+STE-NFI-1D builds on `c219fabe94e4e8c0350c00936b906427e46a9d79`, with source
+unstaged/uncommitted/unpushed. The [native guide](docs/guides/native-functions.md)
+owns eleven additional native functions: epiScanpy normalization, Signac SVD,
+SnapATAC2 UMAP/kNN/Leiden, four independent MACS3 bedGraph commands and two Cicero
+connection/membership functions. Two package ToolSpecs bring the Registry to 41.
+Existing execution, authority, accepted-source binding and shared delivery remain
+sole owners. No full workflow or opaque native-object store is added.
+
+Historical matrix profiles are optional for new packages and remain read-only
+when present. Numeric admission follows the selected function's actual consumed
+slots; retained unrelated X is not inferred counts. Exact axes, unchanged retained
+values and finite computed results remain checked. Cicero 1.28.3 is installed in
+an isolated locked runtime; existing environments and the official OpenAI default
+are unchanged, with alternative profiles selectable.
+
+The [STE-NFI-1D report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1d/REPORT.md)
+records interruption recovery without repeating accepted science, 16 retained
+native parity cases, five genuine Firefox/OpenAI native executions, Cicero
+accepted-table continuation and real PBMC epiScanpy-to-Signac continuation.
+Fifteen browser artifacts match delivered identities; three Sessions remain exact
+after restart. Historical delivery checks preserve six publications/37 artifacts.
+The documented planning maintenance budget is 96 KiB for the expanded catalog,
+not a provider limit; full source/port domains remain. CONDITIONAL GO is bounded
+to these functions and evidence, not complete package or biological qualification.
+ArchR, full Cicero estimation and pycisTopic object adapters remain unsupported;
+independent generated explanations and broad provider coverage are unqualified.
+The report retains failures, corrections, detailed coverage and test counts.
+STE-NFI-1D final closeout corrects two demonstrated admission/metadata defects:
+UMAP/kNN checks follow native `use_dims`, and omitted MACS3 bdgopt method means
+native p2q, requiring negative-log10 p-values. Explicit earlier calls and accepted
+publications remain unchanged. Sixty-three final focused checks and two tiny
+independent native correction cases pass; prior parity/Web evidence is preserved.
+The appended report retains the fixed-filename MACS3 delivery limitation and
+confirms historical compatibility without scientific reruns. Engineering closeout
+is COMPLETE within scope / CONDITIONAL GO for the qualified functions. The user's
+final closeout instruction authorizes one reviewed completion commit and normal
+push to `origin/main`; earlier unstaged/no-commit statements describe prior stages.
+No next STE work unit is started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

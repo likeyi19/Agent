@@ -32,6 +32,9 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('run_cicero', 'dataset'),
+    ('run_macs3', 'dataset'),
+    ('run_macs3', 'control'),
     ('run_episcanpy', 'dataset'),
     ('run_snapatac2', 'dataset'),
     ('run_signac', 'dataset'),

@@ -280,3 +280,88 @@ def test_native_matrix_cross_package_reuse_without_original_source(source, simul
     assert len(simulated) == 2
     assert simulated[1]['input_path'] == app.run_store.load('first:run').steps[0].result['matrix_path']
     assert len(ResearchAgentApplication(root, planner=planner).sessions.load('reuse').revisions) == 2
+
+
+def test_new_package_needs_no_fabricated_historical_profile():
+    package = owner.MatrixPackage('new_package', '1.0', 'isolated', {'transform': ()}, (), 'Native transform')
+    assert package.publication.historical_profiles == frozenset()
+    grown = owner.MatrixPackage('new_package', '1.0', 'isolated', {'transform': (), 'another': ()}, (), 'More functions')
+    assert grown.PROFILE == package.PROFILE
+    for existing in owner.PACKAGES:
+        assert existing.publication.historical_profiles == {owner.HISTORICAL_PROFILES[existing.package]}
+
+
+def test_lsi_admits_signed_unconsumed_x_checks_consumed_layer(source, tmp_path):
+    a = ad.read_h5ad(source['input_path'])
+    a.layers['tf-idf'] = a.X.astype(float)
+    a.X = -a.X.astype(float)
+    a.uns['matrix_semantics'] = 'signed_transformed'
+    a.write_h5ad(source['input_path'])
+    stage = tmp_path / 'stage'; stage.mkdir()
+    args = dict(source, function_name='pp.lsi')
+    prepared, _ = owner.prepare_input(args, stage)
+    assert np.any(prepared.X.data < 0)
+    np.testing.assert_array_equal(prepared.layers['tf-idf'].data, a.layers['tf-idf'].data)
+    a.layers['tf-idf'].data[0] = np.nan; a.write_h5ad(source['input_path'])
+    with pytest.raises(ValueError, match='finite'):
+        owner.prepare_input(args, stage)
+
+
+def test_expanded_catalog_does_not_expand_per_request_authority():
+    from agent.orchestration import build_default_tool_registry
+    from agent.application.turn_decisions import ArgumentMember, StructuredArgument
+    registry = build_default_tool_registry()
+    members = registry.get('run_snapatac2').optional_arguments['kwargs'].planning.conversational_members
+    assert 32 < len(members) <= 128
+    assert {name for name, _ in members} == set().union(*(set(args) for args in owner.SNAPATAC2.FUNCTIONS.values()))
+    assignments = tuple(ArgumentMember(str(i), 'number', '1', 0, 1) for i in range(33))
+    with pytest.raises(ValueError, match='structured argument'):
+        StructuredArgument('run_snapatac2','kwargs','1',0,1,assignments)
+
+
+@pytest.mark.parametrize('function,key', [('tl.umap','provided'),('pp.knn','provided'),('pp.lsi','tf-idf')])
+def test_slot_consumers_do_not_require_count_eligibility(source,tmp_path,function,key):
+    a = ad.read_h5ad(source['input_path']); a.X = -a.X.astype(float); a.uns.clear()
+    if function == 'pp.lsi': a.layers[key] = -a.X
+    else: a.obsm[key] = np.array([[1.,-2.],[3.,4.]])
+    a.write_h5ad(source['input_path']); stage=tmp_path/'stage';stage.mkdir()
+    args=dict(source,function_name=function,kwargs={} if function=='pp.lsi' else {'use_rep':key})
+    assert owner.parameter_prerequisites(args) == ()
+    prepared,effective=owner.prepare_input(args,stage)
+    assert np.any(prepared.X.data < 0)
+    assert effective['matrix_semantics']=='unspecified_retained_measurement'
+
+@pytest.mark.parametrize('tamper', [False, True])
+def test_lsi_retained_unconsumed_nan_is_not_a_computation_input(source, monkeypatch, tamper):
+    a = ad.read_h5ad(source['input_path'])
+    a.layers['tf-idf'] = a.X.astype(float)
+    a.X = a.X.astype(float); a.X.data[0] = np.nan
+    a.write_h5ad(source['input_path'])
+    def native(self, args, stage, matrix):
+        output = ad.read_h5ad(stage / 'input.h5ad')
+        if tamper: output.X.data[-1] += 1
+        output.obsm['X_lsi'] = np.ones((output.n_obs, 1))
+        output.write_h5ad(stage / 'result.h5ad')
+        return dict(completion='succeeded', versions={'epiScanpy':'SIMULATED'}, implementation=[],
+            native_output_type='NoneType', result_slots=['obsm.X_lsi'], measurement='retained_input')
+    monkeypatch.setattr(owner.MatrixPackage, 'native', native)
+    args = dict(source, function_name='pp.lsi')
+    if tamper:
+        with pytest.raises(ValueError, match='changed source X'):
+            owner.EPISCANPY.execute(args)
+    else:
+        result = owner.EPISCANPY.execute(args)
+        assert np.isnan(ad.read_h5ad(result['matrix_path']).X.data[0])
+
+@pytest.mark.parametrize('function', ['tl.umap', 'pp.knn'])
+@pytest.mark.parametrize('use_dims', [1, [0], -1])
+def test_embedding_consumers_validate_only_selected_dimensions(source, tmp_path, function, use_dims):
+    a = ad.read_h5ad(source['input_path'])
+    a.obsm['provided'] = np.array([[1., np.nan], [3., np.nan]])
+    a.write_h5ad(source['input_path'])
+    stage = tmp_path / 'stage'; stage.mkdir()
+    args = dict(source, function_name=function, kwargs={'use_rep':'provided', 'use_dims':use_dims})
+    prepared, _ = owner.prepare_input(args, stage)
+    assert np.isnan(prepared.obsm['provided'][:, 1]).all()
+    with pytest.raises(ValueError, match='finite'):
+        owner.prepare_input(dict(args, kwargs={'use_rep':'provided', 'use_dims':[1]}), stage)

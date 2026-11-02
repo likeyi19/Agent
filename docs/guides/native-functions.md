@@ -141,7 +141,7 @@ all features. Native return-array modes are mapped to their named slots.
 These methods consume finite numeric matrix measurements, without a genome
 or reference prerequisite. `pp.log1p` also accepts signed transformed values;
 its installed native implementation judges the logarithm domain and base.
-The other reviewed functions retain nonnegative admission. This does not claim
+Count-dependent methods retain nonnegative admission; the current function-specific rules below supersede the earlier blanket rule. This does not claim
 that fractional measurements are integer counts or that all methods are suitable
 for every declared measurement. Exact unique cell/feature IDs are required. H5AD
 storage bounds apply; matrices are never expanded from sparse to dense by the
@@ -201,16 +201,13 @@ There is no new ToolSpec, source binder, lifecycle, evidence projector or downlo
 handler. A returned array/tuple needs an explicit slot mapping, as feature masks
 and spectral results already do. Catalog growth no longer changes adapter identity.
 
-Installed-API review identifies epiScanpy `pp.normalize_total` in-place use as
-compatible with this family, including its optional obs/layer outputs. Its wrapper
-discards Scanpy's dictionary return in non-inplace mode, which must not be invented
-by an adapter. SnapATAC2 `tl.umap` fits the existing embedding slots, with a small
-return-array mapping; `pp.knn` needs an explicit graph slot/return mapping. These
-are extension candidates, not registered capabilities.
+STE-NFI-1D implements `pp.normalize_total`, `tl.umap` and `pp.knn` with the
+result mappings below. The installed epiScanpy wrapper discards Scanpy's
+dictionary return in non-inplace mode; the adapter preserves that behavior.
 
 Signac `RunSVD.default` accepts the matrix exchange but returns Seurat `DimReduc`:
-embeddings, loadings, standard deviations and miscellaneous components need an
-accurate thin result adapter. `AverageCounts` requires Seurat metadata/identities;
+STE-NFI-1D maps its embeddings, loadings, standard deviations and miscellaneous
+components through the thin adapter below. `AverageCounts` requires Seurat metadata/identities;
 `RegionStats` needs a qualified genome; `corSparse` produces a potentially dense
 square/cross correlation matrix with different axes. They cannot truthfully share
 the existing X-transform contract unchanged. Fragment imports/exports, plot saves
@@ -245,3 +242,117 @@ The [STE-NFI-1C report](../../../agent-data/acceptance/scientific-tool-ecosystem
 separates direct native parity, genuine Firefox/provider acceptance, simulated
 binding checks, actual downloads and unresolved language/schema limits. This is
 partial ecosystem coverage, not complete integration of any package API.
+
+
+## STE-NFI-1D function families
+
+Eleven additional functions extend three matrix interfaces and introduce two
+package interfaces, `run_macs3` and `run_cicero`. There are 41 Registry tools;
+native functions are choices within their package, not separate workflows.
+The [acceptance report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1d/REPORT.md)
+owns the package-neutral coverage matrix and distinguishes native parity, simulated
+regressions, real browser execution, continuation and explanation quality.
+
+| Interface | Added functions | Actual inputs and result |
+| --- | --- | --- |
+| `run_episcanpy` | `pp.normalize_total` | X and optionally named layers; normalized X/layers and optional obs normalization factors. `inplace=false` leaves the object unchanged and returns native None. |
+| `run_signac` | `RunSVD` | Selected numeric matrix passed as features × cells; DimReduc embeddings become `obsm.X_lsi`, loadings `varm.LSI`, stdev/key/assay/misc `uns.Signac_svd`. This does not apply TF-IDF. |
+| `run_snapatac2` | `tl.umap`, `pp.knn`, `tl.leiden` | UMAP and kNN consume an existing `obsm` embedding (native default `X_spectral`); kNN publishes `obsp.distances`; Leiden consumes that graph. Returned-array modes map to the same named slots. Small native Leiden groups may be `-1`. |
+| `run_macs3` | `bdgopt`, `bdgcmp`, `bdgpeakcall`, `bdgbroadcall` | Ordinary bedGraph tracks; native bedGraph, narrowPeak or gappedPeak bytes, respectively. No fragment pipeline or H5AD prerequisite. |
+| `run_cicero` | `generate_ccans`, `find_overlapping_ccans` | Peak1/Peak2/coaccess connection TSV → Peak/CCAN membership TSV; membership TSV → CCAN1/CCAN2 overlap TSV. No estimation or invented CDS. |
+
+The matrix adapter validates the measurements actually consumed. epiScanpy LSI
+uses the named TF-IDF layer; signed or nonfinite values in unrelated retained X
+are not count prerequisites. Embedding/graph methods likewise check their actual
+slots, including only the dimensions selected by `use_dims` for UMAP/kNN.
+Finite numeric native outputs and exact ordered axes remain mandatory.
+Retained X is checked without mistaking unchanged NaNs for changed values.
+Omitted measurement metadata for an unconsumed X is explicitly unspecified,
+not inferred counts. Native missing-layer failures are preserved.
+
+`run_macs3(input_path, output_dir, function_name, kwargs=..., signal_semantics=...)`
+uses the existing MACS3 3.1.0 executable. `bdgcmp` additionally binds `control_path`,
+`control_semantics` and an explicit common `assembly` declaration. Optional exact
+source checksums are supported. bedGraph uses zero-based half-open intervals;
+MACS3's native interval-end representation requires continuous, sorted,
+nonoverlapping intervals within each chromosome to avoid silently filling gaps.
+A nonzero initial start retains native zero-baseline behavior. Scores must fit
+native float32 and coordinates int32. No reference qualification is inferred.
+Omitting the `bdgopt` method invokes native `p2q`, which requires declared
+negative log10 p-values. Native Poisson/likelihood
+comparisons require declared treatment count pileup and expected control counts.
+Other score operations retain their declared input meaning. One comparison method
+is supported per invocation; several differently named outputs require a further
+result adapter. The argv list has no shell interpolation or user output paths.
+
+`run_cicero(input_path, output_dir, function_name, kwargs=..., seed=...)` invokes
+Cicero 1.28.3 in its isolated R environment. Connection weights must be finite;
+peak identifiers are retained exactly. `generate_ccans` exposes
+`coaccess_cutoff_override`, `tolerance_digits`; optional seed controls native R
+RNG, while omission preserves it. `find_overlapping_ccans` exposes `min_overlap`;
+its native chr_start_end parsing uses one-based closed ranges and compares each
+CCAN's bounding span, rather than requiring individual member peaks to overlap. This does not
+convert arbitrary genomic conventions or establish assembly correspondence.
+These two calls use ordinary data frames, never uploaded serialized R objects.
+
+For MACS3, kwargs are native CLI option names: `method`, `extra-param`,
+`scaling-factor`, `pseudocount`, `cutoff`, `min-length`, `max-gap`,
+`cutoff-peak`, `cutoff-link`, `lvl1-max-gap`, `lvl2-max-gap`, `no-trackline`,
+`verbose`, each only on its actual subcommand. Matrix kwargs and installed
+signatures remain in the Registry/native dispatch and pinned receipts. Explicit
+values retain JSON types; omitted options are not synthesized. Invalid native
+parameters are not silently corrected. Execution limits remain separate from
+scientific defaults: table inputs/outputs 256 MiB, five million bedGraph records,
+ordinary scalar vectors at most 16 members, shared two-hour process timeout.
+
+Table downloads reuse `ScientificDeliverySpec`: `result.tsv` contains the native
+format named in metadata, plus `metadata.json` and `native-receipt.json`. The
+suffix does not imply every result has a header. External tools that choose a
+parser by extension may require a local rename to `.bedGraph`, `.narrowPeak` or
+`.gappedPeak`, according to `result_format`; renaming does not convert data.
+The shared delivery declaration retains fixed publication filenames, avoiding
+changes to accepted file identities. Privacy projection handles the
+first row of headerless tables too. Original and delivered hashes remain distinct.
+Accepted `native_genomic_table.v1` ports pin exact accepted bytes; a consumer must
+still accept their actual format and declared measurement. Table compatibility
+never follows from a filename alone. The existing native matrix port similarly
+permits transformed H5AD reuse without treating it as original counts.
+
+New packages need no historical profile. Existing exact profiles remain read-only;
+unknown/mismatched profiles remain invalid. Function catalog growth does not
+invalidate acceptance, while actual adaptation changes still need compatibility
+review. No new execution, retry, source-binding or delivery owner is introduced.
+
+### Additional runtime installation
+
+The new Cicero environment is isolated; existing scientific runtimes remain intact:
+
+```bash
+conda create -p ../agent-data/resources/runtimes/cicero-1/env --file requirements/native/cicero-1.28.3-linux-64.txt
+```
+
+The explicit Linux x86-64 lock pins R 4.5.3, Cicero 1.28.3, monocle 2.38.0,
+igraph 2.3.4 and GenomicRanges 1.62.1. The default location is beside the configured
+resource library; `AGENT_CICERO_RSCRIPT` is the existing-style operator override.
+MACS3 uses `AGENT_MACS3_EXECUTABLE` or its existing pinned runtime. These are
+operator installations, never per-Session package installation. Cicero is MIT;
+its dependency licenses remain separately applicable. ArchR and pycisTopic are
+not installed/integrated by this unit: valid project/Arrow and topic-model object
+adapters are absent. pycisTopic's upstream academic non-commercial terms must be
+reviewed for the intended deployment; no unrestricted distribution is claimed.
+
+### Catalog maintenance budget
+
+STE-NFI-1C's four detailed planning prompt+schema fixtures were 75,904 / 77,657 /
+78,344 / 83,894 bytes. STE-NFI-1D measures 80,058 / 81,853 / 82,503 / 88,085 bytes
+for inspection, downstream, label transfer and paired DA. The maintenance test
+budget is explicitly revised from 80 to 96 KiB, leaving 10,219 bytes above the
+largest fixture. This reflects reviewed function/parameter and two package-port
+additions; it is not a provider API limit. No capability, source, port or choice
+was removed. Existing lossless schema/domain tests remain. Actual official
+OpenAI table journeys completed with the expanded catalog; this does not qualify
+every request size or provider. The report retains individual package ablations,
+Interpretation measurements, live diagnostics and historical failures.
+Registry metadata now allows a bounded union of 128 offered kwargs names for a
+package; each submitted structured argument still has its existing 32-member
+bound. These are distinct bounds, not permission for arbitrary scientific objects.

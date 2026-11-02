@@ -75,7 +75,31 @@ def parameter_prerequisites(inputs):
     peak_h5ad.inspect(inputs['input_path'])
     with h5py.File(inputs['input_path'], 'r') as handle:
         effective = declarations(handle, inputs)
-    return () if effective.get('matrix_semantics') else ('matrix_semantics',)
+    return () if effective.get('matrix_semantics') or inputs.get('function_name') in ('pp.lsi', 'tl.umap', 'pp.knn', 'tl.leiden') else ('matrix_semantics',)
+
+
+def consumed_measurements(original, x, args):
+    """Select actual native inputs; annotations in unrelated slots are retained."""
+    name, kw = args['function_name'], args.get('kwargs', {})
+    if name == 'pp.lsi':
+        return [original.layers.get(kw.get('tf_idf_layer', 'tf-idf'))]
+    if name in ('tl.umap', 'pp.knn'):
+        data = original.obsm.get(kw.get('use_rep', 'X_spectral'))
+        dims = kw.get('use_dims')
+        if data is not None and dims is not None:
+            try:
+                data = data[:, :dims] if isinstance(dims, int) else data[:, dims]
+            except (TypeError, IndexError, ValueError):
+                # Let the installed function report invalid native selectors.
+                return [None]
+        return [data]
+    if name == 'tl.leiden':
+        return [original.obsp.get('distances')]
+    if name == 'pp.normalize_total':
+        layers = kw.get('layers')
+        keys = list(original.layers) if layers == 'all' else (layers or [])
+        return [x, *(original.layers.get(k) for k in keys)] if isinstance(keys, list) else [x]
+    return [x]
 
 
 def prepare_input(args, stage):
@@ -84,7 +108,7 @@ def prepare_input(args, stage):
     peak_h5ad.inspect(args['input_path'])
     with h5py.File(args['input_path'], 'r') as handle:
         effective = declarations(handle, args)
-    if not effective.get('matrix_semantics'):
+    if not effective.get('matrix_semantics') and args['function_name'] not in ('pp.lsi', 'tl.umap', 'pp.knn', 'tl.leiden'):
         raise ValueError('Declare the actual measurement in the selected matrix slot')
     check_declarations(args['input_path'], effective)
     original = ad.read_h5ad(args['input_path'])
@@ -93,16 +117,20 @@ def prepare_input(args, stage):
         raise ValueError('Nonempty unique axes without tab/newline characters are required')
     slot = effective['count_slot']
     x = original.X if slot == 'X' else original.layers[slot.removeprefix('layers/')]
-    values = x.data if sparse.issparse(x) else np.asarray(x)
-    if values.dtype.kind not in 'biuf' or not np.isfinite(values).all():
-        raise ValueError('Native matrix functions require finite numeric measurements')
-    if args['function_name'] != 'pp.log1p' and np.any(values < 0):
-        raise ValueError('This native matrix function requires nonnegative measurements')
+    for consumed in consumed_measurements(original, x, args):
+        if consumed is None:  # Preserve native missing-object failures.
+            continue
+        values = consumed.data if sparse.issparse(consumed) else np.asarray(consumed)
+        if values.dtype.kind not in 'biuf' or not np.isfinite(values).all():
+            raise ValueError('Native matrix functions require finite numeric measurements')
+        if args['function_name'] not in ('pp.log1p', 'pp.lsi', 'tl.umap', 'pp.knn', 'RunSVD') and np.any(values < 0):
+            raise ValueError('This native matrix function requires nonnegative measurements')
     # The bounded HDF5/AnnData readers admit ordinary serialized annotations,
     # not arbitrary Python objects. Retain them exactly as native AnnData calls
     # do; a retained reduction is not asserted to have been recomputed from X.
     matrix = original.copy()
     matrix.X = x.copy()
+    effective['matrix_semantics'] = effective.get('matrix_semantics') or 'unspecified_retained_measurement'
     matrix.uns['matrix_semantics'] = effective['matrix_semantics']
     matrix.write_h5ad(stage / 'input.h5ad')
     return matrix, effective
@@ -130,7 +158,7 @@ class MatrixPackage:
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
             profile=self.PROFILE, verifier=self.VERIFIER, files=tuple(DELIVERY_FILES),
             arguments=arguments, outputs={'matrix': 'result.h5ad'},
-            historical_profiles=(HISTORICAL_PROFILES[package],))
+            historical_profiles=((HISTORICAL_PROFILES[package],) if package in HISTORICAL_PROFILES else ()))
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
 
@@ -158,11 +186,13 @@ class MatrixPackage:
         # This interface binds the exact existing var field (or all features).
         if isinstance(kwargs.get('features'), (list, dict)):
             raise ValueError('Bind a spectral feature mask through the input AnnData var field')
+        if args['function_name'] == 'tl.umap' and isinstance(kwargs.get('init'), (list, dict)):
+            raise ValueError('UMAP initialization arrays are scientific objects, not ordinary kwargs')
         # Bounds govern execution cost, not the native scientific validity range.
-        for key, cap in (('n_components', 512), ('n_comps', 512), ('n_iter', 1000), ('max_iter', 10), ('n_jobs', 16), ('num_threads', 32)):
+        for key, cap in (('n_components', 512), ('n_comps', 512), ('n', 512), ('n_iter', 1000), ('n_iterations', 1000), ('n_epochs', 10000), ('max_iter', 10), ('n_jobs', 16), ('num_threads', 32)):
             if type(kwargs.get(key)) in (int, float) and kwargs[key] > cap:
                 raise ValueError(f'{key} exceeds the native execution resource bound {cap}')
-        for key in ('layer_tfidf_key', 'tf_idf_layer', 'features'):
+        for key in ('layer_tfidf_key', 'tf_idf_layer', 'features', 'use_rep', 'key_added'):
             value = kwargs.get(key)
             if isinstance(value, str) and ('/' in value or '\\' in value or value in ('.', '..')):
                 raise ValueError('Native object keys must be local field names')
@@ -216,6 +246,17 @@ class MatrixPackage:
                 table = table.loc[matrix.var_names]
                 for key in table:
                     matrix.var['Signac_' + key] = table[key].to_numpy()
+            elif args['function_name'] == 'RunSVD':
+                import pandas as pd
+                for filename, names, container, key in (
+                    ('embeddings.tsv', matrix.obs_names, matrix.obsm, 'X_lsi'),
+                    ('loadings.tsv', matrix.var_names, matrix.varm, 'LSI')):
+                    table = pd.read_csv(stage / filename, sep='\t', index_col=0,
+                        dtype={'id': str}, keep_default_na=False, quoting=csv.QUOTE_NONE)
+                    if table.index.tolist() != names.tolist():
+                        raise AuthorityError('Native reduction changed ordered axis identities')
+                    container[key] = table.to_numpy(dtype=float)
+                matrix.uns['Signac_svd'] = read(stage / 'svd.json')
             else:
                 matrix.X = mmread(stage / 'output.mtx').T.tocsr()
             matrix.write_h5ad(stage / 'result.h5ad')
@@ -236,7 +277,7 @@ class MatrixPackage:
             cells, features = matrix.obs_names.tolist(), matrix.var_names.tolist()
             if self.package == 'Signac':
                 values = matrix.X.data if sparse.issparse(matrix.X) else np.asarray(matrix.X)
-                if np.any(values > 2**53):
+                if np.any(np.abs(values) > 2**53):
                     raise ValueError('Matrix values exceed exact R double precision; no rounding is permitted')
             if args['function_name'] == 'tl.spectral' and kwargs.get('distance_metric', 'cosine') != 'cosine' and matrix.n_obs**2 > 16_000_000:
                 raise ValueError('Quadratic native similarity exceeds the 16000000-element execution bound')
@@ -245,14 +286,22 @@ class MatrixPackage:
             output = ad.read_h5ad(stage / 'result.h5ad')
             if (output.obs_names.tolist() != cells or output.var_names.tolist() != features):
                 raise AuthorityError('Native result changed the exact ordered input axes')
-            if args['function_name'] in ('pp.tfidf', 'pp.lsi', 'pp.select_features', 'tl.spectral', 'FindTopFeatures'):
+            if args['function_name'] in ('pp.tfidf', 'pp.lsi', 'pp.select_features', 'tl.spectral', 'FindTopFeatures', 'RunSVD', 'tl.umap', 'pp.knn', 'tl.leiden'):
                 original = ad.read_h5ad(stage / 'input.h5ad')
-                if (sparse.csr_matrix(original.X) != sparse.csr_matrix(output.X)).nnz:
+                before, after = (sparse.csr_matrix(x, copy=True) for x in (original.X, output.X))
+                for retained in (before, after):
+                    retained.sum_duplicates()
+                    retained.eliminate_zeros()
+                    retained.sort_indices()
+                if (before.shape != after.shape
+                        or not np.array_equal(before.indptr, after.indptr)
+                        or not np.array_equal(before.indices, after.indices)
+                        or not np.array_equal(before.data, after.data, equal_nan=True)):
                     raise AuthorityError('Native annotation/embedding function changed source X')
             for slot in receipt['result_slots']:
                 group, _, key = slot.partition('.')
                 value = output.X if group == 'X' else getattr(output, group)[key]
-                if group in ('X', 'layers', 'obsm'):
+                if group in ('X', 'layers', 'obsm', 'varm', 'obsp'):
                     values = value.data if sparse.issparse(value) else np.asarray(value)
                     if values.dtype.kind not in 'biuf' or not np.isfinite(values).all():
                         raise AuthorityError('Native output is nonnumeric or nonfinite; it cannot be published as a usable matrix')
@@ -292,8 +341,16 @@ class MatrixPackage:
 EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     'pp.binarize': ('copy',), 'pp.tfidf': ('norm', 'layer_tfidf_key'),
     'pp.log1p': ('base', 'copy', 'chunked', 'chunk_size'),
+    'pp.normalize_total': ('target_sum', 'exclude_highly_expressed', 'max_fraction', 'key_added', 'layers', 'layer_norm', 'inplace'),
     'pp.lsi': ('n_components', 'tf_idf_layer', 'algorithm', 'n_iter', 'random_state'),
 }, (
+    ('target_sum', 'normalize_total target library size; omitted uses the native median.'),
+    ('exclude_highly_expressed', 'normalize_total excludes high-expression features from normalization-factor calculation.'),
+    ('max_fraction', 'normalize_total native high-expression fraction threshold.'),
+    ('key_added', 'normalize_total obs field for normalization factors.'),
+    ('layers', 'normalize_total exact layer names or all; no external objects.'),
+    ('layer_norm', 'normalize_total layer scaling: null, after, or X.'),
+    ('inplace', 'normalize_total: false leaves AnnData unchanged; installed epiScanpy discards Scanpy dictionary return.'),
     ('copy', 'binarize/log1p: native copy flag; source is always a managed copy.'),
     ('norm', 'tfidf row normalization; installed default l1, not the docstring l2.'),
     ('layer_tfidf_key', 'tfidf destination layer, default tf-idf; X stays unchanged.'),
@@ -305,12 +362,26 @@ EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     ('algorithm', 'lsi native TruncatedSVD solver, default arpack.'),
     ('n_iter', 'lsi native iterations, default 10; execution cap 1000.'),
     ('random_state', 'lsi native random state, default 42.'),
-), 'epiScanpy binarize/log1p change X; tfidf adds a layer; lsi consumes an existing TF-IDF layer and writes X_lsi. Distinct native calls, no automatic workflow.')
+), 'epiScanpy normalize_total scales X and requested layers; inplace=False returns None and leaves data unchanged in this installed wrapper. binarize/log1p change X; tfidf adds a layer; lsi consumes an existing TF-IDF layer and writes X_lsi. Distinct native calls, no automatic workflow.')
 
 SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
+    'tl.umap': ('n_comps', 'use_dims', 'use_rep', 'key_added', 'random_state', 'inplace', 'n_neighbors', 'min_dist', 'spread', 'metric', 'n_epochs', 'learning_rate', 'init', 'negative_sample_rate', 'repulsion_strength', 'local_connectivity', 'set_op_mix_ratio', 'a', 'b', 'verbose', 'n_jobs'),
+    'pp.knn': ('n_neighbors', 'use_dims', 'use_rep', 'method', 'inplace', 'random_state'),
+    'tl.leiden': ('resolution', 'objective_function', 'min_cluster_size', 'n_iterations', 'random_state', 'key_added', 'weighted', 'inplace'),
     'pp.select_features': ('n_features', 'filter_lower_quantile', 'filter_upper_quantile', 'max_iter', 'inplace', 'n_jobs', 'verbose'),
     'tl.spectral': ('n_comps', 'features', 'random_state', 'sample_size', 'sample_method', 'distance_metric', 'weighted_by_sd', 'chunk_size', 'inplace', 'num_threads'),
 }, (
+    ('use_dims', 'umap/knn leading component count or exact integer component indices.'),
+    ('use_rep', 'umap/knn exact existing obsm key, default X_spectral; no implicit reduction.'),
+    ('key_added', 'umap output obsm X_<key>, default umap; leiden output obs key, default leiden.'),
+    ('n_neighbors', 'umap/knn native neighbor count; defaults 15/50 respectively.'),
+    ('method', 'knn kdtree, hora or pynndescent; hora has no reproducible seed.'),
+    ('resolution', 'leiden native clustering resolution.'),
+    ('objective_function', 'leiden modularity or CPM objective.'),
+    ('min_cluster_size', 'leiden minimum cluster size; smaller groups become -1.'),
+    ('n_iterations', 'leiden native iterations, -1 until convergence; cap 1000 positive iterations.'),
+    ('weighted', 'leiden uses exp(-distance) weights when true.'),
+    *((k, 'umap.UMAP native ' + k + '; omitted uses installed default.') for k in ('min_dist', 'spread', 'metric', 'n_epochs', 'learning_rate', 'init', 'negative_sample_rate', 'repulsion_strength', 'local_connectivity', 'set_op_mix_ratio', 'a', 'b')),
     ('n_features', 'select_features maximum selected features; no matrix subsetting.'),
     ('filter_lower_quantile', 'select_features lower count quantile exclusion.'),
     ('filter_upper_quantile', 'select_features upper count quantile exclusion.'),
@@ -327,16 +398,24 @@ SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
     ('weighted_by_sd', 'spectral native eigenvector scaling.'),
     ('chunk_size', 'spectral native processing chunk size.'),
     ('num_threads', 'spectral native thread count; installed default and execution cap 32.'),
-), 'SnapATAC2 select_features records var.selected without subsetting; spectral consumes X and an explicit/default feature mask and records X_spectral plus eigenvalues. No automatic feature selection.')
+), 'SnapATAC2 umap and knn consume an existing obsm embedding; knn writes obsp.distances; leiden consumes that distance graph and writes obs labels (including native -1 small groups). No implicit embedding or graph. select_features records var.selected without subsetting; spectral consumes X and an explicit/default feature mask and records X_spectral plus eigenvalues. No automatic feature selection.')
 
 SIGNAC = MatrixPackage('Signac', '1.16.0', 'signac-1', {
+    'RunSVD': ('assay', 'n', 'scale.embeddings', 'reduction.key', 'scale.max', 'verbose', 'irlba.work', 'tol'),
     'RunTFIDF': ('method', 'scale.factor', 'verbose'),
     'BinarizeCounts': ('verbose',), 'FindTopFeatures': ('min.cutoff', 'verbose'),
 }, (
+    ('assay', 'RunSVD assay name recorded by native DimReduc; no assay construction.'),
+    ('n', 'RunSVD requested singular components; native clamps to cells minus one; cap 512.'),
+    ('scale.embeddings', 'RunSVD native embedding scaling, default true.'),
+    ('reduction.key', 'RunSVD native component key, default LSI_.'),
+    ('scale.max', 'RunSVD optional symmetric clipping of scaled embeddings.'),
+    ('irlba.work', 'RunSVD native IRLBA work space, default n*3.'),
+    ('tol', 'RunSVD native IRLBA convergence tolerance.'),
     ('method', 'RunTFIDF native method 1/2/3/4; omitted uses 1. Not sklearn TF-IDF.'),
     ('scale.factor', 'RunTFIDF native scaling, default 10000; method-specific effect.'),
     ('verbose', 'RunTFIDF progress; BinarizeCounts/FindTopFeatures matrix methods accept but ignore it.'),
     ('min.cutoff', 'FindTopFeatures matrix method accepts but ignores this assay-only selection argument; returns counts and percentile ranking, no filtering.'),
-), 'Signac matrix methods: RunTFIDF transforms X; BinarizeCounts binarizes X; FindTopFeatures returns count/percentile statistics ranked by count, mapped by exact feature ID with native_rank retained. Matrix method does not select variable features or apply min.cutoff. No Seurat object or full LSI workflow.')
+), 'Signac RunSVD consumes the selected matrix as-is, publishes cell embeddings, feature loadings, standard deviations and native SVD misc; no automatic TF-IDF. Matrix methods: RunTFIDF transforms X; BinarizeCounts binarizes X; FindTopFeatures returns count/percentile statistics ranked by count, mapped by exact feature ID with native_rank retained. Matrix method does not select variable features or apply min.cutoff. No Seurat object or full LSI workflow.')
 
 PACKAGES = (EPISCANPY, SNAPATAC2, SIGNAC)

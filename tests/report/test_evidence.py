@@ -1025,6 +1025,15 @@ def test_evaluation_report_tampering_fails_through_existing_verifier(
 def test_production_registry_membership_includes_raw_intake_after_milestone10_4() -> None:
     assert build_default_tool_registry().names() == (
         "inspect_scATAC",
+        "compute_motif_accessibility",
+        "run_motifmatchr",
+        "run_chromvar",
+        "run_episcanpy",
+        "run_snapatac2",
+        "run_signac",
+        "run_macs3",
+        "run_cicero",
+        "call_scATAC_peaks",
         "epizoo_embed_cells",
         "pca_embed_cells",
         "build_cell_neighbors",
@@ -1053,4 +1062,7 @@ def test_production_registry_membership_includes_raw_intake_after_milestone10_4(
         "build_scATAC_cell_by_features",
         "predict_regulatory_sequences",
         "evaluate_regulatory_predictions",
+        "optimize_regulatory_sequences",
+        "generate_regulatory_sequences",
+        "prepare_scatac_regulatory_sequences",
     )

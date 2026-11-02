@@ -660,6 +660,14 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-NFI-1D extends [native scientific functions](docs/guides/native-functions.md)
+with epiScanpy normalization, Signac SVD, SnapATAC2 graph/embedding functions,
+independent MACS3 genomic-signal commands and Cicero network membership/overlap.
+The [coverage report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1d/REPORT.md)
+records bounded native parity, Firefox/OpenAI acceptance, exact cross-package reuse
+and unsupported native object families. Package interfaces share execution and
+delivery; they do not imply complete scientific workflows or biological validation.
+
 STE-NFI-1A adds [native scientific functions](docs/guides/native-functions.md)
 (36 registered tools): `run_chromvar` selects reviewed expectations, count-total
 and variability functions independently of the existing motif workflow. Native

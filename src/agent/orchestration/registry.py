@@ -217,7 +217,9 @@ class ArgumentPlanningSemantics:
                 or self.conversational_choice or self.conversational_exact_string or self.planner_choice
                 or self.observation_source or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
             raise ValueError('JSON objects require a direct scientific declaration.')
-        if (type(self.conversational_members) is not tuple or len(self.conversational_members) > 32
+        # Catalog members are the union across a package's functions, not the
+        # number of assignments authorized in one conversational declaration.
+        if (type(self.conversational_members) is not tuple or len(self.conversational_members) > 128
                 or self.conversational_members and not self.conversational_json_object):
             raise ValueError('Structured members require a reviewed JSON argument.')
         for member in self.conversational_members:
@@ -3768,6 +3770,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .motifmatchr_registry import tool_spec as motifmatchr_tool_spec
+    from .native_table_registry import tool_specs as native_table_tool_specs
     from .native_matrix_registry import tool_specs as native_matrix_tool_specs
     from .chromvar_native_registry import tool_spec as chromvar_native_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
@@ -3777,6 +3780,7 @@ def build_default_tool_registry() -> ToolRegistry:
         motifmatchr_tool_spec(),
         chromvar_native_tool_spec(),
         *native_matrix_tool_specs(),
+        *native_table_tool_specs(),
         macs3_tool_spec(),
         embedding_spec,
         pca_spec,

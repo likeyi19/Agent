@@ -86,7 +86,9 @@ def prepare(stream, role):
     if role.endswith('.tsv'):
         from .dialogue_evidence import _unsafe_fact_value
         rows = list(csv.reader(io.StringIO(raw.decode()), delimiter='\t'))
-        for row in rows[1:]:
+        # Native tables include both headered statistics and headerless genomic
+        # tracks. Project every cell; a first row is not necessarily a header.
+        for row in rows:
             for i, text in enumerate(row):
                 try:
                     float(text); numeric = True

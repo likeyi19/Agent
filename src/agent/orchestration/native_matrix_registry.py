@@ -35,7 +35,7 @@ def tool_spec(owner):
             scientific_parameter=True, conversational_json_object=True, conversational_members=owner.NATIVE_ARGUMENTS),
         count_slot=arg((str,), 'X by default or exact source layer; this becomes native X without normalization.',
             scientific_parameter=True, conversational_exact_string=True),
-        matrix_semantics=arg((str,), 'Actual source measurement, for example peak_counts or binary_accessibility; X metadata may supply it.',
+        matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
@@ -43,7 +43,6 @@ def tool_spec(owner):
         *(scalar(k, required=k in required) for k in (*required, *optional) if k != 'input_path')]
     pub = owner.publication
     return ToolSpec(name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
-        parameter_prerequisites=owner.parameter_prerequisites,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication or result H5AD.', bindable=True, artifact=A.RAW_SCATAC)

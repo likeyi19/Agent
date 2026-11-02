@@ -116,3 +116,29 @@ def read_native_counts(matrix, semantics):
     if not all(matrix.shape):
         raise ValueError('Nonempty cell and peak axes are required')
     return sparse.vstack(blocks, format='csr')
+
+
+def read_native_matrix(matrix):
+    """Sparse R exchange with faithful double conversion, no numerical admission."""
+    from scipy import sparse
+    from agent.tools._cancellation import cancellation_checkpoint
+    blocks = []; stored = 0
+    for start in range(0, matrix.shape[0], 256):
+        cancellation_checkpoint()
+        block = sparse.csr_matrix(matrix[start:start + 256])
+        native_double_values(block.data)
+        block = block.astype(np.float64)
+        stored += block.data.nbytes + block.indices.nbytes + block.indptr.nbytes
+        if stored > MAX_LOGICAL_BYTES:
+            raise ValueError('Selected sparse matrix exceeds the 2 GiB exchange allocation budget')
+        blocks.append(block)
+    return sparse.vstack(blocks, format='csr') if blocks else sparse.csr_matrix(matrix.shape, dtype=float)
+
+
+def native_double_values(values):
+    """Check actual integer-to-double round trip, not an arbitrary magnitude cap."""
+    if values.dtype.kind in 'iu':
+        with np.errstate(invalid='ignore'):
+            restored = values.astype(np.float64).astype(values.dtype)
+        if not np.array_equal(values, restored):
+            raise ValueError('Integer measurements cannot be represented exactly as native R doubles')

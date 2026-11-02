@@ -867,6 +867,42 @@ final closeout instruction authorizes one reviewed completion commit and normal
 push to `origin/main`; earlier unstaged/no-commit statements describe prior stages.
 No next STE work unit is started.
 
+STE-NFI-1E builds on `b484aeb89e4ff7fcf787c03b09d49ece61c593d9` without staging,
+commit or push. The [native guide](docs/guides/native-functions.md) owns ten new
+functions through epiScanpy, Scanpy and genuine Cicero CellDataSet adaptation;
+43 Registry tools share existing execution, authority and delivery. Ordinary
+native inputs need no dataset registration or measurement certificate. Native
+packages own numerical validity; exact authorized sources, faithful conversion,
+bounded execution and publication integrity remain Agent responsibilities.
+Redundant native matrix/chromVAR/table checks and prerequisite callbacks are
+removed at their owners. Binarized processed data gains no canonical raw-count
+meaning. Historical profiles and typed declarations retain read-only meanings.
+
+The [STE-NFI-1E report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1e/REPORT.md)
+records independent native parity, real PBMC PCA, three accepted Firefox/OpenAI
+executions, exact epiScanpy-to-Scanpy reuse, native failures and restart/download
+preservation. Cicero aggregation is genuine Web acceptance; later conversational
+CDS reuse and missing-input handling remain unqualified. Six broad regression
+failures reproduce at the starting commit; no whole-suite pass is claimed.
+Safe CDS exchange represents exprs/pData/fData for selected functions, not arbitrary
+fitted Monocle objects. ArchR and pycisTopic are not integrated. CONDITIONAL GO is
+bounded to this evidence, not biological, full-package or universal provider
+qualification. No next milestone is started.
+
+STE-NFI-1E focused closeout restores the installed optional hg19 default only for
+`estimate_distance_parameter`, with exact native-default evidence and no input
+reference qualification. `run_cicero` still requires explicit chromosome lengths.
+The existing local-source role list now includes both new dataset ports and the
+Cicero chromosome-length port; this fixes a reproduced missing-file/upload-role
+omission, without a new prerequisite mechanism. Logical summary fields retain
+their type for native validation. The appended final review classifies the six
+baseline assertions, distinguishes reuse of a PCA-containing H5AD from consumption
+of its PCA embedding, and preserves original Web failures and accepted results.
+Final closeout remains unstaged/uncommitted/unpushed; no next milestone is started.
+Bounded engineering closeout is COMPLETE and ready for final commit review;
+controlled-use qualification remains CONDITIONAL GO. The role/default fixes have
+focused software/native evidence, not a new paid Firefox qualification claim.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

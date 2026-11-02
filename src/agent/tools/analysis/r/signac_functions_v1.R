@@ -36,7 +36,7 @@ tryCatch({
     stopifnot(identical(dimnames(result), dimnames(object)))
     writeMM(result, 'output.mtx')
     slots <- c('X')
-    measurement <- if (identical(req$function_name, 'BinarizeCounts')) 'binary_accessibility' else 'Signac_TFIDF'
+    measurement <- if (identical(req$function_name, 'BinarizeCounts')) 'native_binarized_supplied_measurement' else 'Signac_TFIDF'
   }
   versions <- vapply(c('Signac','Matrix','SeuratObject'),function(p)as.character(packageVersion(p)),'')
   method <- getS3method(req$function_name, 'default')

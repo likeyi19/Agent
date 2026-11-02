@@ -336,12 +336,18 @@ def _validate_research_intent(interaction):
 
 
 def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existing=False,
-                    field_choices=None):
+                    field_choices=None, historical=False):
     from .turn_decisions import admit_scientific_argument
     values = dict(inputs)
     names = {}
     for declaration in declarations:
         name, specification = _parameter_input(registry, declaration.tool, declaration.argument)
+        if (historical and declaration.tool == 'run_chromvar' and declaration.argument == 'matrix_semantics'
+                and isinstance(declaration, ScalarChoiceArgument)):
+            # Read the exact pre-STE-NFI-1E choice meaning; new requests use optional free text.
+            from agent.tools.analysis.chromvar_native import MEASUREMENTS
+            specification = replace(specification, choices=MEASUREMENTS, planning=replace(
+                specification.planning, conversational_exact_string=False, conversational_choice=True))
         column = specification.planning.observation_source is not None
         if not column and specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
             raise IntentError('unsupported_intent')
@@ -388,7 +394,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
             _with_retained(registry, group_role_inputs(binding, roles, registry), admitted.get('retained_parameters', ())), declarations,
-            field_choices=_argument_fields(registry, interaction, binding, roles, declarations=declarations))
+            field_choices=_argument_fields(registry, interaction, binding, roles, declarations=declarations), historical=True)
         receipt = admitted.get('resource_selection')
         if receipt is not None:
             _shape(receipt, ('catalog', 'resource_context_sha256'))
@@ -406,7 +412,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
             raise ValueError('Scientific input role attribution changed.')
         return values
     values = _bind_arguments(registry, interaction.utterance,
-        _with_retained(registry, received, admitted.get('retained_parameters', ())), declarations)
+        _with_retained(registry, received, admitted.get('retained_parameters', ())), declarations, historical=True)
     choice = any(isinstance(d, ScalarChoiceArgument) for d in declarations)
     needs_resource = (choice and original.get('tool_name') == 'inspect_scATAC'
         and original.get('composition') in (None, 'h5ad-science.v1'))
@@ -469,7 +475,7 @@ def _validate_argument_record(interaction):
         values = _serialize(admitted['inputs'])
         expected = _bind_arguments(registry, interaction.utterance,
             _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations,
-            field_choices=_argument_fields(registry, interaction, declarations=declarations))
+            field_choices=_argument_fields(registry, interaction, declarations=declarations), historical=True)
         if expected != values:
             raise ValueError('Arguments differ from admitted values.')
         if 'continuation' not in admitted and 'parameter_continuation' not in admitted:

@@ -2051,10 +2051,11 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
-        elif step.tool_name in ('run_signac', 'run_episcanpy', 'run_snapatac2', 'run_macs3', 'run_cicero'):
+        elif step.tool_name in ('run_signac', 'run_scanpy', 'run_episcanpy', 'run_snapatac2', 'run_macs3', 'run_cicero', 'run_cicero_cds'):
             from agent.tools.analysis.native_matrix import PACKAGES
             from agent.tools.analysis.native_tables import PACKAGES as TABLES
-            owner = next(p for p in (*PACKAGES, *TABLES) if p.TOOL == step.tool_name)
+            from agent.tools.analysis import cicero_cds
+            owner = next(p for p in (*PACKAGES, *TABLES, cicero_cds) if p.TOOL == step.tool_name)
             try:
                 owner.verify_result(resolved_arguments, plain_result)
             except (ValueError, TypeError, OSError, RuntimeError, KeyError):

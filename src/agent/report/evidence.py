@@ -18,6 +18,7 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
 from agent.tools.analysis.macs3 import RESULT_FIELDS as _PEAK_FIELDS, FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis import cicero_cds as _CICERO_CDS
 from agent.tools.analysis.native_tables import PACKAGES as _NATIVE_TABLE_PACKAGES
 from agent.tools.analysis.native_matrix import PACKAGES as _NATIVE_MATRIX_PACKAGES
 from agent.tools.analysis.chromvar_native import RESULT_FIELDS as _CHROMVAR_NATIVE_FIELDS, FACT_FIELDS as _CHROMVAR_NATIVE_FACTS
@@ -410,6 +411,10 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    _CICERO_CDS.TOOL: _ToolProjection(frozenset(_CICERO_CDS.RESULT_FIELDS), _CICERO_CDS.FACT_FIELDS, _CICERO_CDS.POLICY, (
+        _ArtifactProjection('manifest_path', 'native_scientific_publication', ('native_completion',), digest_field='manifest_sha256'),
+        _ArtifactProjection('cds_path', 'cicero_cds_exchange', ('native_object_axes',), digest_field='cds_sha256'),
+        _ArtifactProjection('table_path', 'native_genomic_table', ('native_result',), digest_field='table_sha256'))),
     **{p.TOOL: _ToolProjection(frozenset(p.RESULT_FIELDS), p.FACT_FIELDS, p.POLICY, (
         _ArtifactProjection('manifest_path', p.KIND + '_manifest', ('native_completion', 'artifact_integrity'), digest_field='manifest_sha256'),
         _ArtifactProjection('table_path', 'native_genomic_table', ('native_result_semantics', 'exact_source_identity'), digest_field='table_sha256')))

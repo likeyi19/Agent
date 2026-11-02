@@ -53,10 +53,9 @@ def test_axes_measurement_and_managed_copy(source, tmp_path, storage):
 
 def test_layer_requires_own_measurement_and_conflicts_fail(source, tmp_path):
     a = ad.read_h5ad(source['input_path']); a.layers['other'] = a.X.copy(); a.write_h5ad(source['input_path'])
-    assert owner.parameter_prerequisites(dict(source, count_slot='other')) == ('matrix_semantics',)
     stage = tmp_path / 'stage'; stage.mkdir()
-    with pytest.raises(ValueError, match='Declare'):
-        owner.prepare_input(dict(source, count_slot='other'), stage)
+    _, effective = owner.prepare_input(dict(source, count_slot='other'), stage)
+    assert effective['matrix_semantics'] == 'unspecified_retained_measurement'
     with pytest.raises(ValueError, match='conflicts'):
         owner.prepare_input(dict(source, matrix_semantics='insertion_counts'), stage)
     a, effective = owner.prepare_input(dict(source, count_slot='other', matrix_semantics='insertion_counts'), stage)
@@ -86,18 +85,14 @@ def test_explicit_values_and_omitted_defaults_are_not_repaired():
 
 
 @pytest.mark.parametrize('function', ['pp.log1p', 'pp.tfidf', 'pp.select_features', 'tl.spectral', 'RunTFIDF'])
-def test_signed_numeric_admission_is_function_specific(source, tmp_path, function):
+def test_signed_numeric_values_reach_the_native_function(source, tmp_path, function):
     a = ad.read_h5ad(source['input_path'])
     a.X = a.X.astype(float); a.X.data[0] = -.5
     a.uns['matrix_semantics'] = 'transformed_numeric'; a.write_h5ad(source['input_path'])
     stage = tmp_path / 'stage'; stage.mkdir()
     args = dict(source, function_name=function)
-    if function == 'pp.log1p':
-        prepared, _ = owner.prepare_input(args, stage)
-        assert prepared.X.data[0] == -.5
-    else:
-        with pytest.raises(ValueError, match='nonnegative'):
-            owner.prepare_input(args, stage)
+    prepared, _ = owner.prepare_input(args, stage)
+    assert prepared.X.data[0] == -.5
 
 
 def test_native_copy_retains_scientific_anndata_contents(source, simulated):
@@ -287,11 +282,12 @@ def test_new_package_needs_no_fabricated_historical_profile():
     assert package.publication.historical_profiles == frozenset()
     grown = owner.MatrixPackage('new_package', '1.0', 'isolated', {'transform': (), 'another': ()}, (), 'More functions')
     assert grown.PROFILE == package.PROFILE
-    for existing in owner.PACKAGES:
-        assert existing.publication.historical_profiles == {owner.HISTORICAL_PROFILES[existing.package]}
+    for existing in (owner.EPISCANPY, owner.SIGNAC, owner.SNAPATAC2):
+        assert owner.HISTORICAL_PROFILES[existing.package] in existing.publication.historical_profiles
+        assert len(existing.publication.historical_profiles) == 2
 
 
-def test_lsi_admits_signed_unconsumed_x_checks_consumed_layer(source, tmp_path):
+def test_lsi_preserves_native_layer_values_without_numerical_prevalidation(source, tmp_path):
     a = ad.read_h5ad(source['input_path'])
     a.layers['tf-idf'] = a.X.astype(float)
     a.X = -a.X.astype(float)
@@ -303,8 +299,8 @@ def test_lsi_admits_signed_unconsumed_x_checks_consumed_layer(source, tmp_path):
     assert np.any(prepared.X.data < 0)
     np.testing.assert_array_equal(prepared.layers['tf-idf'].data, a.layers['tf-idf'].data)
     a.layers['tf-idf'].data[0] = np.nan; a.write_h5ad(source['input_path'])
-    with pytest.raises(ValueError, match='finite'):
-        owner.prepare_input(args, stage)
+    prepared, _ = owner.prepare_input(args, stage)
+    assert np.isnan(prepared.layers['tf-idf'].data[0])
 
 
 def test_expanded_catalog_does_not_expand_per_request_authority():
@@ -326,7 +322,6 @@ def test_slot_consumers_do_not_require_count_eligibility(source,tmp_path,functio
     else: a.obsm[key] = np.array([[1.,-2.],[3.,4.]])
     a.write_h5ad(source['input_path']); stage=tmp_path/'stage';stage.mkdir()
     args=dict(source,function_name=function,kwargs={} if function=='pp.lsi' else {'use_rep':key})
-    assert owner.parameter_prerequisites(args) == ()
     prepared,effective=owner.prepare_input(args,stage)
     assert np.any(prepared.X.data < 0)
     assert effective['matrix_semantics']=='unspecified_retained_measurement'
@@ -363,5 +358,22 @@ def test_embedding_consumers_validate_only_selected_dimensions(source, tmp_path,
     args = dict(source, function_name=function, kwargs={'use_rep':'provided', 'use_dims':use_dims})
     prepared, _ = owner.prepare_input(args, stage)
     assert np.isnan(prepared.obsm['provided'][:, 1]).all()
-    with pytest.raises(ValueError, match='finite'):
-        owner.prepare_input(dict(args, kwargs={'use_rep':'provided', 'use_dims':[1]}), stage)
+    prepared, _ = owner.prepare_input(dict(args, kwargs={'use_rep':'provided', 'use_dims':[1]}), stage)
+    assert np.isnan(prepared.obsm['provided'][:, 1]).all()
+
+
+def test_r_double_conversion_checks_actual_fidelity_not_integer_range():
+    from agent.tools.analysis.peak_h5ad import native_double_values
+    native_double_values(np.array([-(2**60), 2**60], dtype=np.int64))
+    native_double_values(np.array([2**63], dtype=np.uint64))
+    with pytest.raises(ValueError, match='exactly'):
+        native_double_values(np.array([2**60 + 1], dtype=np.int64))
+    with pytest.raises(ValueError, match='exactly'):
+        native_double_values(np.array([2**64 - 1], dtype=np.uint64))
+
+
+def test_native_matrix_no_obsolete_scientific_prerequisite_callback():
+    from agent.orchestration import build_default_tool_registry
+    registry = build_default_tool_registry()
+    for name in ('run_signac','run_episcanpy','run_snapatac2','run_scanpy','run_chromvar'):
+        assert registry.get(name).parameter_prerequisites is None

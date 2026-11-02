@@ -31,17 +31,16 @@ def tool_spec():
         kwargs=arg((dict,),'Native kwargs from grounded assignments or JSON; omit unrequested defaults.',
             scientific_parameter=True,conversational_json_object=True,conversational_members=owner.NATIVE_ARGUMENTS),
         count_slot=arg((str,),'Count functions: X by default or exact layer name. Not used for computeVariability.',scientific_parameter=True,conversational_exact_string=True),
-        matrix_semantics=arg((str,),'Count measurement; X metadata may supply it. Not for computeVariability.',
-            choices=owner.MEASUREMENTS,scientific_parameter=True,conversational_choice=True),
+        matrix_semantics=arg((str,),'Optional supplied measurement; X metadata may supply it. Not for computeVariability.',
+            scientific_parameter=True,conversational_exact_string=True),
         group_key=arg((str,),'computeExpectations only: exact obs field, passed as native group in original cell order.',scientific_parameter=True,observation_source='dataset'),
         seed=arg((int,),'computeVariability: optional R/BiocParallel seed; omission is not reproducible.',scientific_parameter=True))
     ports=[Consumer('dataset',(member('dataset','input_path'),),True,
         request_sources=(request('input_path',rm('dataset','input_path')),),
-        accepted_upstream_types=('scatac_matrix_h5ad.v1','chromvar_scores_h5ad.v1')),
+        accepted_upstream_types=('scatac_matrix_h5ad.v1','chromvar_scores_h5ad.v1','native_matrix_h5ad.v1','raw_scatac_dataset.v1')),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k!='input_path')]
     pub=owner.publication
     return ToolSpec(name=owner.TOOL,function=owner.run_chromvar,required_arguments=required,optional_arguments=optional,
-        parameter_prerequisites=owner.parameter_prerequisites,
         scientific_delivery=delivery_spec(owner,'scientific_native_result'),
         result_contract=ResultContract('NativeChromvarResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Native statistics with ordered source identities.',bindable=True,artifact=A.MOTIF_ACCESSIBILITY)
@@ -51,7 +50,7 @@ def tool_spec():
             publication_record=pub.publication_record,reuse_result=pub.reuse_result,proof_metadata=pub.proof_metadata,independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.OPERATION,
             'Invoke explicitly requested chromVAR::computeExpectations, getFragmentsPerPeak, getFragmentsPerSample or computeVariability.',
-            'Count functions need declared nonnegative counts, no genome, motifs or upstream analysis. computeExpectations accepts norm and obs group_key; count accessors have no kwargs.',
+            'Matrix functions forward supplied numeric values; no measurement declaration, genome, motifs or upstream analysis is required. computeExpectations accepts norm and obs group_key; count accessors have no kwargs.',
             'computeVariability consumes chromVAR deviations X and z_scores, including accepted scores. It accepts bootstrap_error, bootstrap_samples, bootstrap_quantiles and na.rm, plus optional seed. Reuse existing scores without upstream reruns.',
             'Publish ordered TSV and native provenance. Preserve explicit values and omitted defaults. Independent native calls; never substitute unsupported functions or arguments.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(Producer('statistics','native_chromvar_statistics.v1',

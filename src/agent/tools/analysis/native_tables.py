@@ -35,7 +35,7 @@ def bedgraph(path, *, empty=False):
     following score. Require its actual continuous-track input representation.
     A nonzero first start retains native zero-baseline behavior.
     """
-    ends = {}; previous = None; n = 0
+    ends = {}; n = 0
     with Path(path).open() as stream:
         for line in stream:
             if line.startswith(('#', 'track', 'browser')):
@@ -45,12 +45,12 @@ def bedgraph(path, *, empty=False):
                 raise ValueError('MACS3 requires four-column bedGraph data')
             chrom, left, right, score = fields
             start, end, value = int(left), int(right), float(score)
-            if (str(start) != left or str(end) != right or not 0 <= start < end <= 2147483647
-                    or not math.isfinite(value) or abs(value) > 3.4028234e38):
+            if (not 0 <= start < end <= 2147483647
+                    or math.isfinite(value) and abs(value) > 3.4028234e38):
                 raise ValueError('bedGraph coordinates/scores exceed native representation')
-            if chrom in ends and (previous != chrom or start != ends[chrom]):
+            if chrom in ends and start != ends[chrom]:
                 raise ValueError('MACS3 requires sorted continuous nonoverlapping intervals within each chromosome')
-            ends[chrom] = end; previous = chrom; n += 1
+            ends[chrom] = end; n += 1
             if n > 5_000_000:
                 raise ValueError('bedGraph exceeds the 5000000-record execution bound')
     if not n and not empty:
@@ -99,10 +99,7 @@ class TablePackage:
     def parameter_prerequisites(self, args):
         if self.package != 'MACS3':
             return ()
-        required = ['signal_semantics']
-        if args.get('function_name') == 'bdgcmp':
-            required += ['control_path', 'control_semantics', 'assembly']
-        return tuple(k for k in required if not args.get(k))
+        return ('control_path',) if args.get('function_name') == 'bdgcmp' and not args.get('control_path') else ()
 
     def native(self, args, stage):
         kw = self.native_arguments(args); name = args['function_name']
@@ -127,9 +124,12 @@ class TablePackage:
                 else:
                     values = value if type(value) is list else [value]
                     # One argv member per native value: no shell, no injected flags.
-                    if any(isinstance(v, str) and v.startswith('-') for v in values):
-                        raise ValueError('A native scalar cannot introduce command-line options')
-                    command.append('--' + key); command.extend(str(v) for v in values)
+                    if len(values) == 1:
+                        command.append('--' + key + '=' + str(values[0]))
+                    else:
+                        if any(isinstance(v, str) and v.startswith('-') and not v.lstrip('-').replace('.', '', 1).isdigit() for v in values):
+                            raise ValueError('A native vector cannot introduce command-line options')
+                        command.append('--' + key); command.extend(str(v) for v in values)
             command += ['--outdir', str(stage), '--ofile', 'result.tsv']
             request_sha = write(stage / 'request.json', dict(function_name=name, kwargs=kw))
         else:
@@ -142,7 +142,14 @@ class TablePackage:
         code = run(command, stage / 'native.log', environment=r_environment())
         shutil.copyfile(stage / 'native.log', stage.parent / ('native-failure.log' if code else 'native.log'))
         if code:
-            raise NativeInvocationError('Native function failed; exact diagnostic retained privately, no substituted parameters')
+            from . import peak_h5ad
+            message = read(stage / 'native-error.json').get('message', '')[:2000] if (stage / 'native-error.json').exists() else ''
+            if not message and self.package == 'MACS3':
+                lines = (stage / 'native.log').read_text(errors='replace').splitlines()
+                message = next((line for line in reversed(lines) if 'error:' in line or line.startswith(('ValueError:', 'AssertionError:', 'TypeError:'))), '')[:2000]
+            if not message or peak_h5ad._PATH.search(message) or any(ord(c) < 32 for c in message):
+                message = 'Native function failed; exact diagnostic retained privately, no substituted parameters'
+            raise NativeInvocationError(message)
         if file_closure(p['path'] for p in implementation) != implementation:
             raise AuthorityError('Native implementation changed during execution')
         if self.package == 'MACS3':
@@ -162,13 +169,6 @@ class TablePackage:
         args = arguments(values); kw = self.native_arguments(args)
         if self.parameter_prerequisites(args):
             raise ValueError('Missing native input declarations: ' + ', '.join(self.parameter_prerequisites(args)))
-        if self.package == 'MACS3':
-            method = kw.get('method', 'ppois' if args['function_name'] == 'bdgcmp' else 'p2q')
-            if args['function_name'] == 'bdgopt' and method == 'p2q' and args['signal_semantics'] != 'neg_log10_pvalue':
-                raise ValueError('Native p2q requires declared neg_log10_pvalue scores')
-            if args['function_name'] == 'bdgcmp' and method in ('ppois', 'qpois', 'logLR', 'slogLR'):
-                if args['signal_semantics'] != 'count_pileup' or args['control_semantics'] != 'expected_count':
-                    raise ValueError('Native statistical comparison requires count_pileup and expected_count measurements')
         root = Path(args['output_dir']); root.mkdir(parents=True, exist_ok=True)
         if any(root.iterdir()):
             raise ValueError('Native output directory must be empty; no retry authority')
@@ -234,8 +234,8 @@ class TablePackage:
         if name == 'bdgcmp':
             return 'bedGraph', 'MACS3_' + str(kw.get('method', 'ppois')) + '_comparison'
         if name == 'bdgopt':
-            return 'bedGraph', 'MACS3_' + str(kw.get('method', 'p2q')) + '_of_' + args['signal_semantics']
-        return ('narrowPeak' if name == 'bdgpeakcall' else 'gappedPeak'), 'native_peaks_from_' + args['signal_semantics']
+            return 'bedGraph', 'MACS3_' + str(kw.get('method', 'p2q')) + '_of_' + args.get('signal_semantics', 'unspecified_scores')
+        return ('narrowPeak' if name == 'bdgpeakcall' else 'gappedPeak'), 'native_peaks_from_' + args.get('signal_semantics', 'unspecified_scores')
 
     def invoke_macs3(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None,
                control_path=None, control_sha256=None, signal_semantics=None, control_semantics=None,
@@ -265,7 +265,7 @@ MACS3 = TablePackage('MACS3', '3.1.0', {
     ('lvl2-max-gap', 'bdgbroadcall linking gap in bases, default 800.'),
     ('no-trackline', 'Native boolean output trackline switch.'),
     ('verbose', 'Native diagnostic verbosity, default 2.'),
-), 'MACS3 independent bedGraph score operations bdgopt/bdgcmp and threshold peak calls bdgpeakcall/bdgbroadcall. No fragments/H5AD or callpeak workflow. Input is sorted continuous zero-based half-open bedGraph; native first-interval zero baseline applies. Declare actual scores; p2q consumes -log10 p-values, ppois/qpois consume treatment pileup and expected control counts. Comparison requires declared common assembly. Output retains native coordinate and score semantics; no reference qualification.')
+), 'MACS3 independent bedGraph bdgopt/bdgcmp/bdgpeakcall/bdgbroadcall. Sorted continuous zero-based half-open tracks preserve the native interval representation; native first-interval zero baseline applies. Score/assembly declarations are optional. p2q interprets -log10 p-values; ppois/qpois interpret treatment pileup and expected counts. No unrelated workflow or reference qualification.')
 
 CICERO = TablePackage('cicero', '1.28.3', {
     'generate_ccans': ('coaccess_cutoff_override', 'tolerance_digits'),

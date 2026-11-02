@@ -49,15 +49,13 @@ def test_counts_axes_zero_features_and_no_genome_requirement(source,tmp_path,sto
     assert (n,m)==(2,3) and effective['measurement']=='insertion_counts'
     assert mmread(stage/'counts.mtx').toarray().tolist()==[[0,3],[2,0],[0,1]]
     assert pd.read_csv(stage/'features.tsv',sep='\t',dtype=str).feature_id.tolist()==['03','01','02']
-    assert owner.parameter_prerequisites(source)==()
 
 
 def test_layers_keep_independent_measurement(source,tmp_path):
     a=ad.read_h5ad(source['input_path']);a.layers['counts']=a.X;a.X=np.log1p(a.X.toarray());a.uns['matrix_semantics']='log1p_counts';a.write_h5ad(source['input_path'])
-    assert set(owner.parameter_prerequisites(source))=={'matrix_semantics','count_slot'}
-    assert owner.parameter_prerequisites(dict(source,count_slot='counts'))==('matrix_semantics',)
     stage=tmp_path/'exchange';stage.mkdir()
-    with pytest.raises(ValueError,match='Declare'):owner.prepare_input(dict(source,count_slot='counts'),stage)
+    effective,*_=owner.prepare_input(dict(source,count_slot='counts'),stage)
+    assert effective['measurement']=='unspecified_measurement'
     effective,*_=owner.prepare_input(dict(source,count_slot='counts',matrix_semantics='insertion_counts'),stage)
     assert effective['count_slot']=='layers/counts'
 
@@ -97,7 +95,7 @@ def test_publication_recovery_and_integrity(source,native,function):
 def test_variability_requires_actual_score_slots_not_dimensions(source,tmp_path,native):
     args=dict(source,function_name='computeVariability',kwargs={'bootstrap_error':False})
     stage=tmp_path/'exchange';stage.mkdir()
-    with pytest.raises(ValueError,match='requires chromVAR'):owner.prepare_input(args,stage)
+    with pytest.raises(ValueError,match='requires supplied'):owner.prepare_input(args,stage)
     a=ad.read_h5ad(source['input_path']);a.X=a.X.toarray().astype(float);a.layers['z_scores']=np.array([[np.nan,1,2],[3,4,5]])
     a.uns=dict(matrix_semantics='chromVAR_bias_corrected_deviations',layer_semantics=dict(z_scores='chromVAR_background_standardized_z_scores'))
     a.write_h5ad(source['input_path']);owner.prepare_input(args,stage)
@@ -144,3 +142,24 @@ def test_structured_native_members_use_existing_grounding():
             dict(name='bootstrap_samples',kind='number',literal='25',evidence='bootstrap_samples=25')])]))
     decision=parse_decision(json.dumps(wire),utterance=text)
     assert _bind_arguments(build_default_tool_registry(),text,{},decision.arguments)=={'kwargs':{'bootstrap_error':False,'bootstrap_samples':25}}
+
+
+def test_historical_measurement_choice_replays_without_restricting_new_values():
+    from agent.application.dialogue_execution import _bind_arguments
+    from agent.application.turn_decisions import ScalarChoiceArgument, ScopedArgument, IntentError
+    from agent.orchestration import build_default_tool_registry
+    registry=build_default_tool_registry(); text='insertion counts'
+    declaration=ScalarChoiceArgument('run_chromvar','matrix_semantics',text,0,len(text),'insertion_counts')
+    assert _bind_arguments(registry,text,{},(declaration,),historical=True)=={'matrix_semantics':'insertion_counts'}
+    with pytest.raises(IntentError):_bind_arguments(registry,text,{},(declaration,))
+    current='signed_transformed'
+    assert _bind_arguments(registry,current,{},(ScopedArgument('run_chromvar','matrix_semantics',current,0,len(current)),))=={'matrix_semantics':current}
+
+
+def test_variability_uses_explicit_assay_slots_without_metadata_certificate(source,tmp_path):
+    a=ad.read_h5ad(source['input_path']);a.X=np.array([[1.,2.,3.],[3.,2.,1.]])
+    a.layers['z_scores']=a.X*2;a.uns.clear();a.write_h5ad(source['input_path'])
+    stage=tmp_path/'exchange';stage.mkdir()
+    effective,_,_=owner.prepare_input(dict(source,function_name='computeVariability',kwargs={}),stage)
+    assert effective['measurement']=='supplied_chromVAR_z_assay'
+    np.testing.assert_array_equal(np.fromfile(stage/'z.bin',dtype='<f8'),a.layers['z_scores'].ravel())

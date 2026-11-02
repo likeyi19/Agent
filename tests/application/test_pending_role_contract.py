@@ -139,6 +139,7 @@ def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
 @pytest.mark.parametrize('tool,ports', [
     ('inspect_scATAC', {'dataset'}), ('pca_embed_cells', {'dataset'}),
     ('run_signac', {'dataset'}), ('run_episcanpy', {'dataset'}), ('run_snapatac2', {'dataset'}),
+    ('run_scanpy', {'dataset'}), ('run_cicero_cds', {'dataset'}),
     ('transfer_cell_labels', {'reference_dataset', 'query_dataset'}),
     ('evaluate_cell_clustering', {'analysis', 'ground_truth_dataset'}),
 ])

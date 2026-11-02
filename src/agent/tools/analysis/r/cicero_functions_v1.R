@@ -8,20 +8,20 @@ tryCatch({
   if (!is.null(req$seed)) set.seed(req$seed)
   input <- read.delim('input.tsv', check.names=FALSE, quote='', colClasses='character', na.strings=NULL)
   if (identical(req$function_name, 'generate_ccans')) {
-    stopifnot(all(c('Peak1','Peak2','coaccess') %in% names(input)))
-    stopifnot(!anyNA(input$Peak1), !anyNA(input$Peak2))
-    input$coaccess <- as.numeric(input$coaccess)
-    stopifnot(all(is.finite(input$coaccess)))
+    if ('coaccess' %in% names(input)) {
+      numeric_scores <- suppressWarnings(as.numeric(input$coaccess))
+      if (any(is.na(numeric_scores) & !input$coaccess %in% c('NA','NaN','nan'))) stop('Cannot faithfully convert a supplied coaccess value to numeric')
+      input$coaccess <- numeric_scores
+    }
     f <- cicero::generate_ccans
   } else if (identical(req$function_name, 'find_overlapping_ccans')) {
-    stopifnot(identical(names(input), c('Peak','CCAN')))
     f <- cicero::find_overlapping_ccans
   } else stop('Unsupported native function')
   result <- do.call(f, c(list(input), req$kwargs))
   stopifnot(is.data.frame(result))
   if (identical(req$function_name, 'generate_ccans')) {
     stopifnot(all(result$Peak %in% c(input$Peak1, input$Peak2)), !anyDuplicated(result$Peak))
-  } else stopifnot(all(result$CCAN1 %in% input$CCAN), all(result$CCAN2 %in% input$CCAN))
+  } else stopifnot(all(result$CCAN1 %in% input[[2]]), all(result$CCAN2 %in% input[[2]]))
   write.table(result, 'result.tsv', sep='\t', quote=FALSE, row.names=FALSE)
   versions <- vapply(c('cicero','monocle','igraph','GenomicRanges'),function(p)as.character(packageVersion(p)),'')
   jsonlite::write_json(list(completion='succeeded',package='cicero',function_name=req$function_name,

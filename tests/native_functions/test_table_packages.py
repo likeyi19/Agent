@@ -16,8 +16,8 @@ def source(tmp_path):
 
 
 @pytest.mark.parametrize('text', ['chr1\t0\t100\t1\nchr1\t120\t200\t2\n',
-    'chr1\t0\t100\tnan\n', 'chr1\t-1\t100\t2\n', 'chr1\t0\t2147483648\t2\n',
-    'chr1\t0\t100\t2\textra\n', 'chr1\t0\t100\t1\nchr2\t0\t100\t1\nchr1\t100\t200\t1\n'])
+    'chr1\t-1\t100\t2\n', 'chr1\t0\t2147483648\t2\n',
+    'chr1\t0\t100\t2\textra\n'])
 def test_bedgraph_does_not_silently_reinterpret_invalid_native_storage(source, text):
     Path(source['input_path']).write_text(text)
     with pytest.raises(ValueError):
@@ -35,20 +35,14 @@ def test_native_files_and_unrepresented_multiple_outputs_not_kwargs(source, kwar
         owner.MACS3.native_arguments(dict(source, kwargs=kwargs))
 
 
-def test_statistical_score_meanings_are_not_inferred(source):
-    with pytest.raises(ValueError, match='neg_log10_pvalue'):
-        owner.MACS3.execute(dict(source, kwargs={'method':'p2q'}))
-    with pytest.raises(ValueError, match='count_pileup'):
-        owner.MACS3.execute(dict(source, function_name='bdgcmp', kwargs={'method':'ppois'},
-            control_path=source['input_path'], control_semantics='arbitrary_score', assembly='declared'))
-
-
-def test_bdgopt_omitted_method_retains_native_p2q_default(source):
-    with pytest.raises(ValueError, match='neg_log10_pvalue'):
-        owner.MACS3.execute(dict(source, kwargs={}))
-    args = dict(source, kwargs={}, signal_semantics='neg_log10_pvalue')
+def test_statistical_scores_do_not_require_metadata_admission(source):
+    args = dict(source, kwargs={})
+    assert owner.MACS3.parameter_prerequisites(args) == ()
     assert owner.MACS3.native_arguments(args) == {}
-    assert owner.MACS3.output_semantics(args) == ('bedGraph', 'MACS3_p2q_of_neg_log10_pvalue')
+    args.pop('signal_semantics')
+    assert owner.MACS3.output_semantics(args) == ('bedGraph', 'MACS3_p2q_of_unspecified_scores')
+    assert owner.MACS3.parameter_prerequisites(dict(args, function_name='bdgcmp')) == ('control_path',)
+    assert owner.MACS3.parameter_prerequisites(dict(args, function_name='bdgcmp', control_path=source['input_path'])) == ()
 
 
 def test_all_new_ports_offered_and_bind_exact_private_attachments(source, tmp_path):
@@ -116,3 +110,14 @@ def test_table_acceptance_reuse_delivery_restart_and_tamper(source, tmp_path, mo
     table = next(a for a in artifacts if a.role == 'result.tsv'); table.path.write_text('tampered')
     with pytest.raises((ValueError, RuntimeError)):
         MatrixDownloadPreparer().prepare(table)
+
+
+def test_native_interleaved_chromosomes_and_integer_spelling_preserve_values(source):
+    Path(source['input_path']).write_text('chr1\t00\t100\t1\nchr2\t0\t100\t1\nchr1\t100\t200\t1\n')
+    assert owner.bedgraph(source['input_path']) == 3
+
+
+@pytest.mark.parametrize('score',['nan','inf','-inf'])
+def test_native_nonfinite_scores_remain_native_values(source,score):
+    Path(source['input_path']).write_text('chr1\t0\t100\t'+score+'\n')
+    assert owner.bedgraph(source['input_path']) == 1

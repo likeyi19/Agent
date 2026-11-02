@@ -21,7 +21,13 @@ def main(request_path):
         if package == 'episcanpy':
             import episcanpy as epi
             dispatch = {'pp.binarize': epi.pp.binarize, 'pp.tfidf': epi.pp.tfidf,
+                'tl.pca': epi.tl.pca, 'pp.neighbors': epi.pp.neighbors,
+                'tl.dpt': epi.tl.dpt,
+                'tl.tsne': epi.tl.tsne, 'tl.umap': epi.tl.umap,
                 'pp.log1p': epi.pp.log1p, 'pp.lsi': epi.pp.lsi, 'pp.normalize_total': epi.pp.normalize_total}
+        elif package == 'scanpy':
+            import scanpy as sc
+            dispatch = {'tl.diffmap': sc.tl.diffmap, 'pp.scale': sc.pp.scale}
         elif package == 'snapatac2':
             import snapatac2 as snap
             dispatch = {'pp.select_features': snap.pp.select_features, 'tl.spectral': snap.tl.spectral,
@@ -53,10 +59,23 @@ def main(request_path):
             'tl.spectral': ['obsm.X_spectral', 'uns.spectral_eigenvalue'],
             'tl.umap': ['obsm.X_' + kwargs.get('key_added', 'umap')],
             'pp.knn': ['obsp.distances'], 'tl.leiden': ['obs.' + kwargs.get('key_added', 'leiden')],
-            'pp.normalize_total': [],
+            'pp.scale': [], 'pp.normalize_total': [], 'tl.pca': [], 'pp.neighbors': [], 'tl.diffmap': [], 'tl.dpt': [], 'tl.tsne': [],
         }[name]
+        if package == 'episcanpy' and name in ('tl.pca', 'pp.neighbors', 'tl.dpt', 'tl.tsne', 'tl.umap'):
+            slots = {
+                'tl.pca': ['obsm.X_pca', 'varm.PCs', 'uns.pca'],
+                'pp.neighbors': ['obsp.distances', 'obsp.connectivities', 'uns.neighbors'],
+                'tl.dpt': [*(('obs.' + k) for k in a.obs if k.startswith('dpt_'))],
+                'tl.tsne': ['obsm.X_tsne', 'uns.tsne'],
+                'tl.umap': ['obsm.X_umap', 'uns.umap'],
+            }[name]
+        if package == 'scanpy':
+            slots = ['obsm.X_diffmap', 'uns.diffmap_evals'] if name == 'tl.diffmap' else [
+                'layers.' + kwargs['layer'] if kwargs.get('layer') else 'obsm.' + kwargs['obsm'] if kwargs.get('obsm') else 'X']
+            if name == 'pp.scale':
+                slots += ['var.' + k for k in ('mean', 'std') if k in a.var]
         layer_semantics = {}
-        measurement = {'pp.binarize': 'binary_accessibility', 'pp.log1p': 'log1p_transformed_measurement'}.get(name)
+        measurement = {'pp.binarize': 'native_binarized_supplied_measurement', 'pp.log1p': 'log1p_transformed_measurement'}.get(name)
         if name == 'pp.normalize_total' and kwargs.get('inplace', True):
             layers = kwargs.get('layers') or []
             layers = list(a.layers) if layers == 'all' else layers
@@ -65,6 +84,9 @@ def main(request_path):
                 slots.append('obs.' + kwargs['key_added'])
             measurement = 'episcanpy_library_size_normalized'
             layer_semantics = {k: measurement for k in layers}
+        if name == 'pp.scale':
+            measurement = 'scanpy_scaled_measurement' if not kwargs.get('layer') and not kwargs.get('obsm') else None
+            if kwargs.get('layer'): layer_semantics[kwargs['layer']] = 'scanpy_scaled_measurement'
         if name == 'pp.tfidf':
             layer_semantics = {kwargs.get('layer_tfidf_key', 'tf-idf'): 'episcanpy_tfidf'}
         if name == 'pp.select_features' and kwargs.get('inplace', True) and 'count' in a.var:

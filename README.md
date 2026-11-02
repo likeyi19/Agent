@@ -660,6 +660,15 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-NFI-1E adds native PCA, neighbors, diffusion/pseudotime, t-SNE/UMAP,
+scaling and a focused Cicero CellDataSet exchange (43 Registry tools).
+Ordinary native inputs no longer require redundant measurement certificates or
+Agent numerical preapproval; installed functions own scientific validation.
+The [native guide](docs/guides/native-functions.md) describes supported APIs and
+the [1E report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1e/REPORT.md)
+separates native parity, genuine Firefox execution/reuse, historical preservation
+and remaining conversational and representation limits.
+
 STE-NFI-1D extends [native scientific functions](docs/guides/native-functions.md)
 with epiScanpy normalization, Signac SVD, SnapATAC2 graph/embedding functions,
 independent MACS3 genomic-signal commands and Cicero network membership/overlap.

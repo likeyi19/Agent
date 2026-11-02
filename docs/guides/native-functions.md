@@ -29,9 +29,9 @@ unknown functions, input objects, paths and executable expressions are not nativ
 kwargs. No retry changes the requested parameters or substitutes a function.
 
 Count functions accept dense, CSR and CSC data, X or an explicitly chosen layer.
-The selected matrix requires its actual raw measurement: peak counts, fragment
-overlap counts, insertion counts or binary accessibility. X metadata can supply
-that declaration; a different layer needs its own declaration. They need no
+Measurements are optional supplied provenance, never native admission. Signed,
+fractional and processed values reach the native function unchanged. A selected
+layer does not inherit X measurement metadata. They need no
 coordinates, genome, motif collection, QC, clustering or positive-count filtering.
 The native function names do not turn insertion counts into independent fragments.
 
@@ -45,9 +45,9 @@ more than 16 million denominator elements without changing the parameter.
 Variability uses the exact source motif and cell order. Native objects are
 constructed locally from the stored assays and names; no uploaded R object or
 serialization is needed. The accepted motif-accessibility `scores` port binds
-its precise H5AD through existing schema-2 scientific authority. Compatible
-uploaded scores must explicitly identify deviations and z-score semantics;
-that metadata alone does not verify their scientific origin. Motif accessions
+its precise H5AD through existing schema-2 scientific authority. Compatible uploaded scores bind X to the native deviations assay and
+`layers/z_scores` to the native z assay by this explicit invocation. No semantics
+certificate is required; this assignment does not verify their upstream origin. Motif accessions
 identify rows; repeated TF names remain separate labels. The function's native
 statistics describe the supplied cells, not replicate-level condition tests or
 TF binding. Undefined numbers remain explicit in the table. No motifs,
@@ -58,9 +58,9 @@ backgrounds or deviations are recomputed by this invocation.
 The existing isolated chromVAR runtime and `AGENT_CHROMVAR_RSCRIPT` override are
 reused. No environment or resource installation is performed by the runner.
 Native calls run in a bounded process group with cooperative cancellation and a
-two-hour wall-time limit. Count exchange stays sparse and uses the existing
-2 GiB stored-matrix bound; H5AD storage checks and exact double-count eligibility
-remain. Bootstrap resamples have a 10,000 execution cap. Native validity constraints
+two-hour wall-time limit. Matrix exchange stays sparse and uses the existing
+2 GiB stored-matrix bound; H5AD storage safety and exact integer-to-double
+conversion remain. Bootstrap resamples have a 10,000 execution cap. Native validity constraints
 remain with R. An explicit seed controls R/BiocParallel; execution uses SerialParam.
 Omitting the seed does not promise repeatability.
 
@@ -138,15 +138,15 @@ explicitly request TF-IDF as a separate operation. SnapATAC2 spectral's default
 `features='selected'` requires that actual field; explicit `features=null` uses
 all features. Native return-array modes are mapped to their named slots.
 
-These methods consume finite numeric matrix measurements, without a genome
-or reference prerequisite. `pp.log1p` also accepts signed transformed values;
-its installed native implementation judges the logarithm domain and base.
-Count-dependent methods retain nonnegative admission; the current function-specific rules below supersede the earlier blanket rule. This does not claim
+These methods pass numeric measurements to their installed implementation,
+without a genome, reference or measurement declaration prerequisite. Signed,
+fractional and nonfinite numerical suitability belongs to the native function. This does not claim
 that fractional measurements are integer counts or that all methods are suitable
-for every declared measurement. Exact unique cell/feature IDs are required. H5AD
+for every declared measurement. Exact ordered cell/feature labels and source identities are retained; native
+functions decide whether duplicate or empty axes are suitable. H5AD
 storage bounds apply; matrices are never expanded from sparse to dense by the
-adapter. `count_slot` selects X or one exact layer and preserves its declared
-measurement; an independently selected layer needs its own declaration. Original
+adapter. `count_slot` selects X or one exact layer. Optional declarations retain their
+actual slot; missing measurement metadata remains unspecified. Original
 layers, obs/var, obsm/varm, obsp/varp, raw and ordinary serialized uns metadata
 are retained through AnnData's own copy/read/write operations. Bounded HDF5
 storage inspection excludes external links, unsafe filters and unsupported
@@ -159,13 +159,13 @@ These preserved annotations do not acquire biological validation.
 
 The supported kwargs are exposed by Registry metadata and the package dispatch
 in `tools/analysis/native_matrix.py`. Precomputed Signac IDF vectors, SnapATAC2
-whitelist/blacklist files and feature-weight arrays, serialized Seurat/ArchR/CDS/
+whitelist/blacklist files and feature-weight arrays, arbitrary serialized Seurat/ArchR/CDS/
 Cistopic objects, plotting APIs and arbitrary package exports are not supported
 by these interfaces. They require their own exact typed adapters. No method is
 substituted. The two-hour native process limit, bounded iteration/dimension
 arguments, and 16-million-element limit for quadratic non-cosine spectral calls
-are execution limits, not scientific recommendations. Nonfinite native matrix
-results fail publication rather than being repaired. Native errors retain private
+are execution limits, not scientific recommendations. Native nonfinite results are retained honestly, without repair or a claim of
+numerical usability. Native errors retain private
 diagnostics and never authorize automatic retries.
 
 Reviewed ordinary kwargs retain their JSON types and values, including invalid
@@ -247,7 +247,7 @@ partial ecosystem coverage, not complete integration of any package API.
 ## STE-NFI-1D function families
 
 Eleven additional functions extend three matrix interfaces and introduce two
-package interfaces, `run_macs3` and `run_cicero`. There are 41 Registry tools;
+package interfaces, `run_macs3` and `run_cicero`. That milestone had 41 Registry tools;
 native functions are choices within their package, not separate workflows.
 The [acceptance report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1d/REPORT.md)
 owns the package-neutral coverage matrix and distinguishes native parity, simulated
@@ -261,33 +261,31 @@ regressions, real browser execution, continuation and explanation quality.
 | `run_macs3` | `bdgopt`, `bdgcmp`, `bdgpeakcall`, `bdgbroadcall` | Ordinary bedGraph tracks; native bedGraph, narrowPeak or gappedPeak bytes, respectively. No fragment pipeline or H5AD prerequisite. |
 | `run_cicero` | `generate_ccans`, `find_overlapping_ccans` | Peak1/Peak2/coaccess connection TSV → Peak/CCAN membership TSV; membership TSV → CCAN1/CCAN2 overlap TSV. No estimation or invented CDS. |
 
-The matrix adapter validates the measurements actually consumed. epiScanpy LSI
-uses the named TF-IDF layer; signed or nonfinite values in unrelated retained X
-are not count prerequisites. Embedding/graph methods likewise check their actual
-slots, including only the dimensions selected by `use_dims` for UMAP/kNN.
-Finite numeric native outputs and exact ordered axes remain mandatory.
-Retained X is checked without mistaking unchanged NaNs for changed values.
-Omitted measurement metadata for an unconsumed X is explicitly unspecified,
-not inferred counts. Native missing-layer failures are preserved.
+STE-NFI-1E removes duplicate numerical input screening and measurement
+prerequisites from these direct calls. Exact ordered axes and unchanged retained
+X are still checked, treating unchanged NaNs as unchanged. AnnData files with
+no X can reach functions consuming an existing embedding or graph. Native
+missing-object and numerical failures are preserved.
 
 `run_macs3(input_path, output_dir, function_name, kwargs=..., signal_semantics=...)`
 uses the existing MACS3 3.1.0 executable. `bdgcmp` additionally binds `control_path`,
-`control_semantics` and an explicit common `assembly` declaration. Optional exact
+with optional `control_semantics` and `assembly` declarations. Optional exact
 source checksums are supported. bedGraph uses zero-based half-open intervals;
 MACS3's native interval-end representation requires continuous, sorted,
 nonoverlapping intervals within each chromosome to avoid silently filling gaps.
-A nonzero initial start retains native zero-baseline behavior. Scores must fit
-native float32 and coordinates int32. No reference qualification is inferred.
-Omitting the `bdgopt` method invokes native `p2q`, which requires declared
-negative log10 p-values. Native Poisson/likelihood
-comparisons require declared treatment count pileup and expected control counts.
-Other score operations retain their declared input meaning. One comparison method
+A nonzero initial start retains native zero-baseline behavior. Finite scores must fit native float32 and coordinates int32. Explicit native
+NaN/Inf scores are forwarded and retained; no usability is inferred. No reference qualification is inferred.
+Omitting the `bdgopt` method invokes native `p2q`, which interprets scores as
+negative log10 p-values. Poisson/likelihood methods interpret treatment pileup
+and expected control counts. These scientific meanings are guidance, not an
+Agent metadata approval stage. No score or assembly declaration is required. One comparison method
 is supported per invocation; several differently named outputs require a further
 result adapter. The argv list has no shell interpolation or user output paths.
 
 `run_cicero(input_path, output_dir, function_name, kwargs=..., seed=...)` invokes
-Cicero 1.28.3 in its isolated R environment. Connection weights must be finite;
-peak identifiers are retained exactly. `generate_ccans` exposes
+Cicero 1.28.3 in its isolated R environment. Numeric connection weights reach the native implementation;
+peak identifiers are retained exactly. Unconvertible text fails faithful numeric
+conversion rather than silently becoming NA. `generate_ccans` exposes
 `coaccess_cutoff_override`, `tolerance_digits`; optional seed controls native R
 RNG, while omission preserves it. `find_overlapping_ccans` exposes `min_overlap`;
 its native chr_start_end parsing uses one-based closed ranges and compares each
@@ -356,3 +354,106 @@ Interpretation measurements, live diagnostics and historical failures.
 Registry metadata now allows a bounded union of 128 offered kwargs names for a
 package; each submitted structured argument still has its existing 32-member
 bound. These are distinct bounds, not permission for arbitrary scientific objects.
+
+
+## STE-NFI-1E: native validation and scientific object interoperability
+
+There are **43 Registry tools**. Ten additional native functions are implemented;
+this is selected API coverage, not full package support.
+
+| Interface / installed version | New functions | Actual representation |
+| --- | --- | --- |
+| `run_episcanpy` / 0.4.0 | `tl.pca`, `pp.neighbors`, `tl.dpt`, `tl.tsne`, `tl.umap` | Native AnnData PCA, graph, pseudotime and embedding slots; original ordered axes remain |
+| `run_scanpy` / 1.9.8 | `tl.diffmap`, `pp.scale` | Existing graph → diffusion coordinates/eigenvalues; native scaling of selected X, layer or obsm |
+| `run_cicero_cds` / 1.28.3 | `make_cicero_cds`, `estimate_distance_parameter`, `run_cicero` | Genuine CellDataSet construction, native overlapping aggregates, parameter estimates and co-accessibility connections |
+
+The installed epiScanpy `tl.diffmap` wrapper passes its `copy` positional argument
+as Scanpy's `neighbors_key` and fails on an ordinary valid graph. It is not
+advertised as an executable function. `run_scanpy` explicitly invokes Scanpy's
+own public API; it never substitutes for an epiScanpy request. Scanpy uses the
+existing locked epiScanpy runtime (BSD-3-Clause), with optional
+`AGENT_SCANPY_PYTHON`; no environment was changed. Runtime executable overrides
+work without requiring a resource-library catalog for independent matrix calls.
+
+Cicero aggregation takes an ordinary H5AD, `reduced_coordinates_key` naming an
+actual `obsm` matrix, optional `count_slot`, explicit native kwargs and optional
+R seed. Exact ordered cell/region identities accompany the sparse matrix and
+coordinates. Requested summary fields come from actual `obs`. Native Cicero
+owns k, normalization, numerical validity, region-name parsing and aggregation.
+No embedding, genome length or annotation is invented. Its native dense
+aggregation and membership allocations are limited to 16 million elements.
+
+The resulting `cds.zip` contains only `exprs.mtx` and `object.json`, representing
+actual exprs, pData, fData and dense/sparse storage for the supported Cicero calls.
+A genuine native CellDataSet is reconstructed from these data; no RDS/pickle,
+code, arbitrary archive paths or general fitted-object deserialization is used.
+This is a focused exchange, not full Monocle serialization. Native observation
+and region axes, size factors, metadata column types and native names are retained.
+`return_agg_info=true` additionally publishes the native aggregation table;
+its native `agg_` membership labels and `agg` pData names are not silently renamed.
+Omission retains native false, with an empty header-only aggregation artifact.
+
+`run_cicero` and `estimate_distance_parameter` take that ordinary exchange or an
+exact accepted `cds` port. `run_cicero` requires an authorized two-column
+chromosome-length file through `genomic_coords_path`. The file is optional for
+`estimate_distance_parameter`: omission preserves installed Cicero's
+`cicero::human.hg19.genome` default, whose exact 93-row table and digest are recorded
+in the native receipt and parameter evidence. This is a human hg19 package default,
+not an inferred or qualified assembly for the supplied data. An explicit file is
+forwarded unchanged instead. Accepted objects are reused without reaggregation.
+Results include the retained CDS,
+connection/parameter TSV, optional aggregation TSV, metadata and receipt through
+the existing shared publication and private download owners. An empty connection
+table from `make_cicero_cds` means that it did not estimate connections.
+
+The data-only exchange uses `format="cicero-cds-exchange.v1"` and
+`storage="dense"` or `"sparse"` in `object.json`. `observations.ids` and
+`regions.ids` contain ordered strings; their `columns` maps contain typed
+`values` arrays (`numeric`, `integer`, `logical`, `character`, or `factor`, with
+factor `levels`/`ordered`). Numeric strings retain R's nonfinite values and
+17-digit precision. `exprs.mtx` is coordinate real/integer MatrixMarket with
+regions as rows and observations as columns; its dimensions must match those
+axes. Dense native storage is reconstructed only within the allocation bound.
+Source identities belong to the pinned publication, not invented object fields.
+The existing upload-role owner exposes `run_cicero_cds.dataset`,
+`run_cicero_cds.genomic_coords` and `run_scanpy.dataset`; no separate intake is
+needed for these ordinary files.
+
+Native scientific arguments and defaults remain authoritative. Agent retains
+bounded JSON, reviewed callable/argument names, protected file/object ports,
+managed copies, process cancellation/timeout, exact source identity and
+publication integrity. HDF5 indirect links/unsafe filters remain forbidden.
+Integer-to-R-double conversion checks actual round-trip fidelity: exactly
+representable large integers are admitted. Sparse centered Scanpy scaling would
+densify the whole source and is therefore an explicit conversion/resource limit;
+choose native `zero_center=false` yourself or supply a dense representation.
+The adapter never changes this option automatically.
+
+MACS3 interleaved chromosomes and leading-zero integer spellings now pass when
+within-chromosome intervals are continuous. The gap check is retained: an actual
+installed native probe changes `[0,10),[20,30)` into `[0,10),[10,30)`, filling the
+gap. Retaining this narrow check prevents silent coordinate reinterpretation.
+
+Historical accepted profile identities and displayed text remain unchanged.
+The current matrix profile accepts its two old read-only profiles, and chromVAR
+retains its old read-only profile plus a bounded historical declaration reader.
+New matrix/chromVAR prerequisite callbacks are removed, not bypassed. The detailed
+final planning fixtures measure 83,270 / 85,108 / 85,729 / 91,359 bytes,
+within the unchanged 96 KiB maintenance budget. A separate Interpretation fixture
+measures 105,894 prompt bytes plus 97,085 compact schema bytes; the 96 KiB detailed
+planning budget is not an Interpretation or provider limit.
+
+The [STE-NFI-1E report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1e/REPORT.md)
+owns the cleanup audit, installed-package comparisons, exact Web scope, historical
+checks, failures and limitations. ArchR and pycisTopic are not claimed integrated;
+their actual project/runtime and licensing limits are recorded there.
+
+STE-NFI-1E binarization records `native_binarized_supplied_measurement`, not
+canonical raw binary accessibility: a transformed input does not acquire raw
+measurement provenance simply because the native output contains zeros and ones.
+Python matrix calls also admit duplicate labels and empty unused feature axes,
+preserving ordered source positions. R TSV exchange retains delimiter-safety
+checks; CellDataSet construction retains the native data-frame identity rules.
+Cicero overlap calls honor the native first-two-column convention and permit
+extra ordinary columns; native required-column and numerical checks are not
+duplicated by Agent.

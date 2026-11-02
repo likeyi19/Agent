@@ -22,9 +22,9 @@ def tool_spec(owner):
     if owner.package == 'MACS3':
         optional.update(control_path=arg((str, Path), 'bdgcmp exact control bedGraph.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
             control_sha256=arg((str,), 'Captured control checksum.'),
-            signal_semantics=arg((str,), 'Actual input score meaning; p2q requires neg_log10_pvalue; ppois/qpois require count_pileup.', scientific_parameter=True, conversational_exact_string=True),
-            control_semantics=arg((str,), 'Actual control score meaning; ppois/qpois require expected_count.', scientific_parameter=True, conversational_exact_string=True),
-            assembly=arg((str,), 'bdgcmp explicit common assembly declaration for both tracks; labels alone do not establish it.', scientific_parameter=True, conversational_exact_string=True))
+            signal_semantics=arg((str,), 'Optional supplied score meaning. Native methods interpret the numerical scores.', scientific_parameter=True, conversational_exact_string=True),
+            control_semantics=arg((str,), 'Optional supplied control score meaning.', scientific_parameter=True, conversational_exact_string=True),
+            assembly=arg((str,), 'Optional common assembly declaration; no genome resource is required by bedGraph commands.', scientific_parameter=True, conversational_exact_string=True))
     else:
         optional['seed'] = arg((int,), 'Optional native R random seed for generate_ccans; omission retains native RNG.', scientific_parameter=True)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,

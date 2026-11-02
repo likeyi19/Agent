@@ -23,8 +23,9 @@ TOOL = 'run_chromvar'
 KIND = 'native_chromvar_statistics'
 CONTRACT = 'chromvar-native-statistics.v1'
 POLICY = 'chromvar-native-statistics-v1'
-PROFILE = digest(dict(contract=CONTRACT, functions=['computeExpectations','getFragmentsPerPeak','getFragmentsPerSample','computeVariability'],
+HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, functions=['computeExpectations','getFragmentsPerPeak','getFragmentsPerSample','computeVariability'],
     adaptation='ordered counts or explicitly recorded chromVAR deviations and z scores; no filtering'))
+PROFILE = digest(dict(contract=CONTRACT, adaptation='ordered numeric matrix; native numerical validation; recorded deviations and z scores.v2'))
 VERIFIER = dict(id='agent.chromvar-function-completion', compatibility_version='1')
 FUNCTIONS = {
     'computeExpectations': ('norm',),
@@ -42,7 +43,7 @@ NATIVE_ARGUMENTS = (
 LIMITATIONS = ('Native functions are independent calls, with no filtering, motif scanning, background generation or workflow completion. '
     'Count totals retain the supplied measurement and are not independent molecules. Expectations retain the installed native norm/group behavior. '
     'Variability uses chromVAR z scores across supplied cells; native chi-square/BH statistics are not replicate-level condition tests, TF binding or biological validation. '
-    'Undefined native numbers remain explicit. Uploaded score semantics are supplied metadata, not independently verified scientific origin. '
+    'Undefined native numbers remain explicit. The requested invocation assigns supplied X and z_scores to native deviations and z assays; their upstream scientific origin is not independently verified. '
     'Omitted kwargs use native defaults. Bootstrap results without an explicit seed do not promise reproducibility.')
 FACT_FIELDS = ('function_name','n_cells','n_features','result_rows','result_columns','result_axis','native_output_type',
     'measurement','parameters','source_identity','software_versions','undefined_values','limitations')
@@ -78,7 +79,7 @@ def native_arguments(args):
         raise ValueError('Unreviewed native arguments for the selected function; input objects come from bound sources')
     for key, value in kwargs.items():
         if key == 'bootstrap_quantiles' and type(value) is list:
-            if len(value) > 2 or any(type(v) not in (int,float) or not math.isfinite(v) for v in value):
+            if len(value) > 128 or any(type(v) not in (int,float) or not math.isfinite(v) for v in value):
                 raise ValueError('Quantiles require a bounded native numeric vector')
         elif not (value is None or type(value) in (bool,int) or type(value) is float and math.isfinite(value)
                   or type(value) is str and len(value)<=128 and not any(ord(c)<32 for c in value)):
@@ -105,35 +106,20 @@ def declarations(handle,args):
     return effective
 
 
-def parameter_prerequisites(inputs):
-    if inputs.get('function_name') == 'computeVariability' or not inputs.get('input_path'):
-        return ()
-    with h5py.File(inputs['input_path'],'r') as handle:
-        effective = declarations(handle,inputs)
-    if effective.get('matrix_semantics') in MEASUREMENTS:
-        return ()
-    return ('matrix_semantics','count_slot') if 'count_slot' not in inputs and effective.get('matrix_semantics') else ('matrix_semantics',)
-
-
 def prepare_input(args,stage):
-    from .replicate_pseudobulk import _strict_ids
     peak_h5ad.inspect(args['input_path'],require_matrix=False)
     with h5py.File(args['input_path'],'r') as handle:
         obs,var = read_elem(handle['obs']),read_elem(handle['var'])
-        cells,features = _strict_ids(obs.index,'cell'),_strict_ids(var.index,'feature')
-        if not cells or not features or any(any(c in s for c in '\t\r\n') for s in cells+features):
-            raise ValueError('Nonempty unique ordered axes without tabs/newlines are required')
+        cells,features = tuple(obs.index),tuple(var.index)
+        if any(any(c in s for c in '\t\r\n') for s in cells+features):
+            raise ValueError('R exchange axis labels cannot contain TSV delimiters')
         cell_table = pd.DataFrame(dict(source_index=np.arange(len(cells)),cell_id=cells))
         feature_table = pd.DataFrame(dict(source_index=np.arange(len(features)),feature_id=features))
         if args['function_name'] == 'computeVariability':
             if args.get('count_slot') is not None or args.get('matrix_semantics') is not None:
                 raise ValueError('Variability consumes recorded deviations and z_scores, not a declared count slot')
-            uns = handle.get('uns')
-            if (uns is None or 'matrix_semantics' not in uns
-                    or read_elem(uns['matrix_semantics']) != 'chromVAR_bias_corrected_deviations'
-                    or 'layer_semantics' not in uns
-                    or read_elem(uns['layer_semantics']).get('z_scores') != 'chromVAR_background_standardized_z_scores'):
-                raise ValueError('computeVariability requires chromVAR deviations in X and their separately identified z_scores layer')
+            if 'X' not in handle or 'layers/z_scores' not in handle:
+                raise ValueError('computeVariability requires supplied X deviations and the z_scores layer')
             for slot,target in [('X','deviations.bin'),('layers/z_scores','z.bin')]:
                 matrix = read_elem(handle[slot])
                 if not isinstance(matrix,np.ndarray) or matrix.shape!=(len(cells),len(features)) or matrix.dtype.kind not in 'fi':
@@ -144,11 +130,9 @@ def prepare_input(args,stage):
                 if any(not isinstance(s,str) or any(c in s for c in '\t\r\n') for s in names):
                     raise ValueError('Native motif names must be bounded TSV strings')
                 feature_table['name']=names
-            effective=dict(args,measurement='chromVAR_background_standardized_z_scores')
+            effective=dict(args,measurement='supplied_chromVAR_z_assay')
         else:
             effective=declarations(handle,args)
-            if effective.get('matrix_semantics') not in MEASUREMENTS:
-                raise ValueError('Declare the actual untransformed count measurement for the selected slot')
             # Count-only functions do not require genome/coordinate declarations.
             check_declarations(args['input_path'],effective)
             element=handle[effective['count_slot']]
@@ -157,9 +141,9 @@ def prepare_input(args,stage):
                 raise ValueError('Counts and ordered axes differ')
             if args.get('kwargs',{}).get('norm') is not None and args.get('kwargs',{}).get('norm') is not False and len(cells)*len(features)>16_000_000:
                 raise ValueError('Native norm denominator exceeds the 16000000-element memory bound; the explicit parameter is not changed')
-            x=peak_h5ad.read_native_counts(matrix,effective['matrix_semantics'])
+            x=peak_h5ad.read_native_matrix(matrix)
             mmwrite(stage/'counts.mtx',x.T.tocsc())
-            effective['measurement']=effective['matrix_semantics']
+            effective['measurement']=effective.get('matrix_semantics', 'unspecified_measurement')
             if args.get('group_key') is not None:
                 values=obs[args['group_key']].tolist()
                 if any(not isinstance(s,str) or not s or any(c in s for c in '\t\r\n') for s in values):
@@ -171,7 +155,7 @@ def prepare_input(args,stage):
 
 
 def native(args,stage):
-    rscript=os.environ.get('AGENT_CHROMVAR_RSCRIPT',str(library().root.parent/'runtimes/chromvar/env/bin/Rscript'))
+    rscript=os.environ.get('AGENT_CHROMVAR_RSCRIPT') or str(library().root.parent/'runtimes/chromvar/env/bin/Rscript')
     if not Path(rscript).is_file():
         raise ValueError('Provision the optional installed chromVAR R runtime')
     script=Path(__file__).parent/'r/chromvar_functions_v1.R'
@@ -241,7 +225,7 @@ def run_chromvar(input_path,output_dir,function_name,kwargs=None,input_sha256=No
 
 
 publication=NativePublication(tool=TOOL,kind=KIND,contract=CONTRACT,profile=PROFILE,verifier=VERIFIER,
-    files=FILES,arguments=arguments,outputs={'table':'result.tsv'})
+    files=FILES,arguments=arguments,outputs={'table':'result.tsv'},historical_profiles=(HISTORICAL_PROFILE,))
 load=publication.load
 result=publication.result
 verify_publication=publication.verify_publication

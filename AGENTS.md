@@ -903,6 +903,21 @@ Bounded engineering closeout is COMPLETE and ready for final commit review;
 controlled-use qualification remains CONDITIONAL GO. The role/default fixes have
 focused software/native evidence, not a new paid Firefox qualification claim.
 
+STE-NFI-1F builds on `a18dae01f7ae8377866e9fc736861a3eca4f2477` without staging,
+commit or push. The [native guide](docs/guides/native-functions.md) records 31
+additional package-qualified functions (66 total; still 43 Registry tools) across
+Scanpy, epiScanpy, SnapATAC2, chromVAR, Signac and MACS3. Native independent returns,
+record arrays, interval categories and exact feature-subset positions retain their
+scientific meaning. The existing input, execution, publication, privacy and download
+owners remain authoritative. Historical matrix profiles stay read-only; source
+bytes and displayed history are preserved. Four pinned graph dependencies extend
+the isolated epiScanpy/Scanpy runtime without upgrading existing packages.
+The [STE-NFI-1F report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1f/REPORT.md)
+owns direct native comparisons, regression results, genuine Firefox/OpenAI scope,
+provider failures and unsupported object families. SnapATAC2 kmeans native failures
+are not repaired or substituted; unavailable dependencies and object-heavy methods
+remain unadvertised. No next phase, staging, commit or push is authorized here.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

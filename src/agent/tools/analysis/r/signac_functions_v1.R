@@ -10,10 +10,13 @@ tryCatch({
   object <- as(readMM('input.mtx'), 'CsparseMatrix')
   dimnames(object) <- list(features$feature_id, cells$cell_id)
   function_ <- switch(req$function_name,
-    RunTFIDF=Signac::RunTFIDF, BinarizeCounts=Signac::BinarizeCounts,
+    corSparse=Signac::corSparse, RunTFIDF=Signac::RunTFIDF, BinarizeCounts=Signac::BinarizeCounts,
     FindTopFeatures=Signac::FindTopFeatures, RunSVD=Signac::RunSVD, stop('Unsupported native function'))
-  result <- do.call(function_, c(list(object=object), req$kwargs))
-  if (identical(req$function_name, 'FindTopFeatures')) {
+  result <- do.call(function_, c(setNames(list(object), if (req$function_name == 'corSparse') 'X' else 'object'), req$kwargs))
+  if (identical(req$function_name, 'corSparse')) {
+    writeMM(as(Matrix(result, sparse=TRUE), 'generalMatrix'), 'output.mtx')
+    slots <- 'obsp.Signac_corSparse'; measurement <- NULL
+  } else if (identical(req$function_name, 'FindTopFeatures')) {
     table <- cbind(data.frame(feature_id=rownames(result)), result)
     for (key in names(table)) if (is.numeric(table[[key]])) table[[key]] <- sprintf('%.17g', table[[key]])
     write.table(table, 'feature-statistics.tsv', sep='\t', quote=FALSE, row.names=FALSE, na='NA')
@@ -39,7 +42,7 @@ tryCatch({
     measurement <- if (identical(req$function_name, 'BinarizeCounts')) 'native_binarized_supplied_measurement' else 'Signac_TFIDF'
   }
   versions <- vapply(c('Signac','Matrix','SeuratObject'),function(p)as.character(packageVersion(p)),'')
-  method <- getS3method(req$function_name, 'default')
+  method <- if (req$function_name == 'corSparse') function_ else getS3method(req$function_name, 'default')
   jsonlite::write_json(list(completion='succeeded', package='Signac', function_name=req$function_name,
     request_sha256=digest::digest(file=request_path,algo='sha256'), versions=as.list(versions), R=R.version.string,
     native_signature=paste(capture.output(args(method)),collapse=' '),

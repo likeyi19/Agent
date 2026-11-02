@@ -42,7 +42,7 @@ DELIVERY_FILES = {
 }
 LIMITATIONS = ('Independent native invocation, not a completed analysis workflow or biological validation. '
     'Source annotations are supplied metadata. Matrix transformations, feature masks and embeddings have distinct meanings. '
-    'No inferred filtering, genome conversion or upstream rerun. Omitted native arguments retain installed defaults; '
+    'Native feature names such as genes do not establish biological feature identity. No inferred filtering, genome conversion or upstream rerun. Omitted native arguments retain installed defaults; '
     'stochastic results are qualified only for the recorded runtime and seed. Native nonfinite values are retained, not repaired or claimed usable.')
 # Exact pre-finalization adapter profiles remain readable, never writable.
 HISTORICAL_PROFILES = {
@@ -105,13 +105,18 @@ class MatrixPackage:
         # Exact function, kwargs and installed implementation remain pinned in
         # each publication. Compatible additions need no historical migration.
         self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
-            adaptation='ordinary AnnData preservation; optional measurements; native numerical validation.v3'))
+            adaptation='ordinary AnnData; native returns and exact subset positions.v4'))
         self.VERIFIER = dict(id='agent.' + self.KIND, compatibility_version='1')
+        historical = []
+        if package in ('episcanpy', 'snapatac2', 'Signac', 'scanpy'):
+            historical.append(digest(dict(contract=self.CONTRACT, version=version,
+                adaptation='ordinary AnnData preservation; optional measurements; native numerical validation.v3')))
+        if package in HISTORICAL_PROFILES:
+            historical.extend((HISTORICAL_PROFILES[package], digest(dict(contract=self.CONTRACT, version=version,
+                adaptation='ordinary AnnData preservation; selected X; exact axes; bounded JSON kwargs.v2'))))
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
             profile=self.PROFILE, verifier=self.VERIFIER, files=tuple(DELIVERY_FILES),
-            arguments=arguments, outputs={'matrix': 'result.h5ad'},
-            historical_profiles=((HISTORICAL_PROFILES[package], digest(dict(contract=self.CONTRACT, version=version,
-                adaptation='ordinary AnnData preservation; selected X; exact axes; bounded JSON kwargs.v2'))) if package in HISTORICAL_PROFILES else ()))
+            arguments=arguments, outputs={'matrix': 'result.h5ad'}, historical_profiles=historical)
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
 
@@ -137,9 +142,9 @@ class MatrixPackage:
             raise ValueError('Native kwargs must be bounded JSON data, not executable expressions or input objects')
         # A supplied spectral mask is scientific input, not ordinary kwargs.
         # This interface binds the exact existing var field (or all features).
-        if isinstance(kwargs.get('features'), (list, dict)):
+        if args['function_name'] == 'tl.spectral' and isinstance(kwargs.get('features'), (list, dict)):
             raise ValueError('Bind a spectral feature mask through the input AnnData var field')
-        if args['function_name'] == 'tl.umap' and isinstance(kwargs.get('init'), (list, dict)):
+        if args['function_name'] == 'tl.umap' and any(isinstance(kwargs.get(k), (list, dict)) for k in ('init', 'init_pos')):
             raise ValueError('UMAP initialization arrays are scientific objects, not ordinary kwargs')
         # Bounds govern execution cost, not the native scientific validity range.
         for key, cap in (('n_components', 512), ('n_comps', 512), ('n', 512), ('n_iter', 1000), ('n_iterations', 1000), ('n_epochs', 10000), ('maxiter', 10000), ('n_dcs', 512), ('n_pcs', 512), ('max_iter', 10), ('n_jobs', 16), ('num_threads', 32)):
@@ -188,7 +193,9 @@ class MatrixPackage:
             raise AuthorityError('Native implementation changed during invocation')
         receipt['implementation'] = implementation
         if is_r:
-            if args['function_name'] == 'FindTopFeatures':
+            if args['function_name'] == 'corSparse':
+                matrix.obsp['Signac_corSparse'] = mmread(stage / 'output.mtx').tocsr()
+            elif args['function_name'] == 'FindTopFeatures':
                 import pandas as pd
                 table = pd.read_csv(stage / 'feature-statistics.tsv', sep='\t', index_col=0,
                     dtype={'feature_id': str}, keep_default_na=False, quoting=csv.QUOTE_NONE)
@@ -232,6 +239,8 @@ class MatrixPackage:
                     raise ValueError('R matrix exchange labels cannot contain TSV delimiters')
                 values = matrix.X.data if sparse.issparse(matrix.X) else np.asarray(matrix.X)
                 peak_h5ad.native_double_values(values)
+            if args['function_name'] == 'corSparse' and matrix.n_obs**2 > 16_000_000:
+                raise ValueError('Native cell similarity exceeds the 16000000-element execution bound')
             if args['function_name'] == 'tl.spectral' and kwargs.get('distance_metric', 'cosine') != 'cosine' and matrix.n_obs**2 > 16_000_000:
                 raise ValueError('Quadratic native similarity exceeds the 16000000-element execution bound')
             if args['function_name'] == 'pp.scale' and kwargs.get('zero_center', True):
@@ -241,10 +250,18 @@ class MatrixPackage:
             receipt = self.native(effective, stage, matrix)
             peak_h5ad.inspect(stage / 'result.h5ad', require_matrix=False)
             output = ad.read_h5ad(stage / 'result.h5ad')
-            if (output.obs_names.tolist() != cells or output.var_names.tolist() != features):
+            positions = receipt.get('source_axis_positions')
+            ci, fi = list(range(len(cells))), list(range(len(features)))
+            if positions is not None:
+                if self.package != 'scanpy' or args['function_name'] != 'pp.highly_variable_genes' or not kwargs.get('subset'):
+                    raise AuthorityError('Unexpected native axis change')
+                ci, fi = positions['cells'], positions['features']
+                if ci != list(range(len(cells))) or any(type(i) is not int or not 0 <= i < len(features) for i in fi) or fi != sorted(set(fi)):
+                    raise AuthorityError('Invalid native subset source positions')
+            if output.obs_names.tolist() != [cells[i] for i in ci] or output.var_names.tolist() != [features[i] for i in fi]:
                 raise AuthorityError('Native result changed the exact ordered input axes')
             if args['function_name'] not in ('pp.binarize', 'pp.log1p', 'pp.normalize_total', 'RunTFIDF', 'BinarizeCounts', 'pp.scale') and matrix.X is not None:
-                original = ad.read_h5ad(stage / 'input.h5ad')
+                original = ad.read_h5ad(stage / 'input.h5ad')[ci, fi]
                 before, after = (sparse.csr_matrix(x, copy=True) for x in (original.X, output.X))
                 for retained in (before, after):
                     retained.sum_duplicates()
@@ -276,6 +293,8 @@ class MatrixPackage:
             output.uns['agent_native_invocation'] = dict(function=summary['function_name'], source_sha256=source['sha256'],
                 source_measurement=effective['matrix_semantics'], parameters_json=json.dumps(summary['parameters']),
                 annotation_policy='Retained source annotations and reductions are not recomputed; native-written slots replace existing values.')
+            if positions is not None:
+                output.uns['agent_native_invocation']['source_axis_positions'] = positions
             output.write_h5ad(root / 'result.h5ad')
             write(root / 'native-receipt.json', receipt)
             write(root / 'metadata.json', dict(summary=summary, source=source, receipt=receipt,
@@ -301,54 +320,84 @@ EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     'tl.dpt': ('n_dcs', 'n_branchings', 'min_group_size', 'allow_kendall_tau_shift', 'neighbors_key', 'copy'),
     'tl.tsne': ('n_pcs', 'use_rep', 'perplexity', 'early_exaggeration', 'learning_rate', 'random_state', 'use_fast_tsne', 'n_jobs', 'copy'),
     'tl.umap': ('min_dist', 'spread', 'n_components', 'maxiter', 'alpha', 'gamma', 'negative_sample_rate', 'init_pos', 'random_state', 'a', 'b', 'copy'),
-    'pp.binarize': ('copy',), 'pp.tfidf': ('norm', 'layer_tfidf_key'),
+    'pp.binarize': ('copy',),
+    'pp.tfidf': ('norm', 'layer_tfidf_key'),
     'pp.log1p': ('base', 'copy', 'chunked', 'chunk_size'),
     'pp.normalize_total': ('target_sum', 'exclude_highly_expressed', 'max_fraction', 'key_added', 'layers', 'layer_norm', 'inplace'),
     'pp.lsi': ('n_components', 'tf_idf_layer', 'algorithm', 'n_iter', 'random_state'),
+    'tl.leiden': ('resolution', 'restrict_to', 'random_state', 'key_added', 'directed', 'use_weights', 'n_iterations', 'neighbors_key', 'obsp', 'copy'),
+    'tl.louvain': ('resolution', 'random_state', 'restrict_to', 'key_added', 'flavor', 'directed', 'use_weights', 'neighbors_key', 'obsp', 'copy'),
+    'tl.kmeans': ('num_clusters',),
+    'tl.hc': ('num_clusters',),
+    'tl.rank_features': ('groupby', 'omic', 'use_raw', 'groups', 'reference', 'n_features', 'rankby_abs', 'key_added', 'copy', 'method', 'corr_method'),
 }, (
-    ('n_comps', 'pca native component count; cap 512.'),
-    ('zero_center', 'pca native centering; omission uses true.'),
+    ('n_comps', 'Native n_comps for the selected function; omitted retains its installed default.'),
+    ('zero_center', 'pca native centering; omitted retains its installed default.'),
     ('svd_solver', 'pca installed native solver.'),
+    ('random_state', 'Native random_state for the selected function; omitted retains its installed default.'),
     ('return_info', 'pca native return_info flag; AnnData results retain native slots.'),
     ('use_highly_variable', 'pca uses the existing var highly_variable flag when requested.'),
     ('dtype', 'pca native result dtype.'),
-    ('n_neighbors', 'neighbors native neighborhood size.'),
+    ('copy', 'Native copy flag; returned AnnData is retained, source bytes stay immutable.'),
+    ('chunked', 'pca/log1p native chunked processing flag.'),
+    ('chunk_size', 'pca/log1p native processing chunk size.'),
+    ('n_neighbors', 'neighbors native neighborhood size; omitted retains its installed default.'),
     ('n_pcs', 'neighbors/tsne component count; native representation selection applies.'),
-    ('use_rep', 'neighbors/tsne existing obsm key or native X; omitted uses native representation selection.'),
+    ('use_rep', 'Exact native representation selector; omission retains installed selection/default.'),
     ('knn', 'neighbors hard nearest-neighbor threshold versus full kernel.'),
-    ('method', 'neighbors native graph construction method, default gauss.'),
-    ('metric', 'neighbors metric name; no executable callable.'),
+    ('method', 'Native method for the selected function; omitted retains its installed default.'),
+    ('metric', 'neighbors native metric name; no executable callable.'),
     ('metric_kwds', 'neighbors JSON metric options; no executable callbacks.'),
     ('n_dcs', 'dpt diffusion component count; existing uns.iroot identifies the supplied root cell.'),
     ('n_branchings', 'dpt native branching count.'),
     ('min_group_size', 'dpt minimum group fraction or size.'),
     ('allow_kendall_tau_shift', 'dpt native branching behavior.'),
-    ('neighbors_key', 'dpt existing uns neighbors key.'),
+    ('neighbors_key', 'dpt/leiden/louvain existing uns neighborhood key; omitted uses native selection.'),
     ('perplexity', 'tsne native perplexity.'),
     ('early_exaggeration', 'tsne native early exaggeration.'),
-    ('learning_rate', 'tsne native learning rate.'),
+    ('learning_rate', 'tsne native learning rate; omitted retains its installed default.'),
     ('use_fast_tsne', 'tsne native implementation choice; no adapter substitution.'),
-    ('n_jobs', 'tsne worker count; execution cap 16.'),
-    *((k, 'umap native ' + k + '; omitted uses installed default.') for k in ('min_dist', 'spread', 'maxiter', 'alpha', 'gamma', 'negative_sample_rate', 'init_pos', 'a', 'b')),
-    ('target_sum', 'normalize_total target library size; omitted uses the native median.'),
-    ('exclude_highly_expressed', 'normalize_total excludes high-expression features from normalization-factor calculation.'),
-    ('max_fraction', 'normalize_total native high-expression fraction threshold.'),
-    ('key_added', 'normalize_total obs field for normalization factors.'),
-    ('layers', 'normalize_total exact layer names or all; no external objects.'),
-    ('layer_norm', 'normalize_total layer scaling: null, after, or X.'),
-    ('inplace', 'normalize_total: false leaves AnnData unchanged; installed epiScanpy discards Scanpy dictionary return.'),
-    ('copy', 'binarize/log1p: native copy flag; source is always a managed copy.'),
+    ('n_jobs', 'tsne native worker count; execution cap 16.'),
+    ('min_dist', 'umap native min_dist; omitted uses installed default.'),
+    ('spread', 'umap native spread; omitted uses installed default.'),
+    ('n_components', 'Native n_components for the selected function; omitted retains its installed default.'),
+    ('maxiter', 'umap native maxiter; omitted uses installed default.'),
+    ('alpha', 'Native alpha; omitted retains the installed function default.'),
+    ('gamma', 'umap native gamma; omitted uses installed default.'),
+    ('negative_sample_rate', 'umap native negative_sample_rate; omitted uses installed default.'),
+    ('init_pos', 'umap native init_pos; omitted uses installed default.'),
+    ('a', 'umap native a; omitted uses installed default.'),
+    ('b', 'umap native b; omitted uses installed default.'),
     ('norm', 'tfidf row normalization; installed default l1, not the docstring l2.'),
     ('layer_tfidf_key', 'tfidf destination layer, default tf-idf; X stays unchanged.'),
     ('base', 'log1p logarithm base; omission uses natural log.'),
-    ('chunked', 'log1p native chunked processing flag.'),
-    ('chunk_size', 'log1p native cells per processing chunk.'),
-    ('n_components', 'lsi component count, default 50; execution cap 512.'),
+    ('target_sum', 'normalize_total target library size; omitted uses the native median.'),
+    ('exclude_highly_expressed', 'normalize_total excludes high-expression features from normalization-factor calculation.'),
+    ('max_fraction', 'normalize_total native high-expression fraction threshold.'),
+    ('key_added', 'Native key_added for the selected function; omitted retains its installed default.'),
+    ('layers', 'normalize_total exact layer names or all; no external objects.'),
+    ('layer_norm', 'normalize_total layer scaling: null, after, or X.'),
+    ('inplace', 'normalize_total: false leaves AnnData unchanged; epiScanpy discards the Scanpy return.'),
     ('tf_idf_layer', 'lsi existing TF-IDF layer; default tf-idf. No adapter-generated TF-IDF.'),
     ('algorithm', 'lsi native TruncatedSVD solver, default arpack.'),
-    ('n_iter', 'lsi native iterations, default 10; execution cap 1000.'),
-    ('random_state', 'lsi native random state, default 42.'),
-), 'epiScanpy pca, neighbors, dpt, tsne and umap retain their native slots and defaults. dpt uses supplied uns.iroot. binarize/log1p change X; tfidf adds a layer; lsi consumes an existing TF-IDF layer. normalize_total scales X/requested layers; inplace=False returns None with no changes in this wrapper. Native internal representation choices apply; Agent adds no preprocessing.')
+    ('n_iter', 'Native n_iter; omitted retains the installed function default.'),
+    ('resolution', 'leiden/louvain native clustering resolution.'),
+    ('restrict_to', 'Native restrict_to; omitted retains the installed function default.'),
+    ('directed', 'Native directed; omitted retains the installed function default.'),
+    ('use_weights', 'Native use_weights; omitted retains the installed function default.'),
+    ('n_iterations', 'leiden native iterations, -1 until convergence; cap 1000 positive iterations.'),
+    ('obsp', 'Native obsp; omitted retains the installed function default.'),
+    ('flavor', 'Native flavor; omitted retains the installed function default.'),
+    ('num_clusters', 'Native num_clusters; omitted retains the installed function default.'),
+    ('groupby', 'Exact obs grouping field; native statistics retain supplied feature semantics.'),
+    ('omic', 'Native omic; omitted retains the installed function default.'),
+    ('use_raw', 'Native use_raw; omitted retains the installed function default.'),
+    ('groups', 'Native groups; omitted retains the installed function default.'),
+    ('reference', 'Native reference; omitted retains the installed function default.'),
+    ('n_features', 'rank_features number of ranked features per group; no matrix subsetting.'),
+    ('rankby_abs', 'Native rankby_abs; omitted retains the installed function default.'),
+    ('corr_method', 'Native corr_method; omitted retains the installed function default.'),
+), 'Native AnnData transforms, PCA/graphs/embeddings, clustering and feature ranking. kmeans/hc consume X_pca; leiden/louvain consume graphs. rank_features retains upstream method overrides/errors. tfidf adds a layer; lsi uses that supplied layer. normalize_total(inplace=False) is a native no-op returning None. No Agent-added preprocessing.')
 
 
 SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
@@ -357,66 +406,189 @@ SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
     'tl.leiden': ('resolution', 'objective_function', 'min_cluster_size', 'n_iterations', 'random_state', 'key_added', 'weighted', 'inplace'),
     'pp.select_features': ('n_features', 'filter_lower_quantile', 'filter_upper_quantile', 'max_iter', 'inplace', 'n_jobs', 'verbose'),
     'tl.spectral': ('n_comps', 'features', 'random_state', 'sample_size', 'sample_method', 'distance_metric', 'weighted_by_sd', 'chunk_size', 'inplace', 'num_threads'),
+    'tl.dbscan': ('eps', 'min_samples', 'leaf_size', 'n_jobs', 'use_rep', 'key_added'),
+    'pp.mnc_correct': ('batch', 'n_neighbors', 'n_clusters', 'n_iter', 'use_rep', 'use_dims', 'groupby', 'key_added', 'inplace', 'n_jobs'),
+    'tl.marker_regions': ('groupby', 'pvalue'),
+    'tl.diff_test': ('cell_group1', 'cell_group2', 'features', 'covariates', 'direction', 'min_log_fc', 'min_pct'),
 }, (
-    ('use_dims', 'umap/knn leading component count or exact integer component indices.'),
-    ('use_rep', 'umap/knn exact existing obsm key, default X_spectral; no implicit reduction.'),
-    ('key_added', 'umap output obsm X_<key>, default umap; leiden output obs key, default leiden.'),
-    ('n_neighbors', 'umap/knn native neighbor count; defaults 15/50 respectively.'),
-    ('method', 'knn kdtree, hora or pynndescent; hora has no reproducible seed.'),
+    ('n_comps', 'Native n_comps for the selected function; omitted retains its installed default.'),
+    ('use_dims', 'umap/knn/mnc_correct leading component count or exact integer indices.'),
+    ('use_rep', 'Exact native representation selector; omission retains installed selection/default.'),
+    ('key_added', 'Native key_added for the selected function; omitted retains its installed default.'),
+    ('random_state', 'Native random_state for the selected function; omitted retains its installed default.'),
+    ('inplace', 'Native mutation flag; false preserves independent returns in uns.agent_native_return.'),
+    ('n_neighbors', 'umap/knn/mnc_correct native neighbor count; omitted retains installed default.'),
+    ('min_dist', 'umap.UMAP native min_dist; omitted uses installed default.'),
+    ('spread', 'umap.UMAP native spread; omitted uses installed default.'),
+    ('metric', 'umap.UMAP native metric; omitted uses installed default.'),
+    ('n_epochs', 'umap.UMAP native n_epochs; omitted uses installed default.'),
+    ('learning_rate', 'umap.UMAP native learning_rate; omitted uses installed default.'),
+    ('init', 'umap.UMAP native init; omitted uses installed default.'),
+    ('negative_sample_rate', 'umap.UMAP native negative_sample_rate; omitted uses installed default.'),
+    ('repulsion_strength', 'umap.UMAP native repulsion_strength; omitted uses installed default.'),
+    ('local_connectivity', 'umap.UMAP native local_connectivity; omitted uses installed default.'),
+    ('set_op_mix_ratio', 'umap.UMAP native set_op_mix_ratio; omitted uses installed default.'),
+    ('a', 'umap.UMAP native a; omitted uses installed default.'),
+    ('b', 'umap.UMAP native b; omitted uses installed default.'),
+    ('verbose', 'Native progress verbosity for the selected function.'),
+    ('n_jobs', 'Native parallel jobs for the selected function; execution cap 16.'),
+    ('method', 'Native method for the selected function; omitted retains its installed default.'),
     ('resolution', 'leiden native clustering resolution.'),
     ('objective_function', 'leiden modularity or CPM objective.'),
     ('min_cluster_size', 'leiden minimum cluster size; smaller groups become -1.'),
     ('n_iterations', 'leiden native iterations, -1 until convergence; cap 1000 positive iterations.'),
     ('weighted', 'leiden uses exp(-distance) weights when true.'),
-    *((k, 'umap.UMAP native ' + k + '; omitted uses installed default.') for k in ('min_dist', 'spread', 'metric', 'n_epochs', 'learning_rate', 'init', 'negative_sample_rate', 'repulsion_strength', 'local_connectivity', 'set_op_mix_ratio', 'a', 'b')),
     ('n_features', 'select_features maximum selected features; no matrix subsetting.'),
     ('filter_lower_quantile', 'select_features lower count quantile exclusion.'),
     ('filter_upper_quantile', 'select_features upper count quantile exclusion.'),
     ('max_iter', 'select_features iterations; default 1; execution cap 10.'),
-    ('inplace', 'Native in-place flag; returned arrays are mapped to the same result slots when false.'),
-    ('n_jobs', 'select_features parallel jobs; execution cap 16.'),
-    ('verbose', 'select_features progress output.'),
-    ('n_comps', 'spectral component count; execution cap 512.'),
-    ('features', 'spectral exact boolean var field, default selected; null explicitly uses all features.'),
-    ('random_state', 'spectral native random seed.'),
+    ('features', 'Native existing mask field for spectral; explicit feature IDs/indices for diff_test.'),
     ('sample_size', 'spectral native Nystrom sample size or fraction.'),
     ('sample_method', 'spectral native sampling method.'),
     ('distance_metric', 'spectral native similarity choice.'),
     ('weighted_by_sd', 'spectral native eigenvector scaling.'),
     ('chunk_size', 'spectral native processing chunk size.'),
     ('num_threads', 'spectral native thread count; installed default and execution cap 32.'),
-), 'SnapATAC2 umap and knn consume an existing obsm embedding; knn writes obsp.distances; leiden consumes that distance graph and writes obs labels (including native -1 small groups). No implicit embedding or graph. select_features records var.selected without subsetting; spectral consumes X and an explicit/default feature mask and records X_spectral plus eigenvalues. No automatic feature selection.')
+    ('n_clusters', 'Native n_clusters; omitted retains the installed function default.'),
+    ('eps', 'Native eps; omitted retains the installed function default.'),
+    ('min_samples', 'Native min_samples; omitted retains the installed function default.'),
+    ('leaf_size', 'Native leaf_size; omitted retains the installed function default.'),
+    ('batch', 'Exact obs batch field for mnc_correct; no invented batch labels.'),
+    ('n_iter', 'Native n_iter; omitted retains the installed function default.'),
+    ('groupby', 'Exact obs grouping field; native statistics retain supplied feature semantics.'),
+    ('pvalue', 'Native pvalue; omitted retains the installed function default.'),
+    ('cell_group1', 'Explicit ordered source cell names or indices for diff_test.'),
+    ('cell_group2', 'Explicit ordered source cell names or indices for diff_test.'),
+    ('covariates', 'Native covariates; omitted retains the installed function default.'),
+    ('direction', 'Native direction; omitted retains the installed function default.'),
+    ('min_log_fc', 'Native min_log_fc; omitted retains the installed function default.'),
+    ('min_pct', 'Native min_pct; omitted retains the installed function default.'),
+), 'Native AnnData features/spectral, graphs/embeddings and clustering; use_rep selects the actual embedding. mnc_correct needs supplied batches; marker_regions/diff_test return separate native statistics, not replicate-level DA. Non-inplace returns are in uns.agent_native_return. No automatic feature selection or embedding.')
 
 SIGNAC = MatrixPackage('Signac', '1.16.0', 'signac-1', {
     'RunSVD': ('assay', 'n', 'scale.embeddings', 'reduction.key', 'scale.max', 'verbose', 'irlba.work', 'tol'),
     'RunTFIDF': ('method', 'scale.factor', 'verbose'),
-    'BinarizeCounts': ('verbose',), 'FindTopFeatures': ('min.cutoff', 'verbose'),
+    'BinarizeCounts': ('verbose',),
+    'FindTopFeatures': ('min.cutoff', 'verbose'),
+    'corSparse': ('cov',),
 }, (
     ('assay', 'RunSVD assay name recorded by native DimReduc; no assay construction.'),
     ('n', 'RunSVD requested singular components; native clamps to cells minus one; cap 512.'),
     ('scale.embeddings', 'RunSVD native embedding scaling, default true.'),
     ('reduction.key', 'RunSVD native component key, default LSI_.'),
     ('scale.max', 'RunSVD optional symmetric clipping of scaled embeddings.'),
+    ('verbose', 'RunTFIDF progress; BinarizeCounts/FindTopFeatures matrix methods accept but ignore it.'),
     ('irlba.work', 'RunSVD native IRLBA work space, default n*3.'),
     ('tol', 'RunSVD native IRLBA convergence tolerance.'),
-    ('method', 'RunTFIDF native method 1/2/3/4; omitted uses 1. Not sklearn TF-IDF.'),
+    ('method', 'Native method for the selected function; omitted retains its installed default.'),
     ('scale.factor', 'RunTFIDF native scaling, default 10000; method-specific effect.'),
-    ('verbose', 'RunTFIDF progress; BinarizeCounts/FindTopFeatures matrix methods accept but ignore it.'),
     ('min.cutoff', 'FindTopFeatures matrix method accepts but ignores this assay-only selection argument; returns counts and percentile ranking, no filtering.'),
-), 'Signac RunSVD consumes the selected matrix as-is, publishes cell embeddings, feature loadings, standard deviations and native SVD misc; no automatic TF-IDF. Matrix methods: RunTFIDF transforms X; BinarizeCounts binarizes X; FindTopFeatures returns count/percentile statistics ranked by count, mapped by exact feature ID with native_rank retained. Matrix method does not select variable features or apply min.cutoff. No Seurat object or full LSI workflow.')
+    ('cov', 'corSparse: return covariance instead of correlation; native Y omitted (one source).'),
+), 'Native matrix RunTFIDF/BinarizeCounts transform X. RunSVD publishes LSI without automatic TF-IDF. FindTopFeatures maps ranked statistics to exact feature IDs; matrix method ignores min.cutoff. corSparse uses native features-by-cells X with Y omitted; ordered cell-by-cell correlation/covariance is obsp.Signac_corSparse. No Seurat object is fabricated.')
 
 SCANPY = MatrixPackage('scanpy', '1.9.8', 'episcanpy-0.4.0', {
     'tl.diffmap': ('n_comps', 'neighbors_key', 'random_state', 'copy'),
     'pp.scale': ('zero_center', 'max_value', 'copy', 'layer', 'obsm'),
+    'pp.calculate_qc_metrics': ('expr_type', 'var_type', 'qc_vars', 'percent_top', 'layer', 'use_raw', 'inplace', 'log1p', 'parallel'),
+    'pp.normalize_total': ('target_sum', 'exclude_highly_expressed', 'max_fraction', 'key_added', 'layer', 'layers', 'layer_norm', 'inplace', 'copy'),
+    'pp.log1p': ('base', 'copy', 'chunked', 'chunk_size', 'layer', 'obsm'),
+    'pp.highly_variable_genes': ('layer', 'n_top_genes', 'min_disp', 'max_disp', 'min_mean', 'max_mean', 'span', 'n_bins', 'flavor', 'subset', 'inplace', 'batch_key', 'check_values'),
+    'pp.pca': ('n_comps', 'zero_center', 'svd_solver', 'random_state', 'return_info', 'use_highly_variable', 'dtype', 'copy', 'chunked', 'chunk_size'),
+    'pp.neighbors': ('n_neighbors', 'n_pcs', 'use_rep', 'knn', 'random_state', 'method', 'metric', 'metric_kwds', 'key_added', 'copy'),
+    'tl.leiden': ('resolution', 'restrict_to', 'random_state', 'key_added', 'directed', 'use_weights', 'n_iterations', 'neighbors_key', 'obsp', 'copy'),
+    'tl.umap': ('min_dist', 'spread', 'n_components', 'maxiter', 'alpha', 'gamma', 'negative_sample_rate', 'init_pos', 'random_state', 'a', 'b', 'copy', 'method', 'neighbors_key'),
+    'tl.tsne': ('n_pcs', 'use_rep', 'perplexity', 'early_exaggeration', 'learning_rate', 'random_state', 'use_fast_tsne', 'n_jobs', 'copy', 'metric'),
+    'tl.paga': ('groups', 'use_rna_velocity', 'model', 'neighbors_key', 'copy'),
+    'tl.rank_genes_groups': ('groupby', 'use_raw', 'groups', 'reference', 'n_genes', 'rankby_abs', 'pts', 'key_added', 'copy', 'method', 'corr_method', 'tie_correct', 'layer'),
+    'tl.score_genes': ('gene_list', 'ctrl_size', 'gene_pool', 'n_bins', 'score_name', 'random_state', 'copy', 'use_raw'),
+    'tl.dpt': ('n_dcs', 'n_branchings', 'min_group_size', 'allow_kendall_tau_shift', 'neighbors_key', 'copy'),
 }, (
-    ('n_comps', 'diffmap native component count, default 15; execution cap 512.'),
-    ('neighbors_key', 'diffmap existing uns neighborhood key; default neighbors.'),
-    ('random_state', 'diffmap native random state, default 0.'),
-    ('copy', 'Native AnnData copy flag; source is always task-local.'),
-    ('zero_center', 'scale native centering, default true; sparse X centering materializes dense values.'),
+    ('n_comps', 'Native n_comps for the selected function; omitted retains its installed default.'),
+    ('neighbors_key', 'Existing uns neighborhood key for the selected native function.'),
+    ('random_state', 'Native random_state for the selected function; omitted retains its installed default.'),
+    ('copy', 'Native copy flag; returned AnnData is retained, source bytes stay immutable.'),
+    ('zero_center', 'pca/scale native centering; centered scale materializes sparse values.'),
     ('max_value', 'scale native clipping threshold; omission does not clip.'),
-    ('layer', 'scale exact existing layer instead of X.'),
-    ('obsm', 'scale exact existing obsm field instead of X.'),
-), 'Scanpy diffmap consumes the existing neighborhood graph and writes X_diffmap/diffmap_evals. scale transforms selected X, layer or obsm with native variance scaling and optional centering/clipping. No automatic neighbors or inferred preprocessing; installed native defaults remain authoritative.')
+    ('layer', 'Native layer for the selected function; omitted retains its installed default.'),
+    ('obsm', 'Native obsm for the selected function; omitted retains its installed default.'),
+    ('expr_type', 'Native expr_type; omitted retains the installed function default.'),
+    ('var_type', 'Native QC feature noun only, not biological qualification.'),
+    ('qc_vars', 'Existing boolean var annotation keys for native QC summaries.'),
+    ('percent_top', 'Native QC rank positions; omission retains installed defaults.'),
+    ('use_raw', 'Native use_raw; omitted retains the installed function default.'),
+    ('inplace', 'Native mutation flag; false preserves independent returns in uns.agent_native_return.'),
+    ('log1p', 'Native log1p; omitted retains the installed function default.'),
+    ('parallel', 'Native parallel; omitted retains the installed function default.'),
+    ('target_sum', 'normalize_total target library size; omitted uses the native median.'),
+    ('exclude_highly_expressed', 'normalize_total excludes high-expression features from normalization-factor calculation.'),
+    ('max_fraction', 'normalize_total native high-expression fraction threshold.'),
+    ('key_added', 'Native key_added for the selected function; omitted retains its installed default.'),
+    ('layers', 'normalize_total exact layer names or all; no external objects.'),
+    ('layer_norm', 'normalize_total layer scaling: null, after, or X.'),
+    ('base', 'log1p logarithm base; omission uses natural log.'),
+    ('chunked', 'pca/log1p native chunked processing flag.'),
+    ('chunk_size', 'pca/log1p native processing chunk size.'),
+    ('n_top_genes', 'Native n_top_genes; omitted retains the installed function default.'),
+    ('min_disp', 'Native min_disp; omitted retains the installed function default.'),
+    ('max_disp', 'Native max_disp; omitted retains the installed function default.'),
+    ('min_mean', 'Native min_mean; omitted retains the installed function default.'),
+    ('max_mean', 'Native max_mean; omitted retains the installed function default.'),
+    ('span', 'Native span; omitted retains the installed function default.'),
+    ('n_bins', 'Native n_bins; omitted retains the installed function default.'),
+    ('flavor', 'Native flavor; omitted retains the installed function default.'),
+    ('subset', 'Native highly_variable_genes subsetting; resulting feature positions and axes are retained.'),
+    ('batch_key', 'Native batch_key; omitted retains the installed function default.'),
+    ('check_values', 'Native check_values; omitted retains the installed function default.'),
+    ('svd_solver', 'pca installed native solver.'),
+    ('return_info', 'pca native return_info flag; AnnData results retain native slots.'),
+    ('use_highly_variable', 'pca uses the existing var highly_variable flag when requested.'),
+    ('dtype', 'pca native result dtype.'),
+    ('n_neighbors', 'neighbors native neighborhood size; omitted retains its installed default.'),
+    ('n_pcs', 'neighbors/tsne component count; native representation selection applies.'),
+    ('use_rep', 'Exact native representation selector; omission retains installed selection/default.'),
+    ('knn', 'neighbors hard nearest-neighbor threshold versus full kernel.'),
+    ('method', 'Native method for the selected function; omitted retains its installed default.'),
+    ('metric', 'neighbors/tsne native metric name; no executable callable.'),
+    ('metric_kwds', 'neighbors JSON metric options; no executable callbacks.'),
+    ('resolution', 'leiden native clustering resolution.'),
+    ('restrict_to', 'Native restrict_to; omitted retains the installed function default.'),
+    ('directed', 'Native directed; omitted retains the installed function default.'),
+    ('use_weights', 'Native use_weights; omitted retains the installed function default.'),
+    ('n_iterations', 'leiden native iterations, -1 until convergence; cap 1000 positive iterations.'),
+    ('obsp', 'Native obsp; omitted retains the installed function default.'),
+    ('min_dist', 'umap native min_dist; omitted uses installed default.'),
+    ('spread', 'umap native spread; omitted uses installed default.'),
+    ('n_components', 'Native n_components for the selected function; omitted retains its installed default.'),
+    ('maxiter', 'umap native maxiter; omitted uses installed default.'),
+    ('alpha', 'Native alpha; omitted retains the installed function default.'),
+    ('gamma', 'umap native gamma; omitted uses installed default.'),
+    ('negative_sample_rate', 'umap native negative_sample_rate; omitted uses installed default.'),
+    ('init_pos', 'umap native init_pos; omitted uses installed default.'),
+    ('a', 'umap native a; omitted uses installed default.'),
+    ('b', 'umap native b; omitted uses installed default.'),
+    ('perplexity', 'tsne native perplexity.'),
+    ('early_exaggeration', 'tsne native early exaggeration.'),
+    ('learning_rate', 'tsne native learning rate; omitted retains its installed default.'),
+    ('use_fast_tsne', 'tsne native implementation choice; no adapter substitution.'),
+    ('n_jobs', 'tsne native worker count; execution cap 16.'),
+    ('groups', 'Native groups; omitted retains the installed function default.'),
+    ('use_rna_velocity', 'Native use_rna_velocity; omitted retains the installed function default.'),
+    ('model', 'Native model; omitted retains the installed function default.'),
+    ('groupby', 'Exact obs grouping field; native statistics retain supplied feature semantics.'),
+    ('reference', 'Native reference; omitted retains the installed function default.'),
+    ('n_genes', 'Native n_genes; omitted retains the installed function default.'),
+    ('rankby_abs', 'Native rankby_abs; omitted retains the installed function default.'),
+    ('pts', 'Native pts; omitted retains the installed function default.'),
+    ('corr_method', 'Native corr_method; omitted retains the installed function default.'),
+    ('tie_correct', 'Native tie_correct; omitted retains the installed function default.'),
+    ('gene_list', 'Exact supplied feature IDs for score_genes; the native name does not establish gene annotation.'),
+    ('ctrl_size', 'Native ctrl_size; omitted retains the installed function default.'),
+    ('gene_pool', 'Exact background feature IDs for score_genes.'),
+    ('score_name', 'Native score_name; omitted retains the installed function default.'),
+    ('n_dcs', 'dpt diffusion component count; existing uns.iroot identifies the supplied root cell.'),
+    ('n_branchings', 'dpt native branching count.'),
+    ('min_group_size', 'dpt minimum group fraction or size.'),
+    ('allow_kendall_tau_shift', 'dpt native branching behavior.'),
+), 'Native AnnData QC, normalization/log/scale, variable features, PCA/graphs, clustering/embeddings, PAGA, feature ranking/scoring and DPT. Non-inplace returns are separate in uns.agent_native_return; subset records exact source positions. Names such as genes retain supplied feature meaning. Native defaults and internal representation selection apply; no Agent-added preprocessing.')
 
 PACKAGES = (EPISCANPY, SNAPATAC2, SIGNAC, SCANPY)

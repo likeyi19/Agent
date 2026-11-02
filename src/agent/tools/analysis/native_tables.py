@@ -92,14 +92,18 @@ class TablePackage:
         if args.get('seed') is not None and (self.package != 'cicero' or name != 'generate_ccans'
                 or type(args['seed']) is not int or not 0 <= args['seed'] <= 2147483647):
             raise ValueError('R seed applies to generate_ccans and must fit a native integer')
-        if name != 'bdgcmp' and (args.get('control_path') or args.get('control_semantics') or args.get('control_sha256')):
-            raise ValueError('Control input is used only by bdgcmp')
+        if name not in ('bdgcmp', 'cmbreps') and (args.get('control_path') or args.get('control_semantics') or args.get('control_sha256')):
+            raise ValueError('The second track is used only by bdgcmp/cmbreps')
+        if type(kw.get('threads')) in (int,float) and kw['threads'] > 16:
+            raise ValueError('Native threads exceeds execution bound 16')
+        if type(kw.get('buffer-size')) in (int,float) and kw['buffer-size'] > 10_000_000:
+            raise ValueError('Native parser buffer exceeds execution bound')
         return kw
 
     def parameter_prerequisites(self, args):
         if self.package != 'MACS3':
             return ()
-        return ('control_path',) if args.get('function_name') == 'bdgcmp' and not args.get('control_path') else ()
+        return ('control_path',) if args.get('function_name') in ('bdgcmp', 'cmbreps') and not args.get('control_path') else ()
 
     def native(self, args, stage):
         kw = self.native_arguments(args); name = args['function_name']
@@ -113,10 +117,12 @@ class TablePackage:
             command = [str(executable), name]
             if name == 'bdgcmp':
                 command += ['--tfile', str(stage / 'input.tsv'), '--cfile', str(stage / 'control.tsv')]
+            elif name == 'cmbreps':
+                command += ['-i', str(stage / 'input.tsv'), str(stage / 'control.tsv')]
             else:
                 command += ['--ifile', str(stage / 'input.tsv')]
             for key, value in kw.items():
-                if key == 'no-trackline':
+                if key in ('no-trackline', 'both-direction'):
                     if type(value) is not bool:
                         raise ValueError('CLI switch requires a boolean')
                     if value:
@@ -183,7 +189,7 @@ class TablePackage:
                     if Path(args[key]).stat().st_size > 256 * 1024**2:
                         raise ValueError('Native table exceeds 256 MiB execution bound')
                     shutil.copyfile(args[key], stage / target)
-                    if self.package == 'MACS3':
+                    if self.package == 'MACS3' and args['function_name'] not in ('pileup', 'filterdup'):
                         bedgraph(stage / target)
             receipt = self.native(args, stage)
             result_format, measurement = self.output_semantics(args)
@@ -200,6 +206,12 @@ class TablePackage:
                     if not rows or rows[0] != header or any(len(r) != 2 for r in rows[1:]):
                         raise AuthorityError('Invalid native CCAN table')
                     n_rows = len(rows) - 1
+                elif args['function_name'] == 'filterdup':
+                    widths = {len(r) for r in rows}
+                    if not widths <= {3, 6} or len(widths) > 1:
+                        raise AuthorityError('Unrepresented native read output')
+                    result_format = 'MACS3 BEDPE' if widths == {3} else 'BED6' if widths else 'native_read_intervals (empty)'
+                    n_rows = len(rows)
                 else:
                     expected = 10 if result_format == 'narrowPeak' else 15
                     if any(len(r) != expected or not 0 <= int(r[1]) < int(r[2]) for r in rows):
@@ -231,6 +243,12 @@ class TablePackage:
         name = args['function_name']; kw = args.get('kwargs', {})
         if self.package == 'cicero':
             return 'TSV', 'native_CCAN_membership' if name == 'generate_ccans' else 'native_genomic_CCAN_overlaps'
+        if name == 'pileup':
+            return 'bedGraph', 'native_read_fragment_pileup'
+        if name == 'filterdup':
+            return 'native_read_intervals', 'native_duplicate_filtered_reads_or_pairs'
+        if name == 'cmbreps':
+            return 'bedGraph', 'MACS3_' + str(kw.get('method', 'fisher')) + '_combined_tracks'
         if name == 'bdgcmp':
             return 'bedGraph', 'MACS3_' + str(kw.get('method', 'ppois')) + '_comparison'
         if name == 'bdgopt':
@@ -247,12 +265,25 @@ class TablePackage:
 
 
 MACS3 = TablePackage('MACS3', '3.1.0', {
+    'cmbreps': ('method', 'verbose'),
+    'pileup': ('format', 'max-count', 'both-direction', 'extsize', 'buffer-size', 'threads', 'verbose'),
+    'filterdup': ('format', 'gsize', 'tsize', 'pvalue', 'keep-dup', 'buffer-size', 'threads', 'verbose'),
     'bdgopt': ('method', 'extra-param', 'verbose'),
     'bdgcmp': ('method', 'scaling-factor', 'pseudocount', 'verbose'),
     'bdgpeakcall': ('cutoff', 'min-length', 'max-gap', 'no-trackline', 'verbose'),
     'bdgbroadcall': ('cutoff-peak', 'cutoff-link', 'min-length', 'lvl1-max-gap', 'lvl2-max-gap', 'no-trackline', 'verbose'),
 }, (
-    ('method', 'bdgopt multiply/add/max/min/p2q; bdgcmp one ppois/qpois/subtract/logFE/FE/logLR/slogLR/max method. Native defaults omitted.'),
+    ('format', 'Native alignment format; BEDPE/FRAG are MACS formats, not generic matrices.'),
+    ('max-count', 'pileup native FRAG multiplicity limit.'),
+    ('both-direction', 'pileup native bidirectional extension switch.'),
+    ('extsize', 'pileup native read extension in bases.'),
+    ('buffer-size', 'Native parser allocation increment.'),
+    ('threads', 'Native CPU budget; execution cap 16.'),
+    ('gsize', 'filterdup native effective genome size or installed alias.'),
+    ('tsize', 'filterdup explicit native tag size.'),
+    ('pvalue', 'filterdup native binomial cutoff.'),
+    ('keep-dup', 'filterdup native duplicate handling: auto, all or count.'),
+    ('method', 'cmbreps fisher/max/mean; bdgopt multiply/add/max/min/p2q; bdgcmp one ppois/qpois/subtract/logFE/FE/logLR/slogLR/max method. Native defaults omitted.'),
     ('extra-param', 'bdgopt native numeric extra parameter (scalar or numeric list).'),
     ('scaling-factor', 'bdgcmp scales treatment and control, native default 1.'),
     ('pseudocount', 'bdgcmp native pseudocount after depth normalization, default 0.'),
@@ -265,7 +296,8 @@ MACS3 = TablePackage('MACS3', '3.1.0', {
     ('lvl2-max-gap', 'bdgbroadcall linking gap in bases, default 800.'),
     ('no-trackline', 'Native boolean output trackline switch.'),
     ('verbose', 'Native diagnostic verbosity, default 2.'),
-), 'MACS3 independent bedGraph bdgopt/bdgcmp/bdgpeakcall/bdgbroadcall. Sorted continuous zero-based half-open tracks preserve the native interval representation; native first-interval zero baseline applies. Score/assembly declarations are optional. p2q interprets -log10 p-values; ppois/qpois interpret treatment pileup and expected counts. No unrelated workflow or reference qualification.')
+), 'MACS3 bedGraph operations and native read pileup/filterdup. cmbreps combines exactly two authorized tracks (dataset/control); fisher expects -log10 p-values. pileup consumes real alignment/read formats; filterdup returns native BED6 or MACS BEDPE. bedGraph inputs require continuous within-chromosome intervals to prevent parser coordinate changes. No callpeak duplication or replicate-level DA claim.')
+
 
 CICERO = TablePackage('cicero', '1.28.3', {
     'generate_ccans': ('coaccess_cutoff_override', 'tolerance_digits'),

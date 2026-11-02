@@ -284,7 +284,7 @@ def test_new_package_needs_no_fabricated_historical_profile():
     assert grown.PROFILE == package.PROFILE
     for existing in (owner.EPISCANPY, owner.SIGNAC, owner.SNAPATAC2):
         assert owner.HISTORICAL_PROFILES[existing.package] in existing.publication.historical_profiles
-        assert len(existing.publication.historical_profiles) == 2
+        assert len(existing.publication.historical_profiles) == 3
 
 
 def test_lsi_preserves_native_layer_values_without_numerical_prevalidation(source, tmp_path):

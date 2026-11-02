@@ -457,3 +457,118 @@ checks; CellDataSet construction retains the native data-frame identity rules.
 Cicero overlap calls honor the native first-two-column convention and permit
 extra ordinary columns; native required-column and numerical checks are not
 duplicated by Agent.
+
+## STE-NFI-1F: current native API coverage
+
+The catalog now has **66 distinct package-qualified native functions**, an increase
+of **31**, through the same **43 Registry tools**. No additional motifmatchr output
+mode is exposed. Earlier sections describe their original qualification scope;
+this section records the current additions.
+
+| Installed package | Added functions | Representation |
+| --- | --- | --- |
+| Scanpy 1.9.8 | `pp.calculate_qc_metrics`, `pp.normalize_total`, `pp.log1p`, `pp.highly_variable_genes`, `pp.pca`, `pp.neighbors`, `tl.leiden`, `tl.umap`, `tl.tsne`, `tl.paga`, `tl.rank_genes_groups`, `tl.score_genes`, `tl.dpt` | Native AnnData annotations, transformed measurements, reductions, graphs and statistics; independent returns retained separately |
+| epiScanpy 0.4.0 | `tl.leiden`, `tl.louvain`, `tl.kmeans`, `tl.hc`, `tl.rank_features` | Native graph/PCA clustering and structured feature rankings |
+| SnapATAC2 2.9.0 | `tl.dbscan`, `pp.mnc_correct`, `tl.marker_regions`, `tl.diff_test` | Native labels/corrected embeddings; independent region lists and statistical table |
+| chromVAR 1.32.0 | `getTotalFragments`, `getSampleCorrelation`, `getSampleDistance`, `differentialDeviations`, `differentialVariability` | Scalar, ordered cell-by-cell table, or ordered feature statistics |
+| Signac 1.16.0 | `corSparse` | Native Y omitted: cell-by-cell correlation/covariance in `obsp.Signac_corSparse` |
+| MACS3 3.1.0 | `cmbreps`, `pileup`, `filterdup` | Two authorized bedGraph inputs, native read pileup, or native BED6/MACS BEDPE output |
+
+Use the existing package interface with the exact function and native kwargs, for
+example `run_scanpy`, `function_name="pp.pca"`,
+`kwargs={"n_comps":8,"random_state":7}`. For graph construction explicitly select
+`use_rep="X_pca"` when that is the intended input. Agent inserts no normalization,
+filtering, reduction or graph. Native internal defaults and representation
+selection still apply. Only reviewed kwargs are supported, not arbitrary callbacks,
+input objects or file destinations. Structured JSON remains bounded to 128 entries
+per vector and the existing request-size limits.
+
+`copy` retains returned AnnData. Non-inplace returns are stored in
+`uns.agent_native_return`, with their native type and actual data; they do not
+replace X or pretend to mutate scientific slots. QC returns retain their cell and
+feature tables. Scanpy normalization returns retain X/layer arrays and normalization
+factors separately. Variable-feature return tables preserve interval categories as
+codes plus exact left/right bounds, closure, order and original column order.
+Native feature rankings retain AnnData record-array encodings. Native function and
+column names containing “genes” do not establish gene annotation for supplied peaks.
+
+Native variable-feature subsetting records exact source positions in the receipt
+and H5AD provenance, including duplicate feature labels. Retained X is checked
+against those source positions; an axis change is not admitted for an unrelated
+function. The matrix adapter has a new representation profile; prior profiles remain
+read-only with their exact historical interpretation and download authority. Catalog
+additions alone do not change profiles. Source bytes and accepted history remain
+immutable. Nonfinite native statistics remain nonfinite. Reuploaded downloads can
+be analyzed and downloaded again: the shared export owner refreshes only its
+reserved delivery marker in the derivative, pinning the exact accepted source
+bytes. Earlier export metadata never grants scientific authority. Embedding-only
+native results may omit X. Safe record-array statistics retain their data;
+private string fields still pass through the existing privacy projection.
+
+chromVAR sample/differential functions use supplied deviations X and `z_scores`,
+without inventing scores or backgrounds. Differential calls take `group_key` from
+actual obs. Correlation/distance use deviations with z-score variability selection;
+`differentialDeviations` tests deviations and `differentialVariability` tests
+z scores. Sample tables use `source_index`/`source_id` rows and `cell_0`, `cell_1`,
+… columns whose order is exactly `cells.tsv`. Native `dist` is expanded to its
+ordered square matrix. `getTotalFragments` returns one scalar `value`. These totals
+retain supplied measurement semantics; neither totals nor deviation comparisons
+become independent-molecule counts or replicate-level accessibility inference.
+Signac `corSparse` receives features-by-cells and omits Y; a second matrix is not
+silently created. Its dense native values use lossless sparse storage in H5AD.
+Sample similarity allocations are bounded to 16 million elements.
+
+MACS3 `cmbreps` currently takes exactly two tracks through the existing dataset and
+control ports; `fisher` expects native -log10 p-values. `pileup` and `filterdup`
+receive actual read/alignment files with explicitly requested format where needed.
+MACS BEDPE is the package's three-column fragment representation. Output file bytes
+remain pinned; downloads use the existing privacy projection, retaining bare `+`/`-`
+strand fields. Genome-size aliases and other omitted settings are native defaults,
+not inferred references. No second peak-calling workflow is introduced.
+
+The isolated epiScanpy/Scanpy environment adds pinned `igraph==0.11.9`,
+`leidenalg==0.10.2`, `louvain==0.8.2` and `texttable==1.7.0`; the existing lock records
+them. Other installed packages were not upgraded. The original scientific package
+versions remain unchanged. These optional graph dependencies retain their own
+licenses, including GPL terms for igraph/Leiden/Louvain.
+
+### Reviewed limits
+
+- SnapATAC2 `tl.kmeans` is not exposed: float64 reaches an unimplemented Rust path;
+  float32 is rejected by the installed binding. `tl.hdbscan` and `pp.harmony` need
+  absent optional dependencies. No method or dtype is substituted. Fragment-backed
+  peak/gene matrix operations require genuine native fragment storage and exact
+  genomic relationships; a generic peak-count matrix does not supply them.
+- epiScanpy `tl.diffmap` remains unexposed because of the documented upstream wrapper
+  defect. `tl.rank_features` retains its own method overrides and errors; it is not
+  a transparent alias for arbitrary Scanpy ranking settings. `pp.variability_features`
+  also creates a native plot and ignores its `show` flag; no incomplete plot-result
+  adapter is advertised here.
+- chromVAR `getSampleDepths` needs alignment-file ports, not counts; background
+  selection needs actual supplied bias. Those inputs are not fabricated.
+- motifmatchr scores/positions are inspected but remain unsupported. Scores contain
+  distinct match/score/count assays; positions require native genomic ranges and
+  motif associations. The existing boolean-match contract is not reused for them.
+- Cicero `make_sparse_matrix` is not exported in 1.28.3. Gene activity requires an
+  original accessibility CDS with actual `fData$gene`, exact connection-table input,
+  and separately named normalization metadata. The aggregated CDS exchange does not
+  establish those meanings; no new Cicero function is claimed.
+- Signac `Jaccard` requires two explicit matrices; no two-source matrix port is
+  introduced. Seurat/ChromatinAssay operations require their actual object content.
+  `FitMeanVar` and `PearsonResidualVar` are absent from 1.16.0.
+- MACS3 `bdgdiff` and more-than-two-track `cmbreps` remain unsupported: four-role
+  signal binding/multiple outputs or a bounded multi-track port are not implemented.
+- ArchR and pycisTopic are not installed or executable. Real Arrow/project ownership
+  and native topic/model state remain necessary. pycisTopic's upstream internal
+  academic-use and redistribution restrictions do not authorize general hosted use.
+
+The detailed planning fixtures measure **83,991 / 85,829 / 86,450 / 92,080 bytes**,
+within the unchanged **96 KiB** maintenance budget. Interpretation is separately
+**116,381 prompt + 99,015 schema = 215,396 bytes** for the same baseline fixture;
+most growth is the scientific-parameter catalog. These are maintenance measurements,
+not universal provider limits.
+
+The [STE-NFI-1F report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1f/REPORT.md)
+records actual native parity, historical recovery, Firefox/OpenAI acceptance and
+provider failures. Coverage does not imply full-package, biological or universal
+provider qualification.

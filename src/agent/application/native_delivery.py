@@ -94,7 +94,7 @@ def prepare(stream, role):
                     float(text); numeric = True
                 except ValueError:
                     numeric = False
-                if _unsafe_fact_value(text) or not numeric and text.startswith(('=', '+', '-', '@')):
+                if _unsafe_fact_value(text) or not numeric and text not in ('+', '-') and text.startswith(('=', '+', '-', '@')):
                     row[i] = PRIVATE_LABEL
         target = io.StringIO(); csv.writer(target, delimiter='\t').writerows(rows); raw = target.getvalue().encode()
     return raw

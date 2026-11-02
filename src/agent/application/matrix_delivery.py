@@ -418,7 +418,7 @@ def _string_block(item, left, right):
 
 def _private_metadata(item, *, recurse=True):
     """Inspect metadata only; scientific arrays are never interpreted as text."""
-    from agent.tools.analysis.peak_h5ad import _PATH, strings
+    from agent.tools.analysis.peak_h5ad import _PATH, strings, record_strings
     def private(text):
         return _PATH.search(text) or any(ord(c) < 32 for c in text)
     # A typed provenance key such as dependencies/analysis_path is not itself
@@ -436,6 +436,13 @@ def _private_metadata(item, *, recurse=True):
         selections = [()] if item.ndim == 0 else (
             slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
         return any(private(text) for selection in selections for text in strings(item, selection))
+    if item.dtype.names:
+        for field in item.dtype.names:
+            if private(field):
+                return True
+            if h5py.check_string_dtype(item.dtype.fields[field][0]) is not None:
+                if any(private(text) for text in record_strings(item, field)):
+                    return True
     return False
 
 

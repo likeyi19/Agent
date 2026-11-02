@@ -60,7 +60,7 @@ def create_statistical_export(source_stream, destination_stream, manifest, *, so
     from .native_delivery import definitions
     native_h5ad = any(name == manifest['tool_name'] and spec.h5ad_roles for name, spec in definitions())
     matrix._reject(manifest['tool_name'] not in TOOLS and not native_h5ad or not 0 < max_bytes <= matrix.MAX_MATRIX_BYTES)
-    require_matrix = native_h5ad or manifest['tool_name'] == 'build_replicate_pseudobulk'
+    require_matrix = manifest['tool_name'] == 'build_replicate_pseudobulk'
     destination_stream.seek(0, 2)
     matrix._reject(destination_stream.tell() != 0)
     with h5py.File(source_stream, 'r') as source:
@@ -91,7 +91,13 @@ def create_statistical_export(source_stream, destination_stream, manifest, *, so
         with h5py.File(io._BoundedDestination(destination_stream, max_bytes), 'w') as target:
             matrix._copy(source, target, omitted)
             uns = target.require_group('uns')
-            matrix._reject(io.EXPORT_KEY in uns)
+            # A researcher may upload an earlier privacy export. Its delivery
+            # marker is not scientific authority for this new accepted result.
+            # Refresh only that reserved marker in the derivative; exact prior
+            # bytes remain pinned by source_sha256 and are never rewritten.
+            if io.EXPORT_KEY in uns:
+                del uns[io.EXPORT_KEY]
+                metadata['supersedes_supplied_export_marker'] = True
             io._write_metadata(uns.create_group(io.EXPORT_KEY), metadata)
     destination_stream.flush(); destination_stream.seek(0)
     inspect(destination_stream, privacy=True, require_matrix=require_matrix)

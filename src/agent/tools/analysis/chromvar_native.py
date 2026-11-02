@@ -28,12 +28,22 @@ HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, functions=['computeExpectati
 PROFILE = digest(dict(contract=CONTRACT, adaptation='ordered numeric matrix; native numerical validation; recorded deviations and z scores.v2'))
 VERIFIER = dict(id='agent.chromvar-function-completion', compatibility_version='1')
 FUNCTIONS = {
+    'getTotalFragments': (),
+    'getSampleCorrelation': ('threshold',),
+    'getSampleDistance': ('threshold', 'initial_dims'),
+    'differentialDeviations': ('alternative', 'parametric'),
+    'differentialVariability': ('parametric',),
     'computeExpectations': ('norm',),
     'getFragmentsPerPeak': (),
     'getFragmentsPerSample': (),
     'computeVariability': ('bootstrap_error','bootstrap_samples','bootstrap_quantiles','na.rm'),
 }
+DEVIATION_FUNCTIONS = ('computeVariability', 'getSampleCorrelation', 'getSampleDistance', 'differentialDeviations', 'differentialVariability')
 NATIVE_ARGUMENTS = (
+    ('threshold', 'Native variability threshold for sample correlation/distance.'),
+    ('initial_dims', 'Native distance PCA dimensions; no supplied executable distance function.'),
+    ('alternative', 'differentialDeviations native alternative hypothesis.'),
+    ('parametric', 'Native deviation/variability test choice; not replicate-level accessibility inference.'),
     ('norm','computeExpectations: native per-cell normalization; omitted uses native FALSE.'),
     ('bootstrap_error','computeVariability: native bootstrap confidence bounds; omitted uses TRUE.'),
     ('bootstrap_samples','computeVariability: native bootstrap resamples; omitted uses 1000; execution cap 10000.'),
@@ -42,7 +52,7 @@ NATIVE_ARGUMENTS = (
 )
 LIMITATIONS = ('Native functions are independent calls, with no filtering, motif scanning, background generation or workflow completion. '
     'Count totals retain the supplied measurement and are not independent molecules. Expectations retain the installed native norm/group behavior. '
-    'Variability uses chromVAR z scores across supplied cells; native chi-square/BH statistics are not replicate-level condition tests, TF binding or biological validation. '
+    'computeVariability uses chromVAR z scores across supplied cells; its native chi-square/BH statistics are not replicate-level condition tests, TF binding or biological validation. '
     'Undefined native numbers remain explicit. The requested invocation assigns supplied X and z_scores to native deviations and z assays; their upstream scientific origin is not independently verified. '
     'Omitted kwargs use native defaults. Bootstrap results without an explicit seed do not promise reproducibility.')
 FACT_FIELDS = ('function_name','n_cells','n_features','result_rows','result_columns','result_axis','native_output_type',
@@ -92,8 +102,8 @@ def native_arguments(args):
         raise ValueError('Explicit R seed must be an integer from 0 to 2147483647')
     if function != 'computeVariability' and seed is not None:
         raise ValueError('Seed applies only to computeVariability')
-    if function != 'computeExpectations' and args.get('group_key') is not None:
-        raise ValueError('group_key applies only to computeExpectations')
+    if function not in ('computeExpectations', 'differentialDeviations', 'differentialVariability') and args.get('group_key') is not None:
+        raise ValueError('group_key applies only to expectations or differential deviations/variability')
     return kwargs
 
 
@@ -115,11 +125,11 @@ def prepare_input(args,stage):
             raise ValueError('R exchange axis labels cannot contain TSV delimiters')
         cell_table = pd.DataFrame(dict(source_index=np.arange(len(cells)),cell_id=cells))
         feature_table = pd.DataFrame(dict(source_index=np.arange(len(features)),feature_id=features))
-        if args['function_name'] == 'computeVariability':
+        if args['function_name'] in DEVIATION_FUNCTIONS:
             if args.get('count_slot') is not None or args.get('matrix_semantics') is not None:
-                raise ValueError('Variability consumes recorded deviations and z_scores, not a declared count slot')
+                raise ValueError('This function consumes supplied deviations and z_scores, not a declared count slot')
             if 'X' not in handle or 'layers/z_scores' not in handle:
-                raise ValueError('computeVariability requires supplied X deviations and the z_scores layer')
+                raise ValueError('This native deviation function requires supplied X deviations and the z_scores layer')
             for slot,target in [('X','deviations.bin'),('layers/z_scores','z.bin')]:
                 matrix = read_elem(handle[slot])
                 if not isinstance(matrix,np.ndarray) or matrix.shape!=(len(cells),len(features)) or matrix.dtype.kind not in 'fi':
@@ -130,7 +140,9 @@ def prepare_input(args,stage):
                 if any(not isinstance(s,str) or any(c in s for c in '\t\r\n') for s in names):
                     raise ValueError('Native motif names must be bounded TSV strings')
                 feature_table['name']=names
-            effective=dict(args,measurement='supplied_chromVAR_z_assay')
+            effective=dict(args,measurement=('supplied_chromVAR_z_assay'
+                if args['function_name'] in ('computeVariability', 'differentialVariability')
+                else 'supplied_chromVAR_deviations_with_z_assay'))
         else:
             effective=declarations(handle,args)
             # Count-only functions do not require genome/coordinate declarations.
@@ -144,11 +156,13 @@ def prepare_input(args,stage):
             x=peak_h5ad.read_native_matrix(matrix)
             mmwrite(stage/'counts.mtx',x.T.tocsc())
             effective['measurement']=effective.get('matrix_semantics', 'unspecified_measurement')
-            if args.get('group_key') is not None:
-                values=obs[args['group_key']].tolist()
-                if any(not isinstance(s,str) or not s or any(c in s for c in '\t\r\n') for s in values):
-                    raise ValueError('Native grouping requires supplied nonmissing text labels in exact cell order')
-                cell_table['group']=values
+        if args.get('group_key') is not None:
+            values=obs[args['group_key']].tolist()
+            if any(not isinstance(s,str) or not s or any(c in s for c in '\t\r\n') for s in values):
+                raise ValueError('Native grouping requires supplied nonmissing text labels in exact cell order')
+            cell_table['group']=values
+        if args['function_name'] in ('getSampleCorrelation', 'getSampleDistance') and len(cells)**2 > 16_000_000:
+            raise ValueError('Native sample matrix exceeds the 16000000-element execution bound')
         cell_table.to_csv(stage/'cells.tsv',sep='\t',index=False)
         feature_table.to_csv(stage/'features.tsv',sep='\t',index=False)
     return effective,len(cells),len(features)
@@ -190,12 +204,20 @@ def execute(values,execution_identity=None):
         stage=Path(temp);effective,n,m=prepare_input(args,stage)
         receipt=native(effective,stage)
         table=pd.read_csv(stage/'result.tsv',sep='\t',keep_default_na=False,dtype={'source_id':str})
-        axis='cells' if args['function_name']=='getFragmentsPerSample' else 'features'
-        axes=pd.read_csv(stage/(axis+'.tsv'),sep='\t',keep_default_na=False,dtype={'cell_id':str,'feature_id':str})
-        if (receipt['input_dim']!=[m,n] or receipt['rows']!=len(table) or receipt['columns']!=list(table)
-                or table['source_id'].tolist()!=axes['cell_id' if axis=='cells' else 'feature_id'].tolist()
-                or table['source_index'].tolist()!=list(range(len(axes)))):
-            raise AuthorityError('Native result and exact ordered input axes differ')
+        axis = receipt['result_axis']
+        if receipt['input_dim'] != [m,n] or receipt['rows'] != len(table) or receipt['columns'] != list(table):
+            raise AuthorityError('Native result shape differs from its completion receipt')
+        if axis == 'scalar':
+            if len(table) != 1 or list(table) != ['value']:
+                raise AuthorityError('Invalid native scalar representation')
+        else:
+            axis_file = 'cells' if axis in ('cells', 'cells_by_cells') else 'features'
+            axes = pd.read_csv(stage/(axis_file+'.tsv'), sep='\t', keep_default_na=False, dtype={'cell_id':str,'feature_id':str})
+            if (table['source_id'].tolist() != axes['cell_id' if axis_file=='cells' else 'feature_id'].tolist()
+                    or table['source_index'].tolist() != list(range(len(axes)))):
+                raise AuthorityError('Native result and exact ordered input axes differ')
+            if axis == 'cells_by_cells' and list(table)[2:] != ['cell_' + str(i) for i in range(n)]:
+                raise AuthorityError('Native matrix columns differ from ordered cells.tsv')
         for name in ('result.tsv','cells.tsv','features.tsv'):
             shutil.copyfile(stage/name,root/name)
         summary=dict(status='success',contract_version=CONTRACT,function_name='chromVAR::'+args['function_name'],

@@ -26,6 +26,17 @@ def strings(item, selection):
     return result
 
 
+def record_strings(item, field):
+    """Bounded flat-record string decoding shared by storage and privacy walks."""
+    bounded = item.astype(np.dtype([(field, 'S65537')]))
+    for start in range(0, len(item), 64):
+        for raw in bounded[start:start+64][field]:
+            raw = bytes(raw)
+            if len(raw) > 65536:
+                raise ValueError('H5AD string exceeds 65536-byte limit')
+            yield raw.decode('utf-8', errors='strict')
+
+
 def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True,
             max_logical_bytes=MAX_LOGICAL_BYTES):
     """Reject indirect storage, unsafe filters and excessive allocations."""
@@ -82,6 +93,23 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                                 raise ValueError('Private locator or control character in H5AD metadata')
                 elif item.dtype.kind in 'biuf':
                     size += (item.size or 0) * item.dtype.itemsize
+                elif item.dtype.names and item.ndim == 1 and len(item.dtype.names) <= 128:
+                    # AnnData rank statistics use flat record arrays with one
+                    # numeric/string field per group. No references, nested
+                    # objects or variable-length numeric arrays are admitted.
+                    for field in item.dtype.names:
+                        dtype = item.dtype.fields[field][0]
+                        if privacy and _PATH.search(field):
+                            raise ValueError('Private locator in H5AD record field')
+                        if dtype.kind in 'biuf':
+                            size += item.size * dtype.itemsize
+                        elif h5py.check_string_dtype(dtype) is not None:
+                            for text in record_strings(item, field):
+                                size += len(text.encode('utf-8')) + 8
+                                if privacy and (_PATH.search(text) or any(ord(c)<32 for c in text)):
+                                    raise ValueError('Private locator or control character in H5AD record')
+                        else:
+                            raise ValueError('Unsupported H5AD record field dtype')
                 else:
                     raise ValueError('Unsupported H5AD value dtype')
                 if max_logical_bytes is not None and size > max_logical_bytes:

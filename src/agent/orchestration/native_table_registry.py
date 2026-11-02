@@ -11,7 +11,7 @@ def tool_spec(owner):
         _planning_result, _tool_planning, _semantic_member as member, _semantic_request as request,
         _semantic_request_member as rm, _semantic_argument_port as scalar)
     from .native_delivery import delivery_spec
-    required = dict(input_path=arg((str, Path), 'Exact native genomic table; ordinary attachment or compatible accepted table.',
+    required = dict(input_path=arg((str, Path), 'Exact genomic table or native read/alignment file; ordinary attachment or compatible accepted table.',
         artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         output_dir=arg((str, Path), 'Managed native publication destination.'),
         function_name=arg((str,), 'Explicit native function or CLI subcommand.', choices=tuple(owner.FUNCTIONS),
@@ -20,7 +20,7 @@ def tool_spec(owner):
         kwargs=arg((dict,), 'Exact native arguments; input files and output locations are bound separately.',
             scientific_parameter=True, conversational_json_object=True, conversational_members=owner.NATIVE_ARGUMENTS))
     if owner.package == 'MACS3':
-        optional.update(control_path=arg((str, Path), 'bdgcmp exact control bedGraph.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+        optional.update(control_path=arg((str, Path), 'bdgcmp control or cmbreps second exact bedGraph.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
             control_sha256=arg((str,), 'Captured control checksum.'),
             signal_semantics=arg((str,), 'Optional supplied score meaning. Native methods interpret the numerical scores.', scientific_parameter=True, conversational_exact_string=True),
             control_semantics=arg((str,), 'Optional supplied control score meaning.', scientific_parameter=True, conversational_exact_string=True),

@@ -660,6 +660,13 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
+STE-NFI-1F expands native coverage to **66 package-qualified functions** across
+six expanded package families, with the same **43 Registry tools**. Native
+non-inplace returns, feature subsets, statistics and similarity matrices keep
+their actual values and source relationships. See the [native guide](docs/guides/native-functions.md#ste-nfi-1f-current-native-api-coverage)
+and [acceptance report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1f/REPORT.md)
+for supported kwargs, installed-runtime limits and bounded Web qualification.
+
 STE-NFI-1E adds native PCA, neighbors, diffusion/pseudotime, t-SNE/UMAP,
 scaling and a focused Cicero CellDataSet exchange (43 Registry tools).
 Ordinary native inputs no longer require redundant measurement certificates or

@@ -37,6 +37,7 @@ def native(monkeypatch):
         table.to_csv(stage/'result.tsv',sep='\t',index=False)
         return dict(completion='succeeded',input_dim=[len(features),len(cells)],rows=len(table),columns=list(table),
             native_output_type='data.frame' if function=='computeVariability' else 'numeric',undefined_values=0,
+            result_axis='cells' if function=='getFragmentsPerSample' else 'features',
             versions={'chromVAR':'SIMULATED'},implementation=[])
     monkeypatch.setattr(owner,'native',invoke)
     return calls

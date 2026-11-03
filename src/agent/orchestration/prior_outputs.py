@@ -400,7 +400,11 @@ def validate_active_outputs(locators, store, registry):
         allowed = active.get(kind)
         if kind == 'epizoo_adaptation' and allowed is not None:
             allowed = allowed | set(model_parents.values())
-        if allowed is not None and (path, sha) not in allowed:
+        # Independent owner publications do not claim that every displayed result
+        # shares the same upstream instance. A scalar cooutput still follows its
+        # exact accepted references, including a historical native-object parent.
+        # Coupled owners retain the active-source correspondence requirement.
+        if allowed is not None and kind not in independent and (path, sha) not in allowed:
             raise AuthorityError('Active downstream output refers to a different active upstream publication.')
         description, _ = context.describe(kind, Path(path), sha)
         for dep in description['upstream'].values():

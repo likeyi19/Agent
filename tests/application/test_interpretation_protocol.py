@@ -87,9 +87,9 @@ def test_one_structurally_stable_schema_and_complete_inventory(registry):
         projection = _interpretation_public(public, 'Explore the supplied data.')['dialogue']
         capabilities = projection['capabilities']
         assert set(capabilities) == set(registry.names())
-        assert len(capabilities) == 43
-        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == 69
-        assert sum(len(c['parameters']) for c in capabilities.values()) == 164
+        assert len(capabilities) == 45
+        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == 74
+        assert sum(len(c['parameters']) for c in capabilities.values()) == 183
         for row in scientific_parameters(registry):
             actual=dict(capabilities[row['tool']]['parameters'][row['argument']])
             expected={k:v for k,v in row.items() if k not in ('tool','argument')}

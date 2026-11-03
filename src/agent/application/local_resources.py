@@ -32,6 +32,11 @@ MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
 # Reviewed source ports only; their aliases, roles and types remain Registry facts.
 _GROUP_PORTS = (
+    ('run_archr', 'dataset'),
+    ('run_archr', 'second'),
+    ('run_monalisa', 'dataset'),
+    ('run_monalisa', 'bins'),
+    ('run_monalisa', 'genome'),
     ('run_cicero_cds', 'dataset'),
     ('run_cicero_cds', 'genomic_coords'),
     ('run_scanpy', 'dataset'),

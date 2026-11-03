@@ -18,7 +18,7 @@ from agent.tools._native_process import run, r_environment
 from agent.tools.data.authority_context import current
 from agent.tools.data.fastq_verification_authority import file_closure
 from . import peak_h5ad
-from .native_matrix import arguments, NativeInvocationError, MatrixPackage
+from .native_matrix import arguments, NativeInvocationError, native_kwargs
 from .native_publication import NativePublication
 from .sequence_prediction import library, read, write
 
@@ -73,8 +73,7 @@ LIMITATIONS = ('Native Cicero invocation, not biological validation. Aggregates 
 
 def native_arguments(args):
     # Reuse the existing ordinary JSON and fixed-function boundary.
-    from types import SimpleNamespace
-    kw = MatrixPackage.native_arguments(SimpleNamespace(FUNCTIONS=FUNCTIONS), args)
+    kw = native_kwargs(FUNCTIONS, args)
     for key in ('sample_num', 'maxit', 'max_elements', 'max_sample_windows'):
         if type(kw.get(key)) in (int, float) and kw[key] > 1000:
             raise ValueError(key + ' exceeds the 1000 native execution bound')

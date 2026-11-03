@@ -18,6 +18,8 @@ from agent.tools.data import raw_scatac_manifest as raw_manifest
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
 from agent.tools.analysis.macs3 import RESULT_FIELDS as _PEAK_FIELDS, FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis import archr as _ARCHR
+from agent.tools.analysis import monalisa as _MONALISA
 from agent.tools.analysis import cicero_cds as _CICERO_CDS
 from agent.tools.analysis.native_tables import PACKAGES as _NATIVE_TABLE_PACKAGES
 from agent.tools.analysis.native_matrix import PACKAGES as _NATIVE_MATRIX_PACKAGES
@@ -418,7 +420,7 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
     **{p.TOOL: _ToolProjection(frozenset(p.RESULT_FIELDS), p.FACT_FIELDS, p.POLICY, (
         _ArtifactProjection('manifest_path', p.KIND + '_manifest', ('native_completion', 'artifact_integrity'), digest_field='manifest_sha256'),
         _ArtifactProjection('table_path', 'native_genomic_table', ('native_result_semantics', 'exact_source_identity'), digest_field='table_sha256')))
-        for p in _NATIVE_TABLE_PACKAGES},
+        for p in (*_NATIVE_TABLE_PACKAGES, _MONALISA, _ARCHR)},
     **{p.TOOL: _ToolProjection(frozenset(p.RESULT_FIELDS), p.FACT_FIELDS, p.POLICY, (
         _ArtifactProjection('manifest_path', p.KIND + '_manifest', ('native_completion', 'exact_ordered_axes', 'artifact_integrity'), digest_field='manifest_sha256'),
         _ArtifactProjection('matrix_path', 'native_matrix_h5ad', ('native_result_slots', 'ordered_input_identity'), digest_field='matrix_sha256')))

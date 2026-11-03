@@ -29,6 +29,30 @@ from .sequence_prediction import arguments as path_arguments, library, read, wri
 from .sequence_reference import metadata_declarations, check_declarations
 
 
+def native_kwargs(functions, args):
+    """Shared bounded JSON/function boundary; scientific object checks stay with owners."""
+    function, kwargs = args.get('function_name'), args.get('kwargs', {})
+    if function not in functions or type(kwargs) is not dict or set(kwargs) - set(functions[function]):
+        raise ValueError('Unsupported native function or argument; no method is substituted')
+    def ordinary(value, depth=0):
+        if depth > 4:
+            return False
+        if value is None or type(value) in (bool, int):
+            return True
+        if type(value) is float:
+            return math.isfinite(value)
+        if type(value) is str:
+            return len(value) <= 128 and not any(ord(c) < 32 for c in value)
+        if type(value) is list:
+            return len(value) <= 128 and all(ordinary(v, depth + 1) for v in value)
+        if type(value) is dict:
+            return len(value) <= 128 and all(type(k) is str and ordinary(k) and ordinary(v, depth + 1) for k, v in value.items())
+        return False
+    if not ordinary(kwargs) or len(json.dumps(kwargs).encode()) > 8192:
+        raise ValueError('Native kwargs must be bounded JSON data, not executable expressions or input objects')
+    return kwargs
+
+
 FACT_FIELDS = ('function_name', 'n_cells', 'n_features', 'measurement', 'parameters',
     'source_identity', 'software_versions', 'native_output_type', 'result_slots', 'limitations')
 RESULT_FIELDS = dict(status=(str,), contract_version=(str,), manifest_path=(str,), manifest_sha256=(str,),
@@ -126,25 +150,8 @@ class MatrixPackage:
             setattr(self, name, getattr(self.publication, name))
 
     def native_arguments(self, args):
-        function, kwargs = args.get('function_name'), args.get('kwargs', {})
-        if function not in self.FUNCTIONS or type(kwargs) is not dict or set(kwargs) - set(self.FUNCTIONS[function]):
-            raise ValueError('Unsupported native function or argument; no method is substituted')
-        def ordinary(value, depth=0):
-            if depth > 4:
-                return False
-            if value is None or type(value) in (bool, int):
-                return True
-            if type(value) is float:
-                return math.isfinite(value)
-            if type(value) is str:
-                return len(value) <= 128 and not any(ord(c) < 32 for c in value)
-            if type(value) is list:
-                return len(value) <= 128 and all(ordinary(v, depth + 1) for v in value)
-            if type(value) is dict:
-                return len(value) <= 128 and all(type(k) is str and ordinary(k) and ordinary(v, depth + 1) for k, v in value.items())
-            return False
-        if not ordinary(kwargs) or len(json.dumps(kwargs).encode()) > 8192:
-            raise ValueError('Native kwargs must be bounded JSON data, not executable expressions or input objects')
+        function = args.get('function_name')
+        kwargs = native_kwargs(self.FUNCTIONS, args)
         if (args.get('second_path') or args.get('second_count_slot') or args.get('second_sha256')) and (self.package != 'Signac' or function not in ('corSparse', 'Jaccard')):
             raise ValueError('A second matrix applies only to Signac corSparse/Jaccard')
         if function == 'Jaccard' and not args.get('second_path'):

@@ -247,7 +247,9 @@ def test_grounded_native_members_use_shared_binding():
     assert _bind_arguments(build_default_tool_registry(), text, {}, decision.arguments) == {'kwargs': {'method': 2, 'scale.factor': 5000}}
 
 
-def test_native_matrix_cross_package_reuse_without_original_source(source, simulated, tmp_path):
+@pytest.mark.parametrize('same_package', [False, True])
+@pytest.mark.parametrize('select_scalar', [False, True])
+def test_native_matrix_cross_package_reuse_without_original_source(source, simulated, tmp_path, same_package, select_scalar):
     from agent.application import ResearchAgentApplication, OutputSelection
     from agent.orchestration import AgentPlan, AgentRequest, PlanStep
     from agent.application.workspace import ManagedWorkspace
@@ -261,16 +263,17 @@ def test_native_matrix_cross_package_reuse_without_original_source(source, simul
             return self.selected
     planner = Planner(); app = ResearchAgentApplication(root, planner=planner); app.sessions.create('reuse')
     state = app.sessions.run('reuse', 'first', AgentRequest('first', 'Binarize', {}),
-        (OutputSelection('dataset', 'native', 'matrix_path'),), expected_generation=0)
+        (OutputSelection('dataset', 'native', 'matrix_path'), OutputSelection('prior_cells', 'native', 'n_cells')), expected_generation=0)
     assert state.turn('first').status == 'activated'
     binding = bind_output(app.run_store, app.registry, 'first:run', 'native', 'dataset')
     assert binding.semantic_type == 'native_matrix_h5ad.v1'
     Path(source['input_path']).unlink()
-    follow = dict(input_path=PriorOutputRef(binding, 'matrix_path'), function_name='BinarizeCounts',
+    consumer = owner.EPISCANPY if same_package else owner.SIGNAC
+    follow = dict(input_path=PriorOutputRef(binding, 'matrix_path'), function_name='pp.binarize' if same_package else 'BinarizeCounts',
         output_dir=str(root / 'runs' / ManagedWorkspace.run_digest('second:run') / 'scientific'))
-    planner.selected = AgentPlan('second', 'second', 'Simulated compatible Signac call', (PlanStep('native', owner.SIGNAC.TOOL, follow),))
+    planner.selected = AgentPlan('second', 'second', 'Simulated compatible Signac call', (PlanStep('native', consumer.TOOL, follow),))
     state = app.sessions.run('reuse', 'second', AgentRequest('second', 'Use accepted binary matrix', {}),
-        (OutputSelection('dataset', 'native', 'matrix_path'),), expected_generation=1)
+        (OutputSelection('dataset', 'native', 'matrix_path'),) + ((OutputSelection('cells', 'native', 'n_cells'),) if select_scalar else ()), expected_generation=1, retain=('prior_cells',))
     assert state.turn('second').status == 'activated', app.run_store.load('second:run').errors
     assert len(simulated) == 2
     assert simulated[1]['input_path'] == app.run_store.load('first:run').steps[0].result['matrix_path']

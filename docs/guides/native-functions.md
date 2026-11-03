@@ -1,5 +1,17 @@
 # Native scientific functions
 
+The current STE-NFI-1H inventory is **45 Registry tools, 74 package-qualified
+native functions, 183 scientific-parameter offers and 10 scientific packages**. The
+[native research-object guide](native-research-objects.md) covers genuine ArchR
+Arrow/project snapshots and monaLisa sequence-bin enrichment. pycisTopic remains
+license-blocked and regulatory topic modeling remains uncovered. Earlier milestone
+sections below retain their historical inventories and acceptance scope.
+Centralized STE-NFI integration is **CLOSED**; 1H is **COMPLETE within bounded
+scope / CONDITIONAL GO for controlled researcher use**. These are reviewed
+portions of native APIs, not complete upstream coverage or universal biological
+validation. Future additions remain open to legitimate researcher demand;
+no next milestone is initiated by this closeout.
+
 STE integrates reviewed functions of installed scientific packages. A function
 invocation is an independent capability; it does not imply a complete research
 workflow. Existing motif accessibility, peak calling and raw processing remain
@@ -703,6 +715,14 @@ Cicero gene activity still needs an original accessibility CDS with actual gene
 annotation and exact connections, then separate normalization inputs. SnapATAC2
 fragment import needs its native fragment storage (including noncanonical sparse
 indices), genome ordering and cell-filter semantics, not an ordinary H5AD adapter.
-ArchR Arrow/Project and pycisTopic objects are not installed/executable integrations;
-no broad Seurat adapter is added. The report records concrete runtime, object and
-license constraints and upstream sources. No deferred API is advertised as callable.
+At 1G, ArchR Arrow/Project and pycisTopic objects were not executable integrations.
+1H adds the focused ArchR contracts linked above; pycisTopic and broad Seurat
+adaptation remain unsupported. No deferred API is advertised as callable.
+
+For the complete 1H catalog, the largest maintained detailed-planning fixture is
+103,379 bytes (64,358 prompt + 39,021 schema). The maintenance budget is 112 KiB,
+up from 96 KiB, retaining about 11 KiB headroom. This growth represents two real
+scientific object/enrichment tools and their source/parameter contracts. The fixed
+Interpreter schema stays exactly 32,340 bytes; no alternate protocol, missing
+capabilities or provider-specific workaround is introduced. The budget is not an
+API limit or a claim about provider latency.

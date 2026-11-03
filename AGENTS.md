@@ -988,6 +988,37 @@ instruction authorizes one coherent completion commit and a normal push to
 record pre-closeout stages. The report's section 14.8 owns final review and Git
 verification. STE-NFI-1H is not started.
 
+STE-NFI-1H builds on `2b183dc4403cf448f1d76f5c3e0d62e00103231d`. Its implementation
+and acceptance preceded the separately authorized final Git closeout.
+The [native research-object guide](docs/guides/native-research-objects.md)
+owns four ArchR 1.0.3 functions and monaLisa 1.16.0 sequence-bin enrichment,
+bringing the inventory to 45 tools, 74 native functions and 183 parameter offers.
+Exact accepted internal ArchR snapshots preserve native projects and companion
+Arrows; arbitrary uploaded RDS/ZIP/H5AD does not grant project authority. Native
+gene scores are accessibility estimates, not measured expression. monaLisa keeps
+real sequences, supplied bins, motif identities and native SummarizedExperiment
+statistics; it does not implement regulatory topic modeling. pycisTopic remains
+uninstalled/unregistered because its internal-academic license does not establish
+general hosted-service authorization. Existing infrastructure and fixed Interpreter
+protocol remain authoritative. The [1H report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1h/REPORT.md)
+records bounded CONDITIONAL GO, independent/native/browser distinctions, failures
+and recommendation A to end centralized integration. The shared active-publication
+check respects owner-declared independence while validating exact historical
+references; coupled source requirements remain. Explicit browser recovery activates
+the saved inspection without native retry; historical failed prose stays exact.
+Final closeout retains the one/two-sample ArchR boundary: existing named source
+ports do not provide variable ordered sample collections, and the raw/FASTQ
+collection mechanism is not interchangeable. No new source-binding framework is
+introduced. The runtime lock also records the three exact supplemental R source
+archives and installation order. Scientific execution and the fixed Interpreter
+are unchanged by closeout; earlier native/browser evidence remains applicable.
+The report's final-closeout section owns regression-failure dispositions,
+preservation checks and the authorized completion commit/normal push outcome.
+**STE-NFI centralized integration: CLOSED. STE-NFI-1H: COMPLETE within bounded
+scope / CONDITIONAL GO for controlled researcher use.** Future integrations need
+legitimate researcher demand, with all mature packages retaining equal status.
+No 1I, RUA-1 or subsequent milestone is started or authorized by this closeout.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

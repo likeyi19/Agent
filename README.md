@@ -16,8 +16,20 @@ capability. Model weights and scientific resources remain outside Git.
 See the [documentation index](docs/README.md) for current operating guidance,
 architecture owners and historical acceptance records.
 
+STE-NFI-1H adds genuine ArchR Arrow/project snapshots and gene-score retrieval,
+plus monaLisa sequence-bin motif enrichment through the existing native interface.
+See the [native research-object guide](docs/guides/native-research-objects.md) for
+scientific inputs, accepted-object reuse and deployment, and the
+[1H report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1h/REPORT.md)
+for exact qualification status. pycisTopic is not exposed under its restrictive
+license; regulatory topic modeling remains an explicit capability gap.
+The centralized STE-NFI integration phase is **CLOSED**: 1H is **COMPLETE within
+bounded scope / CONDITIONAL GO for controlled researcher use**, with 45 Registry
+tools, 74 reviewed native functions and 10 scientific packages. This is partial
+upstream API coverage. Future integrations remain demand-driven.
+
 The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
-records the current 27-tool inventory, genuine replicated differential-accessibility
+records its then-current 27-tool inventory, genuine replicated differential-accessibility
 and clustering-evaluation journeys, statistical downloads and long-session follow-up.
 The [blocker closeout](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
 updates the recommendation to **CONDITIONAL GO** for controlled research use:

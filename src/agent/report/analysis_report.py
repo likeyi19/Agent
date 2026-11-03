@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from agent.tools.analysis.macs3 import FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis import archr as _ARCHR
+from agent.tools.analysis import monalisa as _MONALISA
 from agent.tools.analysis import cicero_cds as _CICERO_CDS
 from agent.tools.analysis.native_tables import PACKAGES as _NATIVE_TABLE_PACKAGES
 from agent.tools.analysis.native_matrix import PACKAGES as _NATIVE_MATRIX_PACKAGES
@@ -587,7 +589,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "posttrain_epizoo_model": tuple(k for k in _ADAPTATION_REPORT_FIELDS if k != "adaptation_spec_sha256") + ("parent_model_manifest_sha256",),
     "call_scATAC_peaks": _PEAK_FACTS,
     "run_motifmatchr": _MATCH_FACTS,
-    **{p.TOOL: p.FACT_FIELDS for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)},
+    **{p.TOOL: p.FACT_FIELDS for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     "run_chromvar": _CHROMVAR_NATIVE_FACTS,
     "compute_motif_accessibility": _MOTIF_FACTS,
     "prepare_scatac_regulatory_sequences": _REGION_SEQUENCE_FACTS,
@@ -805,7 +807,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 _TOOL_TITLES: Mapping[str, str] = {
     "call_scATAC_peaks": "Experimental accessible peaks",
     "run_motifmatchr": "Native sequence motif matches",
-    **{p.TOOL: "Native " + p.package + " function results" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)},
+    **{p.TOOL: "Native " + p.package + " function results" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     "run_chromvar": "Native chromVAR function results",
     "compute_motif_accessibility": "Native motif-associated accessibility",
     "prepare_scatac_regulatory_sequences": "scATAC regions and exact genomic DNA",
@@ -1079,7 +1081,7 @@ _FIELD_LABELS: Mapping[str, str] = {
 }
 
 _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
-    ("native_functions", "Native function results", frozenset(p.TOOL for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS))),
+    ("native_functions", "Native function results", frozenset(p.TOOL for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR))),
     ("scatac_peaks", "Experimental accessible peaks", frozenset({"call_scATAC_peaks"})),
     ("native_chromvar_statistics", "Native chromVAR function results", frozenset({"run_chromvar"})),
     ("native_motif_matches", "Native sequence motif matches", frozenset({"run_motifmatchr"})),
@@ -1144,7 +1146,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "call_scATAC_peaks": ("population", "limitations"),
-    **{p.TOOL: ("function_name", "measurement", "limitations") for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)},
+    **{p.TOOL: ("function_name", "measurement", "limitations") for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     "run_chromvar": ("function_name", "measurement", "limitations"),
     "run_motifmatchr": ("function_name", "measurement", "limitations"),
     "compute_motif_accessibility": ("method", "measurement", "limitations"),
@@ -1510,7 +1512,7 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
 
 
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
-    if step.tool_name in tuple(p.TOOL for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)) + ('run_chromvar', 'run_motifmatchr', 'call_scATAC_peaks', 'compute_motif_accessibility', 'predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
+    if step.tool_name in tuple(p.TOOL for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)) + ('run_chromvar', 'run_motifmatchr', 'call_scATAC_peaks', 'compute_motif_accessibility', 'predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
         lines = [f'### {_TOOL_TITLES[step.tool_name]} {occurrence}', '']
         for fact in step.facts:
             lines.append(f'- {fact.field.replace("_", " ").capitalize()}: {_inline_code(fact.value)}')
@@ -1786,7 +1788,7 @@ def _render_summary(
     labels = {
         'inspect_scATAC_fragments': 'Bounded fragment structure inspected; no preprocessing or QC qualification',
         "call_scATAC_peaks": "Native experimental peaks called; peak enrichment is not differential accessibility",
-        **{p.TOOL: "Native " + p.package + " function completed on the exact selected input" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)},
+        **{p.TOOL: "Native " + p.package + " function completed on the exact selected input" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
         "run_chromvar": "Native chromVAR function completed on the exact selected input",
         "run_motifmatchr": "Native sequence motif matches computed; not TF binding or accessibility deviations",
         "compute_motif_accessibility": "Native motif deviations and z-scores computed; descriptive accessibility, not TF binding or causality",

@@ -3801,6 +3801,8 @@ def build_default_tool_registry() -> ToolRegistry:
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
     from .motifmatchr_registry import tool_spec as motifmatchr_tool_spec
+    from .archr_registry import tool_spec as archr_tool_spec
+    from .monalisa_registry import tool_spec as monalisa_tool_spec
     from .cicero_cds_registry import tool_spec as cicero_cds_tool_spec
     from .native_table_registry import tool_specs as native_table_tool_specs
     from .native_matrix_registry import tool_specs as native_matrix_tool_specs
@@ -3814,6 +3816,8 @@ def build_default_tool_registry() -> ToolRegistry:
         *native_matrix_tool_specs(),
         *native_table_tool_specs(),
         cicero_cds_tool_spec(),
+        monalisa_tool_spec(),
+        archr_tool_spec(),
         macs3_tool_spec(),
         embedding_spec,
         pca_spec,

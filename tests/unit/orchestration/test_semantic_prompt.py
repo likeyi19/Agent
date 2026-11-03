@@ -676,3 +676,20 @@ def test_semantic_prompt_and_schema_retain_combined_size_headroom(
     assert len(semantic_prompt.encode("utf-8")) + schema_bytes(
         build_semantic_wire_v4_schema(registry, request)
     ) < 96 * 1024
+
+
+def test_registered_choice_index_reuses_exact_catalog_domains(registry):
+    from tests.unit.orchestration.catalog_expansion import expand_catalog
+    prompt=json.loads(build_semantic_planning_prompt(_request('inspect_canonical'),registry))
+    tools=expand_catalog(prompt['catalog'])
+    offered=prompt['registered_choices']
+    expected={}
+    for name in registry.names():
+        spec=registry.get(name)
+        for port in spec.semantic_planning.consumer_ports:
+            if len(port.members)!=1:continue
+            argument={**spec.required_arguments,**spec.optional_arguments}.get(port.members[0].field_name)
+            if argument is not None and argument.planning.planner_choice:
+                expected.setdefault(name,[]).append(port.name)
+                assert tools[name][1][port.name][PORT_GUIDANCE][GUIDANCE_CHOICES]==list(argument.choices)
+    assert offered==expected

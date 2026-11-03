@@ -228,6 +228,9 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
     "PROVIDER_COMPLETION_INCOMPLETE": ErrorPolicyEntry(
         "The planning provider returned an incomplete completion.", _USER
     ),
+    "PROVIDER_OUTPUT_MISSING": ErrorPolicyEntry(
+        "The provider reported completion but returned no usable response text. Existing accepted results remain available.", _USER
+    ),
     "PROVIDER_REFUSED": ErrorPolicyEntry(
         "The planning provider refused the request.", _NO
     ),

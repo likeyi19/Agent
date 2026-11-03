@@ -44,28 +44,6 @@ def test_exact_offered_independent_result_does_not_require_internal_names(app, m
     assert result.scientific.claims[0].source['output_locator']['step_id'] == 'step1'
 
 
-def test_live_subject_domains_match_the_selected_result_owner(app, monkeypatch):
-    annotation(app)
-    accepted(app, 'cluster_cells', name='partition')
-
-    def choose(prompt):
-        variants = decision_schema(prompt)['properties']['decision']['anyOf']
-        scientific = next(v for v in variants if v['properties']['kind']['enum'] == ['answer_scientific'])
-        domains = scientific['properties']['target']['anyOf']
-        groups = prompt['dialogue']['result_groups']
-        for group in groups:
-            for handle in (group['handle'], *group['outputs']):
-                domain, = [row['properties']['subject'] for row in domains
-                           if handle in row['properties']['output']['enum']]
-                if group['tool'] == 'annotate_scATAC_cell_types':
-                    assert domain['anyOf'][1] == {'type': 'null'}
-                    assert '3' in domain['anyOf'][0]['enum']
-                    assert 'invented subject' not in domain['anyOf'][0]['enum']
-                else:
-                    assert domain == {'type': 'null'}
-        return dict(kind='clarify', reason='unsupported_intent')
-
-    ask(forbid_work(app, monkeypatch), 'domains', 'Explain the accepted annotations and partition.', Model(choose))
 
 
 @pytest.mark.parametrize('section', ['category_counts', 'category_association'])

@@ -62,8 +62,8 @@ numeric array or a named A/C/G/T frequency object. The scientific package owns
 parameter validity. Native errors are retained without modifying values or
 retrying. Input objects, genome paths, scripts and commands cannot be passed in
 kwargs. Unspecified optional arguments are omitted from the R call so the
-installed native method supplies its defaults. The pilot publishes only
-`out="matches"`; scores and positions are explicitly rejected, never substituted.
+installed native method supplies its defaults. The original pilot published
+`out="matches"`; STE-NFI-1G additionally supports `out="scores"` and `out="positions"`.
 
 The existing ScientificResourceLibrary supplies the unique assembly-matched
 genome and taxon-compatible motif collection, or an explicit resource selection.
@@ -78,7 +78,7 @@ a second genomic input representation.
 
 ## Results and limits
 
-The result is a native boolean peak-by-motif matrix. Downloads include Matrix
+For `out="matches"`, the result is a native boolean peak-by-motif matrix. Downloads include Matrix
 Market and SciPy sparse NPZ representations, ordered peaks, native motif names
 and accession/version annotations, metadata and a completion receipt. Peak
 tables use zero-based half-open coordinates; R receives start + 1 and unchanged
@@ -98,3 +98,32 @@ the readiness decision. Implementation availability alone does not establish
 ordinary researcher acceptance.
 
 Native reference: [motifmatchr vignette](https://bioconductor.org/packages/release/bioc/vignettes/motifmatchr/inst/doc/motifmatchr.html).
+
+
+STE-NFI-1G scores output preserves native `motifMatches`, `motifScores` and
+`motifCounts` assays as separate matrices. Positions output preserves the native
+GRangesList: `positions.tsv` contains motif index/name, chromosome, 1-based closed
+start/end, width, strand and score. The original ordered peaks remain separate;
+Agent does not invent a hit-to-peak association absent from the native result.
+Both modes also deliver the exact `native-result.rds`, retaining native attributes.
+RDS is an output download, not a newly admitted executable R input. Native binary
+snapshots retain native labels; projected metadata/TSVs follow existing privacy rules.
+
+`n_matches` counts positive peak/motif incidences for matrix modes. It is null for
+positions; `n_positions` counts native genomic hits. Neither is a cell count or a
+biological validation metric. There is no fabricated boolean output for positions.
+The same native publication owner selects the exact mode-specific file closure;
+accepted historical matches retain their original fields and profile.
+
+Independent native R object equality and simulated acceptance/download/restart
+checks pass. The initial genuine 1G Firefox/OpenAI positions request failed at
+interpretation with an incomplete provider response, before science. The integrated
+closeout subsequently qualifies genuine Firefox/official OpenAI positions execution:
+2,000 GRCh38 peaks, 1,019 motifs and 684,091 native genomic hits. All six downloads
+are checked: exact RDS bytes, unchanged TSV contents with export line endings, and
+JSON retaining scientific fields while removing private paths/session details.
+Initial erroneous coordinate questions are preserved. Their shared prerequisite
+and parameter-continuation scope omission is corrected; the genuine continuation
+executes once. A separate absent-file request asks for the H5AD dataset without a
+Run. This is bounded delivery qualification, not TF binding or universal provider
+qualification. See section 14 of the [1G report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1g/REPORT.md).

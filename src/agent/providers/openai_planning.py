@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import logging
 from pathlib import Path
 from typing import Mapping
 
@@ -13,6 +14,8 @@ from agent.orchestration.planning_model import (
     normalized_retry_after_seconds,
 )
 
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _RESPONSE_FORMAT_NAME = "agent_plan"
@@ -64,9 +67,9 @@ def _default_client() -> object:
 
 def _validate_client(client: object) -> object:
     responses = getattr(client, "responses", None)
-    if not callable(getattr(responses, "create", None)):
+    if not callable(getattr(getattr(responses, "with_raw_response", None), "create", None)):
         raise TypeError(
-            "OpenAI planning client must provide responses.create()."
+            "OpenAI planning client must provide responses.with_raw_response.create()."
         )
     return client
 
@@ -139,7 +142,7 @@ def _completed_output_text(response: object) -> str:
     if not isinstance(output_text, str) or not output_text.strip():
         raise OpenAIPlanningError(
             "OpenAI planning response did not contain output text.",
-            code="PROVIDER_COMPLETION_INCOMPLETE",
+            code="PROVIDER_OUTPUT_MISSING",
         )
     return output_text
 
@@ -186,8 +189,10 @@ class OpenAIPlanningModel:
         if not isinstance(schema, dict):  # pragma: no cover - mapping invariant
             raise TypeError("`response_schema` must serialize to a JSON object.")
 
+        from agent.orchestration.planning_diagnostics import log_operation_event
+
         try:
-            response = self._client.responses.create(
+            transport = self._client.responses.with_raw_response.create(
                 model=self._model,
                 input=prompt,
                 text={
@@ -202,16 +207,28 @@ class OpenAIPlanningModel:
                 background=False,
                 timeout=self._timeout,
             )
+            response = transport.parse()
         except Exception as exc:
             code, message = classify_provider_exception(exc)
             if code == "PLANNING_PROVIDER_ERROR":
                 message = "OpenAI planning request failed."
-            raise OpenAIPlanningError(
+            failure = OpenAIPlanningError(
                 message,
                 code=code,
                 retry_after_seconds=normalized_retry_after_seconds(exc),
-            ) from exc
-        return _completed_output_text(response)
+            )
+            log_operation_event(logger, "openai.request_failed", error=exc,
+                code=code, transport=exc, requested_model=self._model)
+            raise failure from exc
+        try:
+            text = _completed_output_text(response)
+        except OpenAIPlanningError as exc:
+            log_operation_event(logger, 'openai.response_validation_failed', error=exc,
+                transport=transport, completion=response, requested_model=self._model)
+            raise
+        log_operation_event(logger, 'openai.response_completed', transport=transport,
+            completion=response, requested_model=self._model)
+        return text
 
 
 __all__ = [

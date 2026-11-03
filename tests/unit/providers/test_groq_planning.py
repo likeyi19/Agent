@@ -233,7 +233,17 @@ def test_semantic_v4_round_trip_uses_generic_responses_transport() -> None:
         step["properties"]["tool"]["enum"][0]
         for step in schema["$defs"]["step"]["anyOf"]
     ] == sorted(registry.names())
-    assert schema["$defs"]["input_name"]["enum"] == ["input_path"]
+    from tests.application.test_composed_scientific_declarations import expand
+    expanded = expand(schema)
+    def input_domains(node):
+        if isinstance(node, dict):
+            if 'input' in node.get('properties', {}):
+                yield node['properties']['input']['enum']
+            for value in node.values(): yield from input_domains(value)
+        elif isinstance(node, list):
+            for value in node: yield from input_domains(value)
+    assert list(input_domains(expanded))
+    assert all(domain == ['input_path'] for domain in input_domains(expanded))
     assert plan.steps[0].arguments == {"path": secret}
 
 

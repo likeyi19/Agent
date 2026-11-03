@@ -79,17 +79,6 @@ def test_export_rejects_unselected_unsafe_or_unbounded_operands(mutation):
         parse(selected)
 
 
-def test_export_schema_is_accepted_only_and_does_not_add_planned_purposes():
-    public = dict(bases={}, relations=[], dialogue=dict(outputs=[], tools=['compute_cell_umap'],
-        result_groups=[dict(handle='g0', tool='compute_cell_umap'), dict(handle='g1', tool='cluster_cells')],
-        selected_sources=[dict(source='source.0')]))
-    variants = decision_schema(public)['properties']['decision']['anyOf']
-    scientific, = [v['properties'] for v in variants if v['properties']['kind']['enum'] == ['answer_scientific']]
-    export = scientific['export']['anyOf'][0]
-    assert export['additionalProperties'] is False
-    assert export['properties']['measurement']['enum'] == ['g0', 'g1', 'source.0']
-    assert export['properties']['representations']['items']['properties']['output']['enum'] == ['g0', 'g1']
-    assert all('export' not in v['properties'] for v in variants if v['properties']['kind']['enum'] != ['answer_scientific'])
 
 
 def test_field_bound_keeps_the_distinct_original_measurement_reference():

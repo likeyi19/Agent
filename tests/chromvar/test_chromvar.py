@@ -271,11 +271,7 @@ def test_parameter_question_preserves_objective_source_and_natural_layer_reply(s
 
 def test_missing_parameter_wire_does_not_change_source_role_question_schema():
     from agent.application.turn_decisions import decision_schema,parse_decision,IntentError
-    public=dict(bases={},relations=[],dialogue=dict(outputs=[],tools=[owner.TOOL],scientific_parameters=[
-        dict(tool=owner.TOOL,argument='count_slot',required=False,description='Selected count slot',exact_string=True)],
-        selected_sources=[dict(source='source.0',position=1,label='matrix',input_type='h5ad')],
-        input_roles=[dict(tool=owner.TOOL,port='dataset')],attachment_candidates=True))
-    variants=decision_schema(public)['properties']['decision']['anyOf']
+    variants=decision_schema()['properties']['decision']['anyOf']
     for variant in variants:
         properties=variant['properties'];kind=properties['kind']['enum'][0]
         if kind=='execute_plan':assert 'missing_parameters' in properties
@@ -359,7 +355,7 @@ def test_native_variability_reuses_exact_accepted_scores_without_upstream_replay
         table=pd.DataFrame(dict(source_index=range(len(features)),source_id=features.feature_id,variability=1.))
         table.to_csv(stage/'result.tsv',sep='\t',index=False)
         return dict(completion='succeeded',input_dim=[len(features),len(cells)],rows=len(table),columns=list(table),
-            native_output_type='data.frame',undefined_values=0,versions={'chromVAR':'simulated'},implementation=[])
+            result_axis='features',native_output_type='data.frame',undefined_values=0,versions={'chromVAR':'simulated'},implementation=[])
     monkeypatch.setattr(consumer,'native',simulated)
     # The native result stays usable after the historical source disappears.
     Path(args['input_path']).unlink()

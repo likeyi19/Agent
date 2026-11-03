@@ -132,14 +132,12 @@ def evidence(input_sets):
     return result
 
 
-def schema(source_rows, resource_rows):
+def schema():
     from .turn_decisions import _object
     def optional(value): return {'anyOf': [value, {'type': 'null'}]}
     fields = {key: optional({'type': 'string', 'maxLength': 256}) for key in EpiZooDeclaration.__dataclass_fields__}
     for key, choices in dict(operation=['inference', 'initialization', 'posttraining_initialized'], strategy=['de_novo', 'mapped_reference'],
-            matrix_semantics=['fragment_counts', 'binary_accessibility'], feature_category=['peak_set', 'regulatory_regions'],reference_species=['human','mouse'],
-            **{k: [s['source'] for s in source_rows] for k in ('source', 'genome_source', 'genome_index_source', 'checkpoint_source','chain_source')},
-            **{k: [r['handle'] for r in resource_rows] for k in ('resource', 'genome_resource')}).items():
+            matrix_semantics=['fragment_counts', 'binary_accessibility'], feature_category=['peak_set', 'regulatory_regions'],reference_species=['human','mouse']).items():
         fields[key] = optional({'type': 'string', 'enum': choices}) if choices else {'type': 'null'}
     fields['taxonomy_id'] = optional({'type': 'integer', 'minimum': 1})
     fields['scientific_name']['anyOf'][0]['description'] = (

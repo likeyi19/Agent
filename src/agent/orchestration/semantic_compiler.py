@@ -641,6 +641,7 @@ def compile_semantic_plan(
     planner_name: str = "semantic-compiler-contract",
 ) -> AgentPlan:
     """Compile explicit semantic choices without executing or inferring science."""
+    from .native_parameters import request_source_applies
 
     if not isinstance(request, AgentRequest):
         raise TypeError("`request` must be an AgentRequest.")
@@ -696,7 +697,9 @@ def compile_semantic_plan(
                 if (len(port.members) != 1 or argument is None or argument.planning is None
                         or not argument.planning.planner_choice or source.choice not in argument.choices):
                     raise SemanticPlanCompileError('UNAUTHORIZED_REGISTERED_CHOICE', 'Choice is not enabled by the Registry.')
-                if any(m.input_name in request.inputs for r in port.request_sources for m in r.members):
+                function = source.choice if port.members[0].field_name == 'function_name' else state.arguments.get('function_name')
+                if any(m.input_name in request.inputs for r in port.request_sources
+                       if request_source_applies(tool, r.selector, function) for m in r.members):
                     raise SemanticPlanCompileError('EXPLICIT_PARAMETER_CONFLICT', 'Use the supplied parameter source instead of choosing a value.')
                 argument.validate(port.members[0].field_name, source.choice)
                 state.arguments[port.members[0].field_name] = source.choice
@@ -839,6 +842,7 @@ def compile_semantic_plan(
                 (selector, rules)
                 for selector, rules in grouped.items()
                 if all(rule.input_name in request.inputs for rule in rules)
+                and request_source_applies(tool, selector, states[step.step_id].arguments.get('function_name'))
             ]
             if len(available) != 1:
                 continue
@@ -857,6 +861,7 @@ def compile_semantic_plan(
                 for selector, rules in grouped.items()
                 if selector in request.inputs
                 and not all(rule.input_name in request.inputs for rule in rules)
+                and request_source_applies(tool, selector, state.arguments.get('function_name'))
             ]
             if partial:
                 missing = sorted(
@@ -879,6 +884,7 @@ def compile_semantic_plan(
                 (selector, rules)
                 for selector, rules in grouped.items()
                 if all(rule.input_name in request.inputs for rule in rules)
+                and request_source_applies(tool, selector, state.arguments.get('function_name'))
             ]
             if len(available) > 1:
                 _raise_compile(
@@ -937,6 +943,12 @@ def compile_semantic_plan(
                 rules=tuple(rules),
             )
 
+        for name in state.request_inputs:
+            if not request_source_applies(tool, name, state.arguments.get('function_name')):
+                _raise_compile('UNAUTHORIZED_REQUEST_INPUT',
+                    'Function-qualified request input belongs to another selected function.',
+                    diagnostic_fields={'step_id': step.step_id, 'tool_name': step.tool_name,
+                                       'input_name': name})
 
     selected_argument_names = {
         argument_name

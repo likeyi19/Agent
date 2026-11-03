@@ -75,7 +75,7 @@ class ExecutionProgress:
 
 ExecutionCheckpoint = Callable[[ExecutionProgress], None]
 CancellationCheck = Callable[[], str | None]
-ExecutionInputGuard = Callable[[str, Mapping[str, object]], None]
+ExecutionInputGuard = Callable[[PlanStep, Mapping[str, object]], None]
 _execution_input_guard: ContextVar[ExecutionInputGuard | None] = ContextVar(
     'agent_execution_input_guard', default=None)
 
@@ -999,7 +999,7 @@ class PlanExecutor:
                             'during_registered_tool',step_id=step.step_id,attempt=attempt)):
                         input_guard = _execution_input_guard.get()
                         if input_guard is not None:
-                            input_guard(step.tool_name, attempt_arguments)
+                            input_guard(step, attempt_arguments)
                         from agent.tools.data.authority_context import current
                         from agent.tools.scientific_authority import supports_tool, tool_kind
                         from .durable_tool_recovery import execution_identity
@@ -1012,7 +1012,7 @@ class PlanExecutor:
                         else:
                             returned_result = spec.function(**attempt_arguments)
                         if input_guard is not None:
-                            input_guard(step.tool_name, attempt_arguments)
+                            input_guard(step, attempt_arguments)
                 except ToolWorkCancelled:
                     if not cancelled:
                         raise RuntimeError('Tool cancellation requires observed run cancellation.')

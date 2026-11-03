@@ -24,7 +24,7 @@ DELIVERY_FILES = {'result.tsv': ('Native genomic result; format and measurement 
     'native-receipt.json': ('Native completion and runtime identity', 'application/json')}
 LIMITATIONS = ('Independent native function, not a complete workflow or biological validation. '
     'Genomic coordinate labels do not qualify a reference assembly. Native scores and CCAN memberships '
-    'are not fragment counts, causal regulation or independent experimental validation. '
+    'are not replicate-aware edgeR/DESeq2 differential-accessibility tests, fragment counts, causal regulation or independent experimental validation. '
     'Omitted native arguments retain installed defaults; source files remain unchanged.')
 
 
@@ -73,11 +73,26 @@ class TablePackage:
         self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
             adaptation='exact bound tables; fixed native dispatch; managed output; no scientific replay.v1'))
         self.VERIFIER = dict(id='agent.' + self.KIND, compatibility_version='1')
+        old_profile = self.PROFILE
+        if package == 'MACS3':
+            self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
+                adaptation='exact bound tracks; native differential BED families.v2'))
+            self.DELIVERY_FILES = dict(DELIVERY_FILES, **{
+                'condition2.tsv': ('bdgdiff condition 2 unique native BED5 regions', 'text/tab-separated-values'),
+                'common.tsv': ('bdgdiff shared native BED5 regions', 'text/tab-separated-values')})
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
-            profile=self.PROFILE, verifier=self.VERIFIER, files=tuple(DELIVERY_FILES),
+            profile=self.PROFILE, verifier=self.VERIFIER, files=self.publication_files,
+            historical_profiles=(old_profile,) if old_profile != self.PROFILE else (),
             arguments=arguments, outputs={'table': 'result.tsv'})
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
+
+    def publication_files(self, value):
+        return tuple(DELIVERY_FILES) + (('condition2.tsv', 'common.tsv')
+            if value['arguments']['function_name'] == 'bdgdiff' else ())
+
+    def input_ports(self, args):
+        return ('input', 'control', 'treatment2', 'control2') if args['function_name'] == 'bdgdiff' else ('input', 'control')
 
     def native_arguments(self, args):
         kw = args.get('kwargs', {}); name = args.get('function_name')
@@ -92,8 +107,10 @@ class TablePackage:
         if args.get('seed') is not None and (self.package != 'cicero' or name != 'generate_ccans'
                 or type(args['seed']) is not int or not 0 <= args['seed'] <= 2147483647):
             raise ValueError('R seed applies to generate_ccans and must fit a native integer')
-        if name not in ('bdgcmp', 'cmbreps') and (args.get('control_path') or args.get('control_semantics') or args.get('control_sha256')):
+        if name not in ('bdgcmp', 'cmbreps', 'bdgdiff') and (args.get('control_path') or args.get('control_semantics') or args.get('control_sha256')):
             raise ValueError('The second track is used only by bdgcmp/cmbreps')
+        if name != 'bdgdiff' and any(args.get(k + suffix) is not None for k in ('treatment2', 'control2') for suffix in ('_path', '_sha256')):
+            raise ValueError('Additional condition tracks apply only to bdgdiff')
         if type(kw.get('threads')) in (int,float) and kw['threads'] > 16:
             raise ValueError('Native threads exceeds execution bound 16')
         if type(kw.get('buffer-size')) in (int,float) and kw['buffer-size'] > 10_000_000:
@@ -103,6 +120,8 @@ class TablePackage:
     def parameter_prerequisites(self, args):
         if self.package != 'MACS3':
             return ()
+        if args.get('function_name') == 'bdgdiff':
+            return tuple(k + '_path' for k in ('control', 'treatment2', 'control2') if not args.get(k + '_path'))
         return ('control_path',) if args.get('function_name') in ('bdgcmp', 'cmbreps') and not args.get('control_path') else ()
 
     def native(self, args, stage):
@@ -115,7 +134,10 @@ class TablePackage:
                 raise AuthorityError('Pinned MACS3 runtime changed')
             implementation = file_closure([runtime_path, executable])
             command = [str(executable), name]
-            if name == 'bdgcmp':
+            if name == 'bdgdiff':
+                command += ['--t1', str(stage/'input.tsv'), '--c1', str(stage/'control.tsv'),
+                    '--t2', str(stage/'treatment2.tsv'), '--c2', str(stage/'control2.tsv')]
+            elif name == 'bdgcmp':
                 command += ['--tfile', str(stage / 'input.tsv'), '--cfile', str(stage / 'control.tsv')]
             elif name == 'cmbreps':
                 command += ['-i', str(stage / 'input.tsv'), str(stage / 'control.tsv')]
@@ -137,6 +159,8 @@ class TablePackage:
                             raise ValueError('A native vector cannot introduce command-line options')
                         command.append('--' + key); command.extend(str(v) for v in values)
             command += ['--outdir', str(stage), '--ofile', 'result.tsv']
+            if name == 'bdgdiff':
+                command += ['condition2.tsv', 'common.tsv']
             request_sha = write(stage / 'request.json', dict(function_name=name, kwargs=kw))
         else:
             executable = Path(os.environ.get('AGENT_CICERO_RSCRIPT') or library().root.parent / 'runtimes/cicero-1/env/bin/Rscript')
@@ -178,13 +202,14 @@ class TablePackage:
         root = Path(args['output_dir']); root.mkdir(parents=True, exist_ok=True)
         if any(root.iterdir()):
             raise ValueError('Native output directory must be empty; no retry authority')
-        sources = file_closure(args[k] for k in ('input_path', 'control_path') if args.get(k))
-        for k in ('input', 'control'):
+        ports = self.input_ports(args)
+        sources = file_closure(args[k + '_path'] for k in ports if args.get(k + '_path'))
+        for k in ports:
             if args.get(k + '_sha256') and next(p['sha256'] for p in sources if p['path'] == args[k + '_path']) != args[k + '_sha256']:
                 raise AuthorityError('Bound input checksum differs')
         with tempfile.TemporaryDirectory(prefix='.native-table-', dir=root) as temp:
             stage = Path(temp)
-            for key, target in (('input_path', 'input.tsv'), ('control_path', 'control.tsv')):
+            for key, target in ((k + '_path', k + '.tsv') for k in ports):
                 if args.get(key):
                     if Path(args[key]).stat().st_size > 256 * 1024**2:
                         raise ValueError('Native table exceeds 256 MiB execution bound')
@@ -206,6 +231,10 @@ class TablePackage:
                     if not rows or rows[0] != header or any(len(r) != 2 for r in rows[1:]):
                         raise AuthorityError('Invalid native CCAN table')
                     n_rows = len(rows) - 1
+                elif args['function_name'] == 'bdgdiff':
+                    if any(len(r) != 5 or not 0 <= int(r[1]) < int(r[2]) for r in rows):
+                        raise AuthorityError('Invalid native differential BED5 intervals')
+                    n_rows = len(rows)
                 elif args['function_name'] == 'filterdup':
                     widths = {len(r) for r in rows}
                     if not widths <= {3, 6} or len(widths) > 1:
@@ -222,10 +251,23 @@ class TablePackage:
                 n_rows=n_rows, result_format=result_format, measurement=measurement,
                 parameters=dict(kwargs=kw, seed=args.get('seed'), omitted_optional_arguments='native defaults'),
                 source_identity=dict(files={k: {f: p[f] for f in ('sha256', 'size_bytes')}
-                    for k in ('input_path', 'control_path') if args.get(k)
+                    for k in (p + '_path' for p in ports) if args.get(k)
                     for p in sources if p['path'] == args[k]},
                     signal_semantics=args.get('signal_semantics'), control_semantics=args.get('control_semantics'), assembly=args.get('assembly')),
                 software_versions=receipt['versions'], limitations=LIMITATIONS)
+            if args['function_name'] == 'bdgdiff':
+                counts = {'result.tsv': n_rows}
+                for name in ('condition2.tsv', 'common.tsv'):
+                    path = stage/name
+                    if path.stat().st_size > 256 * 1024**2:
+                        raise AuthorityError('Native differential table exceeds size bound')
+                    with path.open() as stream:
+                        rows = [r for r in csv.reader(stream, delimiter='\t') if r and not r[0].startswith(('track', '#'))]
+                    if any(len(r) != 5 or not 0 <= int(r[1]) < int(r[2]) for r in rows):
+                        raise AuthorityError('Invalid native differential BED5 intervals')
+                    counts[name] = len(rows)
+                    shutil.copyfile(path, root/name)
+                summary['result_files'] = counts
             shutil.copyfile(table, root / 'result.tsv')
             write(root / 'metadata.json', dict(summary=summary, sources=sources, receipt=receipt))
             write(root / 'native-receipt.json', receipt)
@@ -233,7 +275,7 @@ class TablePackage:
             if file_closure(p['path'] for p in expected_sources) != expected_sources:
                 raise AuthorityError('Source or runtime changed during invocation')
         value = dict(contract=self.CONTRACT, profile=self.PROFILE, arguments=args, execution_identity=execution_identity,
-            result=summary, files=file_closure(root / name for name in DELIVERY_FILES), sources=expected_sources, native_completion='succeeded')
+            result=summary, files=file_closure(root / name for name in self.publication_files(dict(arguments=args))), sources=expected_sources, native_completion='succeeded')
         path = root / 'manifest.json'; sha = write(path, value)
         if current() is not None:
             current().register_execution(self.KIND, root, execution_identity)
@@ -243,6 +285,8 @@ class TablePackage:
         name = args['function_name']; kw = args.get('kwargs', {})
         if self.package == 'cicero':
             return 'TSV', 'native_CCAN_membership' if name == 'generate_ccans' else 'native_genomic_CCAN_overlaps'
+        if name == 'bdgdiff':
+            return 'BED5', 'native_log10_likelihood_ratio_regions; primary table is condition1 unique; condition2 and common are separate files'
         if name == 'pileup':
             return 'bedGraph', 'native_read_fragment_pileup'
         if name == 'filterdup':
@@ -257,7 +301,7 @@ class TablePackage:
 
     def invoke_macs3(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None,
                control_path=None, control_sha256=None, signal_semantics=None, control_semantics=None,
-               assembly=None):
+               assembly=None, treatment2_path=None, treatment2_sha256=None, control2_path=None, control2_sha256=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
     def invoke_cicero(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, seed=None):
@@ -265,6 +309,7 @@ class TablePackage:
 
 
 MACS3 = TablePackage('MACS3', '3.1.0', {
+    'bdgdiff': ('cutoff', 'min-len', 'max-gap', 'd1', 'd2', 'depth1', 'depth2', 'verbose'),
     'cmbreps': ('method', 'verbose'),
     'pileup': ('format', 'max-count', 'both-direction', 'extsize', 'buffer-size', 'threads', 'verbose'),
     'filterdup': ('format', 'gsize', 'tsize', 'pvalue', 'keep-dup', 'buffer-size', 'threads', 'verbose'),
@@ -273,6 +318,11 @@ MACS3 = TablePackage('MACS3', '3.1.0', {
     'bdgpeakcall': ('cutoff', 'min-length', 'max-gap', 'no-trackline', 'verbose'),
     'bdgbroadcall': ('cutoff-peak', 'cutoff-link', 'min-length', 'lvl1-max-gap', 'lvl2-max-gap', 'no-trackline', 'verbose'),
 }, (
+    ('min-len', 'bdgdiff minimum differential-region length in bases.'),
+    ('d1', 'bdgdiff condition 1 sequencing depth in millions of nonredundant reads; native depth scaling.'),
+    ('d2', 'bdgdiff condition 2 sequencing depth in millions of nonredundant reads.'),
+    ('depth1', 'Native long spelling of d1; do not supply both aliases.'),
+    ('depth2', 'Native long spelling of d2; do not supply both aliases.'),
     ('format', 'Native alignment format; BEDPE/FRAG are MACS formats, not generic matrices.'),
     ('max-count', 'pileup native FRAG multiplicity limit.'),
     ('both-direction', 'pileup native bidirectional extension switch.'),
@@ -287,7 +337,7 @@ MACS3 = TablePackage('MACS3', '3.1.0', {
     ('extra-param', 'bdgopt native numeric extra parameter (scalar or numeric list).'),
     ('scaling-factor', 'bdgcmp scales treatment and control, native default 1.'),
     ('pseudocount', 'bdgcmp native pseudocount after depth normalization, default 0.'),
-    ('cutoff', 'bdgpeakcall score threshold in supplied score units, default 5.'),
+    ('cutoff', 'bdgdiff log10 likelihood-ratio or bdgpeakcall score threshold in supplied score units, default 5.'),
     ('min-length', 'Minimum peak length in bases, default 200.'),
     ('max-gap', 'bdgpeakcall maximum gap in bases, default 30.'),
     ('cutoff-peak', 'bdgbroadcall high-score threshold, default 2.'),
@@ -296,7 +346,7 @@ MACS3 = TablePackage('MACS3', '3.1.0', {
     ('lvl2-max-gap', 'bdgbroadcall linking gap in bases, default 800.'),
     ('no-trackline', 'Native boolean output trackline switch.'),
     ('verbose', 'Native diagnostic verbosity, default 2.'),
-), 'MACS3 bedGraph operations and native read pileup/filterdup. cmbreps combines exactly two authorized tracks (dataset/control); fisher expects -log10 p-values. pileup consumes real alignment/read formats; filterdup returns native BED6 or MACS BEDPE. bedGraph inputs require continuous within-chromosome intervals to prevent parser coordinate changes. No callpeak duplication or replicate-level DA claim.')
+), 'MACS3 native read/bedGraph commands. bdgdiff: dataset=t1, control=c1, treatment2=t2, control2=c2; unscaled pileup/lambda, not SPMR. Three BED5 outputs: condition1 unique (primary table), condition2 unique, common. No replicate-aware DA. cmbreps combines two tracks (fisher: -log10 p-values). pileup/filterdup consume real read formats. bedGraph requires continuous intervals; no coordinate repair.')
 
 
 CICERO = TablePackage('cicero', '1.28.3', {

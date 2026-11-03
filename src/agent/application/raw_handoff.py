@@ -353,27 +353,29 @@ def declaration_dict(value):
     return result
 
 
-def schema(sources, resources, field='fastq', *, groups=()):
+def schema(field='fastq'):
+    """Typed declarations; captured identities are resolved by admission."""
     if field == 'epizoo':
         from .epizoo_handoff import schema as epizoo_schema
-        return epizoo_schema(sources, resources)
+        return epizoo_schema()
     from .turn_decisions import _object
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
         return ({'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
                 if choices else {'type': 'null'})
+    identity = {'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': 256}, {'type': 'null'}]}
     if field == 'annotation':
         from agent.tools.analysis.annotation_contract import EXTERNAL_SEMANTICS
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
-        uploaded = _object({k: optional([s['source'] for s in sources]) if k.endswith('_source') else
+        uploaded = _object({k: identity if k.endswith('_source') else
             {'anyOf': [{'type': 'string', 'maxLength': 512}, {'type': 'null'}]}
             for k in AnnotationUploads.__dataclass_fields__})
-        return _object(dict(source=optional([s['source'] for s in sources]),
-            groups_source=optional([s['source'] for s in sources]),
-            groups_result=optional([g['handle'] for g in groups]) if groups else {'type': 'null'},
+        return _object(dict(source=identity,
+            groups_source=identity,
+            groups_result=identity,
             **{k: text for k in ('species', 'assembly', 'grouping_provenance')},
             context=dict(text, description='Interpret the user-supported tissue meaning using an exact compatible offered context when available: '
-                + repr(sorted({r['context']['context'] for r in resources if r.get('context', {}).get('context')}))
+                + 'see the captured annotation resource offers'
                 + '. Do not append demographic or health qualifiers to an equivalent offered tissue identifier. Preserve genuinely different tissue/context as a declaration; never select by availability alone.'),
             grouping_strategy=optional(('reuse_only', 'compute_if_needed')),
             measurement=dict(text, description=(
@@ -381,36 +383,35 @@ def schema(sources, resources, field='fastq', *, groups=()):
                 'cut-site counts. Preserve other declared measurement types as text for '
                 'compatibility checking. Use fragment_counts for declared region fragment overlaps, peak_counts for raw peak counts, binary_accessibility for binary region presence; unknown history is null. Integer values, filenames '
                 'and resource availability do not establish counting history.')),
-            resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
+            resource=identity,
             uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
     if field == 'fragments':
-        return _object(dict(source=optional([s['source'] for s in sources]),
-            index_source=optional([s['source'] for s in sources]),
-            feature_source=optional([s['source'] for s in sources]),
-            genome_source=optional([s['source'] for s in sources]),
-            genome_index_source=optional([s['source'] for s in sources]),
+        return _object(dict(source=identity,
+            index_source=identity,
+            feature_source=identity,
+            genome_source=identity,
+            genome_index_source=identity,
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
             species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
             source_profile=optional(('10x-atac-fragments.v1',)),
             feature_category=optional(('peak_set', 'regulatory_regions')),
-            resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'}))
+            resource=identity))
     if field == 'bam':
-        return _object(dict(source=optional([s['source'] for s in sources]),
+        return _object(dict(source=identity,
             assay=optional(('SCATAC', 'TENX_ATAC')),
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
             species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
             barcode_policy=optional(('corrected_cb_already_corrected',)),
             source_profile=optional(('agent-cb-paired-atac.v2',)),
-            resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'}))
+            resource=identity))
     return _object(dict(assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
         namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
         species=optional(('human', 'mouse')), barcode_policy=optional(('raw_sequence_whitelist',)),
-        resource=optional([r['handle'] for r in resources]) if resources else {'type': 'null'},
-        members={'type': 'array', 'maxItems': 16 if sources else 0, 'items': _object(dict(
-            source={'type': 'string', 'enum': [s['source'] for s in sources]},
+        resource=identity,
+        members={'type': 'array', 'maxItems': 16, 'items': _object(dict(
+            source={'type': 'string', 'minLength': 1, 'maxLength': 128},
             role={'type': 'string', 'enum': [r.value for r in ReadRole]},
-            lane={'type': 'string', 'pattern': '^[0-9]{3}$'}, chunk={'type': 'string', 'pattern': '^[0-9]{3}$'}))
-            if sources else {'type': 'string'}}))
+            lane={'type': 'string', 'pattern': '^[0-9]{3}$'}, chunk={'type': 'string', 'pattern': '^[0-9]{3}$'}))}))
 
 
 def resources(input_sets, field='fastq'):

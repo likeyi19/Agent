@@ -284,7 +284,7 @@ def test_new_package_needs_no_fabricated_historical_profile():
     assert grown.PROFILE == package.PROFILE
     for existing in (owner.EPISCANPY, owner.SIGNAC, owner.SNAPATAC2):
         assert owner.HISTORICAL_PROFILES[existing.package] in existing.publication.historical_profiles
-        assert len(existing.publication.historical_profiles) == 3
+        assert len(existing.publication.historical_profiles) == (4 if existing.package == "Signac" else 3)
 
 
 def test_lsi_preserves_native_layer_values_without_numerical_prevalidation(source, tmp_path):
@@ -377,3 +377,48 @@ def test_native_matrix_no_obsolete_scientific_prerequisite_callback():
     registry = build_default_tool_registry()
     for name in ('run_signac','run_episcanpy','run_snapatac2','run_scanpy','run_chromvar'):
         assert registry.get(name).parameter_prerequisites is None
+
+
+def test_two_matrix_calls_reject_equal_size_different_feature_identity(source,tmp_path):
+    from agent.tools.analysis.native_matrix import SIGNAC
+    a=ad.read_h5ad(source['input_path']);a.var_names=list(reversed(a.var_names));second=tmp_path/'second.h5ad';a.write_h5ad(second)
+    for fn in ('Jaccard','corSparse'):
+        with pytest.raises(ValueError,match='identical ordered feature'):
+            SIGNAC.execute(dict(source,function_name=fn,kwargs={},second_path=str(second),output_dir=str(tmp_path/fn)))
+    with pytest.raises(ValueError,match='two actual matrix'):
+        SIGNAC.native_arguments(dict(source,function_name='Jaccard',kwargs={}))
+    with pytest.raises(ValueError,match='second matrix'):
+        SIGNAC.native_arguments(dict(source,function_name='RunTFIDF',kwargs={},second_path=str(second)))
+
+
+def test_pairwise_source_binding_and_rectangular_download(source,tmp_path,monkeypatch):
+    from agent.application.local_resources import LocalResourceAdmission
+    from agent.application import ResearchAgentApplication,OutputSelection
+    from agent.orchestration import AgentPlan,AgentRequest,PlanStep
+    from agent.application.workspace import ManagedWorkspace
+    from agent.application.native_delivery import accepted_artifacts
+    from agent.application.matrix_delivery import MatrixDownloadPreparer
+    other=tmp_path/'other.h5ad';a=ad.read_h5ad(source['input_path']);a[:1].copy().write_h5ad(other)
+    local=LocalResourceAdmission(tmp_path/'local',approved_source_roots=(tmp_path,))
+    entries=[local.register('data'+str(i),p,input_type='h5ad',label='matrix'+str(i),attribution='simulated') for i,p in enumerate((source['input_path'],other))]
+    group=local.compose_group([e.resource_id for e in entries],attachment_candidates=True)
+    bound=local.bind_group(group,[dict(tool='run_signac',port=p,source='source.'+str(i)) for i,p in enumerate(('dataset','second'))],verify_source=True)
+    assert bound.execution_inputs['input_path']==source['input_path'] and bound.execution_inputs['second_path']==str(other)
+    def native(self,args,stage,matrix):
+        matrix.uns['Signac_pairwise']=dict(values=np.array([[.2],[.7]]),row_cells=matrix.obs_names.to_numpy(dtype=str),column_cells=np.array(['002']),function_name='Jaccard')
+        matrix.write_h5ad(stage/'result.h5ad')
+        return dict(completion='succeeded',versions={'Signac':'SIMULATED'},implementation=[],native_output_type='matrix',result_slots=['uns.Signac_pairwise'])
+    monkeypatch.setattr(owner.MatrixPackage,'native',native)
+    root=tmp_path/'workspace';args=dict(bound.execution_inputs,function_name='Jaccard',output_dir=str(root/'runs'/ManagedWorkspace.run_digest('pair:run')/'scientific'))
+    class Planner:
+        def plan(self,request,registry):return AgentPlan('pair','pair','Simulated pairwise publication',(PlanStep('native','run_signac',args),))
+    app=ResearchAgentApplication(root,planner=Planner());app.sessions.create('pair')
+    state=app.sessions.run('pair','pair',AgentRequest('pair','Compare matrices',{}),(OutputSelection('matrix','native','matrix_path'),),expected_generation=0)
+    assert state.turn('pair').status=='activated',app.run_store.load('pair:run').errors
+    artifacts=accepted_artifacts(app.sessions,'pair',state.revisions[-1],state.turn('pair'),None,step_id='native')
+    artifact=next(a for a in artifacts if a.role=='result.h5ad');prepared=MatrixDownloadPreparer().prepare(artifact)
+    try:
+        exported=tmp_path/'download.h5ad';exported.write_bytes(b''.join(prepared.iter_chunks()))
+        pair=ad.read_h5ad(exported).uns['Signac_pairwise'];np.testing.assert_array_equal(pair['values'],[[.2],[.7]])
+        assert pair['row_cells'].tolist()==['002','001'] and pair['column_cells'].tolist()==['002']
+    finally:prepared.close()

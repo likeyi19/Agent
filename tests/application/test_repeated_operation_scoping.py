@@ -122,7 +122,7 @@ def test_current_initialization_omits_training_choices_but_historical_declaratio
         assert not any(p['tool'] == 'adapt_epizoo_species' and p['argument'] == name for p in parameters)
         assert any(p['tool'] == 'posttrain_epizoo_model' and p['argument'] == name for p in parameters)
         assert _parameter_input(registry, 'adapt_epizoo_species', name)[0] == name
-    assert 'posttraining' not in schema([], [])['properties']['operation']['anyOf'][0]['enum']
+    assert 'posttraining' not in schema()['properties']['operation']['anyOf'][0]['enum']
     assert EpiZooDeclaration(operation='posttraining').operation == 'posttraining'
 
 

@@ -918,6 +918,76 @@ provider failures and unsupported object families. SnapATAC2 kmeans native failu
 are not repaired or substituted; unavailable dependencies and object-heavy methods
 remain unadvertised. No next phase, staging, commit or push is authorized here.
 
+STE-NFI-1G builds on `5cf499409d660b300b504b5f340c58d9126d7f79`. Its pre-closeout
+stages performed no staging, commit or push. The [native guide](docs/guides/native-functions.md) owns 69 native
+functions across eight packages and 43 Registry tools: bdgdiff, getBackgroundPeaks
+and Jaccard are new; motif scores/positions and corSparse Y are additional modes.
+Existing native publication, source roles, scientific authority and delivery owners
+retain exact inputs and mode-specific results. Historical profiles remain readable.
+Function-qualified typed declarations preserve distinct native calls through the
+same Interpreter/Planner/Compiler; task-selected functions use reviewed Registry
+choices. No separate routing/execution system or provider workaround is added.
+The [1G report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1g/REPORT.md)
+initially separated native parity, software tests and genuine five-turn science
+with scripted plans from four real Firefox/OpenAI incomplete responses before
+execution. At that stage live task composition, new-family delivery, natural-language
+continuation and explanation remained unqualified. Provider settings/credentials and historical
+scientific records are preserved. That initial readiness decision was engineering review with a live provider
+qualification blocker; the later replacement evidence below supersedes it within
+its bounded scope.
+The bounded provider closeout in report section 11 adds two controlled API calls:
+minimal strict JSON succeeds; a representative Interpreter request returns HTTP
+200 with an already-empty incomplete response and explicit zero usage. The same
+SDK request now retains HTTP metadata and distinguishes missing/null/zero usage.
+The effective server budget and workload-specific failure trigger remain unknown;
+provider settings and scientific owners are unchanged. No additional Firefox
+qualification, staging, commit, push or next capability is performed.
+The payload diagnosis in report section 12 is historical evidence: it isolated a
+schema-associated failure without identifying the provider-side trigger. Section 13
+supersedes that compaction design with one fixed typed Interpreter proposal schema
+and one Registry-derived capability projection. All 43 tools, 69 native functions
+and 164 offers remain discoverable; exact API/package names and verified Session
+context expand descriptions without routing or granting authority. Existing typed
+admission checks canonical identities, exact user values and function/source scopes;
+the same Planner/Compiler/Executor and native scientific owners remain authoritative.
+Combinatorial schema construction, enum factoring and duplicate parameter aliases
+are removed, with no fallback protocol. Actual persisted readers remain necessary.
+Accepted parameter evidence now follows the same function-qualified binding owner.
+The complete production protocol succeeds in a bounded official OpenAI probe:
+26,457 input tokens versus 44,910 previously. A genuine Firefox task completes
+native PCA and a checked download. Its initially withheld explanation is preserved;
+the corrected reader exposes its accepted summary after restart. A second explicit
+native continuation completes provider generation but fails admission before science.
+At that stage live continuation and generated explanation remained unqualified. Section 13 records
+structural growth tests, regressions, preservation and bounded limitations; no
+provider configuration change, science expansion, staging, commit, push or 1H work
+is authorized by this record.
+
+Report section 14 completes bounded integrated interaction acceptance. Genuine
+Firefox/official OpenAI requests execute PCA/neighbors/Leiden/UMAP, reuse the exact
+accepted PCA for neighbors, change neighbors from 12 to 15 without PCA rerun, and
+deliver native motif positions plus six checked downloads. A separate missing-file
+request captures the dataset prerequisite without a Run. A reviewed comparison
+answer passes; task completion prose remains partial and native summaries can be
+technical. The original unsaved rejection remains unknowable; a controlled failure
+identifies a missing normalized function choice, correctly rejected by admission.
+Shared instructions distinguish function choice, function scope and direct source
+scope. Compiler binding excludes other functions' scalar sources. Prerequisite
+advice and parameter continuation project one unambiguous function scope without
+changing request inputs or granting execution authority; saved earlier questions
+remain readable. Web failure labels distinguish pre-execution failure. One fixed
+Interpreter schema, Registry and scientific/delivery owners remain; no science
+algorithm or inventory changes occur in this closeout. Fourteen bounded submissions
+observe 30 provider calls, including two connection failures. Exact historical
+records, source bytes and accepted outputs survive restart. The recommendation is
+CONDITIONAL GO for the demonstrated controlled research scope, not universal
+provider/prose, biological or deployment qualification. The final engineering
+review confirms COMPLETE within that bounded scope. The user's final closeout
+instruction authorizes one coherent completion commit and a normal push to
+`origin/main`. Earlier no-commit statements
+record pre-closeout stages. The report's section 14.8 owns final review and Git
+verification. STE-NFI-1H is not started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

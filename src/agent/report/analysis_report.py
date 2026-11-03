@@ -1238,6 +1238,10 @@ def report_fact_fields(tool_name, raw_facts):
     gain no new meaning; optional extensions are selected by their recorded keys.
     """
     fields = _REPORT_FIELDS.get(tool_name, ())
+    if tool_name == 'run_macs3' and 'result_files' in raw_facts:
+        fields = (*fields, 'result_files')
+    if tool_name == 'run_motifmatchr' and 'n_positions' in raw_facts:
+        fields = (*fields, 'n_positions')
     if tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap') and 'embedding_method' in raw_facts:
         fields = (*fields, 'embedding_method', 'representation')
         if 'embedding_parameters' in raw_facts:

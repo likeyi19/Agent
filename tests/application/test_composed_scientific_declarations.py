@@ -8,7 +8,7 @@ from agent.application.dialogue_execution import (
     _bind_arguments, _check_parameter_plan, scientific_parameters,
 )
 from agent.application.turn_decisions import (
-    IntentError, ScopedArgument, ScalarChoiceArgument, _compact_decision_schema,
+    IntentError, ScopedArgument, ScalarChoiceArgument,
     _interpretation_public, decision_schema, parse_decision,
 )
 from agent.orchestration import build_default_tool_registry
@@ -101,19 +101,6 @@ def expand(schema):
     return visit(schema)
 
 
-def test_provider_schema_compaction_is_lossless_and_keeps_source_associations():
-    registry = build_default_tool_registry()
-    public = dict(bases={}, relations=['current'], dialogue=dict(outputs=[], tools=list(registry.names()),
-        scientific_parameters=scientific_parameters(registry), resource_source=True,
-        selected_sources=[dict(source='source.0', input_type='h5ad'), dict(source='source.1', input_type='h5ad')],
-        source_fields=[dict(source='source.0', fields=['cell_type']), dict(source='source.1', fields=['truth'])],
-        input_roles=[dict(tool='evaluate_cell_clustering', port='ground_truth_dataset')]))
-    original = decision_schema(public)
-    compact = _compact_decision_schema(original)
-    assert expand(compact) == original
-    assert len(json.dumps(compact)) < len(json.dumps(original)) * .7
-    assert compact == _compact_decision_schema(original)
-
 
 def test_cooutput_compaction_preserves_all_handles_and_differing_evidence():
     fields = dict(available_fields=['n_cells'], fields_omitted=False, subjects=dict(candidates=[], complete=False))
@@ -121,7 +108,7 @@ def test_cooutput_compaction_preserves_all_handles_and_differing_evidence():
             dict(handle='r2', **(fields | {'available_fields': ['different']})), dict(handle='r3', **fields)]
     public = dict(dialogue=dict(outputs=rows, result_groups=[dict(canonical_output='r0', outputs=['r0', 'r1', 'r2'])]))
     frozen = json.dumps(public)
-    projected = _interpretation_public(public)['dialogue']['outputs']
+    projected = _interpretation_public(public, '')['dialogue']['outputs']
     assert [r['handle'] for r in projected] == ['r0', 'r1', 'r2', 'r3']
     assert projected[1] == dict(handle='r1', evidence_from='r0')
     assert projected[2] == rows[2] and projected[3] == rows[3]
@@ -169,3 +156,21 @@ def test_group_binding_retains_composed_scalar_intent_without_new_file_authority
     with pytest.raises(ResourceAdmissionError):
         group_role_inputs(RegisteredInputGroup([member], values | {'hidden_path':'/other.h5ad'},
             attachment_candidates=True), roles, registry)
+
+
+def test_parameter_projection_preserves_registry_names_and_canonical_details():
+    from agent.application.dialogue_execution import scientific_capabilities
+    registry=build_default_tool_registry()
+    parameters=scientific_parameters(registry)
+    public=dict(dialogue=dict(scientific_parameters=parameters, outputs=[], tools=list(registry.names()),
+                             capabilities=scientific_capabilities(registry)))
+    projected=_interpretation_public(public, '')['dialogue']['capabilities']
+    for row in parameters:
+        actual=dict(projected[row['tool']]['parameters'][row['argument']])
+        expected={k:v for k,v in row.items() if k not in ('tool','argument')}
+        if 'member_names' in actual:
+            assert set(actual.pop('member_names')) == set(expected['members'])
+            assert actual.pop('members') == {}
+            expected.pop('members')
+        assert actual == expected
+    assert public['dialogue']['scientific_parameters'] is parameters

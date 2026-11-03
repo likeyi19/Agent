@@ -19,16 +19,34 @@ result <- tryCatch(
    jsonlite::write_json(list(message=conditionMessage(e)),'native-error.json',auto_unbox=TRUE)
    stop(e)
  })
-matches <- motifMatches(result)
-stopifnot(inherits(matches,'lgCMatrix'),identical(rownames(result),p$feature_id),
- ncol(result)==length(pfms),identical(assayNames(result),'motifMatches'))
-writeMM(matches,'matches.mtx')
-write.table(data.frame(native_name=colnames(result),motif_id=ID(pfms),name=name(pfms)),
+mode <- if (is.null(kwargs$out)) 'matches' else kwargs$out
+if (mode == 'positions') {
+ stopifnot(inherits(result, 'GRangesList'), length(result) == length(pfms), identical(names(result), names(pfms)))
+ hits <- as.data.frame(result)
+ positions <- data.frame(motif_index=hits$group-1L, native_name=hits$group_name,
+   seqnames=hits$seqnames, start=hits$start, end=hits$end, width=hits$width,
+   strand=hits$strand, score=sprintf('%.17g', hits$score))
+ write.table(positions, 'positions.tsv', sep='\t', quote=FALSE, row.names=FALSE)
+ details <- list(n_positions=nrow(positions))
+ native_names <- names(result)
+} else {
+ matches <- motifMatches(result)
+ stopifnot(inherits(matches,'lgCMatrix'),identical(rownames(result),p$feature_id), ncol(result)==length(pfms))
+ writeMM(matches,'matches.mtx')
+ if (mode == 'scores') {
+   writeMM(motifScores(result), 'scores.mtx')
+   writeMM(motifCounts(result), 'counts.mtx')
+ }
+ details <- list(matrix_class=class(matches),dim=dim(result),nnz=length(matches@x),
+   rows_preserved=TRUE,assays=assayNames(result))
+ native_names <- colnames(result)
+}
+if (mode != 'matches') saveRDS(result, 'native-result.rds')
+write.table(data.frame(native_name=native_names,motif_id=ID(pfms),name=name(pfms)),
  'motifs.tsv',sep='\t',quote=FALSE,row.names=FALSE)
 versions <- vapply(c('motifmatchr','TFBSTools','GenomicRanges','Biostrings','Matrix','SummarizedExperiment','Rsamtools'),
  function(p)as.character(packageVersion(p)),'')
-jsonlite::write_json(list(completion='succeeded',function_name=req$function_name,
+jsonlite::write_json(c(list(completion='succeeded',function_name=req$function_name,
  request_sha256=digest::digest(file=request_path,algo='sha256'),versions=as.list(versions),R=R.version.string,
- result_class=class(result),matrix_class=class(matches),dim=dim(result),nnz=length(matches@x),
- rows_preserved=TRUE,assays=assayNames(result),chromVAR_loaded='chromVAR' %in% loadedNamespaces(),
- session=capture.output(sessionInfo())), 'native-receipt.json',auto_unbox=TRUE,pretty=TRUE,digits=NA)
+ result_class=class(result),chromVAR_loaded='chromVAR' %in% loadedNamespaces(),
+ session=capture.output(sessionInfo())),details), 'native-receipt.json',auto_unbox=TRUE,pretty=TRUE,digits=NA)

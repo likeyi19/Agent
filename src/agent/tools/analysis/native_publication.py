@@ -22,16 +22,21 @@ class NativePublication:
 
     def load(self,path,sha=None):
         value = read(path,sha);root = Path(path).parent
+        files = self.files(value) if callable(self.files) else self.files
         if (value['contract']!=self.contract or value['profile'] not in {self.profile, *self.historical_profiles} or root!=Path(value['arguments']['output_dir'])
                 or Path(path).name!='manifest.json' or value['native_completion']!='succeeded'
-                or {r['path'] for r in value['files']}!={str(root/name) for name in self.files} or len(value['files'])!=len(self.files)):
+                or {r['path'] for r in value['files']}!={str(root/name) for name in files} or len(value['files'])!=len(files)):
             raise AuthorityError('Invalid native scientific publication identity or membership')
         return value,file_closure([path])[0]['sha256']
 
 
     def result(self,value,path,sha):
         result = dict(value['result'], manifest_path=str(path), manifest_sha256=sha)
-        for prefix, name in self.outputs.items():
+        outputs = self.outputs(value) if callable(self.outputs) else self.outputs
+        for prefix, name in outputs.items():
+            if name is None:
+                result.update({prefix+'_path': None, prefix+'_sha256': None})
+                continue
             pin = next(r for r in value['files'] if Path(r['path']).name == name)
             result.update({prefix+'_path': pin['path'], prefix+'_sha256': pin['sha256']})
         return result

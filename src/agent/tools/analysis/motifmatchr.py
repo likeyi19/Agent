@@ -23,23 +23,25 @@ TOOL = 'run_motifmatchr'
 KIND = 'native_motif_matches'
 CONTRACT = 'motifmatchr-matches.v1'
 POLICY = 'motifmatchr-native-v1'
-PROFILE = digest(dict(contract=CONTRACT, function='motifmatchr::matchMotifs',
+HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, function='motifmatchr::matchMotifs',
     subject='ordered GRanges; all supplied peaks', output='native matches'))
+PROFILE = digest(dict(contract=CONTRACT, adaptation='native matches, scores and genomic positions.v2'))
 VERIFIER = dict(id='agent.motifmatchr-native-completion', compatibility_version='1')
 FILES = ('matches.mtx','motif-matches.npz','peaks.tsv','motifs.tsv','metadata.json','native-receipt.json')
 NATIVE_ARGUMENTS = (
     ('p.cutoff', 'Native p-value cutoff for motif matching.'),
     ('bg', 'Native nucleotide background: subject, genome, even or an explicit frequency vector.'),
-    ('out', 'Native output form; only matches has a publication representation. Other explicit forms must not be replaced.'),
+    ('out', 'Native output form; matches, scores or positions; preserve the requested native representation.'),
 )
 LIMITATIONS = ('Sequence motif matches are not chromVAR deviations, enrichment, TF expression or binding, '
     'causality or experimental validation. All supplied peaks are scanned in original order, including '
     'zero-count peaks. Counts and cells are not analyzed. Omitted optional arguments use the installed '
-    'native method defaults; only matches output is supported.')
+    'native method defaults. Scores include native matches, scores and match counts; positions are genomic 1-based closed ranges with strands and scores, not a boolean matrix.')
 FACT_FIELDS = ('function_name','n_peaks','n_motifs','n_matches','assembly','motif_collection',
     'parameters','measurement','ordering','software_versions','limitations')
 RESULT_FIELDS = dict(status=(str,),contract_version=(str,),manifest_path=(str,),manifest_sha256=(str,),
-    matches_path=(str,),matches_sha256=(str,),function_name=(str,),n_peaks=(int,),n_motifs=(int,),n_matches=(int,),
+    matches_path=(str,type(None)),matches_sha256=(str,type(None)),
+    function_name=(str,),n_peaks=(int,),n_motifs=(int,),n_matches=(int,type(None)),
     assembly=(str,),motif_collection=(dict,),parameters=(dict,),measurement=(str,),ordering=(str,),
     software_versions=(dict,),limitations=(str,))
 
@@ -72,8 +74,8 @@ def native_arguments(args):
                 raise ValueError('Native background vectors require finite JSON numbers')
         elif not scalar(value):
             raise ValueError('Native kwargs require bounded JSON scalar data or a background frequency vector')
-    if 'out' in kwargs and kwargs['out'] != 'matches':
-        raise ValueError('Only native out="matches" has a publication representation; requested output is not substituted')
+    if 'out' in kwargs and kwargs['out'] not in ('matches', 'scores', 'positions'):
+        raise ValueError('Supported native outputs are matches, scores and positions; requested output is not substituted')
     return kwargs
 
 
@@ -177,28 +179,50 @@ def execute(values,execution_identity=None):
         fasta,genome,motif,entry,sources = sequence_reference.resolve_motif_resources(effective,peaks,stage)
         receipt = native(effective,stage,fasta,motif)
         motifs = pd.read_csv(stage/'motifs.tsv',sep='\t',keep_default_na=False)
-        matches = mmread(stage/'matches.mtx').tocsc()
-        if (matches.shape!=(len(peaks),len(motifs)) or receipt['dim']!=list(matches.shape)
-                or receipt['nnz']!=matches.nnz or not np.all(matches.data==1)
-                or receipt['rows_preserved'] is not True or receipt['assays']!='motifMatches'):
-            raise AuthorityError('Native match matrix, axes or completion dimensions differ')
-        # Native colnames, accession/version and TF name are retained separately.
-        metadata = pd.read_csv(motif['metadata']['path'],sep='\t',keep_default_na=False)
+        mode = kwargs.get('out', 'matches')
+        if mode == 'positions':
+            positions = pd.read_csv(stage/'positions.tsv', sep='\t', keep_default_na=False)
+            if (receipt['n_positions'] != len(positions)
+                    or list(positions) != ['motif_index', 'native_name', 'seqnames', 'start', 'end', 'width', 'strand', 'score']
+                    or not positions.motif_index.between(0, len(motifs)-1).all()
+                    or not (positions.end - positions.start + 1 == positions.width).all()):
+                raise AuthorityError('Native genomic positions differ from completion or motif axes')
+            n_matches = None
+            measurement = 'native genomic motif positions with strand and score; 1-based closed'
+        else:
+            matches = mmread(stage/'matches.mtx').tocsc()
+            assays = 'motifMatches' if mode == 'matches' else ['motifMatches', 'motifScores', 'motifCounts']
+            if (matches.shape != (len(peaks), len(motifs)) or receipt['dim'] != list(matches.shape)
+                    or receipt['nnz'] != matches.nnz or not np.all(matches.data == 1)
+                    or receipt['rows_preserved'] is not True or (receipt['assays'] != assays if mode == 'matches' else set(receipt['assays']) != set(assays))):
+                raise AuthorityError('Native match matrix, axes or completion dimensions differ')
+            sparse.save_npz(root/'motif-matches.npz', matches.astype(bool))
+            n_matches = matches.nnz
+            measurement = 'native boolean sequence motif matches'
+            if mode == 'scores':
+                for name in ('scores.mtx', 'counts.mtx'):
+                    if mmread(stage/name).shape != matches.shape:
+                        raise AuthorityError('Native score/count axes differ from motif matches')
+                measurement = 'native motif matches, maximum match scores and match counts'
+        # Accessions/version and TF labels remain distinct, in native motif order.
+        metadata = pd.read_csv(motif['metadata']['path'], sep='\t', keep_default_na=False)
         annotations = metadata.set_index('matrix_id').loc[motifs.motif_id]
         for key in annotations:
             if key not in motifs:
                 motifs[key] = annotations[key].to_numpy()
-        motifs.to_csv(root/'motifs.tsv',sep='\t',index=False)
-        for name in ('peaks.tsv','matches.mtx'):
-            shutil.copyfile(stage/name,root/name)
-        sparse.save_npz(root/'motif-matches.npz',matches.astype(bool))
+        motifs.to_csv(root/'motifs.tsv', sep='\t', index=False)
+        for name in publication_files(dict(arguments=args)):
+            if name not in ('motifs.tsv', 'metadata.json', 'native-receipt.json', 'motif-matches.npz'):
+                shutil.copyfile(stage/name, root/name)
         collection = dict(resource_id=entry['id'],release=motif['release'],collection=motif['collection'],
             tax_group=motif['tax_group'],citation=motif['citation'],license=motif['license'])
         summary = dict(status='success',contract_version=CONTRACT,function_name='motifmatchr::matchMotifs',
-            n_peaks=len(peaks),n_motifs=len(motifs),n_matches=matches.nnz,assembly=genome['assembly'],
+            n_peaks=len(peaks),n_motifs=len(motifs),n_matches=n_matches,assembly=genome['assembly'],
             motif_collection=collection,parameters=dict(kwargs=kwargs,omitted_optional_arguments='native defaults'),
-            measurement='native boolean sequence motif matches',ordering='all source peaks × native motif order',
+            measurement=measurement,ordering=('native motif order then native genomic-hit order; peaks.tsv retains source peak order' if mode == 'positions' else 'all source peaks × native motif order'),
             software_versions=receipt['versions'],limitations=LIMITATIONS)
+        if mode == 'positions':
+            summary['n_positions'] = len(positions)
         write(root/'native-receipt.json',receipt)
         write(root/'metadata.json',dict(summary=summary,source=source,genome=genome,motif=motif,
             coordinate_system='zero_based_half_open',native_coordinates='GRanges: start + 1, end unchanged',
@@ -208,7 +232,7 @@ def execute(values,execution_identity=None):
         if sources!=sorted(expected.values(),key=lambda r:r['path']):
             raise AuthorityError('Input or reference changed during native invocation')
     value = dict(contract=CONTRACT,profile=PROFILE,arguments=args,execution_identity=execution_identity,
-        result=summary,files=file_closure(root/name for name in FILES),sources=sources,native_completion='succeeded')
+        result=summary,files=file_closure(root/name for name in publication_files(dict(arguments=args))),sources=sources,native_completion='succeeded')
     path = root/'manifest.json';sha = write(path,value)
     if current() is not None:
         current().register_execution(KIND,root,execution_identity)
@@ -221,9 +245,22 @@ def run_motifmatchr(input_path,output_dir,function_name,kwargs=None,input_sha256
     return execute({k:v for k,v in locals().items() if v is not None})
 
 
+def publication_files(value):
+    mode = value['arguments'].get('kwargs', {}).get('out', 'matches')
+    if value.get('profile') == HISTORICAL_PROFILE or mode == 'matches':
+        return FILES
+    common = ('peaks.tsv', 'motifs.tsv', 'metadata.json', 'native-receipt.json', 'native-result.rds')
+    if mode == 'scores':
+        return common + ('matches.mtx', 'motif-matches.npz', 'scores.mtx', 'counts.mtx')
+    if mode == 'positions':
+        return common + ('positions.tsv',)
+    raise AuthorityError('Unrepresented native motif output')
+
+
 from .native_publication import NativePublication
 publication = NativePublication(tool=TOOL, kind=KIND, contract=CONTRACT, profile=PROFILE, verifier=VERIFIER,
-    files=FILES, arguments=arguments, outputs={'matches': 'motif-matches.npz'})
+    files=publication_files, arguments=arguments, historical_profiles=(HISTORICAL_PROFILE,),
+    outputs=lambda v: {'matches': None if v['arguments'].get('kwargs', {}).get('out') == 'positions' else 'motif-matches.npz'})
 load = publication.load
 result = publication.result
 verify_publication = publication.verify_publication
@@ -236,6 +273,10 @@ publication_record = publication.publication_record
 
 
 DELIVERY_FILES = {
+    'native-result.rds': ('Exact native R result, including ranges and attributes', 'application/octet-stream'),
+    'positions.tsv': ('Native motif hits: 1-based closed genomic ranges, strand and score', 'text/tab-separated-values'),
+    'scores.mtx': ('Native peak-by-motif maximum match scores', 'application/octet-stream'),
+    'counts.mtx': ('Native peak-by-motif match counts', 'application/octet-stream'),
     'matches.mtx': ('Native peak-by-motif matches (Matrix Market)', 'application/octet-stream'),
     'motif-matches.npz': ('Native peak-by-motif matches (SciPy sparse)', 'application/octet-stream'),
     'peaks.tsv': ('All original ordered genomic peaks', 'text/tab-separated-values; charset=utf-8'),

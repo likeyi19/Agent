@@ -660,10 +660,24 @@ deterministic planner is not a semantic oracle for LLM output.
 
 ## Scientific capabilities
 
-STE-NFI-1F expands native coverage to **66 package-qualified functions** across
+STE-NFI-1G provides **69 package-qualified native functions**, two new motifmatchr
+output modes and two-input Signac statistics, with **43 Registry tools**. New
+MACS3 four-track comparison and chromVAR background sampling use real scientific
+inputs. One fixed Interpreter protocol projects Registry capabilities and all
+**164 canonical parameter offers** into the existing Planner and typed binding.
+STE-NFI-1G is **COMPLETE — bounded CONDITIONAL GO for controlled researcher use**.
+Genuine Firefox/official OpenAI acceptance covers multi-function Scanpy tasks,
+exact accepted-result continuation and parameter changes, motif positions,
+missing-file clarification, evidence explanation and checked downloads. Provider
+transport, occasional invalid proposals and partial/technical prose remain limits;
+this is not biological validation or unrestricted deployment qualification.
+See the [native guide](docs/guides/native-functions.md#ste-nfi-1g-native-input-families-and-interaction)
+and section 14 of the [1G report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1g/REPORT.md).
+
+STE-NFI-1F expanded native coverage to **66 package-qualified functions** across
 six expanded package families, with the same **43 Registry tools**. Native
 non-inplace returns, feature subsets, statistics and similarity matrices keep
-their actual values and source relationships. See the [native guide](docs/guides/native-functions.md#ste-nfi-1f-current-native-api-coverage)
+their actual values and source relationships. See the [native guide](docs/guides/native-functions.md#ste-nfi-1f-native-api-coverage-at-that-milestone)
 and [acceptance report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1f/REPORT.md)
 for supported kwargs, installed-runtime limits and bounded Web qualification.
 

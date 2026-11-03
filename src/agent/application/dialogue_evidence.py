@@ -41,7 +41,7 @@ RESULT_LIMITATIONS = {
     'call_scATAC_peaks': 'Native MACS3 discovers experimental accessible regions in one exact library population. Count each canonical fragment record once, not read-pair support. No second Tn5 shift. narrowPeak/BED are zero-based half-open; XLS positions are one-based closed. Native p/q fields are minus-log10 probabilities, fold enrichment and pileup are not cell-by-peak counts. Peak-calling q-values do not establish differential accessibility between conditions; that requires experimental replicates and the separate statistical method. Empty calls have no downstream feature reference. The accepted reference and population can feed the existing fragment-overlap matrix owner, independently of downstream choices.',
     **{p.TOOL: p.guidance for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS)},
     'run_chromvar': 'Native chromVAR functions preserve their distinct output semantics: computeExpectations returns peak expectations with native norm/group behavior; count accessors return totals of the supplied measurement; computeVariability returns motif z-score variability with native chi-square/BH statistics and optional bootstrap bounds. These are not replicate-level differential tests or TF binding evidence. kwargs are exact supplied parameters; omitted arguments use native defaults. Counts require no genome or motif scan. Existing deviations are reused without upstream computation.',
-    'run_motifmatchr': 'Native motifmatchr::matchMotifs scans all supplied genomic peaks against the selected motif collection. Boolean peak-by-motif matches preserve native axes. Counts, clustering, chromVAR backgrounds and deviations are not computed. parameters.kwargs contains exact supplied native arguments; omitted optional arguments use native defaults, not invented user instructions. Sequence matches are not expression, binding, enrichment or causal evidence. The sparse matrix and ordered metadata are downloadable from the accepted result.',
+    'run_motifmatchr': 'Native motifmatchr::matchMotifs scans all supplied genomic peaks against the selected motif collection. Native matches output is boolean; scores output retains matches/scores/counts, while positions output retains 1-based closed genomic hits with strands and scores. n_matches counts peak/motif incidences for matrices and is null for positions; n_positions counts native genomic hits. Ordered peaks and motif metadata remain available. Counts, clustering, chromVAR backgrounds and deviations are not computed. parameters.kwargs contains exact supplied native arguments; omitted optional arguments use native defaults, not invented user instructions. Sequence matches are not expression, binding, enrichment or causal evidence. The actual mode-specific files and ordered metadata are downloadable from the accepted result.',
     'compute_motif_accessibility': 'Native chromVAR measures motif-associated accessibility with GC/accessibility-matched backgrounds. X is bias-corrected deviation; z-scores are separate. High variability or group mean is descriptive, not motif enrichment, expression, uniquely identified TF activity, physical binding, causality or replicate-level condition significance. Related TF motifs may be indistinguishable. Supplied groups, including vendor clusters, are not validated cell types. Preserve undefined values, original axes, actual source count semantics, collection and genome identities. Downloads and the native heatmap are available from accepted results without repeating science.',
     'prepare_scatac_regulatory_sequences': 'Observed scATAC region selection and exact reference extraction, without model inference. Detection fractions and differences are descriptive, never statistical significance or FDR. DA statistics retain the actual group and numerator-versus-denominator condition contrast, never inferred cell-type comparisons. Source peaks and real extracted windows are distinct. Midpoint anchors are not measured summits. Unstranded regions use reference plus orientation. Exact FASTA, BED and evidence downloads are available. An annotation is not automatically a supported model target; model predictions and observed ATAC remain separate, with no enhancer-function or experimental-validation claim.',
     'generate_regulatory_sequences': 'Synthetic regulatory DNA candidates, not verified enhancers or functional cCREs. Exact condition is a training label, not predicted or measured activity. GC fractions, entropy in bits (maximum 2), homopolymers and all-pairs position-wise Hamming describe batch composition; they do not establish training novelty, repeat-family annotation or biological diversity. Duplicate sequences are retained; duplicate_sequences is total minus unique. Compare sets only using pinned descriptors with exact result attribution. Optional DHS64 predictions are separate padded in silico evidence, not generator validation. Never fabricate genomic coordinates or flanks.',
@@ -470,6 +470,7 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
         return ()
     from .dialogue_execution import _argument_fields, _parameter_input, _check_parameter_plan
     from .turn_decisions import _scientific_arguments, admit_scientific_argument
+    from agent.orchestration.native_parameters import declaration_input
     indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
     linked, current = [], interaction
     while current is not None:
@@ -499,18 +500,22 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
             for declaration in arguments:
                 name, specification = _parameter_input(sessions._application.registry,
                     declaration.tool, declaration.argument)
+                name = declaration_input(sessions._application.registry, declaration, name)
                 argument = admit_scientific_argument(declaration, current.utterance, specification,
                     observation_fields=fields.get((declaration.tool, declaration.argument)))
                 if (name not in record.get('inputs', {})
                         or _bytes(record['inputs'][name]) != _bytes(argument)):
                     raise ValueError('Declaration differs from its admitted binding.')
-                declarations[declaration.tool, declaration.argument] = (name, argument)
+                declarations[declaration.tool, declaration.argument,
+                    getattr(declaration, 'native_function', None)] = (name, argument)
         # Share the admission owner: exact source-scoped consumers, no second
         # single-instance interpretation during accepted-evidence presentation.
         consumers = _check_parameter_plan(sessions._application.registry, run.plan, admitted, state.interactions)
         names = {}
-        for (tool, argument_name), (input_name, argument) in declarations.items():
+        for (tool, argument_name, function), (input_name, argument) in declarations.items():
             if tool != step.tool_name or (step.step_id, argument_name) not in consumers:
+                continue
+            if function is not None and planned.arguments.get('function_name') != function:
                 continue
             if (input_name not in admitted.get('inputs', {})
                     or _bytes(admitted['inputs'][input_name]) != _bytes(argument)

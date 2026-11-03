@@ -83,7 +83,7 @@ def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, deci
     assert not list(application.run_store.root.glob('*.json'))
     assert state.interactions[0].base_revision_id is None and len(model.calls) == 1
     assert model.calls[0]['bases'] == {} and model.calls[0]['dialogue']['outputs'] == []
-    assert 'inspect_scATAC' in model.calls[0]['dialogue']['tools']
+    assert 'inspect_scATAC' in model.calls[0]['dialogue']['capabilities']
 
 
 def test_empty_guidance_uses_supported_advice_without_creating_scientific_state(tmp_path, monkeypatch):

@@ -61,6 +61,13 @@ class _QueueEndpoint:
         self.outcomes = list(outcomes)
         self.calls: list[dict[str, object]] = []
 
+    @property
+    def with_raw_response(self):
+        def create(**kwargs):
+            result = self.create(**kwargs)
+            return SimpleNamespace(parse=lambda: result, status_code=200, request_id='req_test')
+        return SimpleNamespace(create=create)
+
     def create(self, **kwargs):
         schema = kwargs.get("response_format", {}).get("schema") or kwargs.get("text", {}).get("format", {}).get("schema", {})
         if "selection_schema_version" in schema.get("properties", {}):

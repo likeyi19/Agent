@@ -949,13 +949,14 @@ function readableLabel(value) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function statusLabel(status, responseKind = null, revisionId = null) {
+function statusLabel(status, responseKind = null, revisionId = null, runId = undefined, steps = undefined) {
   if (status === "finalizing") {
     if (responseKind) return "Saved progress requires recovery";
     return revisionId ? "Scientific analysis completed. Preparing the results and explanation."
       : "Preparing the scientific response.";
   }
   if (status === "failed" && responseKind === "answer") return "Answer unavailable";
+  if (status === "failed" && (runId === null || (Array.isArray(steps) && steps.every((step) => step.attempts === 0)))) return "Request failed before scientific execution";
   const labels = {
     activated: "Analysis completed", succeeded: "Analysis completed",
     stale: "Analysis completed · Historical result", failed: "Analysis failed",
@@ -1407,7 +1408,7 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
+    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id, turn.run_id, turn.steps) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     metadata.dataset.detailKey = "turn-details";
@@ -1536,7 +1537,7 @@ function updateControls() {
 
 function renderExecution() {
   element("turn-status").parentElement.hidden = !state.posting && !state.activeTurn;
-  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind, state.activeTurn.revision_id) : "Ready";
+  element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind, state.activeTurn.revision_id, state.activeTurn.run_id, state.activeTurn.steps) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");

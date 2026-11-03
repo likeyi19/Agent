@@ -168,8 +168,11 @@ def test_interactive_failure_and_clarification_survive_retry_and_reopen_without_
     assert reopened._application.sessions.load(SID) == state
 
 
-def test_interpreter_preparation_failure_does_not_call_model(caplog):
+def test_interpreter_preparation_failure_does_not_call_model(caplog, monkeypatch):
     model = Model()
+    def unavailable_schema():
+        raise KeyError('simulated schema construction failure')
+    monkeypatch.setattr(turn_decisions, 'decision_schema', unavailable_schema)
     with pytest.raises(KeyError):
         interpret(model, SECRET, {}, diagnostic_context=(SID, TID))
     assert model.calls == []
@@ -227,3 +230,38 @@ def test_logging_failure_and_fingerprints_preserve_original_model_contract(monke
     model2 = Model()
     assert interpret(model2, SECRET, public, diagnostic_context=(SID, TID)) == Clarify('invalid_decision')
     assert model.calls == model2.calls
+
+
+def test_rejected_proposal_records_catalog_structure_without_scientific_values(tmp_path, caplog):
+    text = 'Run scanpy.pp.neighbors with private value.'
+    value = dict(kind='execute_plan', target='run_scanpy', arguments=[dict(
+        tool='run_scanpy', argument='n_neighbors', native_function='pp.neighbors',
+        literal='private', start=text.index('private'), end=text.index('private')+7)])
+    app = ResearchAgentApplication(tmp_path/'workspace')
+    app.sessions.create(SID)
+    result = app.sessions.respond(SID,TID,text,interpreter=Model(value),expected_generation=0,
+        execution_inputs={'input_path':SECRET})
+    assert result.status == 'failed'
+    row = next(r for r in records(caplog) if r['event']=='turn.boundary_failed')
+    assert row['proposal']['target']==dict(catalog_name='run_scanpy')
+    argument, = row['proposal']['arguments']
+    assert argument['argument']==dict(catalog_name='n_neighbors')
+    assert not argument['registered_argument']
+    assert argument['native_function']==dict(catalog_name='pp.neighbors')
+    assert row['rejection_locations'][-1]['function']=='_parameter_input'
+    assert 'private' not in json.dumps(row) and SECRET not in caplog.text
+
+
+def test_proposal_diagnostics_do_not_echo_unknown_identifiers_or_member_values(caplog):
+    import logging
+    from types import SimpleNamespace
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.planning_diagnostics import log_operation_event
+    proposal=SimpleNamespace(target=SECRET,context='current',roles=(),references=(),arguments=(
+        SimpleNamespace(tool='run_scanpy',argument='kwargs',native_function='pp.pca',
+            literal=SECRET,members=(SimpleNamespace(name='n_comps',literal=SECRET),SimpleNamespace(name=SECRET,literal=SECRET))),))
+    log_operation_event(logging.getLogger(__name__),'test.structure',proposal=proposal,registry=build_default_tool_registry())
+    row=records(caplog)[-1]['proposal']
+    assert row['target']==dict(unknown_sha256=hashlib.sha256(SECRET.encode()).hexdigest())
+    assert row['arguments'][0]['members'][0]==dict(catalog_name='n_comps')
+    assert SECRET not in caplog.text and 'Bearer' not in caplog.text

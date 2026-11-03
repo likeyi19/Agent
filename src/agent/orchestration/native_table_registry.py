@@ -5,7 +5,7 @@ from .native_matrix_registry import classify
 
 
 def tool_spec(owner):
-    from .registry import (ToolSpec, ResultContract, DurableToolHooks, ScientificAuthorityHooks,
+    from .registry import (NativeFunctionCatalog, ToolSpec, ResultContract, DurableToolHooks, ScientificAuthorityHooks,
         ArtifactSemanticKind as A, PlanningToolRole, PlanningSourceEligibility as S, SemanticToolSpec,
         SemanticConsumerPortSpec as Consumer, SemanticProducerPortSpec as Producer, _planning_argument as arg,
         _planning_result, _tool_planning, _semantic_member as member, _semantic_request as request,
@@ -15,7 +15,7 @@ def tool_spec(owner):
         artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         output_dir=arg((str, Path), 'Managed native publication destination.'),
         function_name=arg((str,), 'Explicit native function or CLI subcommand.', choices=tuple(owner.FUNCTIONS),
-            scientific_parameter=True, conversational_choice=True))
+            scientific_parameter=True, conversational_choice=True, planner_choice=True))
     optional = dict(input_sha256=arg((str,), 'Captured source checksum.'),
         kwargs=arg((dict,), 'Exact native arguments; input files and output locations are bound separately.',
             scientific_parameter=True, conversational_json_object=True, conversational_members=owner.NATIVE_ARGUMENTS))
@@ -25,16 +25,24 @@ def tool_spec(owner):
             signal_semantics=arg((str,), 'Optional supplied score meaning. Native methods interpret the numerical scores.', scientific_parameter=True, conversational_exact_string=True),
             control_semantics=arg((str,), 'Optional supplied control score meaning.', scientific_parameter=True, conversational_exact_string=True),
             assembly=arg((str,), 'Optional common assembly declaration; no genome resource is required by bedGraph commands.', scientific_parameter=True, conversational_exact_string=True))
+        for role in ('treatment2', 'control2'):
+            optional[role + '_path'] = arg((str, Path), 'bdgdiff exact condition 2 ' + ('pileup' if role == 'treatment2' else 'control lambda') + ' bedGraph.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
+            optional[role + '_sha256'] = arg((str,), 'Captured exact track checksum.')
     else:
         optional['seed'] = arg((int,), 'Optional native R random seed for generate_ccans; omission retains native RNG.', scientific_parameter=True)
+    from .native_parameters import scalar_port
+    base_scalar = scalar
+    scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),), accepted_upstream_types=('native_genomic_table.v1',))]
     if 'control_path' in optional:
-        ports.append(Consumer('control', (member('dataset', 'control_path'),), False,
-            request_sources=(request('control_path', rm('dataset', 'control_path')),), accepted_upstream_types=('native_genomic_table.v1',)))
-    ports.extend(scalar(k, required=k in required) for k in (*required, *optional) if k not in ('input_path', 'control_path'))
+        for role in ('control', 'treatment2', 'control2'):
+            key = role + '_path'
+            ports.append(Consumer(role, (member('dataset', key),), False,
+                request_sources=(request(key, rm('dataset', key)),), accepted_upstream_types=('native_genomic_table.v1',)))
+    ports.extend(scalar(k, required=k in required) for k in (*required, *optional) if k not in ('input_path', 'control_path', 'treatment2_path', 'control2_path'))
     pub = owner.publication
-    return ToolSpec(name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         parameter_prerequisites=owner.parameter_prerequisites, scientific_delivery=delivery_spec(owner, 'scientific_native_result'),
         result_contract=ResultContract('NativeGenomicTableResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native table publication.', bindable=True, artifact=A.RAW_SCATAC)

@@ -28,7 +28,9 @@ tryCatch({
    object <- as(readMM('counts.mtx'),'CsparseMatrix')
    dimnames(object) <- list(features$feature_id,cells$cell_id)
    if (!is.null(req$group_key)) kwargs$group <- cells$group
+   if (req$function_name == 'getBackgroundPeaks') kwargs$bias <- as.numeric(features$bias)
    result <- switch(req$function_name,
+     getBackgroundPeaks=do.call(chromVAR::getBackgroundPeaks,c(list(object=object),kwargs)),
      getTotalFragments=do.call(chromVAR::getTotalFragments,list(object=object)),
      computeExpectations=do.call(chromVAR::computeExpectations,c(list(object=object),kwargs)),
      getFragmentsPerPeak=do.call(chromVAR::getFragmentsPerPeak,c(list(object=object),kwargs)),
@@ -45,6 +47,9 @@ tryCatch({
    axis <- cells$cell_id
  } else if (result_axis == 'scalar') {
    stopifnot(length(result)==1); table <- data.frame(value=as.numeric(result))
+ } else if (req$function_name == 'getBackgroundPeaks') {
+   stopifnot(is.matrix(result), nrow(result)==m)
+   table <- as.data.frame(result); names(table) <- paste0('iteration_', seq_len(ncol(result)))
  } else if (is.data.frame(result)) {
    stopifnot(identical(rownames(result),axis))
    table <- result

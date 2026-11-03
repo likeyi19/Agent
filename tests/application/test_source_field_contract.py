@@ -14,7 +14,7 @@ from agent.application import InteractiveAgentApplication
 from agent.application.dialogue_execution import scientific_parameters
 from agent.application.turn_decisions import (
     IntentError, ScalarChoiceArgument, ScopedArgument, SourceFieldArgument,
-    admit_scientific_argument, decision_schema, parse_decision,
+    admit_scientific_argument, parse_decision,
 )
 from agent.providers import PlanningModelFactoryRegistry
 from agent.schemas.orchestration import _serialize
@@ -73,16 +73,6 @@ def case(tmp_path, *, reverse=False, outside_page=False, **options):
     return app, records, group, executor, calls
 
 
-def nodes(value):
-    if isinstance(value, dict):
-        yield value
-        for child in value.values():
-            yield from nodes(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from nodes(child)
-
-
 @pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.parametrize('equal_role', [False, True])
 def test_field_source_assertion_supplies_only_its_registry_dataset_port(tmp_path, reverse, equal_role):
@@ -99,24 +89,13 @@ def test_field_source_assertion_supplies_only_its_registry_dataset_port(tmp_path
     assert argument['mode'] == 'offered'
     roles = {(row['tool'],row['port']):row['source'] for row in interaction.admitted['roles']}
     assert len(roles) == 2 and roles[('transfer_cell_labels','reference_dataset')] == argument['source']
-    compact = calls[0]['schema']
-    def expand(value):
-        if isinstance(value, dict):
-            if '$ref' in value:
-                return expand(compact['$defs'][value['$ref'].split('/')[-1]])
-            return {k: expand(v) for k, v in value.items() if k != '$defs'}
-        if isinstance(value, list):
-            return [expand(v) for v in value]
-        return value
-    schema = expand(compact)
-    variants = [row['properties'] for row in nodes(schema) if set(row.get('properties', {})) ==
-                {'tool','argument','source','mode','value','literal','evidence'}
-                and row['properties']['tool'].get('enum') == ['transfer_cell_labels']]
-    assert variants
-    offered = {row['source']:row['fields'] for row in calls[0]['value']['dialogue']['source_fields']}
-    for row in variants:
-        if row['mode']['enum'] == ['offered']:
-            assert row['value']['enum'] == offered[row['source']['enum'][0]]
+    # Field offers stay attached to the captured source; the fixed proposal
+    # schema is not the catalog or the authority for that association.
+    offered = {row['source']: row['fields'] for row in calls[0]['value']['dialogue']['source_fields']}
+    assert LABEL in offered[argument['source']]
+    assert calls[0]['value']['dialogue']['capabilities']['transfer_cell_labels']['parameters'][
+        'reference_label_key']['observation_source'] == 'reference_dataset'
+
 
 
 @pytest.mark.parametrize('change', [dict(reference='source.1'), dict(reference='source.9'),
@@ -165,18 +144,6 @@ def test_source_qualified_wire_requires_value_and_mode_and_retains_old_readers()
     assert type(parse_decision(wire(base | dict(value='cell identity')), utterance=text).arguments[0]) is ScalarChoiceArgument
 
 
-def test_metadata_scope_absence_does_not_advertise_a_source_free_bypass(tmp_path):
-    app, _, group, _, calls = case(tmp_path)
-    app.submit_turn('session', 'field', REQUEST, expected_generation=0, registered_input=group)
-    public = calls[0]['value']
-    public['dialogue'].pop('source_fields')
-    properties = [row['properties'] for row in nodes(decision_schema(public))
-                  if row.get('properties', {}).get('argument', {}).get('enum') == ['reference_label_key']]
-    assert not properties
-    public['dialogue']['selected_sources'] = []
-    properties = [row['properties'] for row in nodes(decision_schema(public))
-                  if row.get('properties', {}).get('argument', {}).get('enum') == ['reference_label_key']]
-    assert properties and all(set(row) == {'tool','argument','literal','evidence'} for row in properties)
 
 
 def test_annotation_evaluation_offers_its_registered_ground_truth_port(tmp_path):

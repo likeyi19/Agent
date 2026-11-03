@@ -29,6 +29,8 @@ def _parameter_input(registry, tool_name, argument_name):
     if tool_name not in registry.names():
         raise IntentError('unsupported_intent')
     tool = registry.get(tool_name)
+    from agent.orchestration.native_parameters import function_choices, input_name
+    native_functions = function_choices(tool)
     argument = tool.required_arguments.get(argument_name, tool.optional_arguments.get(argument_name))
     choice = (argument is not None and argument.planning is not None
         and argument.planning.conversational_choice and str in argument.accepted_types
@@ -44,14 +46,16 @@ def _parameter_input(registry, tool_name, argument_name):
         ports = [port for port in tool.semantic_planning.consumer_ports
                  if any(member.field_name == argument_name for member in port.members)]
         if (len(ports) != 1 or len(ports[0].members) != 1
-                or ports[0].accepted_upstream_types or len(ports[0].request_sources) != 1):
+                or ports[0].accepted_upstream_types or not ports[0].request_sources):
+            raise IntentError('ambiguous_parameter')
+        if len(ports[0].request_sources) > 1 and {s.selector for s in ports[0].request_sources[1:]} != {input_name(tool_name, f, argument_name) for f in native_functions}:
             raise IntentError('ambiguous_parameter')
         source = ports[0].request_sources[0]
         if len(source.members) != 1 or source.members[0].name != ports[0].members[0].name:
             raise IntentError('ambiguous_parameter')
         return source.members[0].input_name, argument
     inputs = {member.input_name for port in tool.semantic_planning.consumer_ports
-              for source in port.request_sources for member in source.members
+              for source in (port.request_sources[:1] if native_functions else port.request_sources) for member in source.members
               if len(source.members) == 1 and any(field.name == member.name
                   and field.field_name == argument_name for field in port.members)}
     if len(inputs) != 1:
@@ -189,14 +193,20 @@ def _source_field_roles(registry, roles, declarations):
     return tuple(merged)
 
 
+def _current_parameter(tool, name):
+    # These settings remain readable on accepted training publications; current
+    # initialization does not train and must not advertise or admit them anew.
+    return not (tool == 'adapt_epizoo_species' and name in ('max_steps', 'learning_rate', 'training_batch_size'))
+
+
 def scientific_parameters(registry):
     """Offer registered scientific choices and native defaults, never input values."""
     offered = []
     for tool_name in registry.names():
         tool = registry.get(tool_name)
         for name, spec in {**tool.required_arguments, **tool.optional_arguments}.items():
-            if tool_name == 'adapt_epizoo_species' and name in ('max_steps', 'learning_rate', 'training_batch_size'):
-                continue  # Readable historical training settings; current initialization has no optimizer.
+            if not _current_parameter(tool_name, name):
+                continue
             try:
                 _parameter_input(registry, tool_name, name)
             except IntentError:
@@ -206,6 +216,8 @@ def scientific_parameters(registry):
             if spec.planning.default_when_omitted is not inspect.Parameter.empty:
                 from agent.orchestration.semantic_prompt import _safe_registered_value
                 item['default_when_omitted'] = _safe_registered_value(spec.planning.default_when_omitted)
+            if name == 'function_name' and spec.planning.planner_choice:
+                item['native_scope'] = True
             if spec.planning.conversational_choice:
                 item['choices'] = [value for value in spec.choices if value is not None]
             elif is_json_object_argument(spec):
@@ -220,6 +232,22 @@ def scientific_parameters(registry):
                         item['observation_source'] = spec.planning.observation_source
             offered.append(item)
     return offered
+
+
+def scientific_capabilities(registry):
+    """Registry descriptions and native signatures for one transient projection."""
+    result = {}
+    for name in registry.names():
+        tool = registry.get(name)
+        item = dict(description=tool.planning.description if tool.planning else name)
+        if tool.planning and tool.planning.conditional_notes:
+            item['notes'] = list(tool.planning.conditional_notes)
+        if tool.native_functions is not None:
+            item['package'] = tool.native_functions.package
+            item['functions'] = dict(tool.native_functions.functions)
+        result[name] = item
+    return result
+
 
 
 def _research_intent(interaction, decision):
@@ -341,6 +369,8 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
     values = dict(inputs)
     names = {}
     for declaration in declarations:
+        if not historical and not _current_parameter(declaration.tool, declaration.argument):
+            raise IntentError('unsupported_intent')
         name, specification = _parameter_input(registry, declaration.tool, declaration.argument)
         if (historical and declaration.tool == 'run_chromvar' and declaration.argument == 'matrix_semantics'
                 and isinstance(declaration, ScalarChoiceArgument)):
@@ -350,9 +380,22 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
                 specification.planning, conversational_exact_string=False, conversational_choice=True))
         column = specification.planning.observation_source is not None
         if not column and specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
-            raise IntentError('unsupported_intent')
+            raise IntentError('unsupported_intent', diagnostic_reason='parameter_form_mismatch',
+                              operand='parameter.form')
+        from agent.orchestration.native_parameters import declaration_input
+        try:
+            name = declaration_input(registry, declaration, name)
+        except ValueError as exc:
+            raise IntentError('invalid_parameter_value') from exc
         value = admit_scientific_argument(declaration, utterance, specification,
             observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)))
+        native = registry.get(declaration.tool).native_functions
+        function = getattr(declaration, 'native_function', None)
+        if native is not None and function is not None and declaration.argument == 'kwargs':
+            if set(value) - set(dict(native.functions)[function]):
+                raise IntentError('invalid_parameter_value')
+        if declaration.argument == 'function_name' and getattr(declaration, 'native_function', value) != value:
+            raise IntentError('conflicting_scientific_parameter')
         # Multiple explicitly declared consumers may share one registered input
         # (for example pseudobulk and DA condition_key). They must agree exactly.
         if name in names and names[name] != value:
@@ -491,7 +534,8 @@ def _validate_argument_record(interaction):
                            for k in ('resource_id', 'record_sha256', 'tool_name', 'resource_choice')):
                         raise ValueError('Argument changed registered source.')
             else:
-                names = {_parameter_input(registry, d.tool, d.argument)[0] for d in declarations}
+                from agent.orchestration.native_parameters import declaration_input
+                names = {declaration_input(registry, d, _parameter_input(registry, d.tool, d.argument)[0]) for d in declarations}
                 names.update(_parameter_input(registry, row['tool'], row['argument'])[0]
                              for row in admitted.get('retained_parameters', ()))
                 without = {k: v for k, v in values.items() if k not in names}
@@ -650,16 +694,23 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
     return admitted, pending
 
 
-def _requested_parameters(registry, admitted, names):
+def _missing_parameter_inputs(registry, tool_name, names, values):
+    from agent.orchestration.native_parameters import prerequisite_inputs
+    projected = prerequisite_inputs(registry.get(tool_name), values)
+    effective = values if projected is None else projected
+    return [name for name in names if _parameter_input(registry, tool_name, name)[0] not in effective]
+
+
+def _requested_parameters(registry, admitted, names, *, historical=False):
     """Validate a semantic question's scalar scope, not scientific readiness."""
     if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8
             or any(not isinstance(name, str) for name in names)
             or len(set(names)) != len(names)):
         raise IntentError('invalid_prerequisite')
-    for name in names:
-        input_name, _ = _parameter_input(registry, admitted['tool'], name)
-        if input_name in admitted['inputs']:
-            raise IntentError('conflicting_scientific_parameter')
+    missing = ([name for name in names if _parameter_input(registry, admitted['tool'], name)[0] not in admitted['inputs']]
+               if historical else _missing_parameter_inputs(registry, admitted['tool'], names, admitted['inputs']))
+    if len(missing) != len(names):
+        raise IntentError('conflicting_scientific_parameter')
     return sorted(names)
 
 
@@ -690,7 +741,7 @@ def _validate_parameter_prerequisite(interaction, preceding):
             tool = registry.get(pending['tool'])
             if 'parameter_request' in admitted:
                 if (admitted['tool'] != tool.name
-                        or _requested_parameters(registry, admitted, admitted['parameter_request']) != list(pending['missing'])
+                        or _requested_parameters(registry, admitted, admitted['parameter_request'], historical=True) != list(pending['missing'])
                         or _replay_initial_inputs(registry, interaction,
                             _scientific_arguments(_serialize(admitted.get('arguments', [])))) != _serialize(values)):
                     raise ValueError('Requested parameter scope changed.')
@@ -743,9 +794,15 @@ def _validate_parameter_prerequisite(interaction, preceding):
             raise ValueError('Parameter continuation changed registered source.')
         if admitted.get('roles', ()) != (origin.admitted or {}).get('roles', ()):
             raise ValueError('Parameter continuation changed scientific input roles.')
-        missing = [name for name in origin.prerequisite['missing']
-                   if _parameter_input(registry, reference['tool'], name)[0] not in expected]
+        missing = _missing_parameter_inputs(registry, reference['tool'], origin.prerequisite['missing'], expected)
         if admitted.get('kind') == 'clarify':
+            # Saved partial questions predate function-qualified prerequisite
+            # projection. Preserve that exact nonexecution history; it grants
+            # no execution authority and new continuations use the shared scope.
+            legacy_missing = [name for name in origin.prerequisite['missing']
+                              if _parameter_input(registry, reference['tool'], name)[0] not in expected]
+            if list(admitted['choices']) == legacy_missing:
+                missing = legacy_missing
             wanted = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
             wanted.update(binding_turn_id=interaction.turn_id, missing=missing)
             if not missing or _serialize(pending) != wanted or list(admitted['choices']) != missing:
@@ -818,8 +875,7 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
             raise IntentError('invalid_prerequisite')
         LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry).validate_submission(
             execution_submission(origin))
-    missing = [name for name in origin.prerequisite['missing']
-               if _parameter_input(sessions._application.registry, reference['tool'], name)[0] not in values]
+    missing = _missing_parameter_inputs(sessions._application.registry, reference['tool'], origin.prerequisite['missing'], values)
     continuation = dict(origin_turn_id=origin.turn_id, binding_turn_id=source.turn_id, field='parameters')
     admitted = dict(kind='execute', operation='plan', tool=origin.admitted['tool'],
         revision_id=interaction.base_revision_id,
@@ -895,15 +951,41 @@ def _check_parameter_plan(registry, plan, admitted, interactions):
     roles = admitted.get('roles', ())
     authorized = set()
     names = set()
+    native_scopes = set()
     for tool_name, argument_name in identities:
         name, _ = _parameter_input(registry, tool_name, argument_name)
-        names.add(name)
         consumers = [s for s in plan.steps if s.tool_name == tool_name]
         # The latest linked declaration owns scope. No conversation-order lookup.
         declarations = next(([d for d in record.get('arguments', ())
             if (d['tool'], d['argument']) == (tool_name, argument_name)]
             for record in records if any((d['tool'], d['argument']) == (tool_name, argument_name)
                 for d in record.get('arguments', ()))), [])
+        native = [d for d in declarations if 'native_function' in d]
+        if native:
+            native_scopes.add((tool_name, argument_name))
+            if len(native) != len(declarations):
+                raise IntentError('ambiguous_parameter')
+            from agent.orchestration.native_parameters import input_name, function_choices
+            for declaration in native:
+                fn = declaration['native_function']
+                if fn not in function_choices(registry.get(tool_name)):
+                    raise IntentError('invalid_reference')
+                matches = [s for s in consumers if s.arguments.get('function_name') == fn]
+                if 'port' in declaration:
+                    role = dict(tool=tool_name, port=declaration['port'], source=declaration['source'])
+                    index = int(declaration['source'].split('.')[1])
+                    if role not in roles or index >= len(members):
+                        raise IntentError('invalid_reference')
+                    port, _, _ = _group_port(registry, tool_name, declaration['port'])
+                    matches = [s for s in matches if plan_source_path(s.arguments.get(port.members[0].field_name), plan.steps) == members[index]['source_path']]
+                key = input_name(tool_name, fn, argument_name)
+                if len(matches) != 1 or (matches[0].step_id, argument_name) in authorized:
+                    raise IntentError('ambiguous_parameter')
+                if matches[0].arguments.get(argument_name) != admitted['inputs'][key]:
+                    raise IntentError('planning_failed')
+                authorized.add((matches[0].step_id, argument_name))
+            continue
+        names.add(name)
         scoped = [d for d in declarations if 'port' in d]
         if scoped:
             if len(scoped) != len(declarations):
@@ -931,12 +1013,18 @@ def _check_parameter_plan(registry, plan, admitted, interactions):
             authorized.add((step.step_id, argument_name))
     for step in plan.steps:
         tool = registry.get(step.tool_name)
+        if tool.native_functions is not None:
+            functions = dict(tool.native_functions.functions)
+            function = step.arguments.get('function_name')
+            kwargs = step.arguments.get('kwargs', {})
+            if function not in functions or not isinstance(kwargs, Mapping) or set(kwargs) - set(functions[function]):
+                raise IntentError('invalid_parameter_value')
         for candidate in {**tool.required_arguments, **tool.optional_arguments}:
             try:
                 other_input, _ = _parameter_input(registry, step.tool_name, candidate)
             except IntentError:
                 continue
-            if (other_input in names and candidate in step.arguments
+            if ((other_input in names or (step.tool_name, candidate) in native_scopes) and candidate in step.arguments
                     and (step.step_id, candidate) not in authorized):
                 raise IntentError('ambiguous_parameter')
     return authorized
@@ -1680,7 +1768,8 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
         if decision.arguments:
             admitted['arguments'] = [asdict(d) for d in decision.arguments]
         if interaction.submission is None:
-            names = {_parameter_input(sessions._application.registry, d.tool, d.argument)[0]
+            from agent.orchestration.native_parameters import declaration_input
+            names = {declaration_input(sessions._application.registry, d, _parameter_input(sessions._application.registry, d.tool, d.argument)[0])
                      for d in decision.arguments}
             names.update(_parameter_input(sessions._application.registry, row['tool'], row['argument'])[0]
                          for row in admitted.get('retained_parameters', ()))
@@ -1929,8 +2018,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     from agent.orchestration.executor import execution_input_guard
     grouped = (registered and interaction.submission['registered_input'].get('composition')
         == 'scientific-role-selection.v1')
-    guard = (lambda tool, arguments: resources.validate_group_consumer(
-        interaction.submission, tool, arguments)) if grouped else None
+    guard = (lambda step, arguments: resources.validate_group_consumer(
+        interaction.submission, step, arguments)) if grouped else None
     from .shared_resources import scientific_resource_scope
     reference_owner = getattr(sessions, '_reference_resources', None)
     with scientific_resource_scope(None if reference_owner is None else reference_owner.library), execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():

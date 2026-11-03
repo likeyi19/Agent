@@ -121,3 +121,47 @@ def test_native_interleaved_chromosomes_and_integer_spelling_preserve_values(sou
 def test_native_nonfinite_scores_remain_native_values(source,score):
     Path(source['input_path']).write_text('chr1\t0\t100\t'+score+'\n')
     assert owner.bedgraph(source['input_path']) == 1
+
+
+def test_bdgdiff_four_exact_roles_and_all_three_results(source,tmp_path,monkeypatch):
+    from agent.orchestration import build_default_tool_registry,AgentPlan,AgentRequest,PlanStep
+    from agent.application.local_resources import LocalResourceAdmission
+    from agent.application import ResearchAgentApplication,OutputSelection
+    from agent.application.workspace import ManagedWorkspace
+    from agent.application.native_delivery import accepted_artifacts
+    from agent.application.matrix_delivery import MatrixDownloadPreparer
+    registry=build_default_tool_registry();local=LocalResourceAdmission(tmp_path/'local',approved_source_roots=(tmp_path,),registry=registry)
+    entries=[]
+    for i in range(4):
+        p=tmp_path/f'track{i}.data';p.write_text(f'chr1\t0\t100\t{i+1}\n')
+        entries.append(local.register('track'+str(i),p,label='track'+str(i),attribution='simulated',input_type='attachment'))
+    group=local.compose_group([e.resource_id for e in entries],attachment_candidates=True)
+    ports=['dataset','control','treatment2','control2']
+    bound=local.bind_group(group,[dict(tool='run_macs3',port=p,source='source.'+str(i)) for i,p in enumerate(ports)],verify_source=True)
+    for i,k in enumerate(('input_path','control_path','treatment2_path','control2_path')):assert bound.execution_inputs[k]==str(tmp_path/f'track{i}.data')
+    calls=[]
+    def native(self,args,stage):
+        calls.append(args)
+        for i,k in enumerate(('input','control','treatment2','control2')):assert (stage/(k+'.tsv')).read_bytes()==(tmp_path/f'track{i}.data').read_bytes()
+        (stage/'result.tsv').write_text('chr1\t0\t100\tone\t3.5\n')
+        (stage/'condition2.tsv').write_text('chr1\t100\t200\ttwo\t4.5\n')
+        (stage/'common.tsv').write_text('track name="common"\n')
+        return dict(completion='succeeded',versions={'MACS3':'SIMULATED'},implementation=[])
+    monkeypatch.setattr(owner.TablePackage,'native',native)
+    root=tmp_path/'workspace';args=dict(bound.execution_inputs,function_name='bdgdiff',kwargs={'cutoff':1,'d1':2,'d2':3},output_dir=str(root/'runs'/ManagedWorkspace.run_digest('diff:run')/'scientific'))
+    class Planner:
+        def plan(self,request,registry):return AgentPlan('diff','diff','Simulated four-track command',(PlanStep('native','run_macs3',args),))
+    app=ResearchAgentApplication(root,planner=Planner());app.sessions.create('diff')
+    state=app.sessions.run('diff','diff',AgentRequest('diff','Compare tracks',{}),(OutputSelection('result','native','table_path'),),expected_generation=0)
+    assert state.turn('diff').status=='activated',app.run_store.load('diff:run').errors
+    artifacts=accepted_artifacts(app.sessions,'diff',state.revisions[-1],state.turn('diff'),None,step_id='native')
+    assert {a.role for a in artifacts}==set(owner.MACS3.DELIVERY_FILES)
+    for artifact in artifacts:
+        prepared=MatrixDownloadPreparer().prepare(artifact)
+        try:
+            data=b''.join(prepared.iter_chunks());assert hashlib.sha256(data).hexdigest()==prepared.sha256
+        finally:prepared.close()
+    assert len(calls)==1
+    assert ResearchAgentApplication(root,planner=Planner()).sessions.load('diff').to_dict()==state.to_dict()
+    companion=next(a for a in artifacts if a.role=='condition2.tsv');companion.path.write_text('changed')
+    with pytest.raises((ValueError,RuntimeError)):MatrixDownloadPreparer().prepare(companion)

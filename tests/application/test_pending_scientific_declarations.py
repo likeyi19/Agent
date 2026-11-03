@@ -91,10 +91,10 @@ def test_unknown_schema_only_offers_the_pending_declarations_metadata(field):
         selected_sources=[dict(source='source.0')],
         pending_prerequisite=dict(field=field)))
     public['dialogue'][field + '_resources'] = []
-    schema = decision_schema(public)
+    schema = decision_schema()
     assert '"uniqueItems"' not in json.dumps(schema)
     variants = schema['properties']['decision']['anyOf']
-    answer, = [v for v in variants if v['properties']['kind']['enum'] == ['answer_roles']]
+    answer, = [v for v in variants if v['properties']['kind']['enum'] == ['answer_roles'] and field in v['properties']]
     choices = answer['properties']['unknown_fields']['items']['enum']
     assert set(choices) == set(scientific_metadata_fields(empty(field)))
     assert not {'source', 'operation', 'resource'}.intersection(choices)

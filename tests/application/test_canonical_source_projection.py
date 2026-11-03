@@ -68,13 +68,6 @@ def setup_case(tmp_path, monkeypatch, **options):
     return app, records, executor, calls, observations
 
 
-def source_enum(schema, field):
-    variants = schema['properties']['decision']['anyOf']
-    request, = [v for v in variants if v['properties']['kind']['enum'] == ['request_roles']
-                and field in v['properties']]
-    return request['properties'][field]['properties']['source']['anyOf'][0]['enum']
-
-
 @pytest.mark.parametrize('pending_field', ['roles', 'annotation', 'epizoo'])
 def test_single_primary_after_pending_uses_one_source_order_for_every_offer(
         tmp_path, monkeypatch, pending_field):
@@ -99,7 +92,6 @@ def test_single_primary_after_pending_uses_one_source_order_for_every_offer(
     assert 'annotation_sources' not in public
     for field in ('annotation', 'epizoo'):
         assert field + '_resources' in public
-        assert source_enum(calls[-1]['schema'], field) == ['source.0', 'source.1']
     state = app._application.sessions.load('session')
     current = state.interactions[-1]
     assert current.submission['registered_input']['composition'] == 'h5ad-science.v1'

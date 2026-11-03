@@ -195,29 +195,8 @@ def test_parameter_answer_requires_one_to_eight_typed_bindings(arguments):
         parse_decision(wire(dict(kind='answer_parameters', pending='@parameters', arguments=arguments)))
 
 
-def test_argument_schema_offers_exact_registered_pairs_without_cross_product():
-    variants = decision_schema(public(pending=True))['properties']['decision']['anyOf']
-    execute = next(value for value in variants if value['properties']['kind']['enum'] == ['execute_plan'])
-    answer = next(value for value in variants if value['properties']['kind']['enum'] == ['answer_parameters'])
-    assert answer['properties']['pending']['enum'] == ['@parameters']
-    assert answer['properties']['arguments']['minItems'] == 1
-    offered = execute['properties']['arguments']
-    assert offered['maxItems'] == 32
-    pairs = {(value['properties']['tool']['enum'][0], value['properties']['argument']['enum'][0])
-        for value in offered['items']['anyOf']}
-    assert pairs == {(value['tool'], value['argument']) for value in public()['dialogue']['scientific_parameters']}
-    assert ('cluster_cells', 'min_tss_enrichment') not in pairs
-    assert all(value['additionalProperties'] is False for value in offered['items']['anyOf'])
-    assert all(value['properties']['kind']['enum'] != ['answer_prerequisite'] for value in variants)
 
 
-def test_parameter_answer_schema_requires_pending_and_offered_registered_contracts():
-    assert all(value['properties']['kind']['enum'] != ['answer_parameters']
-        for value in decision_schema(public())['properties']['decision']['anyOf'])
-    value = public(pending=True)
-    value['dialogue']['scientific_parameters'] = []
-    assert all(item['properties']['kind']['enum'] != ['answer_parameters']
-        for item in decision_schema(value)['properties']['decision']['anyOf'])
 
 
 def test_semantic_association_and_partial_answer_meaning_belong_to_existing_interpreter():
@@ -451,16 +430,6 @@ def test_string_initial_and_pending_wires_reuse_scoped_argument_without_choice_n
         parsed = parse_decision(wire(value))
         assert parsed.arguments == (candidate,) and type(parsed.arguments[0]) is ScopedArgument
 
-    value = public(pending=True)
-    value['dialogue']['scientific_parameters'] = [item for item in scientific_parameters(registry)
-        if (item['tool'], item['argument']) == (candidate.tool, candidate.argument)]
-    variants = decision_schema(value)['properties']['decision']['anyOf']
-    for kind in ('execute_plan', 'answer_parameters'):
-        variant, = [item for item in variants if item['properties']['kind']['enum'] == [kind]]
-        offered, = variant['properties']['arguments']['items']['anyOf']
-        assert offered['properties']['tool']['enum'] == [candidate.tool]
-        assert offered['properties']['argument']['enum'] == [candidate.argument]
-        assert 'value' not in offered['properties']
 
 
 def test_exact_strings_cannot_use_choice_normalization_to_substitute_another_column(registry):
@@ -474,34 +443,8 @@ def test_exact_strings_cannot_use_choice_normalization_to_substitute_another_col
         _bind_arguments(registry, utterance, {}, parsed.arguments)
 
 
-@pytest.mark.parametrize('tool,name,_role', STRING_DECLARATIONS)
-def test_pending_string_schema_offers_only_exact_pairs_for_the_captured_operation(registry, tool, name, _role):
-    from agent.application.dialogue_execution import scientific_parameters
-
-    value = public(pending=True)
-    value['dialogue']['scientific_parameters'] = scientific_parameters(registry)
-    value['dialogue']['pending_prerequisite'].update(tool=tool, missing=[name])
-    variants = decision_schema(value)['properties']['decision']['anyOf']
-    answer, = [item for item in variants if item['properties']['kind']['enum'] == ['answer_parameters']]
-    offered = answer['properties']['arguments']['items']['anyOf']
-    pairs = {(item['properties']['tool']['enum'][0], item['properties']['argument']['enum'][0])
-        for item in offered}
-    expected = {(tool, name)}
-    if tool == 'transfer_cell_labels':
-        expected.update((tool, argument) for argument in ('n_neighbors', 'min_confidence'))
-    assert pairs == expected
-    assert all('value' not in item['properties'] for item in offered)
 
 
-@pytest.mark.parametrize('pending_tool', ['inspect_scATAC', 'unregistered_tool'])
-def test_pending_tool_without_eligible_parameters_never_emits_empty_argument_schema(registry, pending_tool):
-    from agent.application.dialogue_execution import scientific_parameters
-
-    value = public(pending=True)
-    value['dialogue']['scientific_parameters'] = scientific_parameters(registry)
-    value['dialogue']['pending_prerequisite']['tool'] = pending_tool
-    assert all(item['properties']['kind']['enum'] != ['answer_parameters']
-        for item in decision_schema(value)['properties']['decision']['anyOf'])
 
 
 def test_unmatched_same_family_quote_cannot_conceal_a_truncated_column(registry):

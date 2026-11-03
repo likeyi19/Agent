@@ -164,3 +164,21 @@ def test_variability_uses_explicit_assay_slots_without_metadata_certificate(sour
     effective,_,_=owner.prepare_input(dict(source,function_name='computeVariability',kwargs={}),stage)
     assert effective['measurement']=='supplied_chromVAR_z_assay'
     np.testing.assert_array_equal(np.fromfile(stage/'z.bin',dtype='<f8'),a.layers['z_scores'].ravel())
+
+
+def test_background_requires_supplied_ordered_bias_without_fabrication(source,tmp_path):
+    args=dict(source,function_name='getBackgroundPeaks',kwargs={'niterations':-2})
+    assert owner.native_arguments(args)=={'niterations':-2}
+    stage=tmp_path/'bias';stage.mkdir()
+    with pytest.raises(ValueError,match='actual per-peak bias'):owner.prepare_input(args,stage)
+    a=ad.read_h5ad(source['input_path']);a.var['provided_bias']=[.3,.1,.8];a.write_h5ad(source['input_path'])
+    owner.prepare_input(dict(args,bias_key='provided_bias'),stage)
+    features=pd.read_csv(stage/'features.tsv',sep='\t',dtype={'feature_id':str})
+    assert features.feature_id.tolist()==['03','01','02'] and features.bias.tolist()==[.3,.1,.8]
+
+
+def test_background_bias_does_not_lose_integer_precision_in_r_exchange(source,tmp_path):
+    a=ad.read_h5ad(source['input_path']);a.var['bias']=np.array([2**60+1,1,2],dtype=np.int64);a.write_h5ad(source['input_path'])
+    stage=tmp_path/'bias';stage.mkdir()
+    with pytest.raises(ValueError,match='exactly'):
+        owner.prepare_input(dict(source,function_name='getBackgroundPeaks',kwargs={}),stage)

@@ -96,6 +96,8 @@ class MatrixPackage:
 
     def __init__(self, package, version, runtime, functions, native_arguments, guidance):
         self.package, self.version, self.runtime = package, version, runtime
+        if package == 'Signac':
+            self.invoke = self.invoke_signac
         self.FUNCTIONS, self.NATIVE_ARGUMENTS, self.guidance = functions, native_arguments, guidance
         self.TOOL = 'run_' + package.lower()
         self.KIND = 'native_' + package.lower() + '_matrix'
@@ -114,6 +116,9 @@ class MatrixPackage:
         if package in HISTORICAL_PROFILES:
             historical.extend((HISTORICAL_PROFILES[package], digest(dict(contract=self.CONTRACT, version=version,
                 adaptation='ordinary AnnData preservation; selected X; exact axes; bounded JSON kwargs.v2'))))
+        if package == 'Signac':
+            historical.append(self.PROFILE)
+            self.PROFILE = digest(dict(contract=self.CONTRACT, version=version, adaptation='ordered independent pairwise native matrices.v5'))
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
             profile=self.PROFILE, verifier=self.VERIFIER, files=tuple(DELIVERY_FILES),
             arguments=arguments, outputs={'matrix': 'result.h5ad'}, historical_profiles=historical)
@@ -140,6 +145,10 @@ class MatrixPackage:
             return False
         if not ordinary(kwargs) or len(json.dumps(kwargs).encode()) > 8192:
             raise ValueError('Native kwargs must be bounded JSON data, not executable expressions or input objects')
+        if (args.get('second_path') or args.get('second_count_slot') or args.get('second_sha256')) and (self.package != 'Signac' or function not in ('corSparse', 'Jaccard')):
+            raise ValueError('A second matrix applies only to Signac corSparse/Jaccard')
+        if function == 'Jaccard' and not args.get('second_path'):
+            raise ValueError('Signac Jaccard requires two actual matrix sources')
         # A supplied spectral mask is scientific input, not ordinary kwargs.
         # This interface binds the exact existing var field (or all features).
         if args['function_name'] == 'tl.spectral' and isinstance(kwargs.get('features'), (list, dict)):
@@ -168,7 +177,7 @@ class MatrixPackage:
             implementation_paths.append(executable.parent.parent / 'pyvenv.cfg')
         implementation = file_closure(implementation_paths)
         request = dict(stage=str(stage), package=self.package, version=self.version,
-            function_name=args['function_name'], kwargs=self.native_arguments(args))
+            function_name=args['function_name'], kwargs=self.native_arguments(args), second_matrix=bool(args.get('second_path')))
         request_sha = write(stage / 'request.json', request)
         if is_r:
             mmwrite(stage / 'input.mtx', sparse.csc_matrix(matrix.X.T))
@@ -193,7 +202,15 @@ class MatrixPackage:
             raise AuthorityError('Native implementation changed during invocation')
         receipt['implementation'] = implementation
         if is_r:
-            if args['function_name'] == 'corSparse':
+            if args.get('second_path'):
+                values = mmread(stage/'output.mtx').toarray()
+                import pandas as pd
+                other_cells = pd.read_csv(stage/'second-cells.tsv', sep='\t', dtype=str, keep_default_na=False).cell_id.tolist()
+                if values.shape != (matrix.n_obs, len(other_cells)):
+                    raise AuthorityError('Native pairwise axes differ from the exact two inputs')
+                matrix.uns['Signac_pairwise'] = dict(values=values, row_cells=matrix.obs_names.to_numpy(dtype=str),
+                    column_cells=np.array(other_cells, dtype=str), function_name=args['function_name'])
+            elif args['function_name'] == 'corSparse':
                 matrix.obsp['Signac_corSparse'] = mmread(stage / 'output.mtx').tocsr()
             elif args['function_name'] == 'FindTopFeatures':
                 import pandas as pd
@@ -230,6 +247,9 @@ class MatrixPackage:
         source = file_closure([args['input_path']])[0]
         if args.get('input_sha256') and source['sha256'] != args['input_sha256']:
             raise AuthorityError('Selected input bytes changed')
+        second_source = file_closure([args['second_path']])[0] if args.get('second_path') else None
+        if second_source and args.get('second_sha256') and second_source['sha256'] != args['second_sha256']:
+            raise AuthorityError('Selected second matrix bytes changed')
         with tempfile.TemporaryDirectory(prefix='.native-matrix-', dir=root) as temp:
             stage = Path(temp)
             matrix, effective = prepare_input(args, stage)
@@ -239,7 +259,19 @@ class MatrixPackage:
                     raise ValueError('R matrix exchange labels cannot contain TSV delimiters')
                 values = matrix.X.data if sparse.issparse(matrix.X) else np.asarray(matrix.X)
                 peak_h5ad.native_double_values(values)
-            if args['function_name'] == 'corSparse' and matrix.n_obs**2 > 16_000_000:
+            if second_source:
+                other_stage = stage/'second'; other_stage.mkdir()
+                other, other_effective = prepare_input(dict(input_path=args['second_path'],
+                    **({'count_slot': args['second_count_slot']} if args.get('second_count_slot') is not None else {})), other_stage)
+                if features != other.var_names.tolist():
+                    raise ValueError('Two-matrix comparison requires identical ordered feature identities; no implicit alignment')
+                if matrix.n_obs * other.n_obs > 16_000_000:
+                    raise ValueError('Native pairwise result exceeds 16000000 elements')
+                peak_h5ad.native_double_values(other.X.data if sparse.issparse(other.X) else np.asarray(other.X))
+                mmwrite(stage/'second.mtx', sparse.csc_matrix(other.X.T))
+                other.obs.to_csv(stage/'second-cells.tsv', sep='\t', columns=[], index_label='cell_id', quoting=csv.QUOTE_NONE)
+                effective['second_path'] = args['second_path']
+            if args['function_name'] == 'corSparse' and not second_source and matrix.n_obs**2 > 16_000_000:
                 raise ValueError('Native cell similarity exceeds the 16000000-element execution bound')
             if args['function_name'] == 'tl.spectral' and kwargs.get('distance_metric', 'cosine') != 'cosine' and matrix.n_obs**2 > 16_000_000:
                 raise ValueError('Quadratic native similarity exceeds the 16000000-element execution bound')
@@ -290,6 +322,9 @@ class MatrixPackage:
                 source_identity=dict(sha256=source['sha256'], size_bytes=source['size_bytes'], measurement=effective['matrix_semantics']),
                 software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
                 result_slots=receipt['result_slots'], limitations=LIMITATIONS)
+            if second_source:
+                summary['source_identity']['second'] = dict(sha256=second_source['sha256'], size_bytes=second_source['size_bytes'],
+                    count_slot=other_effective['count_slot'], measurement=other_effective['matrix_semantics'], n_cells=other.n_obs)
             output.uns['agent_native_invocation'] = dict(function=summary['function_name'], source_sha256=source['sha256'],
                 source_measurement=effective['matrix_semantics'], parameters_json=json.dumps(summary['parameters']),
                 annotation_policy='Retained source annotations and reductions are not recomputed; native-written slots replace existing values.')
@@ -299,7 +334,7 @@ class MatrixPackage:
             write(root / 'native-receipt.json', receipt)
             write(root / 'metadata.json', dict(summary=summary, source=source, receipt=receipt,
                 input_orientation='cells by features; Signac receives features by cells'))
-            expected = {r['path']: r for r in [source, *receipt['implementation']]}
+            expected = {r['path']: r for r in [source, *([second_source] if second_source else []), *receipt['implementation']]}
             sources = file_closure(expected)
             if sources != sorted(expected.values(), key=lambda r: r['path']):
                 raise AuthorityError('Source or runtime changed during invocation')
@@ -311,6 +346,9 @@ class MatrixPackage:
         return self.verify_publication(path, expected_sha256=sha)
 
     def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None):
+        return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
+
+    def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 
@@ -470,6 +508,7 @@ SIGNAC = MatrixPackage('Signac', '1.16.0', 'signac-1', {
     'RunTFIDF': ('method', 'scale.factor', 'verbose'),
     'BinarizeCounts': ('verbose',),
     'FindTopFeatures': ('min.cutoff', 'verbose'),
+    'Jaccard': (),
     'corSparse': ('cov',),
 }, (
     ('assay', 'RunSVD assay name recorded by native DimReduc; no assay construction.'),
@@ -483,8 +522,8 @@ SIGNAC = MatrixPackage('Signac', '1.16.0', 'signac-1', {
     ('method', 'Native method for the selected function; omitted retains its installed default.'),
     ('scale.factor', 'RunTFIDF native scaling, default 10000; method-specific effect.'),
     ('min.cutoff', 'FindTopFeatures matrix method accepts but ignores this assay-only selection argument; returns counts and percentile ranking, no filtering.'),
-    ('cov', 'corSparse: return covariance instead of correlation; native Y omitted (one source).'),
-), 'Native matrix RunTFIDF/BinarizeCounts transform X. RunSVD publishes LSI without automatic TF-IDF. FindTopFeatures maps ranked statistics to exact feature IDs; matrix method ignores min.cutoff. corSparse uses native features-by-cells X with Y omitted; ordered cell-by-cell correlation/covariance is obsp.Signac_corSparse. No Seurat object is fabricated.')
+    ('cov', 'corSparse: return covariance instead of correlation; optional second matrix supplies native Y.'),
+), 'Native matrix transformations/reductions preserve source axes. corSparse uses features by cells, with optional exact second matrix Y. Jaccard requires two cells-by-features matrices; no automatic binarization. Both require identical ordered features; rectangular cross-cell values and both cell axes are stored in uns.Signac_pairwise. Single-source corSparse remains obsp. No fake Seurat object, hidden TF-IDF or alignment. FindTopFeatures matrix method ignores min.cutoff.')
 
 SCANPY = MatrixPackage('scanpy', '1.9.8', 'episcanpy-0.4.0', {
     'tl.diffmap': ('n_comps', 'neighbors_key', 'random_state', 'copy'),

@@ -169,6 +169,7 @@ def _consumer_port_catalog(
         not port.required
         and len(available_sources) == 1
         and available_sources[0][0] in deterministic_scoped_selectors
+        and not available_sources[0][0].startswith(tool.name + '__')
         and not port.accepted_upstream_types
     ):
         request_source_mode = "deterministic_scoped"
@@ -334,16 +335,16 @@ def build_semantic_planning_prompt(
     catalog['catalog_values'] = shared
     catalog['catalog_keys'] = names
     catalog['catalog_ref_key'] = marker
-    registered_choices = {name: {p.name: list(a.choices) for p in registry.get(name).semantic_planning.consumer_ports
+    registered_choices = {name: [p.name for p in registry.get(name).semantic_planning.consumer_ports
         if (a := _argument_for_port(registry.get(name), p)) is not None
-        and a.planning is not None and a.planning.planner_choice}
+        and a.planning is not None and a.planning.planner_choice]
         for name in catalog['tools']}
     payload = {
         'registered_choices': {k:v for k,v in registered_choices.items() if v},
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
-            'Select registered scientific tools directly for the complete scientific computation; no preliminary capability classification. Preserve explicit method and parameter choices.',
-            'Compose missing scientifically legitimate prerequisites for the goal. Reuse compatible existing results and qualified supplied groups. Do not ask the researcher to compute available prerequisites manually. registered_choices permits source={kind:registered_choice,choice:<offered value>} only at its named tool/port, only when no user value was supplied. Select using the scientific source declarations and Registry method requirements; this is a recorded Planner choice, never a user instruction. Other absent optional values keep native defaults.',
+            'Plan the complete scientific objective directly from Registry tools. A package request may require multiple calls. Function-qualified sources fix each native function and its own kwargs; never substitute them. Chain dataset outputs to preserve dependencies and slots.',
+            'Compose missing scientifically legitimate prerequisites for the goal. Reuse compatible existing results and qualified supplied groups. Do not ask the researcher to compute available prerequisites manually. registered_choices lists eligible tool/port names; their exact domains are in catalog input-port guidance.choices. Bind source={kind:registered_choice,choice:<offered value>} only there and only without a supplied user value. Select using the scientific source declarations and Registry method requirements; this is a recorded Planner choice, never a user instruction. Other absent optional values keep native defaults.',
             'The user_request retains the whole research objective. research_context.task separates requested non-computational delivery from science. Explanation, descriptive comparison and presentation are post-run responsibilities, not invented Registry tools. Delivery intentions marked deferred are not fulfilled by this plan. Do not classify supported science as unsupported solely because subsequent delivery is requested.',
             'catalog.request_inputs and each port\'s available_request_sources describe the inputs supplied for this current planning attempt. On prerequisite continuation, user_request preserves the original objective and may still say that a file has not been attached. That earlier absence does not override a currently offered input. Bind the current authorized source through its offered port; input presence does not establish scientific compatibility or allow an unoffered source.',
             'Missing essential scientific capabilities or incompatible inputs remain unsupported; never silently omit science or change the objective. Missing resolvable declarations use the existing prerequisite path. task.unfulfilled records the exact independently separable requirements excluded during interpretation and disclosed to the user; do not invent replacements or claim them fulfilled. Compose the entire remaining scientific objective. Other omissions require clarification or unsupported, never a hidden partial plan.',

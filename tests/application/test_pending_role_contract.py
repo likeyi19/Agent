@@ -59,10 +59,6 @@ def public(*, selected=True, pending=False):
     return value
 
 
-def variants(value):
-    return {variant['properties']['kind']['enum'][0]: variant
-            for variant in decision_schema(value)['properties']['decision']['anyOf']}
-
 
 def test_role_request_retains_exact_strings_and_is_not_an_executable_plan():
     utterance = 'Evaluate these datasets with column "Cell 类型 Δ".'
@@ -120,20 +116,6 @@ def test_role_answer_retains_reviewed_scalar_choice_wire():
     assert decision.arguments == (ScalarChoiceArgument(**declaration),)
 
 
-def test_schema_offers_new_decisions_only_in_exact_captured_role_context():
-    assert 'request_roles' not in variants(public(selected=False))
-    assert 'answer_roles' not in variants(public())
-    question = variants(public())['request_roles']
-    assert question['additionalProperties'] is False
-    assert question['properties']['required_roles']['minItems'] == 2
-    answer = variants(public(pending=True))['answer_roles']['properties']
-    assert answer['pending']['enum'] == ['@roles']
-    assert [entry['properties']['port']['enum'] for entry in answer['roles']['items']['anyOf']] == [
-        ['analysis'], ['ground_truth_dataset']]
-    argument_variants = answer['arguments']['items']['anyOf']
-    entries = [branch for entry in argument_variants for branch in entry.get('anyOf', [entry])]
-    assert {tuple(entry['properties']['argument']['enum']) for entry in entries} == {('label_key',)}
-    assert 'answer_roles' not in variants(public(selected=False, pending=True))
 
 
 @pytest.mark.parametrize('tool,ports', [

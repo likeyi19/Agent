@@ -26,7 +26,7 @@ _OUTCOMES = frozenset({"started", "succeeded", "failed", "rejected"})
 def log_operation_event(logger, event, *, context=None, error=None, code=None,
                         stage=None, kind=None, reason=None, operand=None, prompt=None, schema=None,
                         requested_model=None, observed_model=None, verified_model=None,
-                        transport=None):
+                        transport=None, completion=None, proposal=None, registry=None):
     """Best-effort operator log, never an execution diagnostic or authority.
 
     Callers supply controlled event/stage/kind/reason values. Untrusted identities
@@ -43,7 +43,7 @@ def log_operation_event(logger, event, *, context=None, error=None, code=None,
             if type(value) is str and _SAFE_IDENTIFIER.fullmatch(value):
                 row[key] = value
         if operand in ('target.output', 'target.subject', 'comparison.output', 'comparison.subject',
-                       'detail.field', 'detail.other_field', 'parameter.field', 'declaration'):
+                       'detail.field', 'detail.other_field', 'parameter.field', 'parameter.form', 'declaration'):
             row['operand'] = operand
         def identity(key, value):
             if type(value) is str and len(value) <= 4096:
@@ -67,8 +67,22 @@ def log_operation_event(logger, event, *, context=None, error=None, code=None,
             row['exception_class'] = error_class(error)
             if error.__cause__ is not None:
                 row['cause_class'] = error_class(error.__cause__)
+            locations = []
+            trace = error.__traceback__
+            while trace is not None:
+                frame = trace.tb_frame
+                module = frame.f_globals.get('__name__', '')
+                if (type(module) is str and module.startswith(('agent.application.', 'agent.orchestration.'))
+                        and _SAFE_IDENTIFIER.fullmatch(module)
+                        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,127}', frame.f_code.co_name)):
+                    locations.append(dict(module=module, function=frame.f_code.co_name, line=trace.tb_lineno))
+                trace = trace.tb_next
+            if locations:
+                row['rejection_locations'] = locations[-3:]
             if code is None:
                 code = getattr(error, 'code', None)
+        if proposal is not None and registry is not None:
+            row['proposal'] = _proposal_structure(proposal, registry)
         if type(code) is str and code in BUILTIN_ERROR_CODES:
             row['code'] = code
         if any(value is not None for value in (requested_model, observed_model, verified_model)):
@@ -89,6 +103,57 @@ def log_operation_event(logger, event, *, context=None, error=None, code=None,
                 identity('provider_request_id', request)
                 if re.fullmatch(r'(?:req_[A-Za-z0-9]{1,96}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})', request):
                     row['provider_request_id'] = request
+        if completion is not None:
+            def item(obj, key):
+                return obj.get(key) if isinstance(obj, Mapping) else getattr(obj, key, None)
+            def presence(obj, key):
+                # SDK models preserve wire presence separately from nullable defaults.
+                fields = obj if isinstance(obj, Mapping) else getattr(obj, 'model_fields_set', vars(obj) if hasattr(obj, '__dict__') else ())
+                if key not in fields:
+                    return 'absent'
+                return 'null' if item(obj, key) is None else 'present'
+            def count(key, value):
+                if type(value) is int and value >= 0:
+                    row[key] = value
+            status = item(completion, 'status')
+            row['completion_status'] = status if status in ('completed', 'incomplete', 'failed', 'cancelled', 'queued', 'in_progress') else None
+            reason = item(item(completion, 'incomplete_details'), 'reason')
+            row['incomplete_reason'] = reason if reason in ('max_output_tokens', 'content_filter') else None
+            output = item(completion, 'output')
+            row['output_item_count'] = len(output) if isinstance(output, (list, tuple)) else None
+            if isinstance(output, (list, tuple)):
+                allowed = ('message', 'reasoning', 'function_call', 'web_search_call', 'file_search_call', 'computer_call', 'code_interpreter_call', 'image_generation_call', 'mcp_call')
+                types = {}
+                content_types = {}
+                for entry in output:
+                    kind = item(entry, 'type')
+                    kind = kind if kind in allowed else 'other'
+                    types[kind] = types.get(kind, 0) + 1
+                    content = item(entry, 'content')
+                    for part in content if isinstance(content, (list, tuple)) else ():
+                        kind = item(part, 'type')
+                        kind = kind if kind in ('output_text', 'refusal') else 'other'
+                        content_types[kind] = content_types.get(kind, 0) + 1
+                row['output_types'] = types
+                row['content_types'] = content_types
+            row['usage_state'] = presence(completion, 'usage')
+            usage = item(completion, 'usage')
+            for name in ('input_tokens', 'output_tokens', 'total_tokens'):
+                row[name + '_state'] = presence(usage, name)
+                count(name, item(usage, name))
+            details = item(usage, 'output_tokens_details')
+            row['reasoning_tokens_state'] = presence(details, 'reasoning_tokens')
+            count('reasoning_tokens', item(details, 'reasoning_tokens'))
+            details = item(usage, 'input_tokens_details')
+            row['cached_tokens_state'] = presence(details, 'cached_tokens')
+            count('cached_tokens', item(details, 'cached_tokens'))
+            row['max_output_tokens_state'] = presence(completion, 'max_output_tokens')
+            count('max_output_tokens', item(completion, 'max_output_tokens'))
+            row['reasoning_state'] = presence(completion, 'reasoning')
+            effort = item(item(completion, 'reasoning'), 'effort')
+            row['reasoning_effort'] = effort if effort in ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max') else None
+            identity('response_id', item(completion, 'id'))
+            identity('response_model', item(completion, 'model'))
         if type(prompt) is str:
             encoded = prompt.encode()
             row.update(prompt_bytes=len(encoded), prompt_sha256=hashlib.sha256(encoded).hexdigest())
@@ -103,6 +168,57 @@ def log_operation_event(logger, event, *, context=None, error=None, code=None,
         logger.warning('Agent operation diagnostic %s', json.dumps(row, sort_keys=True, separators=(',', ':')))
     except Exception:
         pass
+
+
+def _proposal_structure(proposal, registry):
+    """Catalog identities and associations only; never values, quotes or paths."""
+    tools = {name: registry.get(name) for name in registry.names()}
+    names = set(tools)
+    for tool in tools.values():
+        names.update(tool.required_arguments)
+        names.update(tool.optional_arguments)
+        if tool.native_functions is not None:
+            for function, members in tool.native_functions.functions:
+                names.add(function)
+                names.update(members)
+        if tool.semantic_planning is not None:
+            names.update(p.name for p in tool.semantic_planning.consumer_ports)
+
+    def identity(value):
+        if value is None:
+            return None
+        if type(value) is str:
+            return (dict(catalog_name=value) if value in names else
+                    dict(unknown_sha256=hashlib.sha256(value.encode()).hexdigest()))
+        return dict(invalid_type=True)
+
+    def role(value):
+        source = getattr(value, 'source', None)
+        return dict(tool=identity(getattr(value, 'tool', None)),
+            port=identity(getattr(value, 'port', None)),
+            source=source if type(source) is str and re.fullmatch(r'source\.[0-9]{1,3}', source) else None)
+
+    arguments = []
+    for declaration in getattr(proposal, 'arguments', ())[:32]:
+        tool = tools.get(declaration.tool)
+        argument = declaration.argument
+        specification = None if tool is None else {**tool.required_arguments, **tool.optional_arguments}.get(argument)
+        function = getattr(declaration, 'native_function', None)
+        members = getattr(declaration, 'members', ())
+        arguments.append(dict(tool=identity(declaration.tool), argument=identity(argument),
+            registered_argument=specification is not None,
+            normalized_choice_present=hasattr(declaration, 'value'),
+            native_function=identity(function),
+            function_choice=identity(getattr(declaration, 'value', None)) if argument == 'function_name' else None,
+            members=[identity(member.name) for member in members[:64]],
+            association=role(declaration)))
+    context = getattr(proposal, 'context', None)
+    target = getattr(proposal, 'target', None)
+    return dict(target=identity(target),
+        registered_target=type(target) is str and target in tools,
+        context=context if context in ('none', 'current') else None,
+        arguments=arguments, roles=[role(r) for r in getattr(proposal, 'roles', ())[:32]],
+        reference_count=len(getattr(proposal, 'references', ())))
 
 
 class PlanningDiagnosticStage(str, Enum):

@@ -120,7 +120,7 @@ def test_cancellation_terminates_native_process_and_publishes_nothing(source,tmp
     assert request['kwargs']==source['kwargs']
 
 
-@pytest.mark.parametrize('kwargs',[{'out':'positions'},{'out':'scores'},{'genome':'/etc/passwd'},
+@pytest.mark.parametrize('kwargs',[{'out':'unknown'},{'genome':'/etc/passwd'},
     {'subject':'system("touch unsafe")'},{'p.cutoff':float('nan')},{'bg':{'file':'/etc/passwd'}}])
 def test_unreviewed_outputs_objects_and_non_json_values_do_not_execute(source,kwargs):
     with pytest.raises(ValueError):
@@ -209,7 +209,9 @@ def test_json_lexical_admission_rejects_loss_or_code(literal):
 
 
 @pytest.mark.parametrize('structured', [False, True])
-def test_normal_interpreter_compiler_clarification_and_exact_kwargs(source,native,tmp_path,structured):
+@pytest.mark.parametrize('initial_coordinate', [False, True])
+@pytest.mark.parametrize('native_scope', [False, True])
+def test_normal_interpreter_compiler_clarification_and_exact_kwargs(source,native,tmp_path,structured,initial_coordinate,native_scope,monkeypatch):
     from agent.application import InteractiveAgentApplication
     from agent.application.local_resources import LocalResourceAdmission
     from agent.providers import PlanningModelFactoryRegistry
@@ -236,6 +238,16 @@ def test_normal_interpreter_compiler_clarification_and_exact_kwargs(source,nativ
             ('p.cutoff','number','0.0001','p.cutoff=0.0001'),
             ('bg','string','even',"bg='even'"),('out','string','matches',"out='matches'")],scoped=True))['decision']['arguments'][0]
         decisions[prompt]=decision
+    if initial_coordinate:
+        decision=decisions.pop(prompt)
+        prompt += ' Coordinates are zero-based half-open.'
+        decision['arguments'].append(dict(tool=owner.TOOL,argument='coordinate_system',
+            literal='zero-based half-open',evidence='zero-based half-open',value='zero_based_half_open'))
+        decisions[prompt]=decision
+    if native_scope:
+        for decision in decisions.values():
+            for declaration in decision['arguments']:
+                declaration['native_function']='matchMotifs'
     class Model:
         model_id='scripted/native-motif'
         def complete(self,*,prompt,response_schema):
@@ -255,12 +267,27 @@ def test_normal_interpreter_compiler_clarification_and_exact_kwargs(source,nativ
     record=local.register('peaks',source['input_path'],input_type='h5ad',label='ordinary',attribution='researcher')
     group=local.compose_group([record.resource_id],attachment_candidates=True)
     first=app.submit_turn('session','first',prompt,expected_generation=0,registered_input=group).to_dict()
-    assert first['response']['kind']=='clarify',first
     state=app._application.sessions.load('session')
-    assert not state.turns and not native and 'coordinate' in first['response']['text']
-    assert AnalysisSession.from_dict(_serialize(state.to_dict()))==state
-    done=app.submit_turn('session','reply',reply,expected_generation=0).to_dict()
-    state=app._application.sessions.load('session')
+    if initial_coordinate:
+        done=first
+        assert first['response']['kind']!='clarify',first
+    else:
+        assert first['response']['kind']=='clarify',first
+        assert not state.turns and not native and 'coordinate' in first['response']['text']
+        assert AnalysisSession.from_dict(_serialize(state.to_dict()))==state
+        if native_scope and structured:
+            from agent.application import dialogue_execution as execution
+            with monkeypatch.context() as old:
+                old.setattr(execution,'_missing_parameter_inputs',lambda registry,tool,names,values:
+                    [name for name in names if execution._parameter_input(registry,tool,name)[0] not in values])
+                partial=app.submit_turn('session','legacy-partial',reply,expected_generation=0).to_dict()
+                assert partial['response']['kind']=='clarify' and not native
+                historical=app._application.sessions.load('session')
+            assert app._application.sessions.load('session')==historical
+        done=app.submit_turn('session','reply',reply,expected_generation=0).to_dict()
+        state=app._application.sessions.load('session')
+        if native_scope and structured:
+            assert state.interactions[:len(historical.interactions)]==historical.interactions
     assert len(native)==1 and len(state.revisions)==1,done
     run=app._application.run_store.load(state.turns[-1].run_id)
     assert run.steps[0].resolved_arguments['kwargs']==source['kwargs']
@@ -330,15 +357,59 @@ def test_missing_file_offers_distinguish_required_input_from_optional_genome():
 
 
 def test_missing_file_schema_can_request_one_required_dataset_without_optional_resources():
-    from agent.application.local_resources import group_choices,RegisteredInputGroup
-    from agent.application.dialogue_execution import scientific_parameters
     from agent.application.turn_decisions import decision_schema
-    from agent.orchestration import build_default_tool_registry
-    registry=build_default_tool_registry()
-    roles=group_choices(RegisteredInputGroup((),{},attachment_candidates=True),registry)['roles']
-    public=dict(bases={},relations=['current'],dialogue=dict(outputs=[],tools=list(registry.names()),
-        scientific_parameters=scientific_parameters(registry),selected_sources=[],input_roles=roles))
-    schema=decision_schema(public)
+    schema=decision_schema()
     requests=[v['properties'] for v in schema['properties']['decision']['anyOf']
         if v['properties']['kind']['enum']==['request_roles'] and 'required_roles' in v['properties']]
     assert requests and requests[0]['required_roles']['minItems']==1
+
+
+@pytest.mark.parametrize('mode,files',[('scores',9),('positions',6)])
+def test_mode_specific_publication_acceptance_and_download(source,native,tmp_path,monkeypatch,mode,files):
+    from agent.application import ResearchAgentApplication,OutputSelection
+    from agent.orchestration import AgentPlan,AgentRequest,PlanStep
+    from agent.application.workspace import ManagedWorkspace
+    from agent.application.native_delivery import accepted_artifacts
+    from agent.application.matrix_delivery import MatrixDownloadPreparer
+    old_native=owner.native
+    def invoke(args,stage,*resources):
+        receipt=old_native(args,stage,*resources)
+        (stage/'native-result.rds').write_bytes(b'SIMULATED native result; parity qualified separately')
+        if mode=='scores':
+            mmwrite(stage/'scores.mtx',sparse.csc_matrix([[1.,0.],[2.,3.],[0.,4.]]))
+            mmwrite(stage/'counts.mtx',sparse.csc_matrix([[1,0],[2,1],[0,1]]))
+            receipt['assays']=['motifScores','motifMatches','motifCounts']
+        else:
+            (stage/'positions.tsv').write_text('motif_index\tnative_name\tseqnames\tstart\tend\twidth\tstrand\tscore\n0\tMA2.1_TF2\tchr1\t1\t10\t10\t-\t7.5\n')
+            receipt['n_positions']=1
+        return receipt
+    monkeypatch.setattr(owner,'native',invoke)
+    root=tmp_path/'workspace';args=dict(source,kwargs=dict(source['kwargs'],out=mode),output_dir=str(root/'runs'/ManagedWorkspace.run_digest('first:run')/'scientific'/'motifs'))
+    class Planner:
+        def plan(self,request,registry):return AgentPlan('first',request.request_id,'simulated mode',(PlanStep('native',owner.TOOL,args),))
+    app=ResearchAgentApplication(root,planner=Planner());app.sessions.create('modes')
+    state=app.sessions.run('modes','first',AgentRequest('first','Native '+mode,{}),(OutputSelection('result','native','manifest_path'),),expected_generation=0)
+    assert state.turn('first').status=='activated',app.run_store.load('first:run').errors
+    path=Path(args['output_dir'])/'manifest.json';value,sha=owner.load(path);out=owner.result(value,path,sha)
+    if mode=='positions':
+        assert out['n_positions']==1 and out['n_matches'] is None and out['matches_path'] is None
+        assert not (path.parent/'motif-matches.npz').exists()
+    else:assert out['n_matches']==4
+    revision=state.revisions[-1];turn=state.turn('first')
+    artifacts=accepted_artifacts(app.sessions,'modes',revision,turn,None,step_id='native')
+    assert len(artifacts)==files
+    for artifact in artifacts:
+        prepared=MatrixDownloadPreparer().prepare(artifact)
+        try:
+            import hashlib
+            data=b''.join(prepared.iter_chunks())
+            assert len(data)==prepared.size_bytes and hashlib.sha256(data).hexdigest()==prepared.sha256
+        finally:prepared.close()
+    Path(source['input_path']).unlink()
+    reopened=ResearchAgentApplication(root,planner=Planner())
+    assert reopened.sessions.load('modes').to_dict()==state.to_dict()
+    assert len(accepted_artifacts(reopened.sessions,'modes',revision,turn,None,step_id='native'))==files
+    assert len(native)==1
+    (path.parent/'native-result.rds').write_bytes(b'changed')
+    with pytest.raises((ValueError,RuntimeError)):
+        MatrixDownloadPreparer().prepare(next(a for a in artifacts if a.role=='native-result.rds'))

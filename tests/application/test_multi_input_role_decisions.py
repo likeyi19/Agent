@@ -70,19 +70,9 @@ def test_invalid_or_conflicting_role_wire_fails_closed(submitted):
 
 def test_existing_execute_wire_and_schema_do_not_require_new_selection():
     assert parse_decision(wire()) == Execute('current', 'plan', 'evaluate_cell_clustering', None)
-    assert 'roles' not in execution(decision_schema(public(selected=False)))
+    assert execution(decision_schema())['roles']['minItems'] == 0
 
 
-def test_schema_scopes_each_role_to_its_registry_consumer_and_captured_handles():
-    items = execution(decision_schema(public()))['roles']
-    assert items['maxItems'] == 8
-    assert [(item['properties']['tool']['enum'], item['properties']['port']['enum'])
-            for item in items['items']['anyOf']] == [
-        ([item['tool']], [item['port']]) for item in public()['dialogue']['input_roles']]
-    for item in items['items']['anyOf']:
-        assert item['additionalProperties'] is False
-        assert item['properties']['source']['enum'] == ['source.0', 'source.1']
-        assert item['required'] == ['tool', 'port', 'source']
 
 
 def test_interpreter_receives_only_safe_captured_choices_and_owns_role_meaning():
@@ -99,7 +89,8 @@ def test_interpreter_receives_only_safe_captured_choices_and_owns_role_meaning()
     instructions = ' '.join(model.prompt['instructions'])
     assert 'order, filenames and metadata never imply biological roles' in instructions
     assert 'Pending parameter answers retain the exact original selection and roles' in instructions
-    assert 'source.0' in json.dumps(model.schema)
+    assert 'source.0' in json.dumps(model.prompt)
+    assert 'source.0' not in json.dumps(model.schema)
     assert '/private/' not in json.dumps(model.prompt)
 
 
@@ -117,7 +108,10 @@ def test_grouped_interpreter_utf8_preserves_json_values_and_existing_wire_encodi
     interpret(model, utterance, value)
     decoded = json.loads(model.raw)
     assert decoded['utterance'] == utterance
-    assert decoded['dialogue'] == value['dialogue']
+    dialogue = dict(decoded['dialogue'])
+    capabilities = dialogue.pop('capabilities')
+    assert set(capabilities) == set(value['dialogue']['tools'])
+    assert dialogue == {k:v for k,v in value['dialogue'].items() if k not in ('tools','input_roles')}
     if selected:
         assert 'Ground truth 类型 🧬' in model.raw
         assert r'\ud83e\uddec' not in model.raw

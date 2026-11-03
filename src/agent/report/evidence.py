@@ -1057,6 +1057,9 @@ def _project_artifacts(
 ) -> list[dict[str, JsonValue]]:
     artifacts: list[dict[str, JsonValue]] = []
     for artifact in projection.artifacts:
+        if (tool_name == 'run_motifmatchr' and artifact.result_field == 'matches_path'
+                and result.get('parameters', {}).get('kwargs', {}).get('out') == 'positions'):
+            continue
         path = result.get(artifact.result_field)
         if not isinstance(path, str) or not path:
             raise AnalysisEvidenceError(
@@ -1383,6 +1386,10 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == 'run_macs3' and 'result_files' in step_result.result:
+            facts['result_files'] = _plain_json(step_result.result['result_files'], f'{step.step_id}.result_files')
+        if step.tool_name == 'run_motifmatchr' and 'n_positions' in step_result.result:
+            facts['n_positions'] = step_result.result['n_positions']
         if (step.tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap')
                 and ('analysis_sha256' in step_result.result
                      or step_result.result.get('contract_version') == 'cell-neighbors-publication.v2')):

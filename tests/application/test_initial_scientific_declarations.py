@@ -26,6 +26,9 @@ from test_human_epizoo_mapping import (
     MappingWitness, TOOLS, WithholdScience, configuration,
 )
 from test_service import _tiny_h5ad
+from tests.application.test_composed_scientific_declarations import expand
+
+
 
 
 EXPLICIT = ('Analyze these human scATAC-seq cells with EpiZoo, construct their neighbor graph, '
@@ -188,17 +191,7 @@ def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
             spec = registry.get(row['tool'])
             assert is_exact_string_argument(spec.required_arguments.get(row['argument'], spec.optional_arguments.get(row['argument'])))
 
-    execution = next(row for row in decision_schema(context)['properties']['decision']['anyOf']
-        if row['properties']['kind']['enum'] == ['execute_plan'])
-    members = execution['properties']['arguments']['items']['anyOf']
-    actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
-        for row in members}
-    assert actual == offered and len(actual) == len(members)
-    categorical = [row for row in members if 'value' in row['properties']]
-    assert len(categorical) == len(choices)
-    for row in categorical:
-        assert row['additionalProperties'] is False
-        assert set(row['properties']) == {'tool', 'argument', 'literal', 'evidence', 'value'}
+
 
 
 @pytest.mark.parametrize('utterance,literal,value', [
@@ -242,21 +235,6 @@ def test_choice_argument_respects_species_and_shared_parameter_contracts(kind):
         species='human'))) == SpeciesAnswer('@species', 'human')
 
 
-def test_choice_only_context_preserves_pending_schema_without_empty_numeric_union():
-    context = public()
-    context['dialogue']['scientific_parameters'] = [
-        row for row in context['dialogue']['scientific_parameters'] if row.get('choices')]
-    context['dialogue']['pending_prerequisite'] = dict(handle='@species', field='species',
-        choices=['human', 'mouse'], objective=OMITTED)
-    variants = decision_schema(context)['properties']['decision']['anyOf']
-    answer, = [row for row in variants if row['properties']['kind']['enum'] == ['answer_prerequisite']]
-    assert 'arguments' not in answer['properties']
-    assert answer['properties']['species']['enum'] == ['human', 'mouse']
-    assert 'argument' not in answer['properties']
-    context['dialogue']['pending_prerequisite'] = dict(handle='@parameters', field='parameters',
-        objective='Select cells.', missing=['min_tss_enrichment'])
-    assert all(row['properties']['kind']['enum'] != ['answer_parameters']
-        for row in decision_schema(context)['properties']['decision']['anyOf'])
 
 
 @pytest.mark.parametrize('change', [dict(literal='Human'), dict(start=0), dict(end=len(EXPLICIT) + 1),
@@ -285,10 +263,10 @@ def test_supported_new_request_with_omitted_declaration_reaches_existing_compile
         def complete(self, *, prompt, response_schema):
             captured = json.loads(prompt)
             assert captured['utterance'] == OMITTED
-            variants = response_schema['properties']['decision']['anyOf']
+            variants = expand(response_schema)['properties']['decision']['anyOf']
             execution, = [v['properties'] for v in variants
                           if v['properties']['kind']['enum'] == ['execute_plan']]
-            assert 'compute_cell_umap' in execution['target']['enum']
+            assert 'compute_cell_umap' in captured['dialogue']['capabilities']
             assert execution['arguments'].get('minItems', 0) == 0
             assert not captured['dialogue'].get('pending_prerequisite')
             return wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[]))
@@ -296,43 +274,12 @@ def test_supported_new_request_with_omitted_declaration_reaches_existing_compile
     assert decision == Execute('current', 'plan', 'compute_cell_umap', None)
 
 
-@pytest.mark.parametrize('pending_field,expected', [(None, False), ('species', True), ('parameters', False)])
-def test_missing_species_schema_requires_existing_species_pending_context(pending_field, expected):
-    context = public()
-    if pending_field is not None:
-        context['dialogue']['pending_prerequisite'] = dict(handle='@species' if pending_field == 'species' else '@parameters',
-            field=pending_field, choices=['human', 'mouse'], objective=OMITTED)
-    clarify, = [row for row in decision_schema(context)['properties']['decision']['anyOf']
-        if row['properties']['kind']['enum'] == ['clarify']]
-    reasons = clarify['properties']['reason']['enum']
-    assert ('missing_species' in reasons) is expected
-    assert {'ambiguous_species', 'unsupported_species', 'conflicting_species'} <= set(reasons)
 
 
 def test_historical_missing_species_wire_remains_parseable_without_adding_pending_state():
     assert parse_decision(wire(dict(kind='clarify', reason='missing_species'))) == Clarify('missing_species')
 
 
-@pytest.mark.parametrize('field,kind', [('species', 'answer_prerequisite'), ('parameters', 'answer_parameters')])
-def test_pending_scalar_schema_preserves_exact_pairs_and_scoped_choices(field, kind):
-    context = public()
-    context['dialogue']['pending_prerequisite'] = dict(handle='@species' if field == 'species' else '@parameters',
-        field=field, choices=['human', 'mouse'], objective=OMITTED)
-    answer, = [row for row in decision_schema(context)['properties']['decision']['anyOf']
-        if row['properties']['kind']['enum'] == [kind]]
-    arguments = answer['properties']['arguments']
-    members = arguments['items']['anyOf']
-    expected = {(row['tool'], row['argument']) for row in context['dialogue']['scientific_parameters']
-        if field == 'parameters' or 'choices' not in row}
-    actual = {(row['properties']['tool']['enum'][0], row['properties']['argument']['enum'][0])
-        for row in members}
-    assert actual == expected and len(actual) == len(members)
-    assert arguments['maxItems'] == 32
-    assert all(row['additionalProperties'] is False for row in members)
-    if field == 'species':
-        assert all('value' not in row['properties'] for row in members)
-    if field == 'parameters':
-        assert arguments['minItems'] == 1
 
 
 @pytest.mark.parametrize('species,literal', [('human', 'human'), ('mouse', 'mouse')])

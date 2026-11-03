@@ -99,7 +99,7 @@ def test_input_guard_rechecks_after_body_before_acceptance() -> None:
     executor = PlanExecutor(ToolRegistry((_spec("echo", tool),)))
     checks = []
     def guard(name, arguments):
-        checks.append(name)
+        checks.append(name.tool_name)
         if tool.called:
             raise ValueError("Source changed during the registered attempt.")
     with execution_input_guard(guard):

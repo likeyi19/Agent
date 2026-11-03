@@ -71,6 +71,13 @@ class FakeResponses:
         self.error = error
         self.calls: list[dict[str, object]] = []
 
+    @property
+    def with_raw_response(self):
+        def create(**kwargs):
+            result = self.create(**kwargs)
+            return SimpleNamespace(parse=lambda: result, status_code=200, request_id='req_test')
+        return SimpleNamespace(create=create)
+
     def create(self, **kwargs):
         schema = kwargs.get("response_format", {}).get("schema") or kwargs.get("text", {}).get("format", {}).get("schema", {})
         if "selection_schema_version" in schema.get("properties", {}):
@@ -214,7 +221,17 @@ def test_semantic_v4_round_trip_uses_generic_responses_transport() -> None:
         step["properties"]["tool"]["enum"][0]
         for step in schema["$defs"]["step"]["anyOf"]
     ] == sorted(registry.names())
-    assert schema["$defs"]["input_name"]["enum"] == ["input_path"]
+    from tests.application.test_composed_scientific_declarations import expand
+    expanded = expand(schema)
+    def input_domains(node):
+        if isinstance(node, dict):
+            if 'input' in node.get('properties', {}):
+                yield node['properties']['input']['enum']
+            for value in node.values(): yield from input_domains(value)
+        elif isinstance(node, list):
+            for value in node: yield from input_domains(value)
+    assert list(input_domains(expanded))
+    assert all(domain == ['input_path'] for domain in input_domains(expanded))
     assert plan.steps[0].arguments == {"path": secret}
 
 
@@ -334,7 +351,7 @@ def test_invalid_model_is_rejected(model) -> None:
 
 
 def test_invalid_client_boundary_is_rejected() -> None:
-    with pytest.raises(TypeError, match=r"responses\.create"):
+    with pytest.raises(TypeError, match=r"responses\.with_raw_response\.create"):
         OpenAIPlanningModel(model="gpt-test", _client=object())
 
 
@@ -384,3 +401,92 @@ def test_default_client_disables_sdk_retries(monkeypatch) -> None:
     OpenAIPlanningModel(model="gpt-test")
 
     assert calls == [{"max_retries": 0}]
+
+
+@pytest.mark.parametrize('status,code',[('incomplete','PROVIDER_COMPLETION_INCOMPLETE'),('completed','PROVIDER_OUTPUT_MISSING')])
+def test_incomplete_and_missing_outputs_have_distinct_safe_diagnostics(caplog,status,code):
+    response=_response(output_text='')
+    response.status=status
+    response.output=[]
+    response.incomplete_details=SimpleNamespace(reason='max_output_tokens')
+    response.usage=SimpleNamespace(input_tokens=11,output_tokens=0,total_tokens=11,private='/private/secret')
+    adapter,client=_adapter(response)
+    with pytest.raises(OpenAIPlanningError) as caught:adapter.complete(prompt='PRIVATE PROMPT',response_schema=_schema())
+    assert caught.value.code==code and len(client.responses.calls)==1
+    log=caplog.text
+    assert '"completion_status":"'+status+'"' in log
+    assert '"incomplete_reason":"max_output_tokens"' in log and '"output_item_count":0' in log
+    assert 'PRIVATE PROMPT' not in log and '/private/secret' not in log
+
+
+@pytest.mark.parametrize('usage_state', ['absent', 'null', 'zero', 'measured'])
+@pytest.mark.parametrize('status', ['completed', 'incomplete'])
+def test_official_sdk_wire_presence_transport_and_text(caplog, usage_state, status):
+    openai = pytest.importorskip('openai')
+    httpx = pytest.importorskip('httpx')
+    exact = '  {"ok":true}\n'
+    body = dict(id='resp_private', object='response', status=status,
+        model='gpt-test', error=None, max_output_tokens=16384,
+        reasoning={'effort': 'medium'},
+        incomplete_details={'reason': 'max_output_tokens'} if status == 'incomplete' else None,
+        output=[] if status == 'incomplete' else [
+            {'type': 'reasoning', 'id': 'private-reasoning', 'summary': []},
+            {'type': 'message', 'id': 'private-message', 'role': 'assistant', 'status': 'completed',
+             'content': [{'type': 'output_text', 'text': exact, 'annotations': []}]}])
+    if usage_state == 'null':
+        body['usage'] = None
+    elif usage_state in ('zero', 'measured'):
+        n = 0 if usage_state == 'zero' else 17
+        body['usage'] = dict(input_tokens=n, output_tokens=n, total_tokens=2*n,
+            input_tokens_details={'cached_tokens': n}, output_tokens_details={'reasoning_tokens': n})
+    requests = []
+    def handle(request):
+        requests.append(json.loads(request.content))
+        assert request.url == 'https://api.openai.com/v1/responses'
+        return httpx.Response(200, json=body, headers={'x-request-id': 'req_wiretest'})
+    with openai.OpenAI(api_key='test-secret', base_url='https://api.openai.com/v1', max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(handle))) as client:
+        adapter = OpenAIPlanningModel(model='gpt-test', _client=client)
+        schema = {'type': 'object', 'properties': {}, 'additionalProperties': False}
+        if status == 'completed':
+            assert adapter.complete(prompt='PRIVATE PROMPT', response_schema=schema) == exact
+        else:
+            with pytest.raises(OpenAIPlanningError) as caught:
+                adapter.complete(prompt='PRIVATE PROMPT', response_schema=schema)
+            assert caught.value.code == 'PROVIDER_COMPLETION_INCOMPLETE'
+    assert requests == [dict(model='gpt-test', input='PRIVATE PROMPT', store=False,
+        background=False, text={'format': {'type': 'json_schema', 'name': 'agent_plan', 'strict': True, 'schema': schema}})]
+    row = json.loads(caplog.records[-1].message.split('Agent operation diagnostic ')[1])
+    assert row['http_status'] == 200 and row['provider_request_id'] == 'req_wiretest'
+    assert row['usage_state'] == (usage_state if usage_state in ('absent', 'null') else 'present')
+    if usage_state in ('absent', 'null'):
+        assert 'input_tokens' not in row and 'output_tokens' not in row and 'reasoning_tokens' not in row
+    else:
+        assert row['input_tokens'] == row['output_tokens'] == row['reasoning_tokens'] == n
+    assert row['max_output_tokens'] == 16384 and row['reasoning_effort'] == 'medium'
+    assert row['output_types'] == ({} if status == 'incomplete' else {'reasoning': 1, 'message': 1})
+    assert row['content_types'] == ({} if status == 'incomplete' else {'output_text': 1})
+    for secret in ('PRIVATE PROMPT', exact, 'test-secret', 'resp_private', 'private-message'):
+        assert secret not in caplog.text
+
+
+def test_official_sdk_schema_http_error_is_separate_from_incomplete(caplog):
+    openai = pytest.importorskip('openai')
+    httpx = pytest.importorskip('httpx')
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(400, headers={'x-request-id': 'req_schema'}, json={'error': {
+            'type': 'invalid_request_error', 'code': 'invalid_json_schema',
+            'message': 'PRIVATE SCHEMA ECHO', 'param': 'text.format.schema'}})
+    with openai.OpenAI(api_key='test-secret', max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(handle))) as client:
+        adapter = OpenAIPlanningModel(model='gpt-test', _client=client)
+        with pytest.raises(OpenAIPlanningError) as caught:
+            adapter.complete(prompt='private', response_schema={})
+    assert len(calls) == 1
+    assert caught.value.code != 'PROVIDER_COMPLETION_INCOMPLETE'
+    row = json.loads(caplog.records[-1].message.split('Agent operation diagnostic ')[1])
+    assert row['http_status'] == 400 and row['provider_request_id'] == 'req_schema'
+    assert row['event'] == 'openai.request_failed'
+    assert 'completion_status' not in row and 'PRIVATE SCHEMA ECHO' not in caplog.text

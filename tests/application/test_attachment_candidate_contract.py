@@ -7,17 +7,21 @@ import pytest
 from agent.application.local_resources import LocalResourceAdmission, ResourceAdmissionError
 from agent.application.turn_decisions import parse_decision
 from test_multi_input_group_contract import selection, submission
-from test_pending_role_contract import public, variants, wire, request, requirements
+from test_pending_role_contract import wire, request, requirements
 
 
 ROLE = dict(tool='inspect_scATAC', port='dataset', source='source.0')
 
 
-def test_single_missing_role_is_offered_only_for_candidate_attachments():
-    context = public()
-    assert variants(context)['request_roles']['properties']['required_roles']['minItems'] == 2
-    context['dialogue']['attachment_candidates'] = True
-    assert variants(context)['request_roles']['properties']['required_roles']['minItems'] == 1
+def test_single_missing_role_is_admitted_only_for_candidate_attachments(selection):
+    from agent.application.local_resources import validate_group_roles
+    from agent.orchestration import build_default_tool_registry
+    _, _, original = selection
+    registry = build_default_tool_registry()
+    required = [dict(tool='inspect_scATAC', port='dataset')]
+    with pytest.raises(ResourceAdmissionError):
+        validate_group_roles(original, (), registry, required)
+    assert validate_group_roles(replace(original, attachment_candidates=True), (), registry, required) == ()
     assert len(parse_decision(wire(request(required_roles=requirements()[:1]))).required_roles) == 1
 
 

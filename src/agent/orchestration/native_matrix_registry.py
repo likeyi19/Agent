@@ -17,7 +17,7 @@ def classify(exception):
 
 
 def tool_spec(owner):
-    from .registry import (ToolSpec, ResultContract, DurableToolHooks, ScientificAuthorityHooks,
+    from .registry import (NativeFunctionCatalog, ToolSpec, ResultContract, DurableToolHooks, ScientificAuthorityHooks,
         ArtifactSemanticKind as A, PlanningToolRole, PlanningSourceEligibility as S, SemanticToolSpec,
         SemanticConsumerPortSpec as Consumer, SemanticProducerPortSpec as Producer, _planning_argument as arg,
         _planning_result, _tool_planning, _semantic_member as member, _semantic_request as request,
@@ -28,7 +28,7 @@ def tool_spec(owner):
             artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         output_dir=arg((str, Path), 'Managed native publication destination.'),
         function_name=arg((str,), 'Explicit public ' + owner.package + ' function.', choices=tuple(owner.FUNCTIONS),
-            scientific_parameter=True, conversational_choice=True))
+            scientific_parameter=True, conversational_choice=True, planner_choice=True))
     optional = dict(
         input_sha256=arg((str,), 'Captured exact source checksum.'),
         kwargs=arg((dict,), 'Native kwargs from grounded assignments or JSON; omit unrequested defaults.',
@@ -37,12 +37,23 @@ def tool_spec(owner):
             scientific_parameter=True, conversational_exact_string=True),
         matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
+    if owner.package == 'Signac':
+        optional.update(second_path=arg((str, Path), 'Exact second H5AD for Jaccard or corSparse Y; identical ordered features required.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+            second_sha256=arg((str,), 'Captured second source checksum.'),
+            second_count_slot=arg((str,), 'Second input X or selected layer, independently bound.', scientific_parameter=True, conversational_exact_string=True))
+    from .native_parameters import scalar_port
+    base_scalar = scalar
+    scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
         accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')),
-        *(scalar(k, required=k in required) for k in (*required, *optional) if k != 'input_path')]
+        *(scalar(k, required=k in required) for k in (*required, *optional) if k not in ('input_path', 'second_path'))]
+    if owner.package == 'Signac':
+        ports.append(Consumer('second', (member('dataset', 'second_path'),), False,
+            request_sources=(request('second_path', rm('dataset', 'second_path')),),
+            accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')))
     pub = owner.publication
-    return ToolSpec(name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication or result H5AD.', bindable=True, artifact=A.RAW_SCATAC)

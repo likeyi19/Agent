@@ -7,7 +7,7 @@ separate operations. Package order and implementation language confer no priorit
 
 ## Supported interfaces
 
-The existing `run_motifmatchr` supports `matchMotifs` with native matches output;
+The existing `run_motifmatchr` supports `matchMotifs` with native matches, scores or positions output;
 see [native motif invocation](native-motif-invocation.md).
 
 `run_chromvar(input_path, output_dir, function_name, kwargs=...)` supports these
@@ -458,12 +458,12 @@ Cicero overlap calls honor the native first-two-column convention and permit
 extra ordinary columns; native required-column and numerical checks are not
 duplicated by Agent.
 
-## STE-NFI-1F: current native API coverage
+## STE-NFI-1F: native API coverage at that milestone
 
-The catalog now has **66 distinct package-qualified native functions**, an increase
+At 1F the catalog had **66 distinct package-qualified native functions**, an increase
 of **31**, through the same **43 Registry tools**. No additional motifmatchr output
 mode is exposed. Earlier sections describe their original qualification scope;
-this section records the current additions.
+this section records the 1F additions. The 1G section below supersedes its deferred-input limits.
 
 | Installed package | Added functions | Representation |
 | --- | --- | --- |
@@ -532,7 +532,9 @@ them. Other installed packages were not upgraded. The original scientific packag
 versions remain unchanged. These optional graph dependencies retain their own
 licenses, including GPL terms for igraph/Leiden/Louvain.
 
-### Reviewed limits
+### Reviewed limits at 1F
+
+The following records the 1F boundary; 1G updates are listed below.
 
 - SnapATAC2 `tl.kmeans` is not exposed: float64 reaches an unimplemented Rust path;
   float32 is rejected by the installed binding. `tl.hdbscan` and `pp.harmony` need
@@ -572,3 +574,135 @@ The [STE-NFI-1F report](../../../agent-data/acceptance/scientific-tool-ecosystem
 records actual native parity, historical recovery, Firefox/OpenAI acceptance and
 provider failures. Coverage does not imply full-package, biological or universal
 provider qualification.
+
+
+## STE-NFI-1G: native input families and interaction
+
+The catalog contains **69 distinct package-qualified native functions** across
+**eight packages**, still **43 Registry tools**. Three functions are new:
+`MACS3 bdgdiff`, `chromVAR::getBackgroundPeaks`, and `Signac::Jaccard`.
+`matchMotifs` gains two output modes; `corSparse` gains its two-matrix form.
+These modes are not additional function counts.
+
+| Interface | Actual inputs | Native output |
+| --- | --- | --- |
+| motifmatchr `matchMotifs(out="scores")` | Existing ordered peaks, qualified genome and motifs | matches, maximum scores and match counts, exact native R result |
+| motifmatchr `matchMotifs(out="positions")` | Same genomic inputs | Native genomic hits with motif identity, 1-based closed ranges, strand and score; exact GRangesList RDS |
+| MACS3 `bdgdiff` | Four actual continuous bedGraphs: treatment 1, control 1, treatment 2, control 2 | Three native BED5 files: condition 1 unique, condition 2 unique and common regions |
+| chromVAR `getBackgroundPeaks` | H5AD numeric counts and actual numeric per-feature `var.bias`, or an explicit `bias_key` | Native 1-based feature indices per background iteration, preserving feature order |
+| Signac `Jaccard` / two-source `corSparse` | Two H5ADs with identical ordered feature identities; independent cell axes and matrix slots | Rectangular cross-cell similarities, correlations or covariance |
+
+For MACS3, the existing dataset/control ports bind treatment/control for condition 1;
+`treatment2` and `control2` bind condition 2. Use unscaled pileup and lambda tracks,
+not SPMR. `cutoff`, `min-len`, `max-gap`, `d1`/`depth1`, `d2`/`depth2` and `verbose`
+are forwarded unchanged. Output destinations are managed fixed names, never CLI
+kwargs. The primary table is condition 1 unique; `condition2.tsv` and `common.tsv`
+remain separate downloadable files, even when a native table has zero regions.
+This is native likelihood-ratio signal comparison, not replicate-aware edgeR DA.
+`cmbreps` still accepts two tracks, not an arbitrary path list.
+
+Background sampling forwards `niterations`, `w`, `bs` and an optional explicit R
+seed. No GC estimate or bias is invented. Results reference the exact ordered
+`features.tsv`; indices remain 1-based and may repeat. The result has a 16-million
+element execution bound. The native package retains numerical validation/defaults.
+`getSampleDepths` remains unavailable: its real BAM/BED file-list, pairing and
+read-group semantics are not supplied by this count-matrix adapter.
+
+Signac `second` binds an exact independent H5AD. `second_count_slot` selects its
+own X/layer; it does not inherit the first matrix's measurement declaration.
+No feature alignment, automatic binarization or Seurat object is fabricated.
+Jaccard receives cells × features; corSparse receives features × cells and native
+Y. `cov=true` selects native covariance. Rectangular values and both cell axes are
+stored in `uns.Signac_pairwise`; single-source corSparse remains
+`obsp.Signac_corSparse`. Pairwise output is bounded to 16 million elements.
+
+A scientific task may compose multiple native calls. When no function is fixed by
+the user, the existing Planner may select a reviewed `function_name` from Registry.
+Explicit calls can scope grounded declarations to their exact native function,
+including separate kwargs for several calls of one package. The existing compiler
+binds these scalar sources and the typed admission owner checks exact consumers;
+there is no keyword router or second executor. Multiple instances of the *same*
+function with conflicting settings remain ambiguous; no new step-memory mechanism
+is introduced. Specify `use_rep="X_pca"` to establish actual embedding consumption;
+merely retaining X_pca does not establish that it was used.
+
+The Interpreter now uses one fixed typed proposal schema. Tool, native-function,
+argument, source and port names are proposed canonical identities, not schema enums
+or execution authority. Existing admission validates each identity against Registry
+and captured context, grounds user values in exact utterance spans, checks function
+and source scopes, and protects explicit declarations through planning and compilation.
+Native packages retain numerical validity and omitted defaults.
+
+One Registry-derived capability projection exposes all **43 tools, 69 native
+functions and 164 parameter offers**. Every native function's supported kwarg names
+remain visible for task discovery. Exact registered API names expand their actual
+kwarg descriptions; explicit package/tool names, pending prerequisites and active
+accepted results expand relevant package detail. This changes descriptive detail
+only: it neither selects an operation nor adds a routing model call. The existing
+Planner receives complete method details and composes scientific dependencies.
+
+The combinatorial Interpreter schema builder, enum factoring/compactor and shared
+parameter alias projection are removed. There is one production protocol and no
+old-schema fallback. Existing persisted declaration readers retain real historical
+wire meanings; they do not select another generation protocol. Accepted parameter
+evidence uses the same Registry-owned function-qualified input keys as admission,
+so independent calls of one package retain their exact user attribution.
+
+The section-13 matched official-API fixture measured **101,263 prompt bytes + 32,340 schema
+bytes**, **182 enum occurrences** and **26,457 input tokens**. The preceding design
+measured 102,429 + 88,181 bytes, 682 enums and 44,910 input tokens. Synthetic additions
+of tools, functions, parameters and independent source fields change projected
+context but leave the schema unchanged. Context still grows with real information;
+this is not an unlimited-context claim. Planning's separate complete-catalog
+projection and existing maintenance bounds remain unchanged.
+Section 14's clarified choice/source instructions bring the matched prompt to
+**102,211 bytes**; the fixed schema and complete inventory remain unchanged.
+
+The [1G report](../../../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1g/REPORT.md),
+sections 13–14, owns the current architecture and evidence. A bounded official OpenAI
+request using the complete production protocol passed interpretation, admission,
+planning, compilation and output selection with science intentionally withheld.
+A new genuine Firefox natural-language task then completed native Scanpy PCA and
+an actual checked H5AD download. A parameter-evidence reader omission initially
+withheld the explanation; it is corrected and the accepted summary reads after
+restart, while the saved historical reply stays exact. A second explicit neighbors
+continuation returned a complete model response but failed admission before science.
+Its exact generated decision was not persisted, so the precise rejected association
+is not established. Those historical limitations are retained in section 13.
+
+Section 14 adds genuine Firefox/official OpenAI task composition of PCA, neighbors,
+Leiden and UMAP, exact accepted-PCA continuation, a neighbors parameter change
+without PCA rerun, and a complete reviewed comparison answer. A new motif positions
+result is accepted with six checked browser downloads. Missing dataset input asks
+for the file without creating a Run. These are genuine provider-driven executions,
+separate from the earlier scripted plans and native parity. Task completion prose
+is partially reviewed; native summaries can remain technical. No automatic PNG is
+claimed for generic native Scanpy UMAP or motif positions.
+
+Explicit function selections use the reviewed choice value; `native_function`
+scopes parameters but cannot replace that value. A source/port declaration asserts
+direct consumption of that original file, not ancestry through a derived matrix.
+Compiler automatic binding considers only the selected function's qualified scalar
+sources; unspecified kwargs remain omitted. Prerequisite advice and parameter
+continuation share a temporary projection for one unambiguous native function.
+The captured request stays exact; multiple function scopes wait for planning and
+scientific input validation. Historical questions retain their saved meanings.
+
+Fourteen bounded submissions observed 30 provider calls, including two connection
+failures; 28 completions exposed usage. Restart preserves accepted outputs and
+displayed history. The bounded recommendation is CONDITIONAL GO for demonstrated
+controlled research use, not every function, provider response or biological claim.
+
+The earlier empty/incomplete responses and diagnostic-only reduced schema remain
+historical evidence in sections 11–12. The OpenAI adapter retains safe HTTP/status/
+usage diagnostics and distinguishes missing/null/zero usage. Provider settings,
+credentials, retry policy and scientific algorithms are unchanged. No unrestricted
+provider, scientific or biological qualification is implied.
+
+Cicero gene activity still needs an original accessibility CDS with actual gene
+annotation and exact connections, then separate normalization inputs. SnapATAC2
+fragment import needs its native fragment storage (including noncanonical sparse
+indices), genome ordering and cell-filter semantics, not an ordinary H5AD adapter.
+ArchR Arrow/Project and pycisTopic objects are not installed/executable integrations;
+no broad Seurat adapter is added. The report records concrete runtime, object and
+license constraints and upstream sources. No deferred API is advertised as callable.

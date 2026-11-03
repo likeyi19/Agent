@@ -25,9 +25,11 @@ CONTRACT = 'chromvar-native-statistics.v1'
 POLICY = 'chromvar-native-statistics-v1'
 HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, functions=['computeExpectations','getFragmentsPerPeak','getFragmentsPerSample','computeVariability'],
     adaptation='ordered counts or explicitly recorded chromVAR deviations and z scores; no filtering'))
-PROFILE = digest(dict(contract=CONTRACT, adaptation='ordered numeric matrix; native numerical validation; recorded deviations and z scores.v2'))
+PREVIOUS_PROFILE = digest(dict(contract=CONTRACT, adaptation='ordered numeric matrix; native numerical validation; recorded deviations and z scores.v2'))
+PROFILE = digest(dict(contract=CONTRACT, adaptation='ordered numeric counts, scores or actual supplied bias; native background indices.v3'))
 VERIFIER = dict(id='agent.chromvar-function-completion', compatibility_version='1')
 FUNCTIONS = {
+    'getBackgroundPeaks': ('niterations', 'w', 'bs'),
     'getTotalFragments': (),
     'getSampleCorrelation': ('threshold',),
     'getSampleDistance': ('threshold', 'initial_dims'),
@@ -40,6 +42,9 @@ FUNCTIONS = {
 }
 DEVIATION_FUNCTIONS = ('computeVariability', 'getSampleCorrelation', 'getSampleDistance', 'differentialDeviations', 'differentialVariability')
 NATIVE_ARGUMENTS = (
+    ('niterations', 'getBackgroundPeaks native number of background samples per peak.'),
+    ('w', 'getBackgroundPeaks native sampling distribution width.'),
+    ('bs', 'getBackgroundPeaks native bin count per dimension.'),
     ('threshold', 'Native variability threshold for sample correlation/distance.'),
     ('initial_dims', 'Native distance PCA dimensions; no supplied executable distance function.'),
     ('alternative', 'differentialDeviations native alternative hypothesis.'),
@@ -50,7 +55,7 @@ NATIVE_ARGUMENTS = (
     ('bootstrap_quantiles','computeVariability: native two quantiles as a JSON number array.'),
     ('na.rm','computeVariability: native missing-value handling; omitted uses TRUE.'),
 )
-LIMITATIONS = ('Native functions are independent calls, with no filtering, motif scanning, background generation or workflow completion. '
+LIMITATIONS = ('Native functions are independent calls, with no unrequested filtering, motif scanning or workflow completion. Background indices are native 1-based references to features.tsv, with replacement, not new genomic peaks or biological qualification. '
     'Count totals retain the supplied measurement and are not independent molecules. Expectations retain the installed native norm/group behavior. '
     'computeVariability uses chromVAR z scores across supplied cells; its native chi-square/BH statistics are not replicate-level condition tests, TF binding or biological validation. '
     'Undefined native numbers remain explicit. The requested invocation assigns supplied X and z_scores to native deviations and z assays; their upstream scientific origin is not independently verified. '
@@ -100,10 +105,12 @@ def native_arguments(args):
     seed = args.get('seed')
     if seed is not None and (type(seed) is not int or not 0<=seed<=2147483647):
         raise ValueError('Explicit R seed must be an integer from 0 to 2147483647')
-    if function != 'computeVariability' and seed is not None:
-        raise ValueError('Seed applies only to computeVariability')
+    if function not in ('computeVariability', 'getBackgroundPeaks') and seed is not None:
+        raise ValueError('Seed applies only to computeVariability or getBackgroundPeaks')
     if function not in ('computeExpectations', 'differentialDeviations', 'differentialVariability') and args.get('group_key') is not None:
         raise ValueError('group_key applies only to expectations or differential deviations/variability')
+    if function != 'getBackgroundPeaks' and args.get('bias_key') is not None:
+        raise ValueError('bias_key applies only to getBackgroundPeaks')
     return kwargs
 
 
@@ -156,6 +163,20 @@ def prepare_input(args,stage):
             x=peak_h5ad.read_native_matrix(matrix)
             mmwrite(stage/'counts.mtx',x.T.tocsc())
             effective['measurement']=effective.get('matrix_semantics', 'unspecified_measurement')
+            if args['function_name'] == 'getBackgroundPeaks':
+                key = args.get('bias_key', 'bias')
+                if key not in var:
+                    raise ValueError('getBackgroundPeaks requires actual per-peak bias in var; select bias_key')
+                bias = var[key].to_numpy()
+                if bias.dtype.kind not in 'fiu' or bias.shape != (len(features),):
+                    raise ValueError('The supplied bias column must be numeric in original feature order')
+                peak_h5ad.native_double_values(bias)
+                feature_table['bias'] = bias
+                iterations = args.get('kwargs', {}).get('niterations', 50)
+                if type(iterations) in (int, float) and len(features) * iterations > 16_000_000:
+                    raise ValueError('Native background result exceeds 16000000-element execution bound')
+                effective['measurement'] = 'native_1_based_background_feature_indices'
+
         if args.get('group_key') is not None:
             values=obs[args['group_key']].tolist()
             if any(not isinstance(s,str) or not s or any(c in s for c in '\t\r\n') for s in values):
@@ -224,7 +245,8 @@ def execute(values,execution_identity=None):
             n_cells=n,n_features=m,result_rows=len(table),result_columns=list(table),result_axis=axis,
             native_output_type=receipt['native_output_type'],measurement=effective['measurement'],
             parameters=dict(kwargs=kwargs,omitted_optional_arguments='native defaults',seed=args.get('seed'),
-                group_key=args.get('group_key'),count_slot=effective.get('count_slot')),
+                group_key=args.get('group_key'),count_slot=effective.get('count_slot'),
+                **({'bias_key': args.get('bias_key', 'bias')} if args['function_name'] == 'getBackgroundPeaks' else {})),
             source_identity=dict(sha256=source['sha256'],size_bytes=source['size_bytes']),
             software_versions=receipt['versions'],undefined_values=receipt['undefined_values'],limitations=LIMITATIONS)
         write(root/'native-receipt.json',receipt)
@@ -242,12 +264,12 @@ def execute(values,execution_identity=None):
     return verify_publication(path,expected_sha256=sha)
 
 
-def run_chromvar(input_path,output_dir,function_name,kwargs=None,input_sha256=None,count_slot=None,matrix_semantics=None,group_key=None,seed=None):
+def run_chromvar(input_path,output_dir,function_name,kwargs=None,input_sha256=None,count_slot=None,matrix_semantics=None,group_key=None,seed=None,bias_key=None):
     return execute({k:v for k,v in locals().items() if v is not None})
 
 
 publication=NativePublication(tool=TOOL,kind=KIND,contract=CONTRACT,profile=PROFILE,verifier=VERIFIER,
-    files=FILES,arguments=arguments,outputs={'table':'result.tsv'},historical_profiles=(HISTORICAL_PROFILE,))
+    files=FILES,arguments=arguments,outputs={'table':'result.tsv'},historical_profiles=(HISTORICAL_PROFILE, PREVIOUS_PROFILE))
 load=publication.load
 result=publication.result
 verify_publication=publication.verify_publication

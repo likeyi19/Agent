@@ -72,19 +72,6 @@ def test_pending_species_parser_rejects_unsupported_values_and_arbitrary_inputs(
         parse_decision(json.dumps(dict(turn_schema_version=1, decision=decision)))
 
 
-def test_species_answer_schema_is_offered_only_with_exact_pending_context():
-    public = pending_public()
-    variants = decision_schema(public)['properties']['decision']['anyOf']
-    offered = [v for v in variants if v['properties']['kind']['enum'] == ['answer_prerequisite']]
-    assert len(offered) == 1
-    assert offered[0]['properties']['pending']['enum'] == ['@species']
-    assert offered[0]['properties']['species']['enum'] == ['human', 'mouse']
-    assert offered[0]['required'] == ['kind', 'pending', 'species']
-    assert set(offered[0]['properties']) == {'kind', 'pending', 'species'}
-    assert offered[0]['additionalProperties'] is False
-    public['dialogue'].pop('pending_prerequisite')
-    assert all(v['properties']['kind']['enum'] != ['answer_prerequisite']
-               for v in decision_schema(public)['properties']['decision']['anyOf'])
 
 
 @pytest.mark.parametrize('utterance,species', [
@@ -167,7 +154,7 @@ def test_parameter_wire_never_admits_arbitrary_input_dictionaries_or_multiple_ar
 
 
 def test_parameter_schema_retires_the_singular_writer():
-    variants = decision_schema(pending_public())['properties']['decision']['anyOf']
+    variants = decision_schema()['properties']['decision']['anyOf']
     for variant in variants:
         kind = variant['properties']['kind']['enum'][0]
         assert 'argument' not in variant['properties']
@@ -236,7 +223,11 @@ def test_assignment_association_and_execution_intent_belong_to_the_interpreter()
             if value['utterance'] == question:
                 return decision_wire(dict(kind='answer', intent='unsupported', relation='current', technical=False))
             return decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=asdict(declaration)))
-    interpreted = interpret(Model(), utterance, pending_public())
+    public = pending_public()
+    public['dialogue']['tools'].append('cluster_cells')
+    from agent.application.dialogue_execution import scientific_parameters
+    public['dialogue']['scientific_parameters'] = scientific_parameters(build_default_tool_registry())
+    interpreted = interpret(Model(), utterance, public)
     assert interpreted.argument is None
     assert [asdict(d) for d in interpreted.arguments] == [asdict(declaration)]
     assert isinstance(interpret(Model(), question, pending_public()), Answer)
@@ -305,8 +296,7 @@ def test_interpreter_owns_operation_and_source_role_association_for_exact_string
     class Model:
         def complete(self, *, prompt, response_schema):
             captured = json.loads(prompt)
-            offered, = [item for item in captured['dialogue']['scientific_parameters']
-                if (item['tool'], item['argument']) == (tool, name)]
+            offered = captured['dialogue']['capabilities'][tool]['parameters'][name]
             assert offered['exact_string'] is True and offered['provenance_role'] == role
             rule, = [item for item in captured['instructions'] if item.startswith('For an offered exact_string')]
             for phrase in ('surrounding quotation marks excluded', 'Preserve case, Unicode',
@@ -351,45 +341,36 @@ def test_ambiguous_column_association_keeps_provider_authored_clarification():
     assert interpret(Model(), utterance, string_public()) == Clarify('ambiguous_parameter')
 
 
-def test_compact_schema_preserves_complete_registry_domains_and_shares_small_enums():
-    from agent.application.turn_decisions import _compact_decision_schema
+
+
+def test_result_only_instructions_follow_the_existing_schema_offers():
+    from copy import deepcopy
     from agent.application.dialogue_execution import scientific_parameters
-    registry=build_default_tool_registry()
-    parameters=scientific_parameters(registry)
-    public=dict(bases={},relations=['current'],dialogue=dict(outputs=[],tools=list(registry.names()),
-        scientific_parameters=parameters,selected_sources=[dict(source='source.0',input_type='h5ad')],
-        source_fields=[dict(source='source.0',fields=['group','label'],complete=True)],
-        input_roles=[dict(tool=p['tool'],port=p['observation_source']) for p in parameters if p.get('observation_source')]))
-    original=decision_schema(public);compact=_compact_decision_schema(original)
-    def expand(value):
-        if isinstance(value,dict):
-            if '$ref' in value:return expand(compact['$defs'][value['$ref'].split('/')[-1]])
-            return {k:expand(v) for k,v in value.items() if k!='$defs'}
-        if isinstance(value,list):return [expand(v) for v in value]
-        return value
-    def canonical(value):
-        if isinstance(value, list):
-            return [canonical(v) for v in value]
-        if not isinstance(value, dict):
-            return value
-        value = {k: canonical(v) for k, v in value.items()}
-        if set(value) == {'anyOf'}:
-            branches = []
-            for item in value['anyOf']:
-                branches.extend(item['anyOf'] if set(item) == {'anyOf'} else [item])
-            return {'anyOf': [json.loads(v) for v in sorted({json.dumps(v, sort_keys=True) for v in branches})]}
-        argument = value.get('properties', {}).get('argument', {})
-        if len(argument.get('enum', [])) > 1:
-            return canonical({'anyOf': [value | {'properties': value['properties'] |
-                {'argument': argument | {'enum': [name]}}} for name in argument['enum']]})
-        return value
-    # Expanding the argument domains independently yields exactly the same
-    # complete branches, including tool/source/port and member-name constraints.
-    assert canonical(expand(compact)) == canonical(original)
-    assert len(json.dumps(compact)) < len(json.dumps(original)) * .6
-    def enums(value):
-        if isinstance(value,dict):return len(value.get('enum',[]))+sum(enums(v) for v in value.values())
-        if isinstance(value,list):return sum(enums(v) for v in value)
-        return 0
-    assert enums(compact)<1000
-    assert any(v.get('enum')==['compute_motif_accessibility'] for v in compact['$defs'].values())
+    registry = build_default_tool_registry()
+    public = dict(bases={}, relations=['current'], dialogue=dict(outputs=[],
+        tools=list(registry.names()), scientific_parameters=scientific_parameters(registry)))
+    prompts = []
+    class Capture:
+        def complete(self, *, prompt, response_schema):
+            prompts.append(json.loads(prompt))
+            return decision_wire(dict(kind='clarify', reason='ambiguous_subject'))
+    interpret(Capture(), 'Explain the method.', public)
+    populated = deepcopy(public)
+    populated['dialogue']['result_groups'] = [dict(handle='g0', tool='cluster_cells',
+        canonical_output='r0', outputs=['r0'], parameters=[dict(argument='resolution')], categorical={})]
+    interpret(Capture(), 'Explain this result.', populated)
+    absent, present = [p['instructions'] for p in prompts]
+    prefixes = ('For a reusable H5AD', 'dialogue.result_groups groups', 'For execute_plan, references',
+                'Use retain_parameters', 'Use answer_scientific.detail', 'Use section=category_counts')
+    assert not any(rule.startswith(prefixes) for rule in absent)
+    assert all(any(rule.startswith(prefix) for rule in present) for prefix in prefixes)
+    assert [rule for rule in present if not rule.startswith(prefixes)] == absent
+    populated['dialogue']['result_groups'][0].pop('parameters')
+    interpret(Capture(), 'Use the earlier settings.', populated)
+    assert any(rule.startswith('Use retain_parameters') and 'unknown historical settings' in rule
+               for rule in prompts[-1]['instructions'])
+    # Capability and parameter discovery remain complete in both contexts.
+    for prompt in prompts:
+        assert set(prompt['dialogue']['capabilities']) == set(registry.names())
+        for row in scientific_parameters(registry):
+            assert prompt['dialogue']['capabilities'][row['tool']]['parameters'][row['argument']] == {k:v for k,v in row.items() if k not in ('tool','argument')}

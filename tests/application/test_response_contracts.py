@@ -28,7 +28,7 @@ def test_invalid_answer_rejected(change):
 
 
 def test_answer_without_scientific_operations_and_backwards_outcome():
-    schema = decision_schema(dict(bases={}, relations=('current',)))
+    schema = decision_schema()
     variants = schema['properties']['decision']['anyOf']
     assert any(v['properties']['kind']['enum'] == ['answer'] for v in variants)
     assert TurnOutcome('navigate','activated').text == ''

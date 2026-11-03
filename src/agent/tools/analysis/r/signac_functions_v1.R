@@ -10,12 +10,19 @@ tryCatch({
   object <- as(readMM('input.mtx'), 'CsparseMatrix')
   dimnames(object) <- list(features$feature_id, cells$cell_id)
   function_ <- switch(req$function_name,
-    corSparse=Signac::corSparse, RunTFIDF=Signac::RunTFIDF, BinarizeCounts=Signac::BinarizeCounts,
+    Jaccard=Signac::Jaccard, corSparse=Signac::corSparse, RunTFIDF=Signac::RunTFIDF, BinarizeCounts=Signac::BinarizeCounts,
     FindTopFeatures=Signac::FindTopFeatures, RunSVD=Signac::RunSVD, stop('Unsupported native function'))
-  result <- do.call(function_, c(setNames(list(object), if (req$function_name == 'corSparse') 'X' else 'object'), req$kwargs))
-  if (identical(req$function_name, 'corSparse')) {
+  kwargs <- req$kwargs
+  if (isTRUE(req$second_matrix)) {
+    other <- as(readMM('second.mtx'), 'CsparseMatrix')
+    if (req$function_name == 'corSparse') kwargs$Y <- other
+    if (req$function_name == 'Jaccard') kwargs$y <- t(other)
+  }
+  if (req$function_name == 'Jaccard') object <- t(object)
+  result <- do.call(function_, c(setNames(list(object), if (req$function_name == 'corSparse') 'X' else if (req$function_name == 'Jaccard') 'x' else 'object'), kwargs))
+  if (req$function_name %in% c('corSparse', 'Jaccard')) {
     writeMM(as(Matrix(result, sparse=TRUE), 'generalMatrix'), 'output.mtx')
-    slots <- 'obsp.Signac_corSparse'; measurement <- NULL
+    slots <- if (isTRUE(req$second_matrix)) 'uns.Signac_pairwise' else 'obsp.Signac_corSparse'; measurement <- NULL
   } else if (identical(req$function_name, 'FindTopFeatures')) {
     table <- cbind(data.frame(feature_id=rownames(result)), result)
     for (key in names(table)) if (is.numeric(table[[key]])) table[[key]] <- sprintf('%.17g', table[[key]])
@@ -42,7 +49,7 @@ tryCatch({
     measurement <- if (identical(req$function_name, 'BinarizeCounts')) 'native_binarized_supplied_measurement' else 'Signac_TFIDF'
   }
   versions <- vapply(c('Signac','Matrix','SeuratObject'),function(p)as.character(packageVersion(p)),'')
-  method <- if (req$function_name == 'corSparse') function_ else getS3method(req$function_name, 'default')
+  method <- if (req$function_name %in% c('corSparse', 'Jaccard')) function_ else getS3method(req$function_name, 'default')
   jsonlite::write_json(list(completion='succeeded', package='Signac', function_name=req$function_name,
     request_sha256=digest::digest(file=request_path,algo='sha256'), versions=as.list(versions), R=R.version.string,
     native_signature=paste(capture.output(args(method)),collapse=' '),

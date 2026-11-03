@@ -38,9 +38,12 @@ _GROUP_PORTS = (
     ('run_cicero', 'dataset'),
     ('run_macs3', 'dataset'),
     ('run_macs3', 'control'),
+    ('run_macs3', 'treatment2'),
+    ('run_macs3', 'control2'),
     ('run_episcanpy', 'dataset'),
     ('run_snapatac2', 'dataset'),
     ('run_signac', 'dataset'),
+    ('run_signac', 'second'),
     ('run_chromvar', 'dataset'),
     ('run_motifmatchr', 'dataset'),
     ('run_motifmatchr', 'genome'),
@@ -2057,13 +2060,14 @@ class LocalResourceAdmission:
                         # dependencies, never an unregistered literal companion.
                         raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
 
-    def validate_group_consumer(self, submission, tool_name, arguments):
+    def validate_group_consumer(self, submission, step, arguments):
         """Check registration bytes at each actual new source consumption.
 
         This callback is operation-local execution admission, not scientific
         validation or durable authority. Historical presentation never calls it.
         """
         binding = self._submission_binding(submission)
+        tool_name = step.tool_name
         if type(binding) is not RegisteredInputGroup:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         self.validate_binding(binding, verify_source=False)
@@ -2075,6 +2079,14 @@ class LocalResourceAdmission:
                 if r['tool'] == tool_name and r['port'] == port_name
                 and arguments.get(port.members[0].field_name) ==
                     binding.members[int(r['source'].split('.')[1])]['source_path']]
+            if not matches:
+                from agent.schemas import StepOutputRef
+                from agent.schemas.prior_output import PriorOutputRef
+                # The executor has resolved this exact declared reference from
+                # verified upstream/accepted output. This guard checks uploaded
+                # bytes, not a replacement scientific-authority protocol.
+                if isinstance(step.arguments.get(port.members[0].field_name), (StepOutputRef, PriorOutputRef)):
+                    continue
             if len(matches) != 1:
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
             member = matches[0]

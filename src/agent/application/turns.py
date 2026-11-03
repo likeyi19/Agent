@@ -465,11 +465,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         visible['dialogue']['resource_source'] = source_kind(submission)
         visible['dialogue']['reference_supplementation'] = (reference_resources is not None
             and source_kind(submission) == 'h5ad')
-        from .dialogue_execution import scientific_parameters
+        from .dialogue_execution import scientific_parameters, scientific_capabilities
         source_fields = captured['dialogue'].get('source_fields', ())
         visible['dialogue']['source_fields'] = [dict(source=row['source'], fields=list(row['fields']),
                                                    complete=row['complete']) for row in source_fields]
         visible['dialogue']['scientific_parameters'] = scientific_parameters(sessions._application.registry)
+        visible['dialogue']['capabilities'] = scientific_capabilities(sessions._application.registry)
         if reference_resources is not None and reference_resources.library is not None:
             visible['dialogue']['sequence_models'] = reference_resources.library.sequence_models()
         from .local_resources import available_input_view
@@ -646,10 +647,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                                        epizoo_resources=epizoo_resources)
             selected_tool = sessions._application.registry.get(admitted['tool'])
             from .shared_resources import scientific_resource_scope
+            from agent.orchestration.native_parameters import prerequisite_inputs
+            prerequisite_values = prerequisite_inputs(selected_tool, admitted['inputs'])
             reference_owner = getattr(sessions, '_reference_resources', None)
             with scientific_resource_scope(None if reference_owner is None else reference_owner.library):
-                owner_missing = (() if selected_tool.parameter_prerequisites is None else
-                                 selected_tool.parameter_prerequisites(admitted['inputs']))
+                owner_missing = (() if selected_tool.parameter_prerequisites is None or prerequisite_values is None else
+                                 selected_tool.parameter_prerequisites(prerequisite_values))
             missing_parameters = tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters)))
             if missing_parameters:
                 from .dialogue_execution import request_parameters
@@ -667,7 +670,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context,
             stage=diagnostic_stage, error=exc, kind=None if decision is None else type(decision).__name__,
             reason=getattr(exc, 'diagnostic_reason', None) or getattr(exc, 'reason', None),
-            operand=getattr(exc, 'operand', None))
+            operand=getattr(exc, 'operand', None), proposal=decision,
+            registry=sessions._application.registry)
         from .local_resources import ResourceAdmissionError
         if isinstance(exc, ResourceAdmissionError):
             _failed_admission(sessions, interaction, decision)

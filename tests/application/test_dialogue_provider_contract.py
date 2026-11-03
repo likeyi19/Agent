@@ -23,24 +23,18 @@ def test_null_subject_instruction_preserves_captured_subject_semantics():
     assert decision.scientific.target.subject is None
 
 
-@pytest.mark.parametrize('with_operation', [False, True])
-def test_strict_union_has_distinct_discriminators(with_operation):
-    operations = [dict(handle='op.0', parameters={'min_tss_enrichment':'4'})] if with_operation else []
-    schema = decision_schema(dict(bases={'revision':dict(operations=operations)},
-        relations=['current'], dialogue=dict(outputs=[dict(handle='r0')], tools=['inspect_scATAC'])))
+def test_strict_union_retains_closed_intent_and_delivery_forms():
+    schema = decision_schema()
     variants = schema['properties']['decision']['anyOf']
-    tags = [tag for v in variants for tag in v['properties']['kind']['enum']]
-    assert len(tags) == len(set(tags))
-    assert {'answer_scientific', 'execute_plan'} <= set(tags)
+    tags = {tag for v in variants for tag in v['properties']['kind']['enum']}
+    assert {'answer_scientific', 'execute_plan', 'request_roles'} <= tags
     for variant in variants:
         assert variant['additionalProperties'] is False
         assert set(variant['required']) == set(variant['properties'])
-    by_kind = {v['properties']['kind']['enum'][0]: v for v in variants}
-    assert set(by_kind['answer_scientific']['properties']) == {'kind', 'target', 'comparison', 'focus'}
-    assert set(by_kind['execute_plan']['properties']) == {
-        'kind', 'target', 'delivery', 'unfulfilled', 'comparison', 'visualization'}
-    assert by_kind['execute_plan']['properties']['delivery']['items']['enum'] == [
-        'explanation', 'comparison', 'visualization']
+        assert 'argument' not in variant['properties']
+    execution, = [v['properties'] for v in variants if v['properties']['kind']['enum'] == ['execute_plan']]
+    assert execution['delivery']['items']['enum'] == ['explanation', 'comparison', 'visualization']
+    assert 'export' not in execution
 
 
 @pytest.mark.parametrize('tag,decision', [

@@ -705,6 +705,26 @@ class ScientificDeliverySpec:
 
 
 @dataclass(frozen=True)
+class NativeFunctionCatalog:
+    """Registered public names and kwargs, projected from the native owner."""
+
+    package: str
+    functions: tuple[tuple[str, tuple[str, ...]], ...]
+
+    def __post_init__(self):
+        _planning_text(self.package, 'native package', 128)
+        if (not isinstance(self.functions, tuple) or not self.functions
+                or len(dict(self.functions)) != len(self.functions)):
+            raise ValueError('Native functions must have unique registered names.')
+        for name, members in self.functions:
+            _planning_text(name, 'native function', 128)
+            if not isinstance(members, tuple) or len(set(members)) != len(members):
+                raise ValueError('Native kwargs must have unique registered names.')
+            for member in members:
+                _planning_text(member, 'native kwarg', 128)
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """Immutable executable-tool specification owned by the registry."""
 
@@ -724,6 +744,7 @@ class ToolSpec:
     # Optional native-owner projection of unresolved parameters from bound
     # request inputs. This supplies questions, never execution/validity authority.
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
+    native_functions: NativeFunctionCatalog | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -741,6 +762,16 @@ class ToolSpec:
             raise TypeError('Scientific delivery requires reviewed metadata and scientific authority.')
         required = dict(self.required_arguments)
         optional = dict(self.optional_arguments)
+        if self.native_functions is not None:
+            catalog = self.native_functions
+            function = required.get('function_name')
+            kwargs = optional.get('kwargs')
+            if (not isinstance(catalog, NativeFunctionCatalog) or function is None
+                    or tuple(dict(catalog.functions)) != tuple(function.choices)
+                    or kwargs is None or kwargs.planning is None
+                    or set(n for _, names in catalog.functions for n in names)
+                       - set(dict(kwargs.planning.conversational_members))):
+                raise ValueError('Native catalog must agree with registered function and kwarg declarations.')
         overlap = set(required).intersection(optional)
         if overlap:
             raise ValueError(f"Tool arguments cannot be both required and optional: {overlap}.")

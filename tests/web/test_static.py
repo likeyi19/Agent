@@ -479,7 +479,7 @@ def test_history_restores_details_and_focus_by_exact_turn_and_action_identity():
     assert 'target.focus({ preventScroll: true })' in capture
     assert 'restoreConversationUi(history, captured)' in code
     history = code[code.index('function renderHistory'):code.index('function updateControls')]
-    assert 'status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id)' in history
+    assert 'status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id, turn.run_id, turn.steps)' in history
     assert 'checkpointText(turn)' in history
 
 
@@ -532,3 +532,18 @@ def test_answer_and_failed_turn_refresh_do_not_replace_same_revision_content():
       return loads;
     })()"""
     assert _javascript_value(script) == []
+
+
+def test_failure_without_run_does_not_claim_science_failed():
+    code=(STATIC/'app.js').read_text()
+    label=code[code.index('function statusLabel'):code.index('function evidenceValueNode')]
+    assert _javascript_value('(() => {'+label+"""
+      return [statusLabel('failed',null,null,null), statusLabel('failed','answer',null,null),
+              statusLabel('failed',null,null,'run'),
+              statusLabel('failed',null,null,'planning-run',[]),
+              statusLabel('failed',null,null,'preflight-run',[{attempts:0}]),
+              statusLabel('failed',null,null,'native-run',[{attempts:1}]),
+              statusLabel('failed','answer','accepted','native-run',[{attempts:1}])];})()
+""")==['Request failed before scientific execution','Answer unavailable','Analysis failed',
+        'Request failed before scientific execution','Request failed before scientific execution',
+        'Analysis failed','Answer unavailable']

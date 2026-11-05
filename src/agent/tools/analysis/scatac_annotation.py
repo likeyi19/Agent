@@ -367,3 +367,76 @@ def annotate_scATAC_cell_types(annotation_spec_path, annotation_spec_sha256, out
                               group_analysis_path=None, group_analysis_sha256=None) -> CellTypeAnnotationResult:
     """Annotate exact groups on canonical or declared peak counts with pinned resources."""
     return execute_annotation({k: v for k, v in locals().items() if v is not None})
+
+
+def presentation_data(manifest_path, manifest_sha256, *, max_groups=40, max_genes=12):
+    """Descriptive display of pinned native RP, never new markers or annotations.
+
+    Representative genes prefer positive signature markers for the native assigned
+    candidate, then positive native markers, in published order, bounded to two
+    per group and twelve unique genes. The dot summary is
+    mean raw RP and fraction RP>0, not expression or independent validation.
+    """
+    from collections import Counter
+    from agent.tools.data.fastq_verification_authority import file_closure
+    manifest = c.load_manifest(manifest_path, manifest_sha256)
+    root = Path(manifest_path).parent
+    names = ('primary/rp.npz','primary/genes.tsv','primary/cells.tsv','primary/groups.tsv',
+             'primary/cells.json','primary/groups.json','primary/candidate_evidence.json','primary/markers-signature-input.tsv')
+    sources = [dict(path=str(Path(manifest_path)),sha256=manifest_sha256,size_bytes=Path(manifest_path).stat().st_size)]
+    for name in names:
+        path = root/name; pin = manifest['sidecars'][name]
+        if path.resolve() != path or path.is_symlink():
+            raise ValueError('Unsafe annotation presentation source')
+        sources.append(dict(path=str(path),**pin))
+    if file_closure(p['path'] for p in sources) != sorted(sources,key=lambda p:p['path']):
+        raise ValueError('Annotation presentation sidecars changed')
+    cells = (root/'primary/cells.tsv').read_text().splitlines()
+    genes = (root/'primary/genes.tsv').read_text().splitlines()
+    rows = c.read_json(root/'primary/cells.json',manifest['sidecars']['primary/cells.json']['sha256'],limit=256*1024**2)
+    groups = c.read_json(root/'primary/groups.json',manifest['sidecars']['primary/groups.json']['sha256'],limit=64*1024**2)
+    if [r['cell_id'] for r in rows] != cells or len(cells) != manifest['summary']['n_cells']:
+        raise ValueError('Annotation display cells differ from the accepted population')
+    order = [r['group'] for r in groups]
+    group_ids = [r['group'] for r in rows]
+    counts = Counter(group_ids)
+    if len(set(order)) != len(order) or any(counts[g['group']] != g['n_cells'] for g in groups) or set(counts) != set(order):
+        raise ValueError('Annotation display grouping differs')
+    evidence = c.read_json(root/'primary/candidate_evidence.json',manifest['sidecars']['primary/candidate_evidence.json']['sha256'],limit=256*1024**2)
+    candidates = {g['group']:g['primary_annotation'] for g in groups}
+    preferred = {r['group']:set(r['positive']) for r in evidence if r['candidate']==candidates.get(r['group'])}
+    selected, selected_sources = [], []
+    markers = pd.read_csv(root/'primary/markers-signature-input.tsv',sep='\t',dtype={'cluster':str,'gene':str},keep_default_na=False)
+    for group in order[:max_groups]:
+        positive = markers[(markers['cluster']==group)&(markers['avg_logFC']>0)]
+        favored = positive[positive['gene'].str.upper().isin(preferred.get(group,set()))]
+        ordered = list(dict.fromkeys([*favored['gene'],*positive['gene']]))[:2]
+        for gene in ordered:
+            if gene in genes and gene not in selected and len(selected)<max_genes:
+                selected.append(gene)
+                selected_sources.append(dict(group=group,gene=gene,basis='positive_native_candidate_signature_marker'
+                    if gene.upper() in preferred.get(group,set()) else 'positive_native_group_marker'))
+    rp = sparse.load_npz(root/'primary/rp.npz')
+    if (not sparse.isspmatrix_csr(rp) or rp.shape != (len(cells),len(genes))
+            or not np.isfinite(rp.data).all() or (rp.data<0).any()):
+        raise ValueError('Invalid native per-cell RP activity')
+    values = rp[:,[genes.index(g) for g in selected]].toarray()  # At most cells × 12, never full counts/RP.
+    visible = order[:max_groups]
+    matrix, fractions = [], []
+    for group in visible:
+        subset = values[np.asarray(group_ids)==group]
+        matrix.append(subset.mean(axis=0).tolist())
+        fractions.append((subset>0).mean(axis=0).tolist())
+    composition = Counter(r['primary_annotation'] for r in rows)
+    result = dict(cells=cells,groups=group_ids,labels=[r['primary_annotation'] for r in rows],
+        group_order=visible, group_counts=[counts[g] for g in visible],groups_omitted=len(order)-len(visible),
+        composition=[dict(label=k,n_cells=v) for k,v in sorted(composition.items(),key=lambda x:(x[0] is None,x[0] or ''))],
+        genes=selected, mean_rp=matrix, fraction_positive=fractions,
+        per_cell_rp=values.tolist(),sources=sources,source_sha256=manifest['matrix_binding'].get('source_sha256',manifest['matrix_binding'].get('matrix_sha256')),
+        marker_selection='up to two positive markers per group: prefer native assigned-candidate signature markers, then native group markers in published order; deduplicated; at most 12 genes',
+        selected_marker_sources=selected_sources,
+        measurement='native MAESTRO Enhanced RP; accessibility-derived activity, not measured RNA expression',
+        dependent_evidence=True)
+    if file_closure(p['path'] for p in sources) != sorted(sources,key=lambda p:p['path']):
+        raise ValueError('Annotation presentation sources changed while reading')
+    return result

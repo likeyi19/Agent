@@ -858,8 +858,14 @@ class ToolSpec:
             ports = (() if self.semantic_planning is None else
                      tuple(port for port in self.semantic_planning.consumer_ports if port.name == source))
             if (argument.accepted_types != (str,) or argument.choices
-                    or len(ports) != 1 or len(ports[0].members) != 1):
+                    or len(ports) != 1 or len(ports[0].members) not in (1,2)
+                    or len(ports[0].members)==2 and tuple(m.name for m in ports[0].members)!=("path","sha256")):
                 raise ValueError(f"Tool {self.name!r} observation parameter {name!r} requires one dataset port.")
+            if len(ports[0].members) == 2:
+                checksum_field = ports[0].members[1].field_name
+                checksum = required.get(checksum_field, optional.get(checksum_field))
+                if checksum is None or checksum.accepted_types != (str,):
+                    raise ValueError(f"Tool {self.name!r} observation source requires a string checksum member.")
             member = ports[0].members[0]
             dataset = required.get(member.field_name, optional.get(member.field_name))
             if (dataset is None or dataset.planning is None
@@ -3793,6 +3799,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .cell_selection_registry import cell_selection_tool_spec
     from .matrix_registry import matrix_tool_spec
     from .matrix_adoption_registry import matrix_adoption_tool_spec
+    from .cell_comparison_registry import tool_spec as cell_comparison_tool_spec
     from .annotation_registry import annotation_tool_spec
     from .corroboration_registry import tool_spec as corroboration_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
@@ -3840,6 +3847,7 @@ def build_default_tool_registry() -> ToolRegistry:
         matrix_tool_spec(),
         matrix_adoption_tool_spec(),
         annotation_tool_spec(),
+        cell_comparison_tool_spec(),
         corroboration_tool_spec(),
         *species_tool_specs(),
         fragment_feature_tool_spec(),

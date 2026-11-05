@@ -548,6 +548,13 @@ function resultFigureGallery(artifacts) {
   const heading = document.createElement("h3"); heading.textContent = "Scientific figures";
   section.append(heading);
   const captions = {
+    annotation_composition: "Native groups and predicted cell-type composition, including unassigned coverage. Candidate labels are computational annotations.",
+    marker_activity_dot: "Native MAESTRO Enhanced RP: color = log1p(mean raw RP), size = fraction RP > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
+    marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
+    annotation_umap: "Accepted UMAP colored by MAESTRO predictions using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
+    reference_confusion: "Exact library/cell-matched fixed labels, without remapping. Missing predictions count as errors; missing reference labels are excluded with explicit coverage. Reference labels are not biological truth.",
+    reference_composition: "Predicted and reference full-source compositions. Populations may differ; matched/unmatched coverage is reported separately. Gray = missing labels.",
+    reference_umap: "The same accepted UMAP coordinates show predictions, uploaded reference labels and agreement. Shared label colors; gray = missing/unmatched coverage. No refit or biological validation.",
     umap_leiden: "UMAP colored by accepted Leiden groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
     umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
@@ -610,6 +617,26 @@ function renderResultSelection() {
     summary.textContent = state.revision.result.text;
     nodes.push(summary);
   }
+  const headlineFields = new Map();
+  for (const group of visible) {
+    const wanted = {compare_cell_annotations: ["matched_cells", "evaluation_coverage", "accuracy", "macro_f1", "balanced_accuracy"],
+      annotate_scATAC_cell_types: ["n_cells", "n_groups", "assigned_cells", "unassigned_cells"]}[group.tool] || [];
+    const facts = wanted.flatMap(field => (group.evidence?.facts || []).filter(fact =>
+      fact.field === field && fact.status === "available" && (fact.value === null || typeof fact.value === "number")));
+    headlineFields.set(group.handle, new Set(facts.map(fact => fact.field)));
+    if (!facts.length) continue;
+    const headline = document.createElement("section"); headline.className = "result-headline";
+    const title = document.createElement("h3"); title.textContent = `${group.label} · key results`;
+    const values = document.createElement("dl"); values.className = "result-values";
+    for (const fact of facts) {
+      const label = document.createElement("dt"); label.textContent = group.evidence.field_labels[fact.field] || readableLabel(fact.field);
+      const value = document.createElement("dd");
+      if (fact.value === null) value.textContent = "Unavailable for this comparison";
+      else value.append(evidenceValueNode(fact.value));
+      values.append(label, value);
+    }
+    headline.append(title, values); nodes.push(headline);
+  }
   for (const group of visible) limitations.push(...(group.summary_limitations || group.evidence?.limitations || []));
   if (limitations.length) {
     const note = document.createElement("p"); note.className = "result-caution small";
@@ -624,13 +651,14 @@ function renderResultSelection() {
     section.append(heading);
     if (group.evidence) {
       const view = group.evidence;
-      const facts = group.summary_fields.flatMap((field) => view.facts.filter((fact) => fact.field === field));
+      const facts = group.summary_fields.filter(field => !headlineFields.get(group.handle)?.has(field))
+        .flatMap((field) => view.facts.filter((fact) => fact.field === field));
       const values = document.createElement("dl"); values.className = "result-values";
       for (const fact of facts) {
         const label = document.createElement("dt"); label.textContent = view.field_labels[fact.field] || readableLabel(fact.field);
         const value = document.createElement("dd");
         if (fact.status !== "available") value.textContent = `${fact.status}: ${fact.reason || "No accepted value"}`;
-        else if (["group_summary", "state_counts", "metrics"].includes(fact.field)) {
+        else if (["group_summary", "state_counts", "metrics", "per_class", "composition"].includes(fact.field)) {
           // Literature rows and mapping rationales remain in Methods; the
           // composition table shows the exact recorded counts and assessments.
           const preview = fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"
@@ -654,7 +682,7 @@ function renderResultSelection() {
         values.append(label, value);
       }
       section.append(values);
-      if (!facts.length) {
+      if (!facts.length && !headlineFields.get(group.handle)?.size) {
         const empty = document.createElement("p");
         empty.textContent = `Summary: ${view.reason || view.status}. Accepted fields remain in details.`;
         section.append(empty);

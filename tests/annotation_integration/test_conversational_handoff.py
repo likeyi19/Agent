@@ -430,7 +430,7 @@ def test_annotation_corrections_cannot_replace_sources_or_source_metadata():
 
 
 def test_annotation_schema_exposes_measurement_contract_without_relabelling():
-    schema = handoff.schema([{'source':'source.0'}], [], 'annotation')
+    schema = handoff.schema('annotation')
     assert c.EXTERNAL_SEMANTICS in schema['properties']['measurement']['description']
     assert schema['properties']['measurement']['anyOf'] == [
         {'type': 'string', 'maxLength': 128}, {'type': 'null'}]

@@ -926,6 +926,9 @@ def field_semantics(registry, tool, field):
     if description is not None:
         semantics['description'] = description.description
         semantics['description_source'] = 'registry_result_contract'
+    if tool == 'compare_cell_annotations':
+        semantics.update(kind='scientific_result', description_source='reviewed_fixed_label_comparison',
+            description='Fixed labels joined by exact declared physical library and cell identifier, without label mapping or feature comparison. Accuracy/macro-F1/balanced accuracy include missing predictions as errors on matched reference-labeled cells. Macro-F1 uses the union of observed biological classes; balanced accuracy is mean supported-reference recall. ARI/NMI describe jointly labeled partitions only; null means not identifiable. Coverage and omission counts must accompany interpretation. Supplied reference labels are not biological truth; declared library correspondence is not independently verified.')
     if tool == 'annotate_scATAC_cell_types':
         reviewed = annotation_field_semantics(field)
         if reviewed is not None:
@@ -962,6 +965,10 @@ def public_citation_source(source):
 # Researcher-facing selection of existing facts, not a second fact projection.
 # Unlisted tools continue to use their existing reviewed report fields.
 RESULT_SUMMARY_FIELDS = {
+    'compare_cell_annotations': ('matched_cells', 'prediction_only_cells', 'reference_only_cells',
+        'evaluated_cells', 'evaluation_coverage', 'unassigned_prediction_cells', 'accuracy',
+        'macro_f1', 'balanced_accuracy', 'ari', 'nmi', 'per_class', 'classes_omitted',
+        'composition', 'composition_omitted', 'limitations'),
     'inspect_scATAC': ('n_cells', 'n_features', 'x_storage_type', 'nnz', 'density'),
     'pca_embed_cells': ('n_cells', 'n_features', 'embedding_dim', 'representation'),
     'epizoo_embed_cells': ('n_cells', 'embedding_dim', 'species'),

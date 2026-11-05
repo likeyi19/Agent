@@ -2101,6 +2101,16 @@ def verify_step(
                 checks.add('sequence_publication_integrity', True,
                     'Native completion, exact sequences, conditions, measurements and artifact integrity.',
                     'Sequence verification failed.', 'SEQUENCE_VERIFICATION_FAILED')
+        elif step.tool_name == "compare_cell_annotations":
+            try:
+                from agent.tools.analysis.cell_label_comparison import verify_result
+                verify_result(resolved_arguments, plain_result)
+            except (ValueError, OSError, TypeError, KeyError):
+                checks.add("cell_label_comparison_integrity", False, "Fixed labels, exact cell correspondence and native metric publication.",
+                    "Comparison verification failed.", "CELL_LABEL_COMPARISON_INVALID", ErrorCategory.VERIFICATION_ERROR)
+            else:
+                checks.add("cell_label_comparison_integrity", True, "Fixed labels, exact cell correspondence and native metric publication.",
+                    "Comparison verification failed.", "CELL_LABEL_COMPARISON_INVALID")
         elif step.tool_name == "corroborate_cell_type_annotation":
             try:
                 from agent.tools.analysis.annotation_corroboration import verify_result

@@ -34,6 +34,7 @@ from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRA
 from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
     FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
 from agent.tools.analysis.annotation_corroboration import RESULT_FIELDS as _CORROBORATION_FIELDS
+from agent.tools.analysis import cell_label_comparison as _CELL_COMPARISON
 from .annotation import CONTRACT_FIELDS as _ANNOTATION_FIELDS, FACT_FIELDS as _ANNOTATION_FACT_FIELDS
 from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
 from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
@@ -413,6 +414,9 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    _CELL_COMPARISON.TOOL: _ToolProjection(frozenset(_CELL_COMPARISON.RESULT_FIELDS), _CELL_COMPARISON.FACT_FIELDS, _CELL_COMPARISON.POLICY, (
+        _ArtifactProjection("manifest_path", "cell_label_comparison_manifest", ("native_metric_completion", "exact_cell_library_join", "artifact_integrity"), digest_field="manifest_sha256"),
+        _ArtifactProjection("comparison_path", "cell_label_comparison_json", ("fixed_label_comparison",), digest_field="comparison_sha256"))),
     _CICERO_CDS.TOOL: _ToolProjection(frozenset(_CICERO_CDS.RESULT_FIELDS), _CICERO_CDS.FACT_FIELDS, _CICERO_CDS.POLICY, (
         _ArtifactProjection('manifest_path', 'native_scientific_publication', ('native_completion',), digest_field='manifest_sha256'),
         _ArtifactProjection('cds_path', 'cicero_cds_exchange', ('native_object_axes',), digest_field='cds_sha256'),

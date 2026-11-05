@@ -1,5 +1,6 @@
 """Scientific analysis tools."""
 
+from .cell_label_comparison import compare_cell_annotations
 from .annotation_evaluation import (
     CellAnnotationEvaluationToolResult,
     evaluate_cell_annotation,
@@ -52,6 +53,7 @@ __all__ = [
     "pca_embed_cells",
     "evaluate_cell_clustering",
     "evaluate_cell_annotation",
+    "compare_cell_annotations",
     "transfer_cell_labels",
     "build_replicate_pseudobulk",
     "run_replicate_differential_accessibility",

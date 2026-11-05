@@ -69,6 +69,8 @@ _GROUP_PORTS = (
     ('evaluate_cell_clustering', 'analysis'),
     ('evaluate_cell_clustering', 'ground_truth_dataset'),
     ('evaluate_cell_annotation', 'ground_truth_dataset'),
+    ('compare_cell_annotations', 'prediction_dataset'),
+    ('compare_cell_annotations', 'reference_dataset'),
     ('validate_scATAC_feature_space', 'input_path'),
     ('transfer_cell_labels', 'reference_dataset'),
     ('transfer_cell_labels', 'query_dataset'),
@@ -636,7 +638,7 @@ def group_choices(binding, registry):
 
 
 def source_field_choices(binding):
-    """Shallow obs-name offers for captured files, never scientific qualification.
+    """Shallow H5AD obs or TSV/CSV header offers, never scientific qualification.
 
     Registration/consumption owns byte integrity. No values, categories or matrix
     arrays are read here; the selected scientific consumer checks their meaning.
@@ -649,17 +651,21 @@ def source_field_choices(binding):
     for index, member in enumerate(binding.members):
         row = dict(source=f'source.{index}', resource_id=member['resource_id'],
                    source_sha256=member.get('source_sha256'), fields=[], complete=False)
-        if member['input_type'] == 'h5ad' and row['source_sha256'] is not None:
+        if member['input_type'] in ('h5ad','attachment') and row['source_sha256'] is not None:
             try:
                 descriptor = os.open(member['source_path'], os.O_RDONLY | os.O_NOFOLLOW)
                 with os.fdopen(descriptor, 'rb') as stream:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise ValueError('Observation source is not a regular file.')
-                    names = fields(stream)
+                    if member['input_type']=='h5ad':
+                        names = fields(stream)
+                    else:
+                        from agent.tools.analysis.cell_label_comparison import table_fields
+                        names,_ = table_fields(stream)
                 eligible = [name for name in names if type(name) is str and name.strip() and len(name) <= 80
                             and not _unsafe_fact_field(name) and not _unsafe_fact_value(name)]
                 row.update(fields=eligible[:64], complete=len(names) == len(eligible) <= 64)
-            except (ValueError, TypeError, OSError, KeyError):
+            except (ValueError, TypeError, OSError, KeyError, UnicodeError):
                 pass
         rows.append(row)
     return rows
@@ -690,7 +696,7 @@ def source_field_inputs(registry, binding, roles, choices):
                     or any(type(name) is not str or not name.strip() or len(name) > 80
                            or _unsafe_fact_field(name) or _unsafe_fact_value(name) for name in row['fields'])
                     or len(set(row['fields'])) != len(row['fields'])
-                    or row['fields'] and (member['input_type'] != 'h5ad'
+                    or row['fields'] and (member['input_type'] not in ('h5ad','attachment')
                                           or member.get('source_sha256') is None)):
                 raise ValueError('Observation offers do not match the captured source.')
             by_source[row['source']] = row

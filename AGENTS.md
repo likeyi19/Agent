@@ -1019,6 +1019,31 @@ scope / CONDITIONAL GO for controlled researcher use.** Future integrations need
 legitimate researcher demand, with all mature packages retaining equal status.
 No 1I, RUA-1 or subsequent milestone is started or authorized by this closeout.
 
+SRV-1B adds `compare_cell_annotations` (46 Registry tools) for general fixed
+MAESTRO/supplied-label H5AD and independent H5AD/TSV/CSV comparison. Exact declared
+library/cell keys replace neither source roles nor scientific correspondence with
+filenames, row order or feature equality. Classification coverage includes missing
+predictions; partition metrics have a distinct jointly labeled denominator. Native
+MAESTRO composition and genuine per-cell RP marker figures reuse pinned sidecars;
+activity is not measured RNA and marker evidence is dependent. Optional shared
+UMAP views require exact original-source ancestry and ordered prediction cells;
+native annotation ancestry is authenticated by its accepted manifest, never copied
+metadata alone. New annotation figure projection markers preserve historical
+bundles. Registry/source-field metadata supports atomic path/checksum dataset
+ports and bounded candidate TSV/CSV header names without scientific qualification.
+The [SRV-1B report](../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
+owns software/native/browser distinctions and bounded completion. Primary Firefox
+comparison uses the official OpenAI profile; its generated explanation was withheld
+by existing semantic review and was not retried. Earlier binding/provider failures
+remain separate observations. Production defaults and SRV-2B scientific files are
+unchanged. Final source review rejects implicit table-index inference and scalar
+H5AD label broadcasting, preserving exact per-cell identity and missing-label
+semantics. Focused verification and read-only preservation checks pass. The user
+authorizes one reviewed SRV-1B completion commit and normal push to `origin/main`;
+earlier no-commit statements describe the pre-closeout stages. SRV-1B is bounded
+engineering completion; broader SRV-1 visualization/explanation work remains open,
+and the independent SRV-2C published-data benchmark is not started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

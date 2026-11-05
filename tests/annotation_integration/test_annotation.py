@@ -79,7 +79,7 @@ def case(completed,tmp_path,monkeypatch):
         for key,rows in scores.items():(output/(key+'.json')).write_text(json.dumps(rows))
         sparse.save_npz(output/'rp.npz',sparse.csr_matrix([[1.,0.]]*a.n_obs))
         for name in ('markers-native.tsv.gz','markers-maestro-filtered.tsv','markers-signature-input.tsv','group-sizes.tsv'):
-            pd.DataFrame({'group':[groups[0][1]],'gene':['G'],'effect':[1.]}).to_csv(output/name,sep='\t',index=False)
+            pd.DataFrame({'cluster':[groups[0][1]],'gene':['G'],'avg_logFC':[1.]}).to_csv(output/name,sep='\t',index=False)
         (output/'genes.tsv').write_text('G\nH\n');(output/'cells.tsv').write_text('\n'.join(a.obs_names)+'\n')
         shutil.copyfile(group_path,output/'groups.tsv');(output/'marker-runtime.txt').write_text('synthetic backend only\n')
         provenance=dict(matrix=asdict(kw['matrix']),gene_resource=asdict(kw['gene_resource']),
@@ -110,7 +110,7 @@ def test_application_and_terminal_reuse(case,tmp_path,monkeypatch):
     assert result.status.value=='SUCCEEDED',result
     assert not upstream
     assert len(calls)==1  # one native invocation; completion, presentation and recovery do not replay
-    assert result.evidence and result.report and result.visualization is None
+    assert result.evidence and result.report and result.visualization is not None
     out=result.run_result.steps[0].result
     from agent.schemas.orchestration import _serialize
     build_default_tool_registry().validate_result(TOOL,_serialize(out))

@@ -86,6 +86,8 @@ _FIGURE_KIND_BY_TOOL: Mapping[str, str] = {
     "compute_cell_umap": "umap_leiden",
     "evaluate_cell_clustering": "clustering_metrics",
     "evaluate_cell_annotation": "annotation_confusion",
+    "annotate_scATAC_cell_types": "annotation_composition",
+    "compare_cell_annotations": "reference_confusion",
 }
 _RC_PARAMS: Mapping[str, object] = {
     "font.family": _FONT_FAMILY,
@@ -173,6 +175,12 @@ class _ConfusionData:
 
 
 @dataclass(frozen=True)
+class _ScientificPanelData:
+    kind: str
+    value: object
+
+
+@dataclass(frozen=True)
 class _FigureProjection:
     figure_id: str
     figure_kind: str
@@ -184,7 +192,7 @@ class _FigureProjection:
     height_px: int
     dpi: int
     presentation: Mapping[str, JsonValue]
-    data: _UmapData | _MetricData | _ConfusionData
+    data: _UmapData | _MetricData | _ConfusionData | _ScientificPanelData
 
 
 class _DuplicateJsonKey(ValueError):
@@ -653,7 +661,7 @@ def _supported_figure_sources(
     return tuple(supported)
 
 
-def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProjection, ...]:
+def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figures=True) -> tuple[_FigureProjection, ...]:
     artifacts = snapshot.payload.get("artifacts")
     if not isinstance(artifacts, list):
         raise AnalysisVisualizationError(
@@ -663,6 +671,8 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
 
     projections: list[_FigureProjection] = []
     for step_id, tool_name, kind, step in _supported_figure_sources(snapshot):
+        if tool_name in ("annotate_scATAC_cell_types", "compare_cell_annotations"):
+            continue
         facts = step["facts"]
         assert isinstance(facts, Mapping)
         ordinal = len(projections) + 1
@@ -784,6 +794,14 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot) -> tuple[_FigureProj
                 data=data,
             )
         )
+    if annotation_figures:
+        from .annotation_visualization import projections as annotation_projections
+        try:
+            projections.extend(annotation_projections(snapshot))
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Pinned annotation/comparison figure data are invalid.") from exc
+        order = {s["step_id"]:i for i,s in enumerate(snapshot.payload["workflow"]["ordered_steps"])}
+        projections.sort(key=lambda p:order[p.source_step_ids[0]])
     if not projections:
         raise AnalysisVisualizationError(
             "VISUALIZATION_NO_SUPPORTED_FIGURES",
@@ -954,7 +972,8 @@ def _render_metrics(figure: Figure, data: _MetricData) -> None:
         )
 
 
-def _render_confusion(figure: Figure, data: _ConfusionData) -> None:
+def _render_confusion(figure: Figure, data: _ConfusionData, *,
+                      row_axis="Ground-truth label", title="Annotation evaluation confusion matrix (raw counts)") -> None:
     axes = figure.add_axes((0.18, 0.22, 0.68, 0.68))
     maximum = max(1, int(data.counts.max(initial=0)))
     image = axes.imshow(
@@ -970,8 +989,8 @@ def _render_confusion(figure: Figure, data: _ConfusionData) -> None:
     axes.tick_params(axis="x", labelrotation=90, labelsize=7.0)
     axes.tick_params(axis="y", labelsize=7.0)
     axes.set_xlabel("Predicted label")
-    axes.set_ylabel("Ground-truth label")
-    axes.set_title("Annotation evaluation confusion matrix (raw counts)")
+    axes.set_ylabel(row_axis)
+    axes.set_title(title)
     if data.annotate_cells:
         threshold = maximum / 2.0
         for row in range(data.counts.shape[0]):
@@ -1004,6 +1023,9 @@ def _render_figure(projection: _FigureProjection, path: Path) -> None:
             _render_umap(figure, projection.data, legend_columns=legend_columns)
         elif isinstance(projection.data, _MetricData):
             _render_metrics(figure, projection.data)
+        elif isinstance(projection.data, _ScientificPanelData):
+            from .annotation_visualization import render
+            render(figure, projection.data)
         else:
             _render_confusion(figure, projection.data)
         try:
@@ -1078,6 +1100,7 @@ def _bundle_payload(
         "status": "success",
         "figure_set": {
             "n_figures": len(projections),
+            **({"annotation_projection_version": 2} if any(isinstance(p.data, _ScientificPanelData) for p in projections) else {}),
             "expected_figure_ids": tuple(value.figure_id for value in projections),
             "figure_order": "explicit_accepted_sources" if overlay else "verified_workflow_topological_order",
         },
@@ -1553,7 +1576,15 @@ def verify_analysis_visualizations(
         if not isinstance(registry, ToolRegistry):
             raise TypeError("`registry` must be a ToolRegistry.")
         snapshot = _verified_evidence_snapshot(run_result, evidence, registry)
-        projections = _derive_figure_projections(snapshot) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
+        manifest_path, _ = _visualization_reference(visualization)
+        source_manifest, _ = _load_strict_manifest(manifest_path)
+        figure_set = source_manifest.get("figure_set")
+        if not isinstance(figure_set, Mapping):
+            raise AnalysisVisualizationError("VISUALIZATION_MANIFEST_MALFORMED", "Figure set must be an object.")
+        version = figure_set.get("annotation_projection_version", 1)
+        if type(version) is not int or version not in (1, 2):
+            raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Unsupported annotation projection version.")
+        projections = _derive_figure_projections(snapshot, annotation_figures=version == 2) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         renderer = _renderer_contract()
     except (AnalysisVisualizationError, TypeError) as exc:
         code = getattr(exc, "code", "VISUALIZATION_SOURCE_INVALID")

@@ -42,13 +42,50 @@ Researchers may then upload a reference H5AD or labels and request a scientifica
 compatible comparison, metrics, figures, interpretation and downloads. Such
 source-aware comparison operations and their presentation belong to SRV-1.
 
-Current support includes compatible clustering evaluation, label-transfer
-annotation evaluation, and bounded categorical counts/contingency reads. The
-annotation evaluator does not currently consume native MAESTRO publications or
-publish balanced accuracy. Arbitrary uploaded-H5AD comparisons are not universally
-implemented. Valid matched-cell bindings and compatible measurements remain
-necessary. Unsupported comparisons must be explained; future extensions should
-be general scientific capabilities, not paper-specific benchmark implementations.
+Current support includes compatible clustering evaluation, legacy label-transfer
+confidence evaluation, bounded categorical reads and SRV-1B's general
+`compare_cell_annotations`. The latter compares fixed native MAESTRO or supplied
+H5AD labels with an independently uploaded H5AD or headered TSV/CSV. It reads only
+selected observation fields; different feature axes and row orders are allowed.
+H5AD defaults to `obs_names` for cell identifiers; tables require an explicit cell
+column. Biological correspondence is never inferred from filenames or bare barcodes.
+Selected H5AD fields must contain one value per cell. Tables cannot infer an index
+from surplus fields; quoted labels and omitted trailing labels retain their ordinary
+CSV meanings, with omitted labels counted as missing.
+
+Select both sample/library identity columns, or explicitly declare that both files
+describe the same physical library with `shared_library_id`. Matching uses the
+exact `(library, cell identifier)` key; duplicate keys and absence of shared keys
+are rejected. Library declarations are not independently verified. There is no
+barcode rewriting, label alias correction, optimal class mapping or prediction
+update. Source roles and captured H5AD observation/table header names bind fields;
+these name offers do not qualify a source scientifically.
+
+The result reports matched/unmatched counts, both matching fractions, missing
+reference coverage and the evaluated fraction of the prediction population.
+Accuracy, macro-F1 and balanced accuracy include missing predictions as errors on
+matched cells with a reference label. Macro-F1 averages the union of observed
+biological classes; balanced accuracy averages recall over supported reference
+classes. Assigned accuracy uses only jointly labeled cells. Descriptive ARI/NMI
+also use jointly labeled cells and are unavailable for noninformative partitions.
+Per-class results and full-source composition remain separately downloadable.
+Reference annotations are research evidence, not infallible biological truth.
+
+An optional accepted UMAP supplies the same coordinates for prediction, reference
+and agreement panels. Missing/unmatched reference coverage is gray. Exact
+original-source ancestry and ordered prediction cells are required. For native
+MAESTRO predictions, bind its accepted annotation publication as well as its H5AD
+to authenticate that relationship; copied `uns` metadata alone is insufficient.
+The reference needs neither an embedding nor the same features. No UMAP is refit
+by comparison or rendering. Without coordinates, comparison still produces
+confusion/composition figures; overlay metadata states that coordinates are absent.
+
+The existing Registry, native publication, scientific authority, evidence, figure,
+privacy and download owners deliver these results. Tables are limited to 64 MiB,
+selected H5AD observations to 128 MiB, sources to 200,000 cells and the full label
+union to 256 classes. Preview tables/legends/confusion are bounded with explicit
+omission/coverage; complete comparison files retain their labels and counts.
+Legacy evaluation/confidence artifacts keep their original contracts.
 
 SRV-2 is organized outside the Agent: select a published study with original
 sequencing inputs and a corresponding processed peak matrix with published
@@ -97,6 +134,47 @@ Methods, effective parameters, full accepted facts, technical reports, source
 identities and downloads remain accessible in disclosures. No stored report,
 scientific artifact, historical displayed response or acceptance identity is
 rewritten by the presentation. Download requests are not local delivery receipts.
+
+## Annotation figures and remaining coverage
+
+New native annotation result displays include group/cell-type composition and,
+when positive native marker evidence exists, an RP dot plot and per-cell activity
+distributions. These use the pinned sparse per-cell MAESTRO RP matrix, exact genes,
+cells, groups and candidate/marker sidecars. No annotation, RP fit or marker test is
+rerun. Selection prefers positive markers supporting the native assigned candidate,
+then positive native group markers in published order: up to two per group and
+twelve distinct genes. Dot color is `log1p(mean raw RP)`; size is fraction `RP > 0`.
+Distributions show per-cell `log1p(raw RP)` for up to four selected genes and twenty
+groups. Dot previews retain up to forty recorded groups. Limits are explicit.
+Raw RP is sensitive to library depth; it is accessibility-derived activity, not
+measured RNA expression. These markers are dependent annotation evidence.
+
+A source-compatible accepted UMAP in the same Run also receives native cell-type
+colors automatically. Explicit later accepted-result overlays retain the existing
+Interaction composer. A missing UMAP never causes hidden fitting. New annotation
+figure projections have an explicit version marker; saved historical bundles keep
+their original figure sets and displayed prose.
+
+Key annotation/comparison counts and metrics precede the gallery; supporting
+composition/per-class tables and methods follow it. Downloads remain in their
+existing disclosure. The [SRV-1B report](../../../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
+separates native data/UMAP evidence, simulated references, focused tests and official
+OpenAI Firefox acceptance. Generated explanatory prose remains bounded: the primary
+comparison's explanation was withheld by the existing semantic review, while its
+accepted tables, figures and downloads remained available. No paid prose retry was
+made. Production's official OpenAI default is unchanged.
+
+SRV-1 remains open. Barcode QC already publishes length histograms and per-barcode
+metrics, but automatic QC distributions/scatter and selection-retention figures
+remain gaps. Replicate DA retains native statistics and exports but lacks dedicated
+volcano/MA and replicate diagnostics. Native chromVAR accessibility patterns and
+MACS3 peak distributions already exist; motif-hit context, sequence logos, genomic
+peak context and cross-result motif/peak figures remain separate work. Sequence
+prediction/design/generation retain their existing model-specific score, edit and
+composition figures; attribution, cross-model calibration and richer observed-
+measurement diagnostics are not added here. Native package computational results
+do not automatically expose every upstream plotting API. No external evaluation
+or advanced EpiAgent/EpiZoo experiment is started by SRV-1B.
 
 ## Owners and scientific principles
 

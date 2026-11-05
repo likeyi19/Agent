@@ -160,7 +160,7 @@ def _argument_fields(registry, interaction, binding=None, roles=None, *, declara
     for declaration in declarations:
         if isinstance(declaration, SourceFieldArgument):
             index = int(declaration.source.split('.')[1])
-            if index >= len(binding.members) or binding.members[index]['input_type'] != 'h5ad':
+            if index >= len(binding.members) or binding.members[index]['input_type'] not in ('h5ad','attachment'):
                 raise IntentError('invalid_reference', diagnostic_reason='unoffered_source_field',
                                   operand='parameter.field')
     return source_field_inputs(registry, binding, selected,

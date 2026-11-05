@@ -32,6 +32,12 @@ The [SRV results and evaluation guide](docs/guides/scientific-results-and-evalua
 starts the next research phase: source-bound figure previews, concise quantitative
 result tables and external end-to-end evaluation against published reference results.
 Existing algorithms and accepted historical results retain their identities.
+SRV-1B adds native MAESTRO activity/composition figures and general fixed-label
+comparison against later H5AD/TSV/CSV references, with explicit library/cell
+matching, coverage, metrics and reusable UMAP overlays (46 Registry tools).
+See the [SRV-1B report](../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
+for bounded official OpenAI Firefox acceptance, genuine native figures, simulated
+reference scope and remaining explanatory-prose/visualization limitations.
 
 The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
 records its then-current 27-tool inventory, genuine replicated differential-accessibility

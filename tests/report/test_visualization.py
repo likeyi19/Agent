@@ -716,3 +716,43 @@ def test_successful_overwrite_replaces_complete_bundle(tmp_path: Path) -> None:
         Path(second["bundle_path"]) / "figures",
         Path(second["bundle_path"]) / ANALYSIS_VISUALIZATION_MANIFEST_FILENAME,
     }
+
+
+def test_historical_bundle_with_annotation_keeps_original_figure_set(tmp_path,monkeypatch):
+    """New automatic annotation plots do not reinterpret an accepted old bundle."""
+    run,evidence,_,_=_source(tmp_path)
+    snapshot=visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
+    payload=dict(snapshot.payload)
+    payload['steps']=[*payload['steps'],dict(step_id='historical_annotation',tool_name='annotate_scATAC_cell_types',facts={})]
+    payload['workflow']=dict(payload['workflow'],ordered_steps=[*payload['workflow']['ordered_steps'],
+        dict(step_id='historical_annotation',tool_name='annotate_scATAC_cell_types')])
+    snapshot=replace(snapshot,payload=payload)
+    monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',lambda *a,**k:snapshot)
+    original=visualization_module._derive_figure_projections(snapshot,annotation_figures=False)
+    assert len(original)==3
+    built=visualization_module._build_bundle(tmp_path/'historical',original,lambda:original,
+        lambda projections,pngs,renderer:visualization_module._manifest_payload(snapshot,projections,pngs,renderer),overwrite=False)
+    path=built['manifest_path'];raw=Path(path).read_bytes()
+    assert 'annotation_projection_version' not in json.loads(raw)['figure_set']
+    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry()).passed
+    assert Path(path).read_bytes()==raw
+
+
+@pytest.mark.parametrize('figure_set', [None, [], 'invalid', {'annotation_projection_version': True}, {'annotation_projection_version': 3}])
+def test_invalid_projection_version_or_figure_set_fails_verification(tmp_path,figure_set):
+    run,evidence,_,_,result=_build(tmp_path)
+    path=Path(result['manifest_path']);manifest=json.loads(path.read_text())
+    manifest['figure_set']=figure_set
+    path.write_bytes(visualization_module._canonical_json_bytes(manifest))
+    checked=verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry())
+    assert not checked.passed and checked.error is not None
+
+
+
+def test_reference_confusion_names_supplied_reference_without_truth_claim():
+    from agent.report.annotation_visualization import render
+    figure=Figure()
+    render(figure,visualization_module._ScientificPanelData('reference_confusion',
+        dict(rows=['A'],columns=['A',None],counts=[[2,1]])))
+    assert figure.axes[0].get_ylabel()=='Reference annotation'
+    assert 'truth' not in figure.axes[0].get_title().lower()

@@ -155,3 +155,20 @@ cells, 16 unassigned cells and 233 CellMarker records. Actual downloads preserve
 counts and axes; later evidence answers reuse acceptance without scientific reruns.
 Development-time planning and presentation failures remain recorded, so this is
 bounded workflow qualification, not a guarantee of first-attempt provider success.
+
+## Native activity figures and independent reference labels
+
+SRV-1B adds automatic composition, positive-native-marker RP dot plots and genuine
+per-cell RP distributions through the existing verified visualization owner.
+Accessibility-derived regulatory potential is not measured RNA expression, and
+markers used in annotation are dependent evidence. Accepted compatible UMAP
+coordinates can be recolored without refitting. Omitted groups/genes are explicit;
+no additional annotation or marker test runs in the renderer.
+
+`compare_cell_annotations` accepts the native annotated H5AD and later independent
+H5AD/TSV/CSV labels using exact declared library/cell keys, without feature-axis
+equality or label mapping. It supplies coverage, classification/partition metrics,
+confusion/composition and aligned-label downloads. An accepted native manifest can
+authenticate the original-source relationship for an optional UMAP comparison.
+See the [results and evaluation guide](scientific-results-and-evaluation.md) for
+metric denominators, identity requirements, bounds, figures and limitations.

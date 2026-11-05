@@ -63,7 +63,8 @@ def annotation_tool_spec():
             source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key in c.ANALYSIS_GROUP_ARGUMENTS else S.REQUEST_INPUT_ONLY,
             artifacts=(A.CLUSTERED_ANALYSIS,) if key in c.ANALYSIS_GROUP_ARGUMENTS else (A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
             scientific_parameter=key in ('count_slot','group_column'),
-            conversational_exact_string=key in ('count_slot','group_column'))
+            conversational_exact_string=key in ('count_slot','group_column'),
+            observation_source='source' if key=='group_column' else None)
         argument = (ArgumentSpec if scalar else MatrixArgument)(spec.accepted_types,planning=spec.planning)
         (required if key in common else optional)[key] = argument
     ports = []
@@ -88,7 +89,7 @@ def annotation_tool_spec():
         durable_hooks=DurableToolHooks(public.execute_annotation,public.recover_annotation),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Annotate scATAC groups.',
             'Human hg38 or mouse mm10 genomic-region H5AD with declared raw peak counts, fragment_counts or binary_accessibility and compatible gene/signature resources. Use a qualified supplied group_column or groups TSV, or bind clustering from cluster_cells on the exact original source. Reuse compatible accepted prerequisites; otherwise plan the necessary representation, neighbors and clustering. UMAP is not a grouping prerequisite. Ask only for missing biological declarations or incompatible inputs.',
-            'Count-weighted native Enhanced RP. External count history remains declared. All supplied regions and original measurements are preserved. No normalized values, gene-score input, inferred groups or required database corroboration. A separate corroborate_cell_type_annotation operation can query a qualified reference when requested.', capability_ids=('marker_annotation',)),
+            'Count-weighted native Enhanced RP. External count history remains declared. All supplied regions and original measurements are preserved. No normalized values, gene-score input, inferred groups or required database corroboration. Ordinary result display includes composition and genuine RP marker activity. For a request to show cell types, reuse an accepted UMAP or plan compute_cell_umap from compatible neighbors when appropriate; never require or refit UMAP just to annotate.', capability_ids=('marker_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('annotation','scatac_cell_type_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','annotated_h5ad_path'),)),)))

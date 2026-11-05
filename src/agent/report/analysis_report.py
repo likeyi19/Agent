@@ -389,7 +389,10 @@ def _visualization_manifest_path(
     return Path(value).expanduser().resolve()
 
 
+from .annotation_visualization import CAPTIONS as _ANNOTATION_CAPTIONS
+
 _FIGURE_CAPTIONS: Mapping[str, str] = {
+    **_ANNOTATION_CAPTIONS,
     "umap_leiden": "Verified UMAP coordinates colored by Leiden cluster labels.",
     "umap_coordinates": "Verified UMAP coordinates; Leiden clustering was not performed for this result.",
     "clustering_metrics": (
@@ -570,6 +573,7 @@ from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
 from .cell_selection import REPORT_FIELDS as _CELL_SELECTION_REPORT_FIELDS
 from .matrix import REPORT_FIELDS as _MATRIX_REPORT_FIELDS
+from agent.tools.analysis import cell_label_comparison as _CELL_COMPARISON
 from .annotation import REPORT_FIELDS as _ANNOTATION_REPORT_FIELDS
 from .matrix_adoption import REPORT_FIELDS as _ADOPTED_MATRIX_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
@@ -580,6 +584,7 @@ _ADAPTATION_REPORT_FIELDS = (*_ADAPTATION_REPORT_FACTS, "completed_step", "purpo
 from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    _CELL_COMPARISON.TOOL: _CELL_COMPARISON.FACT_FIELDS,
     'inspect_scATAC_fragments': _FRAGMENT_INSPECTION_FIELDS,
     'pca_embed_cells': ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
                        'parameters','software_versions','finite','cell_order_preserved','backend'),
@@ -805,6 +810,7 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
+    _CELL_COMPARISON.TOOL: "Fixed cell-label reference comparison",
     "call_scATAC_peaks": "Experimental accessible peaks",
     "run_motifmatchr": "Native sequence motif matches",
     **{p.TOOL: "Native " + p.package + " function results" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
@@ -847,7 +853,11 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
+    **{k:k.replace("_", " ").capitalize() for k in _CELL_COMPARISON.FACT_FIELDS},
     "function_name": "Native function",
+    "unassigned_prediction_cells": "Missing predictions among evaluated cells",
+    "reference_label_missing_cells": "Matched cells missing reference labels",
+    "evaluation_coverage": "Evaluated fraction of prediction population",
     "population": "Selected fragment population",
     "window_policy": "Genomic extraction window policy",
     "n_sequences": "Sequence records",
@@ -1125,7 +1135,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     (
         "annotation_evaluation",
         "Annotation Evaluation",
-        frozenset({"evaluate_cell_annotation"}),
+        frozenset({"evaluate_cell_annotation", "compare_cell_annotations"}),
     ),
     (
         "regulatory_feature_space",
@@ -1145,6 +1155,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "compare_cell_annotations": ("identity_basis", "label_policy", "software_versions", "limitations"),
     "call_scATAC_peaks": ("population", "limitations"),
     **{p.TOOL: ("function_name", "measurement", "limitations") for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     "run_chromvar": ("function_name", "measurement", "limitations"),
@@ -1819,6 +1830,7 @@ def _render_summary(
         "evaluate_cell_clustering": "Clustering evaluation available",
         "transfer_cell_labels": "Cell-label transfer performed",
         "evaluate_cell_annotation": "Annotation evaluation available",
+        "compare_cell_annotations": "Fixed cell-label comparison available",
         "validate_scATAC_feature_space": "Regulatory feature space validated",
         "build_replicate_pseudobulk": "Replicate-aware pseudobulk produced",
         "run_replicate_differential_accessibility": (

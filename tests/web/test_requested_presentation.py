@@ -213,10 +213,12 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
         {field:'n_cells',status:'available',value:569},
         {field:'group_summary',status:'available',value:[{group:'0',n_cells:203,primary_annotation:'B cells',status:'assigned'}]},
         {field:'metrics',status:'available',value:{macro_f1:0.1234567890123456}},
+        {field:'per_class',status:'available',value:[{label:'B cells',recall:0.5,reference_cells:20}]},
+        {field:'composition',status:'available',value:[{label:null,n_cells:3,source:'prediction'}]},
         {field:'unavailable_metric',status:'unavailable',value:0.99,reason:'No independent reference'},
         {field:'source_sha256',status:'available',value:'exact-sha'}];
       state.revision.result={text:'Saved scientific response'};
-      state.revision.result_groups=[{handle:'a',label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','unavailable_metric'],
+      state.revision.result_groups=[{handle:'a',label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','per_class','composition','unavailable_metric'],
         parameters:{},derived_from:[],
         evidence:{facts,field_labels:{},coverage:[],limitations:['Predictions are not validated identities.']}}];
       renderResultSelection();
@@ -235,3 +237,23 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
     assert not any(n.get('tag') == 'details' for n in values['nodes'])
     assert result['nodes'][0]['textContent'] == 'Saved scientific response'
     assert 'not validated' in result['nodes'][1]['textContent']
+
+
+def test_comparison_quantitative_headline_precedes_figures_without_duplicating_facts():
+    values = functions('function evidenceValueNode', 'function renderEvidence')
+    result=run_render(values+'''
+      document.createTextNode=text=>({textContent:text});
+      state.session.turns=[];
+      state.revision.artifacts=[{handle:'figure',artifact_type:'analysis_figure',revision_id:'r',turn_id:'science',
+        figure:{kind:'reference_confusion',sources:[],manifest_sha256:'pin',figure_id:'figure',output_names:['comparison']}}];
+      state.revision.result_groups=[{handle:'a',tool:'compare_cell_annotations',label:'Fixed comparison',outputs:[{name:'comparison'}],
+        summary_fields:['matched_cells','accuracy'],parameters:{},derived_from:[],
+        evidence:{facts:[{field:'matched_cells',status:'available',value:540},{field:'accuracy',status:'available',value:0.1234567890123456}],field_labels:{},coverage:[],limitations:[]}}];
+      renderResultSelection();
+      return {nodes:dom['result-facts'].nodes};
+    ''')
+    nodes=result['nodes']
+    assert nodes[0]['className']=='result-headline' and nodes[1]['className']=='result-figures'
+    text=json.dumps(nodes)
+    assert text.count('0.1234567890123456')==1
+    assert '540' in json.dumps(nodes[0])

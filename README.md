@@ -28,6 +28,11 @@ bounded scope / CONDITIONAL GO for controlled researcher use**, with 45 Registry
 tools, 74 reviewed native functions and 10 scientific packages. This is partial
 upstream API coverage. Future integrations remain demand-driven.
 
+The [SRV results and evaluation guide](docs/guides/scientific-results-and-evaluation.md)
+starts the next research phase: source-bound figure previews, concise quantitative
+result tables and external end-to-end evaluation against published reference results.
+Existing algorithms and accepted historical results retain their identities.
+
 The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
 records its then-current 27-tool inventory, genuine replicated differential-accessibility
 and clustering-evaluation journeys, statistical downloads and long-session follow-up.

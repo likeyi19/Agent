@@ -531,22 +531,57 @@ function renderPresentationChoices() {
   select.value = Array.from(select.options).some((o) => o.value === saved) ? saved : previous;
 }
 
-function selectResultFigure(group = null, presentation = null) {
-  if (state.artifactPreview) return;
-  clearArtifactView();
+function resultFigureArtifacts(group = null, presentation = null) {
   if (presentation?.presentations.length) {
-    const figures = distinctFigureArtifacts(presentation.presentations);
-    if (figures.length === 1) viewArtifact(state.session.session_id, null, figures[0], false);
-    return;
+    return distinctFigureArtifacts(presentation.presentations);
   }
   const names = group ? new Set(group.outputs.map((o) => o.name)) : null;
   const matching = state.revision.artifacts.filter((artifact) => artifact.figure
     && artifact.artifact_type === "analysis_figure"
     && artifact.figure.output_names.some((name) => !names || names.has(name)));
-  const figures = distinctFigureArtifacts(matching);
-  // A unique explicitly attributed figure can be previewed. Multiple figures
-  // stay explicit choices in the existing inventory; ordering is not relevance.
-  if (figures.length === 1) viewArtifact(state.session.session_id, state.revision.revision_id, figures[0], false);
+  return distinctFigureArtifacts(matching);
+}
+
+function resultFigureGallery(artifacts) {
+  if (!artifacts.length) return null;
+  const section = document.createElement("section"); section.className = "result-figures";
+  const heading = document.createElement("h3"); heading.textContent = "Scientific figures";
+  section.append(heading);
+  const captions = {
+    umap_leiden: "UMAP colored by accepted Leiden groups. Separation is descriptive, not independent validation of cell identity.",
+    umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
+    umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
+    clustering_metrics: "Clustering agreement with the recorded reference labels. Interpretation depends on the reference's provenance and independence.",
+    annotation_confusion: "Recorded annotation comparison counts. Reference labels and unassigned coverage determine the scope of this comparison.",
+  };
+  // Bound image loading, not scientific availability. Every figure and full-size
+  // PNG remains in the source-bound inventory below.
+  for (const artifact of artifacts.slice(0, 6)) {
+    const card = document.createElement("figure");
+    const title = document.createElement("h4"); title.textContent = readableLabel(artifact.figure.kind);
+    const image = document.createElement("img"); image.className = "analysis-figure";
+    image.loading = "lazy"; image.alt = title.textContent;
+    image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
+    const caption = document.createElement("figcaption"); caption.className = "small";
+    caption.textContent = captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
+    const sources = document.createElement("p"); sources.className = "muted small";
+    const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
+    sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
+    const open = document.createElement("button"); open.type = "button"; open.className = "secondary";
+    open.textContent = "Open figure & provenance";
+    open.addEventListener("click", () => viewArtifact(state.session.session_id, artifact.revision_id, artifact));
+    image.addEventListener("error", () => {
+      image.hidden = true;
+      caption.textContent = "Figure preview unavailable. Open the figure to check its saved artifact; no analysis was rerun.";
+    });
+    card.append(title, image, caption, sources, open); section.append(card);
+  }
+  if (artifacts.length > 6) {
+    const note = document.createElement("p"); note.className = "partial-coverage";
+    note.textContent = `Showing 6 of ${artifacts.length} published figures. All figures remain in Downloads & reports.`;
+    section.append(note);
+  }
+  return section;
 }
 
 function renderResultSelection() {
@@ -575,6 +610,13 @@ function renderResultSelection() {
     summary.textContent = state.revision.result.text;
     nodes.push(summary);
   }
+  for (const group of visible) limitations.push(...(group.summary_limitations || group.evidence?.limitations || []));
+  if (limitations.length) {
+    const note = document.createElement("p"); note.className = "result-caution small";
+    note.textContent = [...new Set(limitations)].join(" "); nodes.push(note);
+  }
+  const gallery = resultFigureGallery(resultFigureArtifacts(selected, presentation));
+  if (gallery) nodes.push(gallery);
   for (const group of visible) {
     const section = document.createElement("section");
     section.className = "scientific-result";
@@ -588,9 +630,21 @@ function renderResultSelection() {
         const label = document.createElement("dt"); label.textContent = view.field_labels[fact.field] || readableLabel(fact.field);
         const value = document.createElement("dd");
         if (fact.status !== "available") value.textContent = `${fact.status}: ${fact.reason || "No accepted value"}`;
-        else if (fact.value !== null && typeof fact.value === "object") {
+        else if (["group_summary", "state_counts", "metrics"].includes(fact.field)) {
+          // Literature rows and mapping rationales remain in Methods; the
+          // composition table shows the exact recorded counts and assessments.
+          const preview = fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"
+            && Array.isArray(fact.value) ? fact.value.map(({group, candidate, n_cells, native_score, assessment}) =>
+              ({group, candidate, n_cells, native_score, assessment})) : fact.value;
+          value.append(evidenceValueNode(preview));
+          if (fact.field === "group_summary") {
+            const note = document.createElement("p"); note.className = "muted small";
+            note.textContent = "Recorded group summary; omitted groups do not establish absence. Full results remain available in downloads.";
+            value.append(note);
+          }
+        } else if (fact.value !== null && typeof fact.value === "object") {
           const records = document.createElement("details");
-          records.open = ["score_examples", "metrics"].includes(fact.field);
+          records.open = fact.field === "score_examples";
           const summary = document.createElement("summary"); summary.textContent = "Structured accepted records";
           const preview = fact.field === "score_examples" && Array.isArray(fact.value)
             ? fact.value.map(({sequence_id, condition, mean, fold_std, fold_0, fold_1, fold_3}) =>
@@ -605,8 +659,8 @@ function renderResultSelection() {
         empty.textContent = `Summary: ${view.reason || view.status}. Accepted fields remain in details.`;
         section.append(empty);
       }
-      if (view.coverage.length) section.append(...evidenceFactNodes(view.coverage, view.field_labels || {}));
-      limitations.push(...view.limitations);
+      if (view.coverage.length) section.append(...evidenceFactNodes(view.coverage.filter((fact) =>
+        !facts.some((shown) => shown.field === fact.field)), view.field_labels || {}));
     } else {
       const omitted = document.createElement("p");
       omitted.textContent = "Summary omitted from this bounded view. Select an accepted field in details to read it.";
@@ -615,15 +669,16 @@ function renderResultSelection() {
     const methods = document.createElement("details");
     const title = document.createElement("summary"); title.textContent = "Accepted methods & sources";
     methods.append(title, evidenceValueNode({parameters: group.parameters, derived_from: group.derived_from,
-      source: group.evidence?.source || "Unavailable"}));
+      source: group.evidence?.source || "Unavailable", limitations: group.evidence?.limitations || []}));
     if (group.evidence) methods.append(...evidenceFactNodes(group.evidence.facts.filter((fact) =>
-      group.method_fields.includes(fact.field)), group.evidence.field_labels || {}));
+      !group.summary_fields.includes(fact.field)
+        || fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"), group.evidence.field_labels || {}));
     section.append(methods); nodes.push(section);
   }
   element("result-facts").replaceChildren(...nodes);
   if (!nodes.length) element("result-facts").textContent = "Accepted summary unavailable. Detailed historical outputs remain accessible.";
-  element("result-limitations").replaceChildren(textList([...new Set(limitations)]));
-  element("result-limitations-panel").hidden = !limitations.length;
+  // Field-detail navigation uses this panel; overview limitations are inline.
+  element("result-limitations-panel").hidden = true;
   state.evidence = selected?.evidence || null;
   if (selected) element("evidence-output").value = selected.canonical_output;
   if (selected?.evidence) renderEvidence(selected.evidence, element("evidence-content"));
@@ -637,7 +692,7 @@ function renderResultSelection() {
   renderArtifacts({...state.revision,
     artifacts: [...(presentation?.presentations || []), ...state.revision.artifacts],
     scientific_artifacts: [...(presentation?.artifacts || []), ...(state.revision.scientific_artifacts || [])]});
-  selectResultFigure(selected, presentation);
+  if (!state.artifactPreview) clearArtifactView();
 }
 
 function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {

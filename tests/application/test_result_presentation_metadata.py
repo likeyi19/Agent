@@ -40,3 +40,14 @@ def test_labels_share_the_existing_total_client_projection_byte_limit():
     fields = tuple(EvidenceFact(f'field-{index}', 'available', index) for index in range(80))
     with pytest.raises(ValueError, match='client byte limit'):
         replace(view, facts=fields, field_labels={fact.field: '界' * 4000 for fact in fields})
+
+
+def test_researcher_summary_selects_only_existing_reviewed_facts():
+    from agent.application.dialogue_evidence import RESULT_SUMMARY_FIELDS
+    from agent.report.analysis_report import _REPORT_FIELDS
+    for tool, fields in RESULT_SUMMARY_FIELDS.items():
+        assert len(fields) == len(set(fields))
+        assert set(fields) <= set(_REPORT_FIELDS[tool])
+        assert not any(f.endswith(('_path', '_sha256')) for f in fields)
+    assert {'assigned_cells', 'unassigned_cells', 'ambiguous_cells', 'groups_omitted',
+            'validation_state', 'group_summary'} <= set(RESULT_SUMMARY_FIELDS['annotate_scATAC_cell_types'])

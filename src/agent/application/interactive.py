@@ -345,6 +345,7 @@ class InteractiveAgentApplication:
                 scientific_artifacts = ()
             from .turn_context import revision_results
             from agent.report.analysis_report import _TOOL_TITLES, _REPORT_FIELDS, _METHOD_FIELDS
+            from .dialogue_evidence import EVIDENCE_SCOPE_LIMITATIONS, RESULT_SUMMARY_FIELDS
             groups, remaining = [], MAX_RESULT_VIEW_BYTES
             for group in revision_results(self._application.sessions, state, revision):
                 source = group['canonical']
@@ -359,10 +360,14 @@ class InteractiveAgentApplication:
                     outputs=[dict(name=o.name, field=o.output_key) for o in revision.outputs
                              if o.name in {m['output_name'] for m in group['members']}],
                     parameters=group['parameters'], derived_from=group['derived_from'],
-                    summary_fields=[field for field in _REPORT_FIELDS.get(group['tool'], ())
-                        if field not in _METHOD_FIELDS.get(group['tool'], ())
+                    summary_fields=[field for field in RESULT_SUMMARY_FIELDS.get(
+                        group['tool'], _REPORT_FIELDS.get(group['tool'], ()))
+                        if (group['tool'] in RESULT_SUMMARY_FIELDS
+                            or field not in _METHOD_FIELDS.get(group['tool'], ()))
                         and not field.endswith(('_sha256', '_path')) and 'contract' not in field],
-                    method_fields=list(_METHOD_FIELDS.get(group['tool'], ())),
+                    summary_limitations=[limit for limit in evidence['limitations']
+                        if limit not in EVIDENCE_SCOPE_LIMITATIONS]
+                        if included else [],
                     evidence=evidence if included else None))
             # The accepted scientific Revision remains successful independently
             # of its originating conversation's response publication status.

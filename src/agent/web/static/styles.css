@@ -80,6 +80,10 @@ button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .
 .composer { flex: 0 1 auto; min-height: 0; max-height: 58%; overflow-y: auto; border: 0; border-radius: 0; border-top: 1px solid #e4eae9; margin: 0; padding: 14px 16px; }
 .scientific-state { min-width: 0; padding-top: 0; scroll-margin-top: 12px; }
 .result-heading { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.result-figures figure { margin: 12px 0 20px; padding: 12px; border: 1px solid #dce3e8; border-radius: 8px; }
+.result-figures h4 { margin: 0 0 8px; font-size: 14px; }
+.result-figures figcaption { margin: 8px 0; }
+.result-caution { padding: 10px 12px; border-left: 3px solid #bdcbd5; background: #f6f8f8; }
 #result-output-summary { overflow-wrap: anywhere; }
 .revision-summary { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; }
 .revision-summary dt { color: #586b79; }

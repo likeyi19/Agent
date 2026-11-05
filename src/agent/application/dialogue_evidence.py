@@ -32,6 +32,13 @@ MAX_FACT_BYTES = 16 * 1024
 MAX_VIEW_BYTES = 64 * 1024
 MAX_FIELDS = 128
 MAX_DETAIL_BYTES = 8 * 1024 * 1024
+EVIDENCE_SCOPE_LIMITATIONS = (
+    'This view is not scientific authority or fresh artifact verification.',
+    'Facts describe the accepted source result, not current artifact validity.',
+    'A compact summary is not the complete scientific result; missing detail is not scientific absence.',
+    'Detailed sidecars and raw artifacts are not read.',
+    'Active status is relative to the captured session generation.',
+)
 
 
 # Reviewed scope explanations only, not new scores, biological interpretations,
@@ -172,13 +179,7 @@ class DialogueEvidence(_JsonModel):
     unselected_fields: tuple[str, ...] = ()
     evidence_scope: str = 'accepted_persisted_summary'
     detail: tuple[EvidenceFact, ...] = ()
-    limitations: tuple[str, ...] = (
-        'This view is not scientific authority or fresh artifact verification.',
-        'Facts describe the accepted source result, not current artifact validity.',
-        'A compact summary is not the complete scientific result; missing detail is not scientific absence.',
-        'Detailed sidecars and raw artifacts are not read.',
-        'Active status is relative to the captured session generation.',
-    )
+    limitations: tuple[str, ...] = EVIDENCE_SCOPE_LIMITATIONS
 
 
 class _Unavailable(ValueError):
@@ -956,6 +957,22 @@ def public_citation_source(source):
             child = value.get(key)
             result['derivation'][key] = None if child is None else {k:child[k] for k in allowed if k in child}
     return result
+
+
+# Researcher-facing selection of existing facts, not a second fact projection.
+# Unlisted tools continue to use their existing reviewed report fields.
+RESULT_SUMMARY_FIELDS = {
+    'inspect_scATAC': ('n_cells', 'n_features', 'x_storage_type', 'nnz', 'density'),
+    'pca_embed_cells': ('n_cells', 'n_features', 'embedding_dim', 'representation'),
+    'epizoo_embed_cells': ('n_cells', 'embedding_dim', 'species'),
+    'build_cell_neighbors': ('n_cells', 'n_neighbors', 'metric'),
+    'cluster_cells': ('n_cells', 'n_clusters'),
+    'compute_cell_umap': ('n_cells', 'n_components'),
+    'annotate_scATAC_cell_types': ('n_cells', 'n_groups', 'assigned_cells',
+        'unassigned_cells', 'ambiguous_cells', 'group_summary', 'groups_omitted', 'validation_state'),
+    'corroborate_cell_type_annotation': ('database', 'database_release', 'n_groups',
+        'n_records', 'state_counts', 'group_summary', 'groups_omitted', 'limitations'),
+}
 
 
 def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publisher=None):

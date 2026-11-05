@@ -83,7 +83,7 @@ def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
 
 def test_downloads_use_scientific_figure_identity_and_honest_request_feedback():
     source = (STATIC / 'app.js').read_text()
-    identity = source[source.index('function distinctFigureArtifacts'):source.index('function selectResultFigure')]
+    identity = source[source.index('function distinctFigureArtifacts'):source.index('function resultFigureArtifacts')]
     key = next(line for line in identity.splitlines() if 'const key =' in line)
     assert 'artifact.revision_id' in key and 'artifact.figure.manifest_sha256' in key and 'artifact.figure.figure_id' in key
     assert 'artifact.sha256' not in key

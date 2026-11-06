@@ -1392,6 +1392,9 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == _CELL_COMPARISON.TOOL:
+            facts.update({field: _plain_json(step_result.result[field], f'{step.step_id}.{field}')
+                          for field in _CELL_COMPARISON.EXTENDED_FACT_FIELDS if field in step_result.result})
         if step.tool_name == 'run_macs3' and 'result_files' in step_result.result:
             facts['result_files'] = _plain_json(step_result.result['result_files'], f'{step.step_id}.result_files')
         if step.tool_name == 'run_motifmatchr' and 'n_positions' in step_result.result:

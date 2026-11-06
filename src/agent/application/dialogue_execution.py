@@ -222,6 +222,8 @@ def scientific_parameters(registry):
                 item['choices'] = [value for value in spec.choices if value is not None]
             elif is_json_object_argument(spec):
                 item['json_object'] = True
+                if spec.planning.conversational_string_mapping:
+                    item['string_mapping'] = True
                 if spec.planning.conversational_members:
                     item['members'] = dict(spec.planning.conversational_members)
             elif is_exact_string_argument(spec):
@@ -337,6 +339,71 @@ def _with_retained(registry, values, retained):
         names.add(name)
         values[name] = _serialize(row['value'])
     return values
+
+
+def _retained_field_roles(sessions, interaction, retained, roles):
+    """Keep an accepted observation field's recorded operand when reusing it.
+
+    Accepted result selection identifies the old operation, not a new dataset.
+    Restore only missing registered source roles, by exact record identity in the
+    captured offer. Explicit current bindings and native artifact reuse keep their
+    existing owners. No file discovery or scientific qualification happens here.
+    """
+    from .turn_context import stored_step
+    from .local_resources import _GROUP_PORTS, _group_port
+    state = sessions.load(sessions._interaction_session_id)
+    registry = sessions._application.registry
+    offered = captured_input_group(interaction, state.interactions[:-1])
+    if offered is None:
+        return roles
+    groups = {g['handle']: g for g in interaction.snapshot['dialogue']['results']}
+    outputs = {o['handle']: o for o in interaction.snapshot['dialogue']['outputs']}
+    interactions = {i.turn_id: i for i in state.interactions}
+    origins = {t.run_id: interactions.get(t.turn_id) for t in state.turns if t.run_id is not None}
+    accepted = {}
+    selected = list(roles)
+    explicit = {(r.tool, r.port) for r in roles}
+    received = (interaction.submission or {}).get('execution_inputs', {})
+    for row in retained:
+        _, argument = _parameter_input(registry, row['tool'], row['argument'])
+        port_name = argument.planning.observation_source
+        key = row['tool'], port_name
+        if key not in _GROUP_PORTS or key in explicit:
+            continue
+        port, _, _ = _group_port(registry, row['tool'], port_name)
+        if any(m.field_name in received for m in port.members):
+            continue  # A supplied input is never replaced by accepted context.
+        if row['result'] not in accepted:
+            output = outputs[groups[row['result']]['canonical_output']]
+            revision = next(r for r in state.revisions if r.revision_id == output['revision_id'])
+            locator = next(o for o in revision.outputs if o.name == output['output_name'])
+            step = stored_step(sessions, locator)
+            origin = origins.get(locator.run_id)
+            metadata = {} if origin is None else (execution_submission(origin) or {}).get('registered_input', {})
+            accepted[row['result']] = step, metadata
+        step, metadata = accepted[row['result']]
+        if metadata.get('composition') != 'scientific-role-selection.v1':
+            continue
+        matches = [r for r in metadata['roles'] if r['tool'] == row['tool'] and r['port'] == port_name]
+        if not matches:
+            continue  # A qualified accepted artifact is not a registered upload.
+        if len(matches) != 1 or step.tool_name != row['tool']:
+            raise IntentError('ambiguous_parameter')
+        source = metadata['members'][int(matches[0]['source'].split('.')[1])]
+        if any(step.resolved_arguments.get(m.field_name) != source[
+                'source_path' if n == 0 else 'source_sha256'] for n, m in enumerate(port.members)):
+            continue  # A composed operation did not consume this original file.
+        candidates = [n for n, member in enumerate(offered.members) if all(
+            member.get(key) == source.get(key) for key in
+            ('resource_id', 'record_sha256', 'source_path', 'source_sha256'))]
+        if len(candidates) != 1:
+            raise IntentError('unavailable_context')
+        role = InputRole(row['tool'], port_name, f'source.{candidates[0]}')
+        if any((r.tool, r.port) == key and r != role for r in selected):
+            raise IntentError('ambiguous_parameter')
+        if role not in selected:
+            selected.append(role)
+    return tuple(selected)
 
 
 def _validate_research_intent(interaction):
@@ -752,7 +819,7 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 if (safe.target != admitted['tool'] or any(t != tool.name for t, _ in rejected)
                         or sorted(n for _, n in rejected) != list(pending['missing'])
                         or any(_parameter_input(registry, t, n)[0] in values for t, n in rejected)
-                        or [asdict(d) for d in safe.arguments] != _serialize(admitted.get('arguments', []))
+                        or _serialize([asdict(d) for d in safe.arguments]) != _serialize(admitted.get('arguments', []))
                         or _replay_initial_inputs(registry, interaction, safe.arguments) != _serialize(values)):
                     raise ValueError('Rejected declaration capture changed.')
                 return
@@ -1723,7 +1790,10 @@ def planning_task(interaction, state):
 
 
 def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
+    intent = _research_intent(interaction, decision)
     roles = _source_field_roles(sessions._application.registry, decision.roles, decision.arguments)
+    if decision.context == 'current' and intent.get('retained_parameters'):
+        roles = _retained_field_roles(sessions, interaction, intent['retained_parameters'], roles)
     if roles:
         from .local_resources import available_input_view
         interaction = available_input_view(interaction)
@@ -1735,7 +1805,7 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     admitted = dict(kind='execute', operation='plan', tool=decision.target, revision_id=interaction.base_revision_id,
                 request_id='turn-' + digest(dict(session=sessions._interaction_session_id, turn=interaction.turn_id)),
                 inputs=values)
-    admitted.update(_research_intent(interaction, decision))
+    admitted.update(intent)
     grouped = (interaction.submission is not None
         and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
     if grouped:

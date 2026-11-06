@@ -57,7 +57,7 @@ Select both sample/library identity columns, or explicitly declare that both fil
 describe the same physical library with `shared_library_id`. Matching uses the
 exact `(library, cell identifier)` key; duplicate keys and absence of shared keys
 are rejected. Library declarations are not independently verified. There is no
-barcode rewriting, label alias correction, optimal class mapping or prediction
+barcode rewriting, inferred label alias correction, optimal class mapping or prediction
 update. Source roles and captured H5AD observation/table header names bind fields;
 these name offers do not qualify a source scientifically.
 
@@ -70,6 +70,59 @@ classes. Assigned accuracy uses only jointly labeled cells. Descriptive ARI/NMI
 also use jointly labeled cells and are unavailable for noninformative partitions.
 Per-class results and full-source composition remain separately downloadable.
 Reference annotations are research evidence, not infallible biological truth.
+
+Strict original-label comparison remains the default. When vocabularies differ,
+the Agent can explain the actual categories and name differences, then ask for
+explicit correspondences. Disagreement between individual cells within the same
+vocabulary is not a reason to request a mapping. Researchers can reply naturally:
+
+> Map CD4 Naive T and CD4 Memory T in my predictions to CD4 T, and map CD4 T cell
+> in the reference to CD4 T. Leave the other labels unchanged.
+
+The existing operation accepts optional `prediction_mapping` and
+`reference_mapping` dictionaries internally; researchers need not write JSON.
+Both original and replacement strings are grounded in the user's words. Rules
+must name actual categories on the selected side. A missing correspondence uses
+the ordinary parameter clarification; ambiguous or conflicting instructions need
+clarification. Unknown original categories and invalid rules cannot execute.
+Simple renaming and many-to-one merging are supported, with at most 32 rules per
+side. Rules apply simultaneously once: targets do not trigger another rule.
+Unspecified labels and all cells remain present. Missing labels and the explicit
+unassigned/unknown/unlabeled/unlabelled sentinels cannot become biological classes.
+Category splitting, synonym inference, ontology matching and agreement-optimized
+mapping are not provided.
+
+Recomparison reads the original prediction/reference label datasets through their
+existing upload roles or accepted label artifacts, preserving columns and physical
+library declarations. The comparison report itself is not a label dataset. No
+re-upload is needed when those exact files remain available in the Session.
+
+A mapped comparison is a new accepted publication. Source files, original labels,
+the earlier strict comparison and its displayed response remain unchanged. The
+comparison JSON includes explicit side-specific rules and their request-parameter
+origin, full-source mapped/unmapped categories and coverage, original exact-label
+metrics, harmonized metrics and actual cell/class denominators. Bounded evidence
+names omitted categories; full vocabularies remain in the JSON. Original label
+columns in the aligned TSV retain their meanings; mapped labels and agreement are
+additional columns. Existing tables, confusion plots, coordinate overlays and
+downloads describe the recorded label policy, with mapped figures identified as
+harmonized views. Mapped ARI/NMI describe the merged partitions, not the original
+clustering. A researcher-specified equivalence is a comparison convention, not
+independent biological validation.
+
+This bounded extension is recorded under
+[SRV-2C Phase 0](../../../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md).
+The dated multi-turn addendum and final architecture review qualify genuine
+strict-result and reference-side to two-sided many-to-one continuation with the original files. Retained observation columns
+keep their exact accepted registered sources when those sources remain offered;
+explicit current source selections take precedence, including distinct sources for
+repeated operations. The decision is bounded CONDITIONAL GO for controlled use.
+A historical strict-result request was refused despite complete inputs; a later
+single confirmation with the same wording succeeded. This is not universal
+first-attempt reliability. Completion prose can be unavailable when multiple result
+summaries exceed the existing context bound; exact evidence and downloads remain
+available. Scientific factual review is unchanged.
+It does not start the full published-data SRV-2C evaluation or close SRV-1.
 
 An optional accepted UMAP supplies the same coordinates for prediction, reference
 and agreement panels. Missing/unmatched reference coverage is gray. Exact

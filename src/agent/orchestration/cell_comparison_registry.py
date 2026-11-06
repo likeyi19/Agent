@@ -31,6 +31,10 @@ def tool_spec():
         optional[role+'_sha256'] = arg((str,), 'Optional exact captured source checksum.')
     optional['shared_library_id'] = arg((str,), 'Explicit user declaration that BOTH label sources describe the same physical sample/library, with this exact identity. Required when no pair of library columns is selected. Never infer from filenames, equal cell counts or barcodes.',
         scientific_parameter=True, conversational_exact_string=True)
+    for side in ('prediction', 'reference'):
+        optional[side+'_mapping'] = arg((dict,),
+            'Explicit '+side+' original-label to common-label string mapping. Only user-specified one-to-one or many-to-one rules; unspecified labels stay unchanged. Resolve exact original category names; ask for missing/unknown/conflicting correspondence. Never infer equivalence, split categories, map missing/unassigned values or change cell identities.',
+            scientific_parameter=True, conversational_json_object=True, conversational_string_mapping=True)
     optional['umap_path'] = arg((str,Path), 'Optional already accepted UMAP on the exact prediction source; reuse coordinates for predicted/reference/agreement views, never refit.',
         source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT, artifacts=(A.UMAP_ANALYSIS,))
     optional['annotation_manifest_path'] = arg((str,Path), 'Accepted native MAESTRO publication authenticating the prediction file and original-source ancestry when reusing UMAP from original counts.',source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT,artifacts=(A.SCATAC_CELL_TYPE_ANNOTATION,))
@@ -52,8 +56,9 @@ def tool_spec():
             proof_metadata=pub.proof_metadata,independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.EVALUATION,
             'Compare fixed native MAESTRO or supplied cell labels with independently uploaded H5AD/TSV/CSV reference annotations.',
-            'Use exact (sample/library identity, cell identifier) correspondence; ask for missing library identity or selected columns. Different feature axes and row orders are allowed. No measurement comparison, training, label remapping or biological truth claim.',
+            'Use exact (library, cell identifier) correspondence; ask for missing identity/columns. Feature axes and row order may differ. Strict comparison is default. prediction_mapping/reference_mapping require explicit user rules, never inferred equivalence. A mapped continuation reuses exact original sources, columns and library declaration, publishing a new result. No measurement comparison, training or biological truth claim.',
             'Report matched/unmatched and missing coverage, accuracy, macro-F1, balanced accuracy, per-class results and descriptive ARI/NMI. Reuse a compatible accepted UMAP through coordinates for label overlays. For native MAESTRO predictions bind its accepted annotation publication too, to authenticate original-source ancestry. Do not compute another UMAP for comparison.',
+            'A previous comparison publication is not a label dataset. Recomparison must bind the original prediction/reference label files: select their exact captured upload roles, or the compatible accepted label artifacts from their original results. context=current alone does not supply those inputs. Preserve original columns and the library declaration using accepted parameters. A missing-mapping request still needs these original source roles before its parameter continuation.',
             capability_ids=('reference_annotation',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(Producer('comparison',owner.CONTRACT,
             (member('path','manifest_path'),member('sha256','manifest_sha256'))),)))

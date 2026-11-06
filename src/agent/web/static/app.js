@@ -570,7 +570,9 @@ function resultFigureGallery(artifacts) {
     image.loading = "lazy"; image.alt = title.textContent;
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
-    caption.textContent = captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
+    caption.textContent = artifact.figure.label_policy === "explicit_harmonized_labels" && artifact.figure.caption
+      ? artifact.figure.caption
+      : captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
     const sources = document.createElement("p"); sources.className = "muted small";
     const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
     sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;

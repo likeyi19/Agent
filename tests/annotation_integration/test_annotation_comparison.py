@@ -16,22 +16,23 @@ from test_external_entry import external_case, case
 
 
 class Planner:
-    def __init__(self,args,reference):self.args,self.reference=args,reference
+    def __init__(self,args,reference,mapped=False):self.args,self.reference,self.mapped=args,reference,mapped
     def plan(self,request,registry):
         return AgentPlan('compare',request.request_id,'Annotate then compare fixed labels',(
             PlanStep('annotation','annotate_scATAC_cell_types',self.args),
             PlanStep('comparison',owner.TOOL,dict(prediction_path=StepOutputRef('annotation','annotated_h5ad_path'),
                 reference_path=str(self.reference),prediction_label_key='primary_annotation',
                 reference_label_key='reference',reference_cell_key='cell',shared_library_id='synthetic-library',
-                output_dir=str(Path(request.inputs['output_dir'])/'comparison')),depends_on=('annotation',))))
+                output_dir=str(Path(request.inputs['output_dir'])/'comparison'), **(dict(prediction_mapping={'A':'Common'},reference_mapping={'A':'Common'}) if self.mapped else {})),depends_on=('annotation',))))
 
 
-def test_maestro_comparison_figures_authority_download_and_restart(external_case,tmp_path,monkeypatch):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_maestro_comparison_figures_authority_download_and_restart(external_case,tmp_path,monkeypatch,mapped):
     args,calls=external_case
     original=Path(args['source_path']).read_bytes()
     data=ad.read_h5ad(args['source_path']);reference=tmp_path/'reference.csv'
     pd.DataFrame({'cell':data.obs_names[::-1],'reference':['A']*data.n_obs}).to_csv(reference,index=False)
-    app=ResearchAgentApplication(tmp_path/'app',planner=Planner(args,reference));app.sessions.create('research')
+    app=ResearchAgentApplication(tmp_path/'app',planner=Planner(args,reference,mapped));app.sessions.create('research')
     state=app.sessions.run('research','first',AgentRequest('first','Annotate and compare',{}),
         (OutputSelection('comparison','comparison','manifest_path'),),expected_generation=0)
     assert state.turn('first').status=='activated',state.turn('first')
@@ -44,6 +45,11 @@ def test_maestro_comparison_figures_authority_download_and_restart(external_case
     kinds=[f['figure_kind'] for f in manifest['figures']]
     assert kinds==['annotation_composition','marker_activity_dot','marker_activity_distribution','reference_confusion','reference_composition']
     assert manifest['figure_set']['annotation_projection_version']==2
+    if mapped:
+        assert 'original_metrics' in result and result['mapping']['applied']
+        assert all(f['presentation'].get('label_policy')=='explicit_harmonized_labels'
+                   for f in manifest['figures'] if f['figure_kind'].startswith('reference_'))
+        assert 'Harmonized-label view' in manifest['figures'][-1]['presentation']['caption']
     assert all(len(f['plotting_data_sha256'])==64 for f in manifest['figures'])
     assert 'not measured RNA expression' in manifest['figures'][1]['presentation']['caption']
     from agent.application.native_delivery import accepted_artifacts

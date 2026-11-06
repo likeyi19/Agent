@@ -927,8 +927,24 @@ def field_semantics(registry, tool, field):
         semantics['description'] = description.description
         semantics['description_source'] = 'registry_result_contract'
     if tool == 'compare_cell_annotations':
+        meanings = {
+            'vocabulary': 'Original prediction/reference category names and side-specific differences, with omission counts. Different names may limit exact-name biological interpretation, but establish no equivalence. Offer explicit mapping only for vocabulary differences, never merely cell-level disagreement within the same vocabulary.',
+            'mapping': 'Explicit side-specific user rules and full-source coverage: rule-covered, changed, missing and unmapped cells/categories; unspecified labels stay unchanged. Rules apply simultaneously once. No inferred equivalence, cell dropping, missing-value promotion or prediction modification.',
+            'original_metrics': 'Original exact-label metrics before any user mapping. These retain the original classification and partition meanings, with the same matched/reference-labeled and jointly labeled cell denominators. They are distinct from harmonized-label metrics.',
+            'metric_denominators': 'Actual evaluated and jointly labeled cell counts, macro-F1 union-class counts and supported-reference class counts, including original class denominators. Missing predictions count as errors; missing references are excluded. Zero-division per-class precision/recall/F1 is zero.',
+            'label_policy': 'exact_labels_no_mapping is strict original-label agreement. explicit_harmonized_labels uses only recorded user mappings, preserves original metrics and does not validate biological equivalence.',
+            'accuracy': 'Fraction correct among matched cells with a reference label; missing predictions count as errors.',
+            'assigned_accuracy': 'Fraction correct among jointly labeled matched cells only; excludes missing predictions. Null means no assigned denominator.',
+            'macro_f1': 'Mean F1 across the union of observed biological labels in evaluated cells, including prediction-only classes. Missing predictions count as errors. User category merging changes this class denominator.',
+            'balanced_accuracy': 'Mean recall over supported reference classes in evaluated cells; missing predictions count as errors. User category merging changes this class denominator.',
+            'ari': 'ARI on jointly labeled matched cells. After category merging this describes mapped partitions, not original clustering. It is not biological label correctness; null means partitions are not identifiable.',
+            'nmi': 'Arithmetic-normalized NMI on jointly labeled matched cells. After category merging this describes mapped partitions, not original clustering. It is not biological label correctness; null means partitions are not identifiable.',
+            'per_class': 'Per-class precision, recall, F1, reference/predicted/correct cells under the recorded label_policy; omissions are explicit and full rows remain in downloads.',
+            'composition': 'Full-source category counts/fractions under the recorded label_policy, separately for each source. Populations may differ; this is not matched-cell coverage. Omissions are explicit.',
+        }
         semantics.update(kind='scientific_result', description_source='reviewed_fixed_label_comparison',
-            description='Fixed labels joined by exact declared physical library and cell identifier, without label mapping or feature comparison. Accuracy/macro-F1/balanced accuracy include missing predictions as errors on matched reference-labeled cells. Macro-F1 uses the union of observed biological classes; balanced accuracy is mean supported-reference recall. ARI/NMI describe jointly labeled partitions only; null means not identifiable. Coverage and omission counts must accompany interpretation. Supplied reference labels are not biological truth; declared library correspondence is not independently verified.')
+            description=meanings.get(field, 'Exact declared physical-library/cell join and label coverage; no feature comparison or cell-identifier rewriting.')
+                + ' Main metrics follow label_policy; original_metrics retains original exact labels. Supplied reference labels are not biological truth; declared library identity is not independently verified.')
     if tool == 'annotate_scATAC_cell_types':
         reviewed = annotation_field_semantics(field)
         if reviewed is not None:
@@ -968,7 +984,7 @@ RESULT_SUMMARY_FIELDS = {
     'compare_cell_annotations': ('matched_cells', 'prediction_only_cells', 'reference_only_cells',
         'evaluated_cells', 'evaluation_coverage', 'unassigned_prediction_cells', 'accuracy',
         'macro_f1', 'balanced_accuracy', 'ari', 'nmi', 'per_class', 'classes_omitted',
-        'composition', 'composition_omitted', 'limitations'),
+        'composition', 'composition_omitted', 'vocabulary', 'mapping', 'original_metrics', 'metric_denominators', 'label_policy', 'limitations'),
     'inspect_scATAC': ('n_cells', 'n_features', 'x_storage_type', 'nnz', 'density'),
     'pca_embed_cells': ('n_cells', 'n_features', 'embedding_dim', 'representation'),
     'epizoo_embed_cells': ('n_cells', 'embedding_dim', 'species'),
@@ -1015,6 +1031,8 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         step_ids=record['source_step_ids'], output_names=names, sources=sources)
     if run_id is not None:
         public['run_id'] = run_id
+    if record.get('presentation', {}).get('label_policy') == 'explicit_harmonized_labels':
+        public.update(label_policy='explicit_harmonized_labels', caption=record['presentation']['caption'])
     if publisher is not None:
         public['publisher'] = {k:publisher[k] for k in ('kind', 'session_id', 'turn_id')}
     if composite:

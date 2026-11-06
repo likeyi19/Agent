@@ -91,7 +91,8 @@ def test_inputs_immutable_and_recovery_only_saved_completion(tmp_path):
     with pytest.raises(ValueError,match='empty'):owner.execute(args,'execution-2')
 
 
-def test_comparison_reuses_genuine_umap_and_rejects_wrong_ancestry(tmp_path,monkeypatch):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_comparison_reuses_genuine_umap_and_rejects_wrong_ancestry(tmp_path,monkeypatch,mapped):
     from agent.tools.analysis.pca_embedding import pca_embed_cells
     from agent.tools.analysis.embedding_analysis import build_cell_neighbors, compute_cell_umap
     from agent.tools.analysis.marker_annotation import sha256
@@ -108,12 +109,18 @@ def test_comparison_reuses_genuine_umap_and_rejects_wrong_ancestry(tmp_path,monk
     reference=tmp_path/'truth.tsv';pd.DataFrame({'cell':data.obs_names[:12][::-1], 'type':['B']*4+['A']*8}).to_csv(reference,sep='\t',index=False)
     args=dict(prediction_path=str(source),reference_path=str(reference),prediction_label_key='prediction',reference_label_key='type',reference_cell_key='cell',
         shared_library_id='explicit-synthetic-library',umap_path=umap['analysis_path'],umap_sha256=sha256(umap['analysis_path']),output_dir=str(tmp_path/'comparison'))
+    if mapped:
+        args.update(prediction_mapping={'A':'Common'},reference_mapping={'A':'Common'})
     monkeypatch.setattr(sc.tl,'umap',lambda *a,**k:pytest.fail('UMAP refit during comparison'))
     output=owner.compare_cell_annotations(**args)
     overlay=json.loads((Path(output['manifest_path']).parent/'overlay.json').read_text())
     np.testing.assert_array_equal(overlay['coordinates'],expected)
     assert overlay['reference'][12:]==[None]*4 and overlay['matched'][12:]==[False]*4
     assert output['umap_available'] is True
+    if mapped:
+        assert overlay['label_policy']=='explicit_harmonized_labels'
+        assert overlay['predicted'][:8]==['Common']*8 and overlay['reference'][:8]==['Common']*8
+        assert output['original_metrics']['accuracy']==output['accuracy']
     # Equal cells and labels on another byte source do not qualify these coordinates.
     wrong=tmp_path/'other.h5ad';data.uns['unrelated_source']='different';data.write_h5ad(wrong)
     args.update(prediction_path=str(wrong),output_dir=str(tmp_path/'other-comparison'))

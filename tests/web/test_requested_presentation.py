@@ -257,3 +257,17 @@ def test_comparison_quantitative_headline_precedes_figures_without_duplicating_f
     text=json.dumps(nodes)
     assert text.count('0.1234567890123456')==1
     assert '540' in json.dumps(nodes[0])
+
+
+def test_mapping_gallery_uses_its_pinned_caption_and_preserves_strict_caption():
+    result=run_render('''
+      const comparisonFigure={kind:'reference_confusion',sources:[],output_names:['comparison']};
+      const mapped={handle:'mapped',revision_id:'r',artifact_type:'analysis_figure',
+        figure:{...comparisonFigure,label_policy:'explicit_harmonized_labels',caption:'Harmonized-label view; original labels preserved.'}};
+      const strict={handle:'strict',revision_id:'r',artifact_type:'analysis_figure',figure:comparisonFigure};
+      const captions=resultFigureGallery([mapped,strict]).nodes.filter(n=>n.tag==='figure')
+        .map(n=>n.nodes.find(x=>x.tag==='figcaption').textContent);
+      return captions;
+    ''')
+    assert result[0]=='Harmonized-label view; original labels preserved.'
+    assert 'without remapping' in result[1]

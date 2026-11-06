@@ -27,9 +27,13 @@ CAPTIONS = {
 
 def _projection(step_id, kind, sources, value, metadata, *, width=10, height=6):
     digest = v._domain_digest('agent.annotation-figure.'+kind+'.v1', value)
+    caption = CAPTIONS[kind]
+    if metadata.get('label_policy') == 'explicit_harmonized_labels':
+        caption = caption.replace('without label mapping', 'using explicit user label mappings')
+        caption += ' Harmonized-label view; original labels, exact-label metrics and side-specific rules remain in downloads. Merging categories changes the partitions; agreement is not biological validation.'
     return v._FigureProjection(kind+'-'+step_id,kind,kind+'-'+step_id+'.png',(step_id,),tuple(sources),digest,
         int(width*v._DPI),int(height*v._DPI),v._DPI,
-        dict(metadata,caption=CAPTIONS[kind],projection_version=2),v._ScientificPanelData(kind,value))
+        dict(metadata,caption=caption,projection_version=2),v._ScientificPanelData(kind,value))
 
 
 def _sha(source):
@@ -91,18 +95,21 @@ def projections(snapshot):
             pins={Path(p['path']).name:p for p in manifest['files']}
             report=comparison.read(pins['comparison.json']['path'],pins['comparison.json']['sha256'])
             overlay=comparison.read(pins['overlay.json']['path'],pins['overlay.json']['sha256'])
+            mapped = report['summary']['label_policy'] == 'explicit_harmonized_labels'
+            policy = dict(label_policy='explicit_harmonized_labels') if mapped else {}
+            confusion = dict(report['confusion'], **policy)
             sources=[source]+[dict(producing_step_id=sid,tool_name=tool,artifact_kind='cell_label_comparison_data',
                 artifact_path=p['path'],integrity=dict(sha256=p['sha256'])) for p in (pins['comparison.json'],pins['overlay.json'])]
             if report['confusion']['rows']:
-                result.append(_projection(sid,'reference_confusion',sources,report['confusion'],
-                    dict(evaluated_cells=report['summary']['evaluated_cells'],raw_counts=True),
+                result.append(_projection(sid,'reference_confusion',sources,confusion,
+                    dict(evaluated_cells=report['summary']['evaluated_cells'],raw_counts=True, **policy),
                     width=min(20,max(8,3+.4*len(report['confusion']['columns']))),height=min(20,max(7,3+.4*len(report['confusion']['rows'])))))
             result.append(_projection(sid,'reference_composition',sources,report['composition'],
-                dict(matched_cells=report['summary']['matched_cells']),height=min(16,max(6,.25*len(report['composition'])+2))))
+                dict(matched_cells=report['summary']['matched_cells'], **policy),height=min(16,max(6,.25*len(report['composition'])+2))))
             if overlay['available']:
                 result.append(_projection(sid,'reference_umap',sources,overlay,
                     dict(coordinate_reused=True,matched_cells=report['summary']['matched_cells'],
-                        evaluated_cells=report['summary']['evaluated_cells'],n_cells=report['summary']['n_prediction_cells']),width=16,height=6))
+                        evaluated_cells=report['summary']['evaluated_cells'],n_cells=report['summary']['n_prediction_cells'], **policy),width=16,height=6))
     return result
 
 
@@ -165,8 +172,9 @@ def render(figure,data):
             ax=figure.add_axes((.08,.12,.6,.78));_scatter(ax,xy,value['labels'],palette,'MAESTRO predicted cell types')
         else:
             axes=figure.subplots(1,3);figure.subplots_adjust(left=.04,right=.99,bottom=.29,top=.87,wspace=.25)
-            _scatter(axes[0],xy,value['predicted'],palette,'Fixed predictions')
-            _scatter(axes[1],xy,value['reference'],palette,'Uploaded reference labels')
+            mapped = value.get('label_policy') == 'explicit_harmonized_labels'
+            _scatter(axes[0],xy,value['predicted'],palette,'Mapped predictions' if mapped else 'Fixed predictions')
+            _scatter(axes[1],xy,value['reference'],palette,'Mapped reference labels' if mapped else 'Uploaded reference labels')
             labels=[None if p is None or r is None or not m else 'Agreement' if p==r else 'Disagreement'
                 for p,r,m in zip(value['predicted'],value['reference'],value['matched'],strict=True)]
             agreement={'Agreement':'#228833','Disagreement':'#cc6677',None:'#bdbdbd'}
@@ -186,7 +194,8 @@ def render(figure,data):
         preview=counts[:visible_rows,selected]
         v._render_confusion(figure,v._ConfusionData(tuple(rows[:visible_rows]),
             tuple(columns[i] if columns[i] is not None else 'Unassigned (missing)' for i in selected),
-            preview,preview.size<=400),row_axis="Reference annotation",title="Fixed-label comparison (raw counts)")
+            preview,preview.size<=400),row_axis="Reference annotation",
+            title="Harmonized-label comparison (raw counts)" if value.get('label_policy') == 'explicit_harmonized_labels' else "Fixed-label comparison (raw counts)")
         if visible_rows<len(rows) or visible_columns<len(columns)-1:
             figure.text(.04,.02,f'Showing {visible_rows}/{len(rows)} reference and {visible_columns}/{len(columns)-1} predicted classes plus missing; {int(preview.sum())}/{int(counts.sum())} evaluated cells. Full confusion in downloads.',fontsize=8)
     elif kind=='reference_composition':

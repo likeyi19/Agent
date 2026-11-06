@@ -133,6 +133,13 @@ def clarification_text(clarification):
         names = {'parent':'parent version', 'previous_active':'previously active version'}
         return 'Do you mean the ' + ' or the '.join(names[c] for c in clarification.choices) + '?'
     if clarification.reason in {'missing_parameter_value', 'ambiguous_parameter'}:
+        mapping_sides = {'compare_cell_annotations.prediction_mapping': 'predictions',
+                         'compare_cell_annotations.reference_mapping': 'reference'}
+        if clarification.choices and set(clarification.choices) <= mapping_sides.keys():
+            sides = ' and '.join(mapping_sides[name] for name in clarification.choices)
+            return ('Which original labels in the ' + sides + ' should map to which common categories? '
+                'Describe each correspondence in your own words, including its source side. '
+                'Unspecified labels will stay unchanged; the original comparison will be preserved.')
         if not clarification.choices:
             return 'Please state which scientific parameter you want to use and its value.'
         if clarification.reason == 'ambiguous_parameter' and any('.' in name for name in clarification.choices):

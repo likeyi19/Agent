@@ -558,7 +558,8 @@ def _verified_visualization_snapshot(
                 width_px=width,
                 height_px=height,
                 dpi=dpi,
-                caption=_FIGURE_CAPTIONS[str(figure_kind)],
+                caption=(raw['presentation']['caption'] if raw.get('presentation', {}).get('label_policy') == 'explicit_harmonized_labels'
+                         else _FIGURE_CAPTIONS[str(figure_kind)]),
             )
         )
     return _VisualizationSnapshot(
@@ -853,7 +854,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
-    **{k:k.replace("_", " ").capitalize() for k in _CELL_COMPARISON.FACT_FIELDS},
+    **{k:k.replace("_", " ").capitalize() for k in (*_CELL_COMPARISON.FACT_FIELDS, *_CELL_COMPARISON.EXTENDED_FACT_FIELDS)},
     "function_name": "Native function",
     "unassigned_prediction_cells": "Missing predictions among evaluated cells",
     "reference_label_missing_cells": "Matched cells missing reference labels",
@@ -1251,6 +1252,9 @@ def report_fact_fields(tool_name, raw_facts):
     gain no new meaning; optional extensions are selected by their recorded keys.
     """
     fields = _REPORT_FIELDS.get(tool_name, ())
+    if tool_name == _CELL_COMPARISON.TOOL and 'vocabulary' in raw_facts:
+        fields = ('label_policy', *_CELL_COMPARISON.EXTENDED_FACT_FIELDS,
+                  *(k for k in fields if k != 'label_policy'))
     if tool_name == 'run_macs3' and 'result_files' in raw_facts:
         fields = (*fields, 'result_files')
     if tool_name == 'run_motifmatchr' and 'n_positions' in raw_facts:

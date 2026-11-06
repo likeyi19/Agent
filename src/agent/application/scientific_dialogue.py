@@ -316,6 +316,14 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
             _group_evidence(sessions, state.session_id, group, views=views)
         result['result_groups'].append(dict(description, **{k:canonical[k] for k in
             ('is_active', 'evidence_status')}))
+        if canonical['tool'] == 'compare_cell_annotations':
+            vocabulary = next((f.value for f in views[group['canonical']['handle']].facts
+                               if f.field == 'vocabulary' and f.status == 'available'), None)
+            if vocabulary is not None:
+                # Exact accepted names support explicit parameter selection, not
+                # biological equivalence or an inferred mapping from confusion counts.
+                result['result_groups'][-1]['label_vocabulary'] = {
+                    k:_serialize(vocabulary[k]) for k in ('prediction', 'reference', 'categories_omitted')}
         from .dialogue_evidence import DetailRequest, detail_sections
         if 'categorical_fields' in detail_sections(canonical['tool']):
             item = group['canonical']
@@ -694,6 +702,10 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 if independent.status == 'available':
                     detail_facts = independent.detail
         def leaves(key, val, pointer, depth=0):
+            if (view.source.tool_name == 'compare_cell_annotations'
+                    and key in ('vocabulary', 'mapping', 'original_metrics', 'metric_denominators')):
+                yield key, val, pointer
+                return
             if key in ('training_configuration', 'transfer_assessment', 'species',
                        'parameters', 'embedding_parameters'):
                 yield key, val, pointer

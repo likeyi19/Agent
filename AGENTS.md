@@ -1044,6 +1044,42 @@ earlier no-commit statements describe the pre-closeout stages. SRV-1B is bounded
 engineering completion; broader SRV-1 visualization/explanation work remains open,
 and the independent SRV-2C published-data benchmark is not started.
 
+SRV-2C Phase 0 extends this same comparison with optional explicit prediction/reference
+label mappings through ordinary conversation. Exact key/value spans, side-specific
+rules, unchanged unspecified/missing labels, original metrics and harmonized
+partition meanings stay with existing parameter, scientific publication, R5,
+figure and download owners. No ontology, inferred equivalence, second comparison
+engine or new Registry tool is introduced. New publications have a distinct science
+profile; historical strict publications and deterministic reports remain readable
+with their original identities. The
+[Phase 0 checkpoint](../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md)
+separates software qualification, genuine official OpenAI/Firefox one-sided mapping,
+checked downloads and a complete read-only explanation from failed live two-sided
+continuations. Those failures include omitted source roles and malformed proposals;
+bounded parser/rejection corrections do not qualify universal conversational
+reliability. Original scientific data and accepted strict results are preserved.
+The dated multi-turn addendum and final architecture review record the shared retained-field correction:
+explicitly retained observation columns can restore their exact accepted registered
+source roles through the captured Session candidates. Current explicit sources
+prevail; filenames and cell counts never establish correspondence. Genuine Firefox
+reference-only to two-sided many-to-one continuation now executes and produces checked
+metrics, figures and downloads without re-upload. Final review replaces a lossy
+tool/port dictionary with the existing full role list so repeated explicit sources
+remain distinct. The same successful plan compiles and passes admission for both
+historical requests #11/#12; no design cause for #11's Planner refusal is established.
+One bounded official OpenAI/Firefox confirmation also executes strict-result to
+two-sided mapping with #11's unchanged utterance. This does not erase the refusal or
+attribute later planning success to the unrelated role-cardinality fix.
+Two-result completion context exceeds the existing 32 KiB R5 bound; each exact
+result remains readable. Factual review and scientific owners are unchanged.
+The final decision is bounded CONDITIONAL GO for controlled explicit-mapping use
+and a reviewed evaluation baseline, not universal provider or biological qualification.
+The combined closeout confirms this bounded Phase 0 completion and authorizes one
+dedicated reviewed implementation commit and normal push. Earlier no-commit records
+describe the pre-closeout stages. The separate SRV-1/R5 context improvement follows
+in its own work unit and commit; SRV-1 remains open. The full PBMC10k/SRV-2C
+evaluation has not started.
+
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability
 remains method-specific; equal status never makes DHS64 and DeepPBMC scores or

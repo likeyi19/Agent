@@ -53,6 +53,25 @@ def test_explicit_repeated_sources_replay_and_match_without_step_order():
     assert parse_decision(json.dumps(wire), utterance='mouse').arguments == declarations
 
 
+@pytest.mark.parametrize('tool,argument', [('pca_embed_cells','n_components'),
+    ('transfer_cell_labels','reference_label_key')])
+def test_retained_settings_preserve_every_explicit_repeated_source_role(monkeypatch,tool,argument):
+    """A retained setting must not collapse two explicit calls of another tool."""
+    from agent.application import dialogue_execution as execution
+    registry, declarations, binding, plan, admitted, owner = example()
+    roles = tuple(InputRole(**dict(r)) for r in binding.roles)
+    current = SimpleNamespace(turn_id='current',snapshot=dict(dialogue=dict(results=[],outputs=[])),submission=None)
+    state = SimpleNamespace(interactions=(current,),turns=(),revisions=())
+    sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry),
+        _interaction_session_id='session',load=lambda _:state)
+    monkeypatch.setattr(execution,'captured_input_group',lambda *a,**k:binding)
+    actual = execution._retained_field_roles(sessions,current,
+        [dict(tool=tool,argument=argument,result='g0')],roles)
+    assert actual == roles
+    assert group_role_inputs(binding,[asdict(r) for r in actual],registry) == dict(binding.execution_inputs)
+    _check_parameter_plan(registry,plan,dict(admitted,roles=[asdict(r) for r in actual]),())
+
+
 @pytest.mark.parametrize('mutation', ['unscoped', 'missing_scope', 'duplicate_source', 'redirect', 'extra', 'wrong_value', 'missing_role'])
 def test_repeated_parameter_scope_rejects_ambiguity_and_substitution(mutation):
     registry, declarations, binding, plan, admitted, owner = example()

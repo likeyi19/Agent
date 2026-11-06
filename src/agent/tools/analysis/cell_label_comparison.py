@@ -5,6 +5,7 @@ or otherwise change predictions. Legacy transfer-confidence evaluation remains
 in annotation_evaluation with its original publication contract.
 """
 from collections import Counter
+from collections.abc import Mapping
 import csv
 from pathlib import Path
 
@@ -26,9 +27,12 @@ TOOL = 'compare_cell_annotations'
 KIND = 'cell_label_comparison'
 CONTRACT = 'cell-label-comparison.v1'
 POLICY = 'compare-cell-annotations-v1'
-PROFILE = digest(dict(contract=CONTRACT, identity='explicit_library_and_exact_cell_id',
+HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, identity='explicit_library_and_exact_cell_id',
     labels='exact_no_mapping', unassigned='included_in_accuracy_and_recall',
     macro_f1='union_of_observed_biological_labels', partitions='jointly_labeled_only'))
+PROFILE = digest(dict(contract=CONTRACT, base=HISTORICAL_PROFILE,
+    labels='explicit_side_scoped_simultaneous_string_mapping.v1', unspecified='unchanged',
+    originals='immutable_with_original_metrics', missing='never_mapped'))
 VERIFIER = dict(id='agent.cell-label-comparison', compatibility_version='1')
 LIMITATIONS = ('Reference annotations are supplied research evidence, not infallible biological truth. '
     'Library identity is explicitly declared or supplied in selected metadata columns, not independently verified. '
@@ -43,6 +47,7 @@ FACT_FIELDS = ('n_prediction_cells', 'n_reference_cells', 'matched_cells', 'pred
     'evaluation_coverage', 'assigned_accuracy', 'accuracy', 'macro_f1', 'balanced_accuracy',
     'ari', 'nmi', 'partition_cells', 'identity_basis', 'label_policy', 'per_class',
     'classes_omitted', 'composition', 'composition_omitted', 'umap_available', 'software_versions', 'limitations')
+EXTENDED_FACT_FIELDS = ('vocabulary', 'mapping', 'original_metrics', 'metric_denominators')
 RESULT_FIELDS = dict(status=(str,), contract_version=(str,), manifest_path=(str,), manifest_sha256=(str,),
     comparison_path=(str,), comparison_sha256=(str,), aligned_path=(str,), aligned_sha256=(str,))
 for _k in FACT_FIELDS:
@@ -55,7 +60,7 @@ for _k in FACT_FIELDS:
         (bool,) if _k=='umap_available' else (str,))
 DELIVERY_FILES = {
     'comparison.json': ('Comparison metrics, confusion counts, coverage and method', 'application/json'),
-    'aligned-labels.tsv': ('Exact library/cell join, fixed labels and missing coverage', 'text/tab-separated-values'),
+    'aligned-labels.tsv': ('Exact library/cell join, original labels, optional mapped labels and missing coverage', 'text/tab-separated-values'),
     'per-class.tsv': ('Per-class precision, recall, F1 and supported counts', 'text/tab-separated-values'),
     'composition.tsv': ('Full prediction and reference label composition', 'text/tab-separated-values'),
     'overlay.json': ('UMAP overlay availability; coordinates and aligned labels when available', 'application/json'),
@@ -197,6 +202,76 @@ def _overlay(args, prediction_pin, ids, labels, reference, matched, annotation_p
         source_sha256=pin['sha256'], correspondence='exact_original_source_and_ordered_cells'), [pin]
 
 
+def _metric_data(predicted, truth):
+    """The same metric definitions for exact and explicitly mapped partitions."""
+    evaluated = [i for i, r in enumerate(truth) if r is not None]
+    classes = sorted({truth[k] for k in evaluated} | {predicted[k] for k in evaluated if predicted[k] is not None})
+    if len(classes) > MAX_CLASSES:
+        raise ValueError('Comparison exceeds the 256-class presentation bound')
+    codes = {c:i for i,c in enumerate(classes)}
+    y = np.asarray([codes[truth[k]] for k in evaluated], dtype=int)
+    p = np.asarray([codes.get(predicted[k], -1) for k in evaluated], dtype=int)
+    assigned = p >= 0
+    per_class = []
+    confusion = np.zeros((len(classes), len(classes)+1), dtype=np.int64)
+    if len(y):
+        precision, recall, f1, support = precision_recall_fscore_support(y, p, labels=list(range(len(classes))), zero_division=0)
+        for i, c in enumerate(classes):
+            per_class.append(dict(label=c, precision=float(precision[i]), recall=float(recall[i]),
+                f1=float(f1[i]), reference_cells=int(support[i]), predicted_cells=int((p==i).sum()),
+                correct_cells=int(((p==i)&(y==i)).sum())))
+        np.add.at(confusion, (y, np.where(assigned, p, len(classes))), 1)
+        accuracy = float(accuracy_score(y, p))
+        macro = float(f1_score(y, p, labels=list(range(len(classes))), average='macro', zero_division=0))
+        balanced = float(np.mean(recall[support>0]))
+    else:
+        accuracy = macro = balanced = None
+    partition = int(assigned.sum())
+    identifiable = partition > 1 and len(set(y[assigned])) > 1 and len(set(p[assigned])) > 1
+    metrics = dict(evaluated_cells=len(y), unassigned_prediction_cells=int((~assigned).sum()),
+        accuracy=accuracy, macro_f1=macro, balanced_accuracy=balanced,
+        assigned_accuracy=float(accuracy_score(y[assigned],p[assigned])) if partition else None,
+        partition_cells=partition, ari=float(adjusted_rand_score(y[assigned],p[assigned])) if identifiable else None,
+        nmi=float(normalized_mutual_info_score(y[assigned],p[assigned],average_method='arithmetic')) if identifiable else None)
+    return metrics, per_class, dict(rows=classes, columns=classes+[None], counts=confusion.tolist())
+
+
+def _mapping(values, rules, side):
+    if not isinstance(rules, Mapping) or not 1 <= len(rules) <= 32:
+        raise ValueError(side + ' mapping requires 1–32 explicit original-label to common-label rules')
+    vocabulary = {v for v in values if v is not None}
+    for source, target in rules.items():
+        _text(source, 'Original mapping label'); _text(target, 'Common mapping label')
+        if source.casefold() in {'unassigned', 'unknown', 'unlabeled', 'unlabelled'} or target.casefold() in {'unassigned', 'unknown', 'unlabeled', 'unlabelled'}:
+            raise ValueError('Missing/unassigned categories cannot be mapped to or from a biological class')
+        if source not in vocabulary:
+            raise ValueError(side + ' mapping label does not exist: ' + source + '; supply an exact original label')
+    # Simultaneous substitution, never recursive/chained or cell-dependent.
+    mapped = [rules.get(v, v) if v is not None else None for v in values]
+    labeled = sum(v is not None for v in values)
+    covered = sum(v in rules for v in values if v is not None)
+    return mapped, dict(rules=[dict(original_label=k, common_label=v) for k,v in rules.items()],
+        rule_source='explicit_request_parameter', total_cells=len(values), labeled_cells=labeled,
+        missing_cells=len(values)-labeled, rule_covered_cells=covered,
+        changed_cells=sum(a != b for a,b in zip(values, mapped)),
+        rule_coverage_labeled=covered/labeled if labeled else None,
+        unmapped_categories=sorted(vocabulary-set(rules)), unmapped_labeled_cells=labeled-covered,
+        mapped_vocabulary=sorted({v for v in mapped if v is not None}))
+
+
+def _vocabulary(predicted, truth):
+    p, r = {v for v in predicted if v is not None}, {v for v in truth if v is not None}
+    if len(p | r) > MAX_CLASSES:
+        raise ValueError('Comparison exceeds the 256-class bound across full sources')
+    return dict(prediction=sorted(p), reference=sorted(r), prediction_only_names=sorted(p-r),
+        reference_only_names=sorted(r-p), category_names_differ=p != r)
+
+
+def _bounded_categories(record):
+    return {**record, **{k:v[:50] for k,v in record.items() if isinstance(v,list)},
+        'categories_omitted':{k:max(0,len(v)-50) for k,v in record.items() if isinstance(v,list)}}
+
+
 def compare(args):
     sources = [_pin(args['prediction_path'], args.get('prediction_sha256')),
                _pin(args['reference_path'], args.get('reference_sha256'))]
@@ -220,6 +295,28 @@ def compare(args):
     matches = [k for k in left if k in ri]
     if not matches:
         raise ValueError('No cells match exact declared library/cell identities')
+    original_predicted, original_truth = predicted, truth
+    vocabulary = _vocabulary(predicted, truth)
+    original_metrics, original_per_class, original_confusion = _metric_data(
+        [predicted[li[k]] for k in matches], [truth[ri[k]] for k in matches])
+    mapping = {}
+    for side, values in (('prediction', predicted), ('reference', truth)):
+        rules = args.get(side+'_mapping')
+        if rules is not None:
+            mapped, coverage = _mapping(values, rules, side)
+            mapping[side] = coverage
+            if side == 'prediction': predicted = mapped
+            else: truth = mapped
+        else:
+            labeled = sum(v is not None for v in values)
+            mapping[side] = dict(rules=[], rule_source='none', total_cells=len(values),
+                labeled_cells=labeled, missing_cells=len(values)-labeled, rule_covered_cells=0,
+                changed_cells=0, rule_coverage_labeled=0.0 if labeled else None,
+                unmapped_categories=sorted({v for v in values if v is not None}),
+                unmapped_labeled_cells=labeled, mapped_vocabulary=sorted({v for v in values if v is not None}))
+    harmonized = any(side+'_mapping' in args for side in ('prediction','reference'))
+    mapping.update(applied=harmonized, unspecified_labels='unchanged', substitution='simultaneous_once',
+        coverage_population='full_source_each_side; metric denominators are separately recorded')
     reference = [truth[ri[k]] if k in ri else None for k in left]
     matched = [k in ri for k in left]
     aligned = []
@@ -228,30 +325,17 @@ def compare(args):
         aligned.append(dict(library_id=k[0], cell_id=k[1], prediction_present=k in li, reference_present=k in ri,
             predicted_label=p, reference_label=r, evaluated=k in li and k in ri and r is not None,
             agreement=None if p is None or r is None or k not in li or k not in ri else p==r))
-    evaluated = [k for k in matches if truth[ri[k]] is not None]
-    classes = sorted({truth[ri[k]] for k in evaluated} | {predicted[li[k]] for k in evaluated if predicted[li[k]] is not None})
-    if len(classes) > MAX_CLASSES:
-        raise ValueError('Comparison exceeds the 256-class presentation bound')
-    codes = {c:i for i,c in enumerate(classes)}
-    y = np.asarray([codes[truth[ri[k]]] for k in evaluated], dtype=int)
-    p = np.asarray([codes.get(predicted[li[k]], -1) for k in evaluated], dtype=int)
-    assigned = p >= 0
-    per_class = []
-    confusion = np.zeros((len(classes), len(classes)+1), dtype=np.int64)
-    if len(y):
-        precision, recall, f1, support = precision_recall_fscore_support(y, p, labels=list(range(len(classes))), zero_division=0)
-        for i, c in enumerate(classes):
-            per_class.append(dict(label=c, precision=float(precision[i]), recall=float(recall[i]),
-                f1=float(f1[i]), reference_cells=int(support[i]), predicted_cells=int((p==i).sum()),
-                correct_cells=int(((p==i)&(y==i)).sum())))
-        np.add.at(confusion, (y, np.where(assigned, p, len(classes))), 1)
-        accuracy = float(accuracy_score(y, p))
-        macro = float(f1_score(y, p, labels=list(range(len(classes))), average='macro', zero_division=0))
-        balanced = float(np.mean(recall[support>0]))
-    else:
-        accuracy = macro = balanced = None
-    partition = int(assigned.sum())
-    identifiable = partition > 1 and len(set(y[assigned])) > 1 and len(set(p[assigned])) > 1
+        if harmonized:
+            # Keep original download column meanings; mapped values are additional.
+            row = aligned[-1]
+            row['mapped_predicted_label'], row['mapped_reference_label'] = p, r
+            row['mapped_agreement'] = row['agreement']
+            op = original_predicted[li[k]] if k in li else None
+            ot = original_truth[ri[k]] if k in ri else None
+            row.update(predicted_label=op, reference_label=ot,
+                agreement=None if op is None or ot is None or k not in li or k not in ri else op==ot)
+    metrics, per_class, confusion = (_metric_data([predicted[li[k]] for k in matches], [truth[ri[k]] for k in matches])
+        if harmonized else (original_metrics, original_per_class, original_confusion))
     composition = []
     for name, values in (('prediction', predicted), ('reference', truth)):
         for label, count in sorted(Counter(values).items(), key=lambda x:(x[0] is None,x[0] or '')):
@@ -261,27 +345,43 @@ def compare(args):
         raise ValueError('Comparison exceeds the 256-class bound across full sources')
     annotation_parent, annotation_sources = _annotation_parent(args,sources[0])
     overlay, extra_sources = _overlay(args, sources[0], axis, predicted, reference, matched, annotation_parent, category_order)
+    if harmonized:
+        overlay['label_policy'] = 'explicit_harmonized_labels'
     sources += annotation_sources + extra_sources
     summary = dict(status='success', contract_version=CONTRACT,
         n_prediction_cells=len(left), n_reference_cells=len(right), matched_cells=len(matches),
         prediction_only_cells=len(left)-len(matches), reference_only_cells=len(right)-len(matches),
         matched_fraction_prediction=len(matches)/len(left), matched_fraction_reference=len(matches)/len(right),
-        evaluated_cells=len(y), reference_label_missing_cells=len(matches)-len(y),
-        unassigned_prediction_cells=int((~assigned).sum()), evaluation_coverage=len(y)/len(left),
-        accuracy=accuracy, macro_f1=macro, balanced_accuracy=balanced,
-        assigned_accuracy=float(accuracy_score(y[assigned],p[assigned])) if partition else None,
-        partition_cells=partition, ari=float(adjusted_rand_score(y[assigned],p[assigned])) if identifiable else None,
-        nmi=float(normalized_mutual_info_score(y[assigned],p[assigned],average_method='arithmetic')) if identifiable else None,
+        reference_label_missing_cells=len(matches)-metrics['evaluated_cells'],
+        evaluation_coverage=metrics['evaluated_cells']/len(left), **metrics,
         identity_basis='declared_shared_library' if shared is not None else 'selected_library_columns',
-        label_policy='exact_labels_no_mapping', per_class=per_class[:50], classes_omitted=max(0,len(per_class)-50),
+        label_policy='explicit_harmonized_labels' if harmonized else 'exact_labels_no_mapping', per_class=per_class[:50], classes_omitted=max(0,len(per_class)-50),
         composition=composition[:50], composition_omitted=max(0,len(composition)-50), umap_available=overlay['available'],
-        software_versions={'scikit_learn':sklearn_version}, limitations=LIMITATIONS)
+        software_versions={'scikit_learn':sklearn_version}, limitations=(LIMITATIONS if not harmonized else
+            LIMITATIONS.replace(' or label mapping', '') + ' Explicit user mappings rename/merge categories without validating biological equivalence. '
+            'Metrics describe harmonized labels; ARI/NMI describe mapped partitions, not original clustering. '
+            'Original exact-label metrics and original labels are preserved separately.'))
+    denominators = dict(accuracy_cells=metrics['evaluated_cells'], assigned_accuracy_cells=metrics['partition_cells'],
+        partition_cells=metrics['partition_cells'], macro_f1_classes=len(per_class),
+        balanced_accuracy_reference_classes=sum(c['reference_cells']>0 for c in per_class),
+        original_macro_f1_classes=len({original_truth[ri[k]] for k in matches if original_truth[ri[k]] is not None}
+            | {original_predicted[li[k]] for k in matches if original_truth[ri[k]] is not None and original_predicted[li[k]] is not None}),
+        original_balanced_accuracy_reference_classes=sum(c['reference_cells']>0 for c in original_per_class),
+        reference_missing_excluded_cells=summary['reference_label_missing_cells'],
+        missing_prediction_policy='included_as_errors', zero_division=0,
+        partition_scope='mapped_partitions' if harmonized else 'original_label_partitions')
+    summary.update(vocabulary=_bounded_categories(vocabulary),
+        mapping={**mapping, **{side:_bounded_categories(mapping[side]) for side in ('prediction','reference')}},
+        original_metrics=dict(label_policy='exact_labels_no_mapping', **original_metrics), metric_denominators=denominators)
     report = dict(schema=CONTRACT, summary=summary, per_class=per_class, composition=composition,
-        confusion=dict(rows=classes, columns=classes+[None], counts=confusion.tolist()),
+        confusion=confusion, vocabulary=vocabulary, mapping=mapping,
         methods=dict(identity_basis=summary['identity_basis'], label_policy=summary['label_policy'],
             sample_declaration=shared, prediction_sample_key=pk, reference_sample_key=rk,
             prediction_label_key=args['prediction_label_key'], reference_label_key=args['reference_label_key']),
         sources=sources)
+    if harmonized:
+        report['original_comparison'] = dict(metrics=original_metrics, per_class=original_per_class,
+            confusion=original_confusion, label_policy='exact_labels_no_mapping')
     if file_closure(r['path'] for r in sources) != sorted({r['path']:r for r in sources}.values(),key=lambda r:r['path']):
         raise AuthorityError('Comparison source changed while reading')
     return summary, report, aligned, overlay, sources
@@ -310,13 +410,14 @@ def execute(values, execution_identity=None):
 def compare_cell_annotations(prediction_path, reference_path, prediction_label_key, reference_label_key,
     output_dir, shared_library_id=None, prediction_sample_key=None, reference_sample_key=None,
     prediction_cell_key=None, reference_cell_key=None, prediction_sha256=None, reference_sha256=None,
-    umap_path=None, umap_sha256=None, annotation_manifest_path=None, annotation_manifest_sha256=None):
+    umap_path=None, umap_sha256=None, annotation_manifest_path=None, annotation_manifest_sha256=None,
+    prediction_mapping=None, reference_mapping=None):
     return execute({k:v for k,v in locals().items() if v is not None})
 
 
 publication = NativePublication(tool=TOOL, kind=KIND, contract=CONTRACT, profile=PROFILE,
     verifier=VERIFIER, files=tuple(DELIVERY_FILES), arguments=arguments,
-    outputs={'comparison':'comparison.json', 'aligned':'aligned-labels.tsv'})
+    outputs={'comparison':'comparison.json', 'aligned':'aligned-labels.tsv'}, historical_profiles=(HISTORICAL_PROFILE,))
 load, result = publication.load, publication.result
 verify_publication, verify_result = publication.verify_publication, publication.verify_result
 recover = publication.recover

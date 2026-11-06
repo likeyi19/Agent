@@ -179,6 +179,7 @@ class ArgumentPlanningSemantics:
     conversational_exact_string: bool = False
     conversational_json_object: bool = False
     conversational_members: tuple[tuple[str, str], ...] = ()
+    conversational_string_mapping: bool = False
     observation_source: str | None = None
 
     def __post_init__(self) -> None:
@@ -217,6 +218,10 @@ class ArgumentPlanningSemantics:
                 or self.conversational_choice or self.conversational_exact_string or self.planner_choice
                 or self.observation_source or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
             raise ValueError('JSON objects require a direct scientific declaration.')
+        if (type(self.conversational_string_mapping) is not bool
+                or self.conversational_string_mapping and (
+                    not self.conversational_json_object or self.conversational_members)):
+            raise ValueError('String mappings require a JSON argument without fixed members.')
         # Catalog members are the union across a package's functions, not the
         # number of assignments authorized in one conversational declaration.
         if (type(self.conversational_members) is not tuple or len(self.conversational_members) > 128
@@ -1832,6 +1837,7 @@ def _planning_argument(
     conversational_exact_string: bool = False,
     conversational_json_object: bool = False,
     conversational_members: tuple[tuple[str, str], ...] = (),
+    conversational_string_mapping: bool = False,
     observation_source: str | None = None,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
@@ -1849,6 +1855,7 @@ def _planning_argument(
             conversational_exact_string=conversational_exact_string,
             conversational_json_object=conversational_json_object,
             conversational_members=conversational_members,
+            conversational_string_mapping=conversational_string_mapping,
             observation_source=observation_source,
             provenance_role=provenance,
             conditional_note=conditional_note,

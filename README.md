@@ -38,6 +38,12 @@ matching, coverage, metrics and reusable UMAP overlays (46 Registry tools).
 See the [SRV-1B report](../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
 for bounded official OpenAI Firefox acceptance, genuine native figures, simulated
 reference scope and remaining explanatory-prose/visualization limitations.
+Explicit user label mappings can now extend this same comparison operation through
+ordinary conversation. Original labels and exact-label metrics remain separate
+from harmonized-label metrics; unknown correspondences are not inferred. See the
+[SRV guide](docs/guides/scientific-results-and-evaluation.md) and
+[SRV-2C Phase 0 checkpoint](../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md).
+The full published-data evaluation has not started.
 
 The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
 records its then-current 27-tool inventory, genuine replicated differential-accessibility

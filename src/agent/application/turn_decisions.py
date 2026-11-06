@@ -140,6 +140,21 @@ class ArgumentMember:
 
 
 @dataclass(frozen=True)
+class StringMappingMember(ArgumentMember):
+    """Both a user-selected key and its value have exact utterance spans."""
+
+    name_start: int
+    name_end: int
+
+    def __post_init__(self):
+        ScopedArgument('member', 'value', self.literal, self.start, self.end)
+        if (type(self.name) is not str or not 0 < len(self.name) <= 512 or self.kind != 'string'
+                or type(self.name_start) is not int or type(self.name_end) is not int
+                or not 0 <= self.name_start < self.name_end <= 4096):
+            raise ValueError('Invalid grounded string mapping key.')
+
+
+@dataclass(frozen=True)
 class StructuredArgument(ScopedArgument):
     """An ordinary scientific declaration with individually grounded members."""
 
@@ -149,6 +164,8 @@ class StructuredArgument(ScopedArgument):
         super().__post_init__()
         if (type(self.members) is not tuple or not 1 <= len(self.members) <= 32
                 or any(not isinstance(m, ArgumentMember) or not self.start <= m.start < m.end <= self.end
+                       for m in self.members)
+                or any(isinstance(m, StringMappingMember) and not self.start <= m.name_start < m.name_end <= self.end
                        for m in self.members)
                 or len({m.name for m in self.members}) != len(self.members)):
             raise ValueError('Invalid or conflicting structured argument members.')
@@ -759,7 +776,8 @@ def _scientific_arguments(value):
         if 'members' in item:
             if type(item['members']) not in (list, tuple):
                 raise IntentError('invalid_decision')
-            item = dict(item, members=tuple(ArgumentMember(**m) for m in item['members']))
+            item = dict(item, members=tuple((StringMappingMember if 'name_start' in m else ArgumentMember)(**m)
+                                           for m in item['members']))
         result.append(cls(**item))
     return tuple(result)
 
@@ -829,7 +847,7 @@ def _numeric_token_span(text, start, end, *, legacy_modifier=False):
     return True
 
 
-def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
+def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _string_literal=False):
     """Locate provider-selected text; persisted declarations remain strict spans.
 
     Association belongs to the interpreter. An exact context quote can distinguish
@@ -846,16 +864,23 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
             raise IntentError('invalid_decision')
         grounded = []
         for member in value['members']:
-            _shape(member, ('name', 'kind', 'literal', 'evidence'))
+            keyed = 'name_evidence' in member
+            _shape(member, ('name', 'kind', 'literal', 'evidence') + (('name_evidence',) if keyed else ()))
             span = _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
-                literal=member['literal'], evidence=member['evidence']), utterance)
-            grounded.append(dict(name=member['name'], kind=member['kind'],
-                **{k: span[k] for k in ('literal', 'start', 'end')}))
+                literal=member['literal'], evidence=member['evidence']), utterance, _string_literal=keyed)
+            result = dict(name=member['name'], kind=member['kind'],
+                **{k: span[k] for k in ('literal', 'start', 'end')})
+            if keyed:
+                key_span = _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
+                    literal=member['name'], evidence=member['name_evidence']), utterance, _string_literal=True)
+                result.update(name_start=key_span['start'], name_end=key_span['end'])
+            grounded.append(result)
         return grounded
     if 'members' in value and 'literal' not in value:
         _shape(value, tuple(k for k in keys if k != 'literal'))
         grounded = members()
-        start, end = min(m['start'] for m in grounded), max(m['end'] for m in grounded)
+        start = min(min(m['start'], m.get('name_start', m['start'])) for m in grounded)
+        end = max(max(m['end'], m.get('name_end', m['end'])) for m in grounded)
         return dict(value, members=grounded, literal=utterance[start:end], start=start, end=end)
     quoted = type(value) is dict and 'evidence' in value
     _shape(value, keys + (('evidence',) if quoted else ('start', 'end')))
@@ -870,9 +895,15 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
     evidence = value['evidence'] if quoted else literal
     if type(evidence) is not str or not 0 < len(evidence) <= 4096:
         raise IntentError('invalid_decision')
-    def unique(text, token, *, numeric=False):
+    def unique(text, token, *, numeric=False, string=False):
         matches = [m.start() for m in re.finditer('(?=' + re.escape(token) + ')', text)
                    if not numeric or _numeric_token_span(text, m.start(), m.start() + len(token))]
+        if string and len(matches) > 1:
+            quotes = {'"':'"', "'":"'", '`':'`', '“':'”', '‘':'’', '「':'」', '『':'』'}
+            quoted = [i for i in matches if i > 0 and i+len(token) < len(text)
+                      and quotes.get(text[i-1]) == text[i+len(token)]]
+            if quoted:
+                matches = quoted
         if not matches:
             raise IntentError('ungrounded_operand')
         if len(matches) != 1:
@@ -880,7 +911,8 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False):
         return matches[0]
     numeric = (not _legacy_numeric_grounding and re.fullmatch(
         r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:/[+-]?\d+)?', literal) is not None)
-    start = unique(utterance, evidence, numeric=numeric and evidence == literal) + unique(evidence, literal, numeric=numeric)
+    start = unique(utterance, evidence, numeric=numeric and evidence == literal) + unique(
+        evidence, literal, numeric=numeric, string=_string_literal)
     result = {key: value[key] for key in keys} | dict(start=start, end=start + len(literal))
     if 'members' in result:
         result['members'] = members()
@@ -916,10 +948,13 @@ def parse_decision(raw, *, utterance=None):
                     # Structural validation only; these placeholders never leave
                     # this parser or become admitted parameter evidence.
                     placeholder = {k: v for k, v in item.items() if k not in {'evidence', 'start', 'end'}} | dict(start=0, end=1)
+                    if placeholder.get('native_function', True) is None:
+                        placeholder.pop('native_function')
                     if 'members' in placeholder:
                         placeholder.setdefault('literal', '?')
                         placeholder['members'] = [dict(name=m['name'], kind=m['kind'], literal=m['literal'],
-                            start=0, end=1) for m in placeholder['members']]
+                            start=0, end=1, **(dict(name_start=0, name_end=1) if 'name_evidence' in m else {}))
+                            for m in placeholder['members']]
                     return placeholder
             if 'argument' in value:
                 value['argument'] = ground(value['argument'])
@@ -1086,7 +1121,9 @@ def decision_schema():
     definitions = {}
     identity = dict(tool=text(), argument=text())
     quote = dict(literal=text(4096), evidence=text(4096))
-    definitions['member'] = _object(dict(name=text(), kind=enum(('string', 'number', 'json')), **quote))
+    definitions['member'] = {'anyOf': [
+        _object(dict(name=text(), kind=enum(('string', 'number', 'json')), **quote)),
+        _object(dict(name=text(512), name_evidence=text(4096), kind=enum(('string',)), **quote))]}
     forms = [identity | quote, identity | quote | dict(value=text(80)),
              identity | dict(members=array(ref('member'), 32, 1))]
     variants = []
@@ -1266,6 +1303,8 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'execute_plan.arguments contains explicit declarations for canonical tool/argument pairs offered in dialogue.capabilities[tool].parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. For numeric parameters, literal is only the numeric token, without the parameter name or units: for example literal="2" with evidence="use 2 components". The evidence clause locates the token; do not put the whole clause into literal. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Different native functions of one package are distinct operations: native_function associates their parameters without requiring source/port. Use source and port only when the user associates a parameter with an operation directly consuming that exact captured original file, especially repeated instances of the same function on different files. Source/port asserts direct original-file consumption, not shared ancestry. In a multi-function workflow, bind its original input through roles and let the Planner compose derived dependencies; do not copy that original source scope onto downstream functions consuming newly produced results. This scopes direct-file values without constructing DAG steps. A value explicitly applying to both files needs one declaration per source; the same evidence clause may support both. Unscoped values never authorize repeated operations. source and port name captured attachments, not accepted result outputs. When consuming an accepted result, do not attach its producer\'s original file as a role or scope scalar choices to that file unless the requested consumer actually reads that file again. Use current accepted context and its exact offered result instead. Do not repeat the same tool/argument/source/port identity.',
             *(['For a json_object parameter, explicit JSON remains one verbatim literal without members. When reviewed members are offered, ordinary name=value or natural-language assignments use one declaration with members, each with its own exact literal/evidence. Do not supply an enclosing literal or invented JSON text; Agent builds the mapping from the grounded members. Select each canonical member name semantically from its description, never by an alias parser. kind=number preserves numeric tokens; kind=string copies the full string excluding quotation delimiters; kind=json copies an explicitly supplied JSON value (including arrays, booleans or null). Preserve explicit types, including invalid native values. Do not fabricate, repair or default omitted members. Do not combine contradictory assignments or explicit JSON and prose values that disagree; clarify ambiguous, conflicting or unrepresentable values. Source/port scope remains the same as any other scientific declaration.']
               if any(item.get('json_object') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
+            *(['For a string_mapping parameter, extract ordinary explicit key-to-value correspondences as members: name is the exact original string, name_evidence quotes its unique clause; kind=string, literal is the exact requested replacement and evidence locates that value. Group ALL rules for each side into ONE declaration for its mapping parameter, never separate declarations per original category. Both strings must occur verbatim in this utterance. Choose the prediction/reference parameter only from the user\'s explicit side association. Multiple original labels may share one target. Omitted labels stay unchanged. Never infer equivalence, split a category, map missing/unassigned labels into biological classes, or optimize agreement. result_groups.label_vocabulary offers exact accepted original categories with omission counts, not biological equivalences. Resolve original names against the selected comparison side; unknown names in a complete vocabulary or ambiguous/conflicting instructions require clarification. Missing correspondence uses execute_plan.missing_parameters for the requested prediction_mapping/reference_mapping sides, preserving the comparison objective. Do not run strict comparison as a substitute. For a later comparison request reuse its original exact scientific sources, label columns and library declaration from accepted context; mapping creates a new result.']
+              if any(item.get('string_mapping') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             *(['For an offered exact_string parameter without observation_source, literal is the explicitly supplied value (observation column, processing namespace or DNA sequence as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
               if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
             'For a parameter with observation_source and an offered H5AD source, declare source, value, mode, literal and evidence. source explicitly selects that tool\'s observation_source dataset port; a matching roles entry is optional and must agree. Other dataset ports still need their own explicit roles. In mode=offered, value is an exact field name from that source\'s source_fields row, while literal/evidence quotes the researcher\'s natural reference to supplied annotations or the field. The researcher need not spell an internal column name. In mode=literal, the researcher explicitly names the column: value must equal the exact verbatim literal, excluding surrounding quotation marks; this may identify a name outside the bounded metadata offer. Never change modes after a rejected binding, omit value, borrow another file\'s field, infer ground truth from field presence, or invent a column from a descriptive phrase. Native owners qualify the selected data and exact axes. With no supported source yet offered, only an explicitly supplied exact column-name literal may be retained in the existing source-free declaration form; otherwise preserve the objective and request its file roles without inventing a name.',
@@ -1373,12 +1412,21 @@ def admit_scientific_argument(declaration, utterance, argument_spec, *, observat
         try:
             if isinstance(declaration, StructuredArgument):
                 allowed = dict(argument_spec.planning.conversational_members)
-                if any(m.name not in allowed for m in declaration.members):
+                keyed = argument_spec.planning.conversational_string_mapping
+                if not keyed and any(m.name not in allowed for m in declaration.members):
                     raise ValueError('Unregistered structured member')
                 value = {}
                 for member in declaration.members:
                     if utterance[member.start:member.end] != member.literal:
                         raise IntentError('ungrounded_operand')
+                    if keyed:
+                        if (not isinstance(member, StringMappingMember) or member.kind != 'string'
+                                or utterance[member.name_start:member.name_end] != member.name):
+                            raise IntentError('ungrounded_operand')
+                        value[member.name] = member.literal
+                        continue
+                    if isinstance(member, StringMappingMember):
+                        raise ValueError('Mapping keys are not registered native members')
                     if member.kind == 'json':
                         value[member.name] = json.loads(member.literal, object_pairs_hook=pairs,
                                                        parse_constant=invalid_constant)

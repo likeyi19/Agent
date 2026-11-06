@@ -12,7 +12,7 @@ from scipy.io import mmwrite
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from agent.tools._native_process import run, r_environment
 from .sequence_prediction import arguments as _arguments, library, read, write
 from .sequence_reference import metadata_declarations, check_declarations

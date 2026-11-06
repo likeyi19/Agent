@@ -30,7 +30,7 @@ def passed(kind, identity):
 def accepted(app, tool, *, name='initial', overrides=None, extra_facts=None, copies=1, activate=True, arguments=None):
     state = app.sessions.load('session')
     request = AgentRequest(name, 'Synthetic accepted metadata fixture.', {})
-    spec = app.registry.get(tool)
+    spec = app.registry.accepted(tool)
     # Populate the real result shape; explicit probe values below carry the
     # assertions. These are metadata fixtures, not scientific-owner executions.
     default = {str: 'fixture', int: 2, float: 0.5, bool: True, dict: {}, list: []}

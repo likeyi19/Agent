@@ -7,7 +7,8 @@ import h5py
 import numpy as np
 
 from . import scatac_matrix_contract as m, external_matrix_contract as e
-from . import _cell_by_ccre_io as io, _matrix_bedtools as bed
+from . import _matrix_storage as io
+from agent.tools._file_identity import file_sha256
 from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots
 from .scatac_qc_reference import _fsync_dir
 
@@ -122,7 +123,7 @@ def build(args, output_dir, limits=io.MatrixLimits(), *, contract=e):
     ref, reference_snapshots = reference(args, limits, contract=contract)
     before = tuple(sorted(set(reference_snapshots + take_snapshots([source]))))
     if source.stat().st_size > limits.max_scratch_bytes: m.fail('MATRIX_RESOURCE_LIMIT')
-    if bed.file_sha(source) != args['source_sha256']: m.fail('MATRIX_SOURCE_MISMATCH')
+    if file_sha256(source) != args['source_sha256']: m.fail('MATRIX_SOURCE_MISMATCH')
     with tempfile.TemporaryDirectory(prefix='.external-matrix-', dir=root.parent) as scratch:
         budget = io.Budget(root.parent, limits)
         with io.database(Path(scratch)/'axes.sqlite', budget) as db, h5py.File(source,'r') as src:
@@ -154,7 +155,7 @@ def build(args, output_dir, limits=io.MatrixLimits(), *, contract=e):
             reference=dict(manifest_path=args['reference_manifest_path'],manifest_sha256=args['reference_manifest_sha256'],identity_sha256=ref.reference_identity_sha256,contract_version=contract.REFERENCE_CONTRACT),
             matrix_semantics=args['matrix_semantics'],shape=[n,p],**summary,ordered_cells_sha256=cells,
             ordered_feature_sha256=ref.ccre.ordered_feature_sha256,source_logical_matrix_sha256=summary['logical_matrix_sha256'],
-            matrix=dict(path='matrix.h5ad',sha256=bed.file_sha(payload),size_bytes=payload.stat().st_size,format='csr',dtype='int64'),readiness='matrix_available' if n else 'no_source_cells')
+            matrix=dict(path='matrix.h5ad',sha256=file_sha256(payload),size_bytes=payload.stat().st_size,format='csr',dtype='int64'),readiness='matrix_available' if n else 'no_source_cells')
         value['identity_sha256'] = contract.identity(value)
         raw = m.canonical(contract.validate(value)); sha = hashlib.sha256(raw).hexdigest()
         (root/'manifest.json').write_bytes(raw)

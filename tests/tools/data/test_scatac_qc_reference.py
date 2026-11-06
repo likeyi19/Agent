@@ -11,7 +11,6 @@ import pytest
 from agent.tools.data import scatac_reference as parent
 from agent.tools.data import scatac_qc_reference as q
 from agent.tools.data import scatac_qc_profile as science
-from agent.tools.data import _qc_bedtools as backend
 
 
 @pytest.fixture
@@ -124,8 +123,6 @@ def test_invalid_source(inputs,row):
 def test_no_production_parser_or_path_fallback(inputs):
     with pytest.raises(science.ScATACQCError,match='PARSER_UNQUALIFIED'):
         q.build_scatac_qc_reference_bundle(**(inputs|{'parser_profile':'gencode-gtf.v1'}))
-    with pytest.raises(science.ScATACQCError,match='BEDTOOLS_MISMATCH'):
-        backend.verify_qc_bedtools('bedtools')
 
 
 @pytest.mark.parametrize('resource',['annotation','tss','lineage','parent'])
@@ -164,64 +161,6 @@ def test_order_identity():
     assert q.ordered_tss_sha256(rows)!=q.ordered_tss_sha256([('chr2',2001,'+'),rows[1]])
     assert q.ordered_tss_sha256(rows)!=q.ordered_tss_sha256([('chr2',2000,'-'),rows[1]])
     with pytest.raises(science.ScATACQCError):q.ordered_tss_sha256([])
-
-
-@pytest.mark.parametrize('length,kind',[(1,'nucleosome_free'),(146,'nucleosome_free'),(147,'mononucleosomal'),
-    (293,'mononucleosomal'),(294,'longer'),(10**9,'longer')])
-def test_lengths(length,kind):assert science.fragment_length_bin(length)==kind
-
-
-@pytest.mark.parametrize('length',[0,-1,True,1.5,2**63])
-def test_bad_lengths(length):
-    with pytest.raises(science.ScATACQCError):science.fragment_length_bin(length)
-
-
-def test_ratios():
-    assert science.tss_enrichment(101,100,100)==(Fraction(1),None)
-    assert science.tss_enrichment(101,1,0)==(Fraction(200),None)
-    assert science.tss_enrichment(5,0,0)==(None,'ZERO_TSS_BACKGROUND')
-    assert science.nucleosome_signal(0,5)==(None,'ZERO_NUCLEOSOME_FREE')
-    assert science.nucleosome_signal(3,1)==(Fraction(1,3),None)
-    with pytest.raises(science.ScATACQCError):science.tss_enrichment(1,2**128-1,1)
-
-
-def _run(tmp_path,a,b,genome='chr2\t6001\nchr1\t6001\n'):
-    paths=[tmp_path/n for n in ('a.bed','b.bed','genome')]
-    for p,content in zip(paths,(a,b,genome)):p.write_text(content)
-    argv=backend.qc_intersection_argv('/usr/bin/bedtools',insertions_path=paths[0],windows_path=paths[1],genome_path=paths[2])
-    return subprocess.run(argv,env=backend.ENVIRONMENT,capture_output=True,text=True,check=False)
-
-
-@pytest.mark.parametrize('offset,hits',[(-2001,0),(-2000,1),(-1901,1),(-1900,0),(-51,0),(-50,1),
-    (0,1),(50,1),(51,0),(1900,0),(1901,1),(2000,1),(2001,0)])
-def test_real_bedtools_tss_boundaries(tmp_path,offset,hits):
-    windows=science.tss_windows(3000,6001)
-    b=''.join(f'chr2\t{a}\t{z}\tw{i}\n' for i,(a,z) in sorted(enumerate(windows),key=lambda x:x[1]))
-    p=3000+offset
-    r=_run(tmp_path,f'chr2\t{p}\t{p+1}\tendpoint\n',b)
-    assert r.returncode==0,r.stderr
-    assert len(r.stdout.splitlines())==hits
-
-
-def test_real_bedtools_multiplicity_order_and_repeatability(tmp_path):
-    a='chr2\t3000\t3001\ta\nchr1\t3000\t3001\tb\n'
-    b='chr2\t2950\t3051\tplus\nchr2\t2950\t3051\tminus\nchr2\t2999\t3100\tother_tss\nchr1\t2950\t3051\tlast\n'
-    r=_run(tmp_path,a,b)
-    assert r.returncode==0
-    assert [l.split('\t')[-1] for l in r.stdout.splitlines()]==['plus','minus','other_tss','last']
-    assert _run(tmp_path,a,b).stdout==r.stdout
-
-
-@pytest.mark.parametrize('a',['unknown\t1\t2\ta\n','chr2\t-1\t2\ta\n','chr2\tx\t2\ta\n',
-    'chr2\t20\t21\ta\nchr2\t10\t11\tb\n','chr1\t20\t21\ta\nchr2\t20\t21\tb\n'])
-def test_real_bedtools_rejects_invalid_sorted_inputs(tmp_path,a):
-    assert _run(tmp_path,a,'chr2\t10\t30\tw\nchr1\t10\t30\tw\n').returncode!=0
-
-
-def test_executable_mutation_before_execution(tmp_path,monkeypatch):
-    p=tmp_path/'bedtools';p.write_bytes(b'not the qualified binary');p.chmod(0o755)
-    monkeypatch.setattr(backend.subprocess,'run',lambda *a,**k:pytest.fail('unqualified execution'))
-    with pytest.raises(science.ScATACQCError,match='BEDTOOLS_MISMATCH'):backend.verify_qc_bedtools(p)
 
 
 def _gtf(inputs):
@@ -302,21 +241,6 @@ def test_bounds(inputs,monkeypatch,tmp_path):
     p=tmp_path/'large.json';p.write_bytes(b' '*11)
     with pytest.raises(science.ScATACQCError,match='MANIFEST_LIMIT'):
         q.load_scatac_qc_reference_bundle(p)
-
-
-def test_length_one_retains_both_endpoint_occurrences(tmp_path):
-    # A one-base fragment has two coincident weight-one insertions.
-    r=_run(tmp_path,'chr2\t3000\t3001\tleft\nchr2\t3000\t3001\tright\n',
-        'chr2\t2950\t3051\tcenter\n')
-    assert r.returncode==0
-    assert len(r.stdout.splitlines())==2
-
-
-def test_linked_runtime_mismatch(monkeypatch):
-    original=backend._sha
-    monkeypatch.setattr(backend,'_sha',lambda path: original(path) if str(path)=='/usr/bin/bedtools' else '0'*64)
-    with pytest.raises(science.ScATACQCError,match='BEDTOOLS_MISMATCH'):
-        backend.verify_qc_bedtools('/usr/bin/bedtools')
 
 
 @pytest.mark.parametrize('suffix', [

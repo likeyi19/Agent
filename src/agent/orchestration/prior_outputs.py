@@ -66,7 +66,7 @@ def references(plan):
 
 
 def source_port(registry, tool_name, name):
-    semantic = registry.get(tool_name).semantic_planning
+    semantic = registry.accepted(tool_name).semantic_planning
     ports = [] if semantic is None else [p for p in semantic.producer_ports if p.name == name]
     if len(ports) != 1:
         raise AuthorityError('Unknown historical semantic output port.')
@@ -80,12 +80,14 @@ def bind_output(store, registry, run_id, step_id, port_name):
         raise AuthorityError('Historical source run is not terminal successful.')
     stored, _, _ = _accepted_step(store, run_id, step_id)
     port = source_port(registry, stored.tool_name, port_name)
+    if any(stored.result.get(member.field_name) is None for member in port.members):
+        raise AuthorityError('The accepted native function did not produce this output family')
     if port.accepted_file_sha256_field is not None:
         from agent.schemas.verification_authority import digest
         # This is exact accepted-file reuse, not a schema-2 publication upgrade.
         # The consumer retains its native scientific eligibility checks.
         from agent.schemas.orchestration import _serialize
-        registry.get(stored.tool_name).result_contract.validate(_serialize(stored.result))
+        registry.accepted(stored.tool_name).result_contract.validate(_serialize(stored.result))
         sha = stored.result[port.accepted_file_sha256_field]
         path = stored.result[port.members[0].field_name]
         from pathlib import Path
@@ -144,13 +146,26 @@ def channel_for(binding, tool_name, target_port, registry):
     channels = [c for c in build_semantic_compiler_contract(registry).step_output_channels
                 if (c.producer_tool_name, c.source_port, c.consumer_tool_name, c.target_port)
                 == (binding.tool_name, binding.source_port, tool_name, target_port)]
+    if not channels and not registry.contains(binding.tool_name):
+        # Read-only historical producer metadata can link an accepted file to a
+        # current consumer. This does not register or revive its producer.
+        from .semantic_compiler import StepOutputChannelRule, ChannelMember
+        producer = source_port(registry, binding.tool_name, binding.source_port)
+        consumers = [port for port in registry.get(tool_name).semantic_planning.consumer_ports
+                     if port.name == target_port and binding.semantic_type in port.accepted_upstream_types]
+        fields = {member.name: member.field_name for member in producer.members}
+        if len(consumers) == 1 and all(member.name in fields for member in consumers[0].members):
+            consumer = consumers[0]
+            channels = [StepOutputChannelRule(binding.tool_name, binding.source_port, tool_name, target_port,
+                tuple(ChannelMember(fields[member.name], member.field_name) for member in consumer.members),
+                required_lineage=consumer.required_lineage)]
     if len(channels) != 1:
         raise AuthorityError('Historical output is incompatible with the consumer port.')
     channel = channels[0]
     if channel.required_lineage is not None:
         # A fixed owner-qualified source role survives acceptance. An unresolved
         # branch role still cannot be invented from step order or a path.
-        semantic = registry.get(binding.tool_name).semantic_planning
+        semantic = registry.accepted(binding.tool_name).semantic_planning
         producer = source_port(registry, binding.tool_name, binding.source_port)
         sources = [p for p in semantic.consumer_ports if p.name == producer.lineage_from_port]
         if len(sources) != 1 or sources[0].required_lineage != channel.required_lineage:
@@ -162,7 +177,7 @@ def validate_step_references(step, registry, *, integrity=True):
     refs = {k: a for k, a in step.arguments.items() if isinstance(a, PriorOutputRef)}
     if not refs:
         return
-    semantic = registry.get(step.tool_name).semantic_planning
+    semantic = registry.accepted(step.tool_name).semantic_planning
     covered = set()
     for port in (() if semantic is None else semantic.consumer_ports):
         names = {m.field_name for m in port.members}
@@ -220,9 +235,10 @@ def binding_for_locator(locator, store, registry):
     step, _, _ = _accepted_step(store, locator.run_id, locator.step_id)
     if accepted_step_digest(step) != locator.accepted_step_sha256:
         raise AuthorityError('Active locator accepted-step anchor changed.')
-    semantic = registry.get(step.tool_name).semantic_planning
+    semantic = registry.accepted(step.tool_name).semantic_planning
     ports = [] if semantic is None else [p for p in semantic.producer_ports
-        if locator.output_key in {m.field_name for m in p.members}]
+        if locator.output_key in {m.field_name for m in p.members}
+             and not (p.name=='dataset' and any(m.name=='sha256' and m.field_name==locator.output_key for m in p.members))]
     if len(ports) != 1:
         raise AuthorityError('Active locator does not identify a unique semantic artifact.')
     return bind_output(store, registry, locator.run_id, locator.step_id, ports[0].name)
@@ -248,9 +264,12 @@ def _optional_member_binding(run_id, step_id, output_key, anchor, store, registr
     authority = None
     if stored.verification.artifact_authority is not None or step_id in qualified:
         _, authority, _, _ = _accepted(store, run_id, step_id)
-    semantic = registry.get(stored.tool_name).semantic_planning
+    semantic = registry.accepted(stored.tool_name).semantic_planning
     ports = [] if semantic is None else [port for port in semantic.producer_ports
-        if output_key in {member.field_name for member in port.members}]
+        if output_key in {member.field_name for member in port.members}
+        and not (port.name=='dataset' and any(m.name=='sha256' and m.field_name==output_key for m in port.members))]
+    if ports and any(stored.result.get(member.field_name) is None for member in ports[0].members):
+        return None
     if len(ports) > 1:
         raise AuthorityError('Active locator does not identify a unique semantic artifact.')
     if ports and ports[0].accepted_file_sha256_field is not None:
@@ -277,13 +296,16 @@ def matrix_dataset_binding(binding, store, registry):
     fanout. A manifest and its owner-published matrix are one scientific source.
     """
     from agent.tools.scientific_authority import tool_kind
-    if binding.verification_mode != 'scientific-authority.v2' or tool_kind(binding.tool_name, registry) != 'matrix' or binding.source_port != 'matrix':
-        return None
-    semantic = registry.get(binding.tool_name).semantic_planning
-    ports = [port for port in semantic.producer_ports if port.name == 'dataset'
-             and port.semantic_type == 'scatac_matrix_h5ad.v1'
-             and tuple((m.name, m.field_name) for m in port.members) == (('dataset', 'matrix_path'),)]
-    return bind_output(store, registry, binding.run_id, binding.step_id, 'dataset') if ports else None
+    if binding.verification_mode!='scientific-authority.v2' or binding.source_port!='matrix':return None
+    spec=registry.accepted(binding.tool_name)
+    legacy=tool_kind(binding.tool_name,registry)=='matrix'
+    native=spec.scientific_authority is not None and spec.scientific_authority.kind.startswith('native_')
+    if not legacy and not native:return None
+    ports=[port for port in spec.semantic_planning.producer_ports if port.name=='dataset'
+        and port.semantic_type in ('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')
+        and port.members[0].field_name=='matrix_path']
+    step=validate_binding(binding,store=store,registry=registry)
+    return bind_output(store,registry,binding.run_id,binding.step_id,'dataset') if ports and step.result.get('matrix_path') is not None else None
 
 
 def qualified_dependencies_for_locator(locator, store, registry):

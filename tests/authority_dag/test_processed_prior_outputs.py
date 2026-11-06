@@ -78,7 +78,7 @@ def processed_work():
     import scanpy as sc
     from agent.orchestration import semantic_compiler, verifier
     from agent.tools.analysis import embedding_analysis, neighbors_publication
-    from agent.tools.data import fastq_verification_authority
+    from agent.tools import _file_identity as fastq_verification_authority
     functions = {
         'production.neighbors': sc.pp.neighbors,
         'production.leiden': sc.tl.leiden,

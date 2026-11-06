@@ -4,7 +4,7 @@ import h5py
 from pathlib import Path
 from anndata.io import read_elem
 from agent.schemas.verification_authority import AuthorityError
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .sequence_prediction import library
 
 

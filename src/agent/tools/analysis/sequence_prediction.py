@@ -18,7 +18,7 @@ from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import current, owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from . import annotation_contract as io
 
 TOOL = 'predict_regulatory_sequences'

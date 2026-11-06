@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from agent.application.matrix_delivery import MatrixPrivacyError, validate_matrix_h5ad
-from agent.tools.data import _cell_by_ccre_io as writer
+from agent.tools.data import _matrix_storage as writer
 from agent.tools.data import scatac_matrix_contract as canonical
 from agent.tools.data import fragment_feature_matrix_contract as explicit
 from agent.tools.data import selected_feature_matrix_contract as selected
@@ -20,6 +20,31 @@ from agent.tools.data import selected_feature_matrix_contract as selected
 CREATED = (canonical.CONTRACT, explicit.CONTRACT, selected.CONTRACT)
 ADOPTED = ('scatac-cell-by-ccre.external.v1', 'scatac-cell-by-features.external.v1')
 SPECIES = {'scientific_name': 'Macaca fascicularis', 'taxonomy_id': 9541}
+
+
+def legacy_layout(path,database,bound,budget):
+    """Fixed historical H5AD fixture, without an executable scientific writer."""
+    summary=canonical.logical_matrix_identity(1,2,[([0,1],[2,3])])
+    with h5py.File(path,'w') as file:
+        file.attrs.update({'encoding-type':'anndata','encoding-version':'0.1.0'})
+        for name in ('layers','obsm','obsp','varm','varp','uns'):
+            file.create_group(name).attrs.update({'encoding-type':'dict','encoding-version':'0.1.0'})
+        writer.write_axis(file,'obs',('_index','namespace','barcode_identifier','matrix_row_index'),
+            ('_index','namespace','barcode_identifier'),database.execute('SELECT rendered,ns,bc,row FROM cells'),1,budget)
+        writer.write_axis(file,'var',('_index','chrom','start','end','matrix_column_index'),
+            ('_index','chrom'),database.execute('SELECT name,chrom,start,end,col FROM features'),2,budget)
+        x=file.create_group('X');x.attrs.update({'encoding-type':'csr_matrix','encoding-version':'0.1.0','shape':np.array([1,2],dtype='int64')})
+        for name,values in [('data',[2,3]),('indices',[0,1]),('indptr',[0,2])]:
+            x.create_dataset(name,data=values,dtype='int64',compression='gzip')
+        species=bound.reference.species
+        metadata=dict(species=json.dumps(species,sort_keys=True,separators=(',',':')) if isinstance(species,dict) else species,
+            assembly=bound.reference.target_assembly,matrix_semantics='fragment_counts',matrix_profile_id=bound.contract.PROFILE.profile_id,
+            matrix_profile_sha256=bound.contract.PROFILE_SHA256,coordinate_system='zero-based-half-open',
+            ordered_selected_sha256=bound.selection['ordered_selected_sha256'],ordered_feature_sha256=bound.reference.ccre.ordered_feature_sha256,
+            logical_matrix_sha256=summary['logical_matrix_sha256'])
+        for name,value in metadata.items():
+            file['uns'].create_dataset(name,data=value,dtype=h5py.string_dtype()).attrs.update({'encoding-type':'string','encoding-version':'0.2.0'})
+    return summary
 
 
 @pytest.fixture
@@ -47,7 +72,7 @@ def make_matrix(tmp_path):
                     selection={'selected_count': 1, 'ordered_selected_sha256': 'a' * 64},
                     reference=SimpleNamespace(species=species, target_assembly=assembly,
                                              ccre=SimpleNamespace(feature_count=2, ordered_feature_sha256='b' * 64)))
-                summary = writer.write_h5(path, database, bound, [([0, 1], [2, 3])], budget)
+                summary = legacy_layout(path, database, bound, budget)
                 manifest = dict(contract_version=contract, shape=[1, 2], species=species, assembly=assembly,
                                 profile={'profile_id': contract_module.PROFILE.profile_id},
                                 profile_sha256=contract_module.PROFILE_SHA256,

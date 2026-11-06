@@ -185,7 +185,7 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
             or record['science_profile'] != owner.profile_sha(step.resolved_arguments, result['artifact_schema_version'])
             or record['verifier'] != owner.verifier(result['artifact_schema_version'])):
         raise ValueError('Unsupported annotation authority.')
-    spec = app._application.registry.get(step.tool_name)
+    spec = app._application.registry.accepted(step.tool_name)
     spec.result_contract.validate(result)
     key = 'manifest_path' if output is None else output.output_key
     if key not in {'manifest_path', 'manifest_sha256', 'annotated_h5ad_path'}:

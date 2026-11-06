@@ -7,7 +7,7 @@ import os
 import numpy as np
 import torch
 
-from agent.tools.data import scatac_matrix as publication
+from agent.tools.data import matrix_publication as publication
 from agent.tools.data.authority_context import current,authority_operation,VerificationContext,owned_verification
 from agent.tools._cancellation import cancellation_checkpoint
 from . import contract as c,resources,preprocessing,backend

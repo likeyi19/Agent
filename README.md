@@ -59,10 +59,17 @@ source-qualified repeated EpiZoo operations, fixed held-out annotation evaluatio
 downloads and later evidence answers now pass genuine browser/native acceptance.
 Biological validity and universal input/provider qualification remain outside that conclusion.
 
-The [raw scATAC guide](docs/guides/raw-scatac-processing.md) covers FASTQ/BAM
-uploads, reference provisioning, QC/count semantics and downstream reuse.
-It links genuine FASTQ and external corrected-CB BAM Firefox/OpenRouter acceptance,
-including independently verified original H5AD downloads.
+The [raw scATAC guide](docs/guides/raw-scatac-processing.md) describes the current
+native-first raw boundary: Chromap owns FASTQ mapping and SnapATAC2 owns native BAM
+fragment extraction, direct fragment ingestion, QC, filtering and region matrices.
+Both ordinary research tasks and explicit native requests use the shared execution
+and publication infrastructure. The seven former custom raw tools are retired;
+accepted historical results remain readable. Final engineering closeout is
+**CONDITIONAL GO within bounded scope**; see its
+[acceptance report](../agent-data/acceptance/raw-intake-simplification/native-first/REPORT.md)
+for native verification, the final live resource-selection clarification and
+remaining qualification limits.
+SRV-2C remains paused.
 
 The [scientific storage guide](docs/guides/scientific-storage.md) records the FS-2
 resource deployment, FS-3 development retirement, explicit EpiZoo location
@@ -334,7 +341,11 @@ See the [annotation guide](docs/guides/cell-type-annotation.md) for method-speci
 input support, reference deployment and evidence limits. EpiAgent-NT retains
 private scripts and native results, with no registered execution tool.
 
-## Milestone 11 status
+## Historical Milestone 11 status
+
+These are historical acceptance records. Current raw execution uses the native
+interfaces described in the [raw guide](docs/guides/raw-scatac-processing.md); the
+custom raw producer, QC, selection and counting registrations below are retired.
 
 **Milestone 11.6 — Production Reference & Runtime Resource Provisioning is complete.**
 The accepted slices are [M11.6a — production resource specification and operator
@@ -831,16 +842,17 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | --- | --- |
 | Exact external cCRE adoption | `adopt_scATAC_cell_by_ccre`: constrained int64 CSR H5AD, exact complete reference vocabulary, explicit external value semantics, independently verified conservation, durable matrix authority and figureless reporting; see [M12.1](docs/history/m12.1-exact-external-cell-by-ccre-adoption.md) |
 | Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
-| FASTQ preprocessing | `prepare_scATAC_fragments`: canonical per-library BGZF/tabix fragments, exact support, independent verification, durable recovery, and figureless Application reporting |
-| External fragment adoption | `import_scATAC_fragments`: explicit 10x fragment semantics, complete source validation and conservation, canonical v2 artifacts, durable recovery, and figureless Application reporting |
-| Qualified BAM fragments | `prepare_scATAC_bam_fragments`: explicit corrected-CB profile, complete BAM identity, independently recomputed exact-key support, strand-absent v2, durable recovery and figureless reporting |
+| FASTQ preprocessing | `run_chromap`: native `index`/`map`, explicit lane/barcode/reference inputs and native BED output |
+| Fragment ingestion | `run_snapatac2` → `pp.import_fragments`: direct native fragments to fragment-storage H5AD |
+| BAM fragments | `run_snapatac2` → `pp.make_fragment_file`: native BAM method and recorded parameters |
+| Native QC and filtering | `run_snapatac2`: native import observations, `metrics.tsse`, library `metrics.frag_size_distr` and `pp.filter_cells` |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
 | Reference corroboration | `corroborate_cell_type_annotation`: exact accepted annotation and qualified CellMarker records; separate literature associations and downloadable evidence TSV |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
-| Neutral fragment-derived matrix | `build_scATAC_cell_by_features`: verified external fragments, exact caller-ordered cells and neutral features; independent fragment-count authority |
+| Fragment-derived region matrix | `run_snapatac2` → `pp.make_peak_matrix`, actual native counting unit and exact regions |
 | Target EpiZoo lifecycle | `adapt_epizoo_species`: automatic or explicit transfer with zero-update initialization; `posttrain_epizoo_model`: native training from that accepted parent; exact target inference through `epizoo_embed_cells` |
 | Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
 | Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |

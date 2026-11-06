@@ -34,11 +34,11 @@ def receive(owner, role='R1', *, key=None, data=b'not scientifically qualified',
 
 
 def test_member_attribution_and_catalog_completion_never_execute_science(uploads, monkeypatch):
-    from agent.tools.data import raw_scatac, fastq_fragments
+    from agent.tools.data import raw_scatac, chromap_native
     def forbidden(*args, **kwargs):
         pytest.fail('Byte/collection admission executed science')
     monkeypatch.setattr(raw_scatac, 'inspect_raw_scATAC', forbidden)
-    monkeypatch.setattr(fastq_fragments, 'prepare_fastq_fragments', forbidden)
+    monkeypatch.setattr(chromap_native,'execute',forbidden)
     records = [receive(uploads, role) for role in ('R1', 'R2', 'R3')]
     assert uploads.choices() == ()
     assert len(uploads.fastq_members()) == 3
@@ -52,9 +52,9 @@ def test_member_attribution_and_catalog_completion_never_execute_science(uploads
     assert uploads.choices() == (completed.public(),)
     binding = uploads.resolve(completed.resource_id)
     assert isinstance(binding, RegisteredInputCollection)
-    assert _serialize(binding.execution_inputs) == dict(raw_input_paths=sorted([dict(path=r.source_path,
-        **{k: r.fastq_member[k] for k in ('library_id','role','lane','chunk')}) for r in records],key=lambda r:r['path']),
-        raw_assay='TENX_ATAC', fastq_layout='tenx-atac-r1-r2-r3.v1')
+    assert binding.tool_name=='run_chromap'
+    assert _serialize(binding.execution_inputs)==dict(read1_path=[records[0].source_path],
+        read2_path=[records[2].source_path],barcode_path=[records[1].source_path])
     assert not tuple(uploads.resources._workspace.runs.iterdir())
     assert not (uploads.resources._workspace.root / 'sessions').exists()
     reopened = H5ADUploadAdmission(LocalResourceAdmission(uploads.resources._workspace,

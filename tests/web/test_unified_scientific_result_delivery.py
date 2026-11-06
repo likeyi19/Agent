@@ -25,7 +25,7 @@ from agent.providers import PlanningModelFactoryRegistry
 from agent.schemas import AgentError, ErrorCategory, RunLifecycleStatus
 from agent.web.app import create_app
 from helpers import wait_turn
-from rich_helpers import PROFILES, rich_harness
+from rich_helpers import PROFILES
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'authority_dag'))
 from test_processed_prior_outputs import processed_source, preserved_run_bytes
@@ -38,7 +38,7 @@ def processed_delivery_work():
     import scanpy as sc
     from agent.orchestration import LLMPlanner, PlanExecutor, semantic_compiler, verifier
     from agent.tools.analysis import embedding_analysis, neighbors_publication
-    from agent.tools.data import fastq_verification_authority
+    from agent.tools import _file_identity as fastq_verification_authority
     from agent.tools.models import epizoo
     from agent.application import matrix_delivery, turn_decisions
     from agent.tools.analysis import neighbors_delivery
@@ -261,81 +261,6 @@ def test_ordinary_processed_result_presentation_downloads_history_and_fresh_serv
         'continuation': dict(production), 'read_only': dict(reads), 'provider_completions': model_calls}, sort_keys=True))
 
 
-def test_raw_results_use_same_evidence_transport_and_historical_revision_access(tmp_path):
-    fixture = rich_harness(tmp_path, managed_matrix=True, managed_tables=True)
-    try:
-        old_revision = fixture.initial_revision
-        initial_work = fixture.work.snapshot()
-        with TestClient(create_app(fixture.service, input_sets=fixture.input_sets)) as client:
-            old_path = revision_path(old_revision)
-            old_inventory = client.get(old_path + '/scientific-artifacts').json()['artifacts']
-            assert {entry['filename'] for entry in old_inventory} == {
-                'matrix.h5ad', 'barcodes.tsv.gz', 'lengths.tsv.gz', 'decisions.tsv.gz', 'selected.tsv.gz'}
-            old_payloads = {entry['handle']: client.get(old_path + '/scientific-artifacts/' + entry['handle']).content
-                            for entry in old_inventory}
-            admitted = client.post('/api/v1/sessions/analysis/turns', json=dict(
-                turn_id='selection-followup', expected_generation=1, utterance='Set minimum depth to 1.'))
-            assert admitted.status_code == 202, admitted.text
-            turn = wait_turn(client, 'selection-followup', session='analysis', timeout=60)
-            assert turn['status'] == 'succeeded', turn
-            child_revision = turn['revision_id']
-            path = revision_path(child_revision)
-            view = client.get(path).json()
-            assert view['parent_revision_id'] == old_revision and view['is_active']
-            assert [step['tool_name'] for step in view['steps']] == ['select_scATAC_cells']
-            assert set(view['outputs']) == {'selection', 'fragments', 'qc'}
-            evidence = client.get(path + '/evidence', params={'output_name': 'selection'}).json()
-            assert evidence['status'] == 'available'
-            facts = field_facts(evidence)
-            assert facts['selection_threshold_origins']['value']['min_qc_fragment_records'] == 'explicit_execution_argument'
-            assert 'existing_owner_default' in facts['selection_threshold_origins']['value'].values()
-            assert evidence['field_labels']['n_selected']
-            child_inventory = client.get(path + '/scientific-artifacts').json()['artifacts']
-            assert {entry['filename'] for entry in child_inventory} == {
-                'barcodes.tsv.gz', 'lengths.tsv.gz', 'decisions.tsv.gz', 'selected.tsv.gz'}
-            assert all(entry['revision_id'] == child_revision for entry in child_inventory)
-            after_execution = fixture.work.snapshot()
-            assert {key: value - initial_work.get(key, 0) for key, value in after_execution.items()
-                    if value != initial_work.get(key, 0)} == {'production.selection': 1, 'owner.selection': 1}
-            model_calls = sum(len(model.calls) for model in fixture.models)
-            state = fixture.application.sessions.load('analysis')
-            before_reads = file_bytes(fixture.application.workspace_root)
-            for entry in old_inventory + child_inventory:
-                entry_path = revision_path(entry['revision_id'])
-                download = client.get(entry_path + '/scientific-artifacts/' + entry['handle'])
-                assert download.status_code == 200, download.text
-                assert hashlib.sha256(download.content).hexdigest() == entry['sha256']
-                assert len(download.content) == entry['size_bytes']
-                if entry['handle'] in old_payloads:
-                    assert download.content == old_payloads[entry['handle']]
-            matrix = next(entry for entry in old_inventory if entry['filename'] == 'matrix.h5ad')
-            assert client.get(path + '/scientific-artifacts/' + matrix['handle']).status_code == 404
-            refreshed = client.get('/api/v1/sessions/analysis').json()
-            assert refreshed['active_revision_id'] == child_revision
-            assert client.get(old_path).json()['is_active'] is False
-            safe_json([view, evidence, old_inventory, child_inventory, refreshed], tmp_path)
-        assert fixture.work.snapshot() == after_execution
-        assert sum(len(model.calls) for model in fixture.models) == model_calls
-        assert fixture.application.sessions.load('analysis') == state
-        assert file_bytes(fixture.application.workspace_root) == before_reads
-
-        def forbidden_factory(profile):
-            raise AssertionError('Raw historical presentation must not construct a provider.')
-        reopened = InteractiveAgentApplication(fixture.application.workspace_root, model_profiles=PROFILES,
-            default_profile_id='alpha', planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': forbidden_factory}))
-        with TestClient(create_app(reopened)) as client:
-            assert client.get(path).json() == view
-            assert client.get(old_path + '/scientific-artifacts').json()['artifacts'] == old_inventory
-            assert client.get(old_path + '/scientific-artifacts/' + matrix['handle']).content == old_payloads[matrix['handle']]
-        assert fixture.work.snapshot() == after_execution
-        assert fixture.application.sessions.load('analysis') == state
-        assert reopened._matrix_downloads.active_count == 0
-        (tmp_path / 'unified-raw-result-delivery-witness.json').write_text(json.dumps(dict(
-            old_revision=old_revision, child_revision=child_revision, evidence=evidence,
-            initial_counts=initial_work, final_counts=after_execution, inventory=child_inventory),
-            indent=2, sort_keys=True), encoding='utf-8')
-    finally:
-        fixture.close()
 
 
 @pytest.mark.parametrize('attack', ['bytes', 'manifest', 'symlink', 'forged', 'wrong_revision', 'wrong_session'])

@@ -27,11 +27,12 @@ def receive(owner, data=b'unqualified source bytes', **kwargs):
 
 
 def test_bam_transport_registers_bytes_without_qualifying_or_inspecting_them(uploads, monkeypatch):
-    from agent.tools.data import raw_scatac, bam_fragments
+    from agent.tools.data import raw_scatac
+    from agent.tools.analysis.native_matrix import SNAPATAC2
     def forbidden(*args, **kwargs):
         pytest.fail('Byte registration invoked a scientific owner')
     monkeypatch.setattr(raw_scatac, 'inspect_raw_scATAC', forbidden)
-    monkeypatch.setattr(bam_fragments, 'prepare_in_stage', forbidden)
+    monkeypatch.setattr(SNAPATAC2,'execute',forbidden)
     record = receive(uploads)
     assert record.input_type == 'bam' and record.source_index is None
     assert record.source_sha256 == hashlib.sha256(b'unqualified source bytes').hexdigest()
@@ -42,8 +43,9 @@ def test_bam_transport_registers_bytes_without_qualifying_or_inspecting_them(upl
     assert not tuple(uploads.resources._workspace.runs.iterdir())
     assert not (uploads.resources._workspace.root / 'sessions').exists()
     binding = uploads.resolve(record.resource_id)
-    assert binding.tool_name == 'inspect_raw_scATAC'
-    assert list(binding.execution_inputs['raw_input_paths']) == [record.source_path]
+    assert binding.tool_name == 'run_snapatac2'
+    assert binding.execution_inputs['input_path']==record.source_path
+    assert binding.execution_inputs['input_sha256']==record.source_sha256
     assert 'source_profile' not in binding.execution_inputs
 
 

@@ -84,19 +84,3 @@ def decode_cell_id(value):
         if encode_cell_id(*pair) != value: fail('SELECTION_CELL_ID_INVALID')
     except (ValueError, UnicodeError): fail('SELECTION_CELL_ID_INVALID')
     return pair
-
-
-def decide(counts, policy):
-    _, depth, c, l, r, free, mono, _ = counts
-    reasons = []
-    if depth < policy['min_qc_fragment_records']: reasons.append(REASONS[0])
-    t = policy['min_tss_enrichment']
-    if l+r == 0: reasons.append(REASONS[1])
-    elif 200*c*t['denominator'] < 101*(l+r)*t['numerator']: reasons.append(REASONS[2])
-    if policy['min_tss_flank_evidence'] is not None and l+r < policy['min_tss_flank_evidence']: reasons.append(REASONS[3])
-    if policy['max_qc_fragment_records'] is not None and depth > policy['max_qc_fragment_records']: reasons.append(REASONS[4])
-    t = policy['max_nucleosome_signal']
-    if t is not None:
-        if free == 0: reasons.append(REASONS[5])
-        elif mono*t['denominator'] > free*t['numerator']: reasons.append(REASONS[6])
-    return tuple(reasons)

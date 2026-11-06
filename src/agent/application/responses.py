@@ -81,6 +81,12 @@ def render(facts, *, technical=False):
 
 
 def clarification_text(clarification):
+    if (clarification.reason in {'missing_parameter_value', 'ambiguous_parameter',
+            'invalid_parameter_value', 'ungrounded_operand', 'conflicting_scientific_parameter'}
+            and any(name == 'source_profile' or name.endswith('.source_profile') for name in clarification.choices)):
+        names = [LABELS.get(name, name) for name in clarification.choices]
+        return ('Please clarify ' + _joined(names) + '. '
+                'Confirm that provenance, or describe which parts are unknown or different.')
     if clarification.reason == 'invalid_reference':
         return 'The selected reference is incompatible or its qualified content has changed. Supply a compatible reference for the preserved task.'
     if clarification.reason == 'missing_reference':

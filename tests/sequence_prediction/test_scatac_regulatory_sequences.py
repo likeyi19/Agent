@@ -11,7 +11,7 @@ import pytest
 from scipy import sparse
 
 from agent.tools.analysis import scatac_regulatory_sequences as owner, sequence_prediction as shared
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 
 
 @pytest.fixture

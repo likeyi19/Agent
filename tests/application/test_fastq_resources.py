@@ -67,10 +67,8 @@ def test_registration_hashes_declared_sources_without_parsing(tmp_path, monkeypa
         pytest.fail('Registration entered the Registry or FASTQ scientific owner.')
     import agent.orchestration.registry as registry
     import agent.tools.data.raw_scatac as intake
-    import agent.tools.data.fastq_fragments as producer
     monkeypatch.setattr(_raw_fastq, 'inspect_fastq_inputs', forbidden)
     monkeypatch.setattr(intake, 'inspect_raw_scATAC', forbidden)
-    monkeypatch.setattr(producer, 'prepare_fastq_fragments', forbidden)
     monkeypatch.setattr(registry, 'build_default_tool_registry', forbidden)
     record = register(owner, source)
     assert record.source_path == str(source)
@@ -397,176 +395,12 @@ def test_reopen_preserves_legacy_scalar_bindings_and_record_bytes(fastqs, tmp_pa
         ('bam', 'inspect_raw_scATAC', {}),
     ]:
         record = register(owner, Path(records[0].source_path), kind, input_type=kind)
-        binding = owner.resolve(record.resource_id, tool_name=tool, scientific_inputs=declarations)
+        binding = (RegisteredInput(record.resource_id,record.record_sha256,tool,dict(declarations,source_path=record.source_path,source_sha256=record.source_sha256)) if kind=='external_fragments' else owner.resolve(record.resource_id,tool_name=tool,scientific_inputs=declarations))
         legacy.append((record, binding, owner._path(record.resource_id).read_bytes()))
     owner.resolve_collection(references(records), tool_name='inspect_raw_scATAC')
     reopened = LocalResourceAdmission(owner._workspace.root)
     for record, binding, stored in legacy:
         assert type(binding) is RegisteredInput
         assert set(binding.attribution()) == {'resource_id', 'record_sha256', 'tool_name'}
-        reopened.validate_submission(submission(binding))
+        reopened.validate_submission(submission(binding),verify_source=False)
         assert reopened._path(record.resource_id).read_bytes() == stored
-
-
-@pytest.fixture
-def producer_resources(tmp_path):
-    approved = tmp_path / 'reads'
-    approved.mkdir()
-    owner = LocalResourceAdmission(tmp_path / 'workspace', approved_source_roots=(approved,))
-    records = []
-    for lane in ('001', '002'):
-        for role in ('R1', 'R2', 'R3', 'I1'):
-            sequence = b'ACGTACGTACGTACGT' if role == 'R2' else b'ACGTACGT'
-            path = approved / f'sample_S1_L{lane}_{role}_001.fastq'
-            path.write_bytes(b'@read\n' + sequence + b'\n+\n' + b'I' * len(sequence) + b'\n')
-            records.append(register(owner, path))
-    intake = inspect_raw_scATAC([record.source_path for record in records], tmp_path / 'intake',
-                               species='human', raw_assay='TENX_ATAC')
-    _, manifest, _ = raw_scatac_manifest.load_raw_intake_manifest(intake['manifest_path'],
-        expected_sha256=intake['manifest_sha256'])
-    whitelist_path = tmp_path / 'whitelist.txt'
-    whitelist_path.write_bytes(b'ACGTACGTACGTACGT\n')
-    whitelist = scatac_library_context.inspect_barcode_whitelist(whitelist_path)
-    declarations = tuple(scatac_library_context.LibraryDeclaration(
-        namespace=f'library_{index}', group_ids=(group.id,),
-        membership_basis=scatac_library_context.MembershipBasis.SINGLE_GROUP,
-        barcode_interpretation=scatac_library_context.BarcodeInterpretation.RAW_SEQUENCE,
-        correction_policy=scatac_library_context.CorrectionPolicy.WHITELIST_REQUIRED,
-        whitelist=whitelist) for index, group in enumerate(manifest.groups))
-    def context(selected, mode, name):
-        value = scatac_library_context.build_scatac_library_processing_context(
-            intake_manifest_path=intake['manifest_path'], expected_intake_sha256=intake['manifest_sha256'],
-            libraries=selected, selection_mode=mode)
-        return scatac_library_context.publish_scatac_library_processing_context(value, tmp_path / name)
-    complete = context(declarations, scatac_library_context.SelectionMode.ALL_GROUPS, 'all-context.json')
-    subset = context(declarations[:1], scatac_library_context.SelectionMode.EXPLICIT_SUBSET, 'subset-context.json')
-    scientific = dict(intake_manifest_path=intake['manifest_path'], intake_manifest_sha256=intake['manifest_sha256'],
-        library_context_path=complete['manifest_path'], library_context_sha256=complete['manifest_sha256'],
-        reference_bundle_path=str(tmp_path / 'explicit-reference.json'), reference_bundle_sha256='1' * 64)
-    return owner, records, scientific, intake, manifest, subset
-
-
-def test_exact_intake_and_explicit_library_subset_preserve_producer_contract(producer_resources):
-    owner, records, declarations, intake, manifest, subset = producer_resources
-    assert intake['readiness'] == 'READY'
-    assert len(manifest.groups) == 2 and len(manifest.files) == 8
-    inspect_binding = owner.resolve_collection(references(records), tool_name='inspect_raw_scATAC')
-    complete = owner.resolve_collection(references(records), tool_name='prepare_scATAC_fragments',
-                                       scientific_inputs=declarations)
-    subset_declarations = declarations | dict(library_context_path=subset['manifest_path'],
-                                              library_context_sha256=subset['manifest_sha256'])
-    selected = owner.resolve_collection(references(records)[::-1], tool_name='prepare_scATAC_fragments',
-                                       scientific_inputs=subset_declarations)
-    assert type(selected) is RegisteredInputCollection
-    assert owner.validate_binding(complete) == declarations
-    assert owner.validate_binding(selected) == subset_declarations
-    assert set(selected.execution_inputs) == set(build_default_tool_registry().get(
-        'prepare_scATAC_fragments').required_arguments) - {'output_dir'}
-    assert selected.collection_sha256 == complete.collection_sha256 == inspect_binding.collection_sha256
-    assert _serialize(selected.members) == _serialize(complete.members)
-    assert sorted(inspect_binding.execution_inputs['raw_input_paths']) == sorted(source.path for source in manifest.files)
-    assert sum('_I1_' in source.path for source in manifest.files) == 2
-    owner.validate_submission(submission(selected))
-
-
-@pytest.mark.parametrize('missing', ['intake_manifest_path', 'intake_manifest_sha256',
-    'library_context_path', 'library_context_sha256', 'reference_bundle_path', 'reference_bundle_sha256'])
-def test_producer_required_declarations_are_not_manufactured(producer_resources, missing):
-    owner, records, declarations, *_ = producer_resources
-    supplied = dict(declarations)
-    supplied.pop(missing)
-    assert_code('LOCAL_RESOURCE_DECLARATION_REQUIRED', lambda: owner.resolve_collection(
-        references(records), tool_name='prepare_scATAC_fragments', scientific_inputs=supplied))
-
-
-@pytest.mark.parametrize('extra', ['raw_input_paths', 'source_path', 'source_sha256', 'output_dir',
-    'source_profile', 'input_spec_path', 'species', 'assembly', 'authority_payload'])
-def test_producer_admission_does_not_extend_unchanged_scientific_inputs(producer_resources, extra):
-    owner, records, declarations, *_ = producer_resources
-    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.resolve_collection(
-        references(records), tool_name='prepare_scATAC_fragments', scientific_inputs=declarations | {extra: 'supplied'}))
-
-
-@pytest.mark.parametrize('mutation', ['other_source', 'directory', 'extra_source', 'subset_intake',
-    'checksum', 'unpinned', 'corrupt', 'size'])
-def test_producer_intake_must_match_complete_explicit_registered_collection(producer_resources, tmp_path, mutation):
-    owner, records, declarations, intake, manifest, _ = producer_resources
-    supplied = dict(declarations)
-    if mutation in {'other_source', 'directory', 'extra_source', 'subset_intake'}:
-        paths = [record.source_path for record in records]
-        if mutation in {'other_source', 'extra_source'}:
-            other = tmp_path / 'other_S1_L001_R1_001.fastq'
-            other.write_bytes(Path(paths[0]).read_bytes())
-            paths = [str(other), *paths[1:]] if mutation == 'other_source' else [*paths, str(other)]
-        elif mutation == 'directory':
-            paths = str(Path(paths[0]).parent)
-        else:
-            paths = [path for path in paths if '_L001_' in path]
-        wrong = inspect_raw_scATAC(paths, tmp_path / 'unrelated-intake',
-                                  species='human', raw_assay='TENX_ATAC')
-        supplied.update(intake_manifest_path=wrong['manifest_path'], intake_manifest_sha256=wrong['manifest_sha256'])
-    elif mutation == 'checksum':
-        supplied['intake_manifest_sha256'] = '0' * 64
-    elif mutation == 'unpinned':
-        supplied['intake_manifest_sha256'] = None
-    elif mutation == 'corrupt':
-        Path(intake['manifest_path']).write_bytes(b'corrupt intake')
-    else:
-        changed = replace(manifest, files=(replace(manifest.files[0], size_bytes=manifest.files[0].size_bytes + 1),
-                                           *manifest.files[1:]))
-        pointer = raw_scatac_manifest.publish_raw_intake_manifest(changed, tmp_path / 'wrong-size.json')
-        supplied.update(intake_manifest_path=pointer['manifest_path'], intake_manifest_sha256=pointer['manifest_sha256'])
-    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.resolve_collection(
-        references(records), tool_name='prepare_scATAC_fragments', scientific_inputs=supplied))
-
-
-def test_producer_historical_validation_reads_neither_raw_sources_nor_intake(producer_resources, monkeypatch):
-    owner, records, declarations, *_ = producer_resources
-    binding = owner.resolve_collection(references(records), tool_name='prepare_scATAC_fragments',
-                                       scientific_inputs=declarations)
-    def forbidden(*args, **kwargs):
-        pytest.fail('Historical attribution accessed a scientific input.')
-    monkeypatch.setattr(owner, '_source', forbidden)
-    monkeypatch.setattr(raw_scatac_manifest, 'load_raw_intake_manifest', forbidden)
-    monkeypatch.setattr(scatac_library_context, 'load_scatac_library_processing_context', forbidden)
-    assert owner.validate_binding(binding, verify_source=False) == declarations
-    owner.validate_submission(submission(binding), verify_source=False)
-
-
-def test_producer_new_consumption_rechecks_intake_without_reconstructing_science(producer_resources, monkeypatch):
-    owner, records, declarations, *_ = producer_resources
-    binding = owner.resolve_collection(references(records), tool_name='prepare_scATAC_fragments',
-                                       scientific_inputs=declarations)
-    monkeypatch.setattr(_raw_fastq, 'inspect_fastq_inputs',
-                        lambda *a, **k: pytest.fail('Admission reconstructed raw inspection.'))
-    Path(declarations['intake_manifest_path']).write_bytes(b'intake changed after resolution')
-    assert_code('LOCAL_RESOURCE_BINDING_INVALID', lambda: owner.validate_binding(binding))
-    assert owner.validate_binding(binding, verify_source=False) == declarations
-
-
-@pytest.mark.parametrize('consumption', ['resolve', 'validate_binding'])
-def test_producer_collection_rechecks_source_changed_during_intake_validation(
-        producer_resources, monkeypatch, consumption):
-    owner, records, declarations, *_ = producer_resources
-    binding = owner.resolve_collection(references(records), tool_name='prepare_scATAC_fragments',
-                                       scientific_inputs=declarations)
-    source = Path(records[0].source_path)
-    before = source.stat()
-    original_bytes = source.read_bytes()
-    original_load = raw_scatac_manifest.load_raw_intake_manifest
-    intake_reads = []
-    def source_changed_after_intake_read(*args, **kwargs):
-        value = original_load(*args, **kwargs)
-        intake_reads.append(value)
-        source.write_bytes(original_bytes.replace(b'ACGT', b'TGCA', 1))
-        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
-        assert source.stat().st_size == before.st_size
-        return value
-    monkeypatch.setattr(raw_scatac_manifest, 'load_raw_intake_manifest', source_changed_after_intake_read)
-    if consumption == 'resolve':
-        consume = lambda: owner.resolve_collection(references(records),
-            tool_name='prepare_scATAC_fragments', scientific_inputs=declarations)
-    else:
-        consume = lambda: owner.validate_binding(binding)
-    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', consume)
-    assert len(intake_reads) == 1

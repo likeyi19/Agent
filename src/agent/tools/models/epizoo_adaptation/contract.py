@@ -87,7 +87,7 @@ def execution_profile(*, purpose, seed, batch_size, sequence_batch_size, max_ste
 
 
 def file_record(path):
-    from agent.tools.data._fragments_common import snapshot
+    from agent.tools._file_identity import snapshot
     path=Path(path).resolve(strict=True)
     before=snapshot(path)
     size=path.stat().st_size

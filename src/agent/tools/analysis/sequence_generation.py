@@ -14,7 +14,7 @@ from . import sequence_prediction as shared
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 
 TOOL = 'generate_regulatory_sequences'
 KIND = 'regulatory_sequence_generation'

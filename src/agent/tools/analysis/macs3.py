@@ -1,5 +1,6 @@
 """Native single-population MACS3 FRAG calling; no peak or counting algorithm."""
 import math
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import current, owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from agent.tools.data import explicit_cells
 from .sequence_prediction import read, write, arguments, library
 
@@ -71,12 +72,12 @@ def grouped_population(args, fragments):
     import h5py
     from anndata.io import read_elem
     from agent.tools.data.cell_by_ccre_verifier import verify_cell_by_ccre
-    from agent.tools.data.scatac_matrix import _load, executable
+    from agent.tools.data.matrix_publication import _load
     from .embedding_analysis import source_bound_cluster_rows
     keys=('matrix_manifest_path','matrix_manifest_sha256','group_analysis_path','group_analysis_sha256','group_label')
     if not all(k in args for k in keys):raise ValueError('A selected group needs its exact count-matrix publication, clustering and group label')
     path=args['matrix_manifest_path'];sha=args['matrix_manifest_sha256']
-    verify_cell_by_ccre(path,expected_sha256=sha,bedtools_path=executable())
+    verify_cell_by_ccre(path,expected_sha256=sha)
     value=_load(Path(path),sha);fp=value['upstream']['fragments']
     if any(fp[k]!=args['fragments_'+k] for k in ('manifest_path','manifest_sha256')):
         raise AuthorityError('Grouping matrix belongs to different source fragments')
@@ -92,7 +93,6 @@ def grouped_population(args, fragments):
 
 def selected_population(args, fragments):
     """Read the existing cell contracts or an ordinary one-barcode-per-line list."""
-    from agent.tools.data._fragment_feature_binding import cell_input
     from agent.tools.data.cell_selection_verifier import verify_cell_selection
     candidates = [k for k in ('selected_cells_manifest_path','explicit_cells_manifest_path','barcodes_path','group_analysis_path') if args.get(k)]
     if len(candidates)>1: raise ValueError('Choose one population: QC-selected cells, explicit cells or supplied barcodes')
@@ -115,16 +115,21 @@ def selected_population(args, fragments):
             if any(not b or '\t' in b or ' ' in b for b in rows):raise ValueError('Supply one exact barcode per line for the selected namespace')
             pairs=[(ns,b) for b in rows];label='explicit supplied barcode population; no QC claim'
         else:
-            declared,contract=cell_input(dict(manifest_path=str(path),manifest_sha256=sha))
-            if contract.CELL_CONTRACT==explicit_cells.CONTRACT:
+            from agent.tools.data import _cell_selection_contract as selection
+            with path.open('rb') as stream: raw=stream.read(selection.qc.MAX_MANIFEST+1)
+            if len(raw)>selection.qc.MAX_MANIFEST: raise ValueError('Population manifest exceeds its bound')
+            contract=json.loads(raw)['contract_version']
+            if contract==explicit_cells.CONTRACT:
                 explicit_cells.verify_explicit_cells(path,expected_sha256=sha);table=path.parent/'cells.tsv.gz'
                 label='explicit supplied ordered cells; no QC claim'
-            else:
+            elif contract==selection.CONTRACT:
                 declared=verify_cell_selection(path,expected_sha256=sha).to_dict();table=path.parent/'selected.tsv.gz'
                 bound=declared['qc_lineage']['arguments']
                 if any(bound[k]!=args[k] for k in ('fragments_manifest_path','fragments_manifest_sha256')):
                     raise AuthorityError('QC-selected population belongs to different fragments')
                 label='accepted source-bound QC-selected cells'
+            else:
+                raise ValueError('Unsupported exact population contract')
             sources+=file_closure([table]);pairs=[(n,b) for _,n,b,_ in explicit_cells.iter_rows(table)]
         if not pairs or len(pairs)!=len(set(pairs)) or any(n!=ns for n,b in pairs):
             raise ValueError('Population must be nonempty, unique and confined to one exact namespace')

@@ -9,7 +9,7 @@ from pathlib import Path
 from . import regulatory_feature_reference as ref, scatac_reference as legacy
 from . import scatac_fragments_v2 as v2
 from ._fragments_common import canonical, digest
-from ._external_fragment_io import resource
+from .fragment_io import resource
 from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots
 
 PROFILE = 'primary-nuclear-contigs.v1'
@@ -74,28 +74,3 @@ def verify_scope(path, sha, *, reference_path=None, reference_sha256=None):
         for line in stream:
             if line.split('\t',1)[0] not in primary: fail()
     return value
-
-
-def publish_scope(*, reference_path, reference_sha256, classifications, classification_source,
-                  extra_exclusions, output_path):
-    """Caller-reviewed complete FAI classifications, with hash-bound provenance.
-
-    QC primary_nuclear_qc classifications can be supplied without changing their
-    legacy record; only the neutral projection renames that class.
-    """
-    rows = [dict(name=c.name, length=c.length,
-                 classification='primary_nuclear' if c.classification == 'primary_nuclear_qc' else c.classification)
-            for c in classifications]
-    value = dict(contract_version=PROFILE, profile_sha256=PROFILE_SHA256,
-        reference=resource(reference_path, reference_sha256), classification_source=classification_source,
-        contigs=rows, extra_exclusions=extra_exclusions)
-    value['identity_sha256'] = digest(value)
-    destination=Path(output_path); destination.parent.mkdir(parents=True,exist_ok=True)
-    # Validate at a private file before publishing an immutable resource.
-    import tempfile, os
-    with tempfile.TemporaryDirectory(dir=destination.parent) as temp:
-        stage=Path(temp)/'scope.json'; stage.write_bytes(canonical(value))
-        sha=digest_bytes(stage.read_bytes());verify_scope(stage,sha)
-        with stage.open('rb') as stream: os.fsync(stream.fileno())
-        os.link(stage,destination)  # exclusive publication, never overwrite
-    return resource(destination,sha)

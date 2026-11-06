@@ -7,6 +7,13 @@ from contextlib import nullcontext
 import h5py
 import numpy as np
 
+# SnapATAC2's native backed H5AD uses Zstandard. Only this reviewed filter is
+# admitted in addition to HDF5 built-ins; arbitrary plugin filters stay rejected.
+try:
+    import hdf5plugin
+except ImportError:
+    hdf5plugin = None
+
 MAX_BYTES = 1024**3
 MAX_LOGICAL_BYTES = 2 * 1024**3
 _PATH = re.compile(r'(?:^|[\s\"\'=:(])(?:/|~/|[A-Za-z]:[\\/]|\\\\)|file://')
@@ -41,7 +48,9 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
             max_logical_bytes=MAX_LOGICAL_BYTES):
     """Reject indirect storage, unsafe filters and excessive allocations."""
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
-        required = {'X','obs','var'} if require_matrix else {'obs','var'}
+        # Native fragment storage may have obs/obsm and zero features, with
+        # neither X nor var. Matrix consumers retain the stricter requirement.
+        required = {'X','obs','var'} if require_matrix else {'obs'}
         if observation_fields is None and not required <= set(f):
             raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
         if privacy and f.userblock_size:
@@ -79,7 +88,10 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                 if item.is_virtual or item.external:
                     raise ValueError('Unsupported H5AD dataset layout')
                 creation = item.id.get_create_plist()
-                if any(creation.get_filter(i)[0] not in (1,2,3) for i in range(creation.get_nfilters())):
+                filters = [creation.get_filter(i)[0] for i in range(creation.get_nfilters())]
+                if {32001,32015}.intersection(filters) and hdf5plugin is None:
+                    raise ValueError('Install hdf5plugin to read native H5AD Blosc/Zstandard storage')
+                if any(filter_id not in (1,2,3,32001,32015) for filter_id in filters):
                     raise ValueError('Unsupported HDF5 filter')
                 string = h5py.check_string_dtype(item.dtype) is not None
                 if string:

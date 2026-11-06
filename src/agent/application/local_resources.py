@@ -47,6 +47,16 @@ _GROUP_PORTS = (
     ('run_macs3', 'control2'),
     ('run_episcanpy', 'dataset'),
     ('run_snapatac2', 'dataset'),
+    ('run_snapatac2', 'chrom_sizes'),
+    ('run_snapatac2', 'gene_anno'),
+    ('run_snapatac2', 'peaks'),
+    ('run_snapatac2', 'whitelist'),
+    ('run_chromap', 'reference'),
+    ('run_chromap', 'index'),
+    ('run_chromap', 'read1'),
+    ('run_chromap', 'read2'),
+    ('run_chromap', 'barcode'),
+    ('run_chromap', 'whitelist'),
     ('run_signac', 'dataset'),
     ('run_signac', 'second'),
     ('run_chromvar', 'dataset'),
@@ -82,41 +92,23 @@ _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
 _INPUT_TYPES = ('attachment', 'h5ad', 'external_fragments', 'bam', 'fastq', 'groups', 'fasta', 'regulatory_reference', 'genome_reference', 'scientific_reference')
 _OPERATION_TYPES = {
+    'run_snapatac2': 'attachment',
     'inspect_scATAC': 'h5ad',
     'adopt_scATAC_cell_by_ccre': 'h5ad',
     'import_scATAC_fragments': 'external_fragments',
     'inspect_raw_scATAC': 'bam',
     'prepare_scATAC_bam_fragments': 'bam',
 }
-_COLLECTION_OPERATIONS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments')
+_COLLECTION_OPERATIONS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments', 'run_chromap')
 _H5AD_COMPOSITION = 'h5ad-science.v1'
 _FRAGMENTS_COMPOSITION = 'external-fragments-science.v1'
 _BAM_COMPOSITION = 'bam-science.v1'
 _FASTQ_COMPOSITION = 'fastq-science.v1'
+_NATIVE_COMPOSITION = 'native-science.v1'
 # These consumers may receive user parameters; only the planner binds matrix outputs.
 _RAW_ANALYSIS_TOOLS = ('pca_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
-_FASTQ_COMPANION_TOOLS = ('inspect_raw_scATAC', 'prepare_scATAC_fragments',
-                        'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre') + _RAW_ANALYSIS_TOOLS
-_FASTQ_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
-    'source_index_path', 'source_index_sha256', 'output_dir',
-    'fragments_manifest_path', 'fragments_manifest_sha256',
-    'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
-    'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _FASTQ_SELECTION_ERRORS = ('FASTQ_RESOURCE_AMBIGUOUS',)
-_BAM_COMPANION_TOOLS = ('inspect_raw_scATAC', 'prepare_scATAC_bam_fragments',
-                       'compute_scATAC_qc', 'select_scATAC_cells', 'build_scATAC_cell_by_ccre') + _RAW_ANALYSIS_TOOLS
-_BAM_SOURCE_ARGUMENTS = {'raw_input_paths', 'source_path', 'source_sha256',
-    'source_index_path', 'source_index_sha256', 'output_dir',
-    'fragments_manifest_path', 'fragments_manifest_sha256',
-    'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
-    'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
-_FRAGMENTS_COMPANION_TOOLS = ('import_scATAC_fragments', 'compute_scATAC_qc',
-                              'select_scATAC_cells', 'build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features', 'call_scATAC_peaks') + _RAW_ANALYSIS_TOOLS
-_FRAGMENTS_SOURCE_ARGUMENTS = {'source_path', 'source_sha256', 'source_index_path',
-    'source_index_sha256', 'output_dir', 'fragments_manifest_path', 'fragments_manifest_sha256',
-    'barcode_qc_manifest_path', 'barcode_qc_manifest_sha256',
-    'selected_cells_manifest_path', 'selected_cells_manifest_sha256'}
 _H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'pca_embed_cells', 'build_cell_neighbors',
                          'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
@@ -418,7 +410,8 @@ class RegisteredInput:
     def __post_init__(self):
         if type(self.tool_name) is not str or self.tool_name not in _OPERATION_TYPES:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
-        if (self.composition not in (None, _H5AD_COMPOSITION, _FRAGMENTS_COMPOSITION, _BAM_COMPOSITION)
+        if (self.composition not in (None, _H5AD_COMPOSITION, _FRAGMENTS_COMPOSITION, _BAM_COMPOSITION, _NATIVE_COMPOSITION)
+                or (self.composition == _NATIVE_COMPOSITION and self.tool_name != 'run_snapatac2')
                 or (self.composition == _H5AD_COMPOSITION and self.tool_name != 'inspect_scATAC')
                 or (self.composition == _FRAGMENTS_COMPOSITION and self.tool_name != 'import_scATAC_fragments')
                 or (self.composition == _BAM_COMPOSITION and self.tool_name != 'inspect_raw_scATAC')
@@ -557,7 +550,7 @@ def _group_port(registry, tool_name, port_name):
     port = ports[0]
     member = port.members[0]
     sources = [s for s in port.request_sources if tuple(m.name for m in s.members) == tuple(m.name for m in port.members)]
-    if len(port.members) == 2 and tuple(m.name for m in port.members) != ('path', 'sha256'):
+    if len(port.members) == 2 and tuple(m.name for m in port.members) not in (('path','sha256'),('dataset','sha256')):
         raise _fail('MULTI_INPUT_ROLE_INVALID')
     alias = 'input_path' if (tool_name, port_name) == ('inspect_scATAC', 'dataset') else member.field_name
     exact = [s for s in sources if s.members[0].input_name == alias]
@@ -960,7 +953,8 @@ class RegisteredInputCollection:
     def __post_init__(self):
         if type(self.tool_name) is not str or self.tool_name not in _COLLECTION_OPERATIONS:
             raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
-        if (self.composition not in (None, _FASTQ_COMPOSITION)
+        if (self.composition not in (None, _FASTQ_COMPOSITION, _NATIVE_COMPOSITION)
+                or self.composition == _NATIVE_COMPOSITION and self.tool_name != 'run_chromap'
                 or self.composition == _FASTQ_COMPOSITION and self.tool_name != 'inspect_raw_scATAC'
                 or self.resource_selection_error is not None and not (
                     self.composition == _FASTQ_COMPOSITION
@@ -1420,63 +1414,6 @@ class LocalResourceAdmission:
                   if tool_name == 'inspect_raw_scATAC' else {})
         return self._declared_inputs(tool_name, source, scientific_inputs)
 
-    @staticmethod
-    def _validate_fastq_intake(records, values):
-        from agent.tools.data.raw_scatac_manifest import (
-            InputKind, SelectionBasis, load_raw_intake_manifest,
-        )
-        try:
-            if values['intake_manifest_sha256'] is None:
-                raise ValueError('Registered collection requires an intake digest.')
-            _, intake, _ = load_raw_intake_manifest(values['intake_manifest_path'],
-                expected_sha256=values['intake_manifest_sha256'])
-            expected = {record.source_path: record.size_bytes for record in records}
-            from agent.tools.data._raw_fastq import declared_sources, _name
-            declared = declared_sources(intake)
-            if declared is not None and declared != LocalResourceAdmission._fastq_sources(records):
-                raise ValueError('Intake declarations differ from registered task roles.')
-            if declared is None:
-                # Legacy intakes qualify filename-derived roles. They cannot
-                # satisfy a contradictory explicit task binding for those bytes.
-                for record in records:
-                    if record.fastq_member is None:
-                        continue
-                    name = _name(Path(record.source_path).name)
-                    member = record.fastq_member
-                    if name is None or (name.role.value, name.lane, name.chunk) != (
-                            member['role'], member['lane'], member['chunk']):
-                        raise ValueError('Legacy intake roles differ from registered task roles.')
-            if len(intake.files) != len(expected) or {source.path for source in intake.files} != set(expected):
-                raise ValueError('Intake membership differs from the registered collection.')
-            for source in intake.files:
-                if (source.input_kind is not InputKind.FASTQ or source.size_bytes != expected[source.path]
-                        or source.selection is not SelectionBasis.EXPLICIT or source.selection_root is not None):
-                    raise ValueError('Intake does not explicitly identify registered FASTQs.')
-        except (ValueError, TypeError, OSError, KeyError) as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-
-    @staticmethod
-    def _validate_bam_intake(record, values):
-        from agent.tools.data.raw_scatac_manifest import (
-            InputKind, SelectionBasis, load_raw_intake_manifest,
-        )
-        try:
-            # The loader permits unpinned reads; registered association does not.
-            if values['intake_manifest_sha256'] is None:
-                raise ValueError('Registered BAM requires an intake digest.')
-            _, intake, _ = load_raw_intake_manifest(values['intake_manifest_path'],
-                expected_sha256=values['intake_manifest_sha256'])
-            if len(intake.files) != 1 or len(intake.groups) != 1:
-                raise ValueError('Registered BAM requires a singleton intake.')
-            source = intake.files[0]
-            # The intake owner validates group membership. Require explicit file
-            # selection so producer reinspection cannot rediscover other sources.
-            if (source.input_kind is not InputKind.BAM or source.path != record.source_path
-                    or source.size_bytes != record.size_bytes
-                    or source.selection is not SelectionBasis.EXPLICIT or source.selection_root is not None):
-                raise ValueError('Intake does not identify the registered BAM.')
-        except (ValueError, TypeError, OSError, KeyError) as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
 
     def resolve(self, resource_id, *, tool_name, scientific_inputs=None,
                 resource_choice=None, verify_source=True):
@@ -1570,116 +1507,6 @@ class LocalResourceAdmission:
         self.validate_binding(binding, verify_source=verify_source)
         return binding
 
-    def _fragments_inputs(self, record, scientific_inputs):
-        """Validate explicit companions against the existing focused Registry."""
-        if record.input_type != 'external_fragments':
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        values = _input_mapping(scientific_inputs)
-        if self._registry is None:
-            from agent.orchestration.registry import build_default_tool_registry
-            self._registry = build_default_tool_registry()
-        declarations = {}
-        try:
-            for name in _FRAGMENTS_COMPANION_TOOLS:
-                specification = self._registry.get(name)
-                arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
-                for key, argument in arguments.items():
-                    if (key not in _FRAGMENTS_SOURCE_ARGUMENTS
-                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
-                        declarations.setdefault(key, []).append(argument)
-                if specification.semantic_planning is not None:
-                    for port in specification.semantic_planning.consumer_ports:
-                        fields = {member.name: member.field_name for member in port.members}
-                        for source in port.request_sources:
-                            for member in source.members:
-                                key = fields[member.name]
-                                if (key not in _FRAGMENTS_SOURCE_ARGUMENTS
-                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
-                                    declarations.setdefault(member.input_name, []).append(arguments[key])
-            if set(values) - set(declarations):
-                raise ValueError('Unsupported fragments companion declaration.')
-            for key, value in values.items():
-                for argument in declarations[key]:
-                    argument.validate(key, value)
-        except (ValueError, TypeError, LookupError) as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        source = dict(source_path=record.source_path, source_sha256=record.source_sha256)
-        if record.source_index is not None:
-            source.update(source_index_path=record.source_index['path'],
-                          source_index_sha256=record.source_index['sha256'])
-        return values | source
-
-    def compose_fragments(self, resource_id, scientific_inputs=None, *,
-                          resource_selection_error=None, resource_choice=None, verify_source=True):
-        """One registered source with explicit import/QC/selection/matrix inputs.
-
-        This mapping selects no scientific steps and fills no missing downstream
-        requirements. The ordinary Planner and compiler still bind the plan.
-        """
-        record = self.load(resource_id)
-        binding = RegisteredInput(record.resource_id, record.record_sha256, 'import_scATAC_fragments',
-            self._fragments_inputs(record, scientific_inputs), _FRAGMENTS_COMPOSITION,
-            resource_selection_error, resource_choice)
-        self.validate_binding(binding, verify_source=verify_source)
-        return binding
-
-    def _validate_fragments_requirements(self, binding, values):
-        """Require declared import context at execution and first acceptance only."""
-        if binding.resource_selection_error is not None:
-            raise _fail(binding.resource_selection_error)
-        imported = self._group_registry().get('import_scATAC_fragments')
-        required = set(imported.required_arguments) - _FRAGMENTS_SOURCE_ARGUMENTS
-        if required - set(values):
-            raise _fail('LOCAL_RESOURCE_DECLARATION_REQUIRED')
-
-    def _bam_inputs(self, record, scientific_inputs):
-        """Offer exact source identity and supplied declarations, without a workflow."""
-        if record.input_type != 'bam':
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        values = _input_mapping(scientific_inputs)
-        if self._registry is None:
-            from agent.orchestration.registry import build_default_tool_registry
-            self._registry = build_default_tool_registry()
-        declarations = {}
-        try:
-            for name in _BAM_COMPANION_TOOLS:
-                specification = self._registry.get(name)
-                arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
-                for key, argument in arguments.items():
-                    if (key not in _BAM_SOURCE_ARGUMENTS
-                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
-                        declarations.setdefault(key, []).append(argument)
-                if specification.semantic_planning is not None:
-                    for port in specification.semantic_planning.consumer_ports:
-                        fields = {member.name: member.field_name for member in port.members}
-                        for source in port.request_sources:
-                            for member in source.members:
-                                key = fields[member.name]
-                                if (key not in _BAM_SOURCE_ARGUMENTS
-                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
-                                    declarations.setdefault(member.input_name, []).append(arguments[key])
-            if set(values) - set(declarations):
-                raise ValueError('Unsupported BAM companion declaration.')
-            for key, value in values.items():
-                for argument in declarations[key]:
-                    argument.validate(key, value)
-        except (ValueError, TypeError, LookupError) as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        # Inspection has no required biological declarations. Producer contracts
-        # apply only when the ordinary plan actually requests preparation.
-        return values | dict(raw_input_paths=([record.source_path] if record.source_path.endswith('.bam')
-                            else [dict(path=record.source_path, input_kind='BAM')]),
-                             source_path=record.source_path, source_sha256=record.source_sha256)
-
-    def compose_bam(self, resource_id, scientific_inputs=None, *,
-                    resource_selection_error=None, resource_choice=None, verify_source=True):
-        """One BAM with explicit inspection/producer/downstream request inputs."""
-        record = self.load(resource_id)
-        binding = RegisteredInput(record.resource_id, record.record_sha256, 'inspect_raw_scATAC',
-            self._bam_inputs(record, scientific_inputs), _BAM_COMPOSITION, resource_selection_error,
-            resource_choice)
-        self.validate_binding(binding, verify_source=verify_source)
-        return binding
 
     def resolve_collection(self, members, *, tool_name, scientific_inputs=None, resource_choice=None):
         members = _members(members)
@@ -1690,74 +1517,117 @@ class LocalResourceAdmission:
         self.validate_binding(binding)
         return binding
 
-    def _fastq_inputs(self, records, scientific_inputs):
-        """Compose existing contracts around explicit registered read attribution."""
-        self._fastq_groups(records)
-        values = _input_mapping(scientific_inputs)
-        if self._registry is None:
-            from agent.orchestration.registry import build_default_tool_registry
-            self._registry = build_default_tool_registry()
-        declarations = {}
-        try:
-            for name in _FASTQ_COMPANION_TOOLS:
-                specification = self._registry.get(name)
-                arguments = dict(specification.required_arguments) | dict(specification.optional_arguments)
-                for key, argument in arguments.items():
-                    if (key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}
-                            and (name not in _RAW_ANALYSIS_TOOLS or argument.planning.scientific_parameter)):
-                        declarations.setdefault(key, []).append(argument)
-                if specification.semantic_planning is not None:
-                    for port in specification.semantic_planning.consumer_ports:
-                        fields = {member.name: member.field_name for member in port.members}
-                        for source in port.request_sources:
-                            for member in source.members:
-                                key = fields[member.name]
-                                if (key not in _FASTQ_SOURCE_ARGUMENTS | {'raw_assay', 'fastq_layout'}
-                                        and (name not in _RAW_ANALYSIS_TOOLS or arguments[key].planning.scientific_parameter)):
-                                    declarations.setdefault(member.input_name, []).append(arguments[key])
-            if set(values) - set(declarations):
-                raise ValueError('Unsupported FASTQ companion declaration.')
-            for key, value in values.items():
-                for argument in declarations[key]:
-                    argument.validate(key, value)
-        except (ValueError, TypeError, LookupError) as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        return values | dict(raw_input_paths=self._fastq_sources(records),
-            raw_assay='TENX_ATAC', fastq_layout=records[0].fastq_member['fastq_layout'])
 
-    def compose_fastq_collection(self, resource_id, scientific_inputs=None, *,
-                                resource_selection_error=None, resource_choice=None, verify_source=True):
-        collection = self.load(resource_id)
-        if type(collection) is not LocalResourceCollectionRecord:
+    def _native_inputs(self, records, tool_name, declarations):
+        """Exact native source roles; no inspection, scientific eligibility or workflow."""
+        registry = self._group_registry()
+        if tool_name == 'run_snapatac2':
+            if len(records) != 1:
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            source = dict(input_path=records[0].source_path, input_sha256=records[0].source_sha256)
+        elif tool_name == 'run_chromap':
+            self._fastq_groups(records)
+            groups = {}
+            for record in records:
+                groups.setdefault((record.fastq_member['lane'], record.fastq_member['chunk']), []).append(record)
+            from agent.tools.data._raw_fastq import FastqLayout
+            source = dict(read1_path=[], read2_path=[], barcode_path=[])
+            for _, group in sorted(groups.items()):
+                # _fastq_groups establishes exact user-declared lane/chunk roles.
+                fields = {r.fastq_member['role']: r.source_path for r in group}
+                layout = group[0].fastq_member['layout'] if 'layout' in group[0].fastq_member else group[0].fastq_member['fastq_layout']
+                for key, role in (('read1_path', 'R1'), ('read2_path', 'R3' if layout == FastqLayout.A.value else 'R2'),
+                                  ('barcode_path', 'R2' if layout == FastqLayout.A.value else 'I2')):
+                    source[key].append(fields[role])
+        else:
+            raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+        values = _input_mapping(declarations)
+        if set(values).intersection(source):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        records = self._collection_records(collection.members)
-        binding = RegisteredInputCollection(collection.members, collection.collection_sha256,
-            'inspect_raw_scATAC', self._fastq_inputs(records, scientific_inputs),
-            _FASTQ_COMPOSITION, resource_selection_error, resource_choice)
+        allowed = {}
+        for name in (tool_name, *_RAW_ANALYSIS_TOOLS):
+            spec = registry.get(name)
+            for key, argument in (dict(spec.required_arguments) | dict(spec.optional_arguments)).items():
+                if key not in source and key != 'output_dir' and (name == tool_name or argument.planning.scientific_parameter):
+                    allowed.setdefault(key, []).append(argument)
+            for port in spec.semantic_planning.consumer_ports:
+                for request in port.request_sources:
+                    for member in request.members:
+                        if member.input_name in allowed:
+                            continue
+                        field = next(m.field_name for m in port.members if m.name == member.name)
+                        argument = (dict(spec.required_arguments) | dict(spec.optional_arguments))[field]
+                        if (argument.planning.scientific_parameter
+                                or name == tool_name and field not in source and field != 'output_dir'):
+                            allowed.setdefault(member.input_name, []).append(argument)
+        if set(values) - set(allowed):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        for key, value in values.items():
+            for argument in allowed[key]:
+                try:
+                    argument.validate(key, value)
+                    break
+                except (ValueError, TypeError):
+                    continue
+            else:
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        return values | source
+
+    def compose_native(self, resource_id, scientific_inputs, *, resource_choice=None, verify_source=True):
+        record = self.load(resource_id)
+        if type(record) is LocalResourceCollectionRecord:
+            records = self._collection_records(record.members)
+            binding = RegisteredInputCollection(record.members, record.collection_sha256, 'run_chromap',
+                self._native_inputs(records, 'run_chromap', scientific_inputs), _NATIVE_COMPOSITION, resource_choice=resource_choice)
+        else:
+            binding = RegisteredInput(record.resource_id, record.record_sha256, 'run_snapatac2',
+                self._native_inputs([record], 'run_snapatac2', scientific_inputs), _NATIVE_COMPOSITION, resource_choice=resource_choice)
         self.validate_binding(binding, verify_source=verify_source)
         return binding
+
+    def _validate_native_consumption(self, binding, steps, *, resolved=False):
+        values = _serialize(binding.execution_inputs)
+        source_keys = ('input_path',) if type(binding) is RegisteredInput else ('read1_path', 'read2_path', 'barcode_path')
+        consumed = False
+        for step in steps:
+            args = step.resolved_arguments if resolved else step.arguments
+            if step.tool_name == binding.tool_name and all(_serialize(args.get(key)) == values[key] for key in source_keys):
+                consumed = True
+                if 'input_sha256' in args and args['input_sha256'] != values.get('input_sha256'):
+                    raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
+            if step.tool_name in ('run_snapatac2', 'run_chromap'):
+                from agent.schemas import StepOutputRef
+                from agent.schemas.prior_output import PriorOutputRef
+                from agent.orchestration.native_parameters import input_name
+                for key, value in args.items():
+                    selected = input_name(step.tool_name, args.get('function_name', ''), key)
+                    expected = values.get(selected, values.get(key))
+                    if key.endswith(('_path', '_sha256')) and expected is not None and not isinstance(value, (StepOutputRef, PriorOutputRef)):
+                        # Downstream native objects can have their own exact
+                        # input_path. Request reference ports cannot substitute.
+                        if key not in ('input_path', 'input_sha256') and _serialize(value) != expected:
+                            raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
+        if not consumed:
+            raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
 
     def _validate_collection(self, binding, *, verify_source):
         records = self._collection_records(binding.members)
         values = _serialize(binding.execution_inputs)
+        if binding.composition == _NATIVE_COMPOSITION:
+            declarations = {key: value for key, value in values.items() if key not in ('read1_path', 'read2_path', 'barcode_path')}
+            if values != self._native_inputs(records, binding.tool_name, declarations):
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            if verify_source: self._verify_records(records)
+            return values
         declarations = {key: value for key, value in values.items()
                         if binding.tool_name != 'inspect_raw_scATAC' or key != 'raw_input_paths'}
-        if binding.composition == _FASTQ_COMPOSITION:
-            declarations = {key: value for key, value in values.items()
-                            if key not in {'raw_input_paths', 'raw_assay', 'fastq_layout'}}
-        try:
-            expected = (self._fastq_inputs(records, declarations)
-                        if binding.composition == _FASTQ_COMPOSITION else
-                        self._collection_inputs(records, binding.tool_name, declarations))
-        except ResourceAdmissionError as exc:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        if values != expected:
-            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        if verify_source:
-            if binding.tool_name == 'prepare_scATAC_fragments':
-                self._validate_fastq_intake(records, values)
-            # Hash and recheck all members after the intake loader finishes.
-            self._verify_records(records)
+        if binding.composition == _FASTQ_COMPOSITION or binding.tool_name == 'prepare_scATAC_fragments':
+            if verify_source: raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+            from .native_raw_handoff import historical_binding
+            return historical_binding(self, records, binding)
+        expected = self._collection_inputs(records, binding.tool_name, declarations)
+        if values != expected: raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if verify_source: self._verify_records(records)
         return values
 
     def _verify_records(self, records):
@@ -1841,6 +1711,16 @@ class LocalResourceAdmission:
         if binding.record_sha256 != record.record_sha256:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         values = _serialize(binding.execution_inputs)
+        if binding.composition == _NATIVE_COMPOSITION:
+            declarations = {key: value for key, value in values.items() if key not in ('input_path', 'input_sha256')}
+            if values != self._native_inputs([record], binding.tool_name, declarations):
+                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+            if verify_source: self._verify_records([record])
+            return values
+        if binding.composition in (_FRAGMENTS_COMPOSITION, _BAM_COMPOSITION) or binding.tool_name in ('import_scATAC_fragments','prepare_scATAC_bam_fragments'):
+            if verify_source: raise _fail('LOCAL_RESOURCE_OPERATION_UNSUPPORTED')
+            from .native_raw_handoff import historical_binding
+            return historical_binding(self, [record], binding)
         if binding.resource_selection_error is not None and 'expected_resource_identity' in values:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         fields = (('input_path',) if binding.tool_name == 'inspect_scATAC' else
@@ -1853,10 +1733,6 @@ class LocalResourceAdmission:
         declarations = {key: value for key, value in values.items() if key not in fields}
         try:
             expected = (self._h5ad_inputs(record, declarations) if binding.composition == _H5AD_COMPOSITION
-                        else self._fragments_inputs(record, declarations)
-                            if binding.composition == _FRAGMENTS_COMPOSITION
-                        else self._bam_inputs(record, declarations)
-                            if binding.composition == _BAM_COMPOSITION
                         else self._binding_inputs(record, binding.tool_name, declarations))
         except ResourceAdmissionError as exc:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
@@ -1864,8 +1740,6 @@ class LocalResourceAdmission:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         if verify_source:
             self._verify_records([record])
-        if verify_source and binding.tool_name == 'prepare_scATAC_bam_fragments':
-            self._validate_bam_intake(record, values)
         return values
 
     @staticmethod
@@ -1908,52 +1782,6 @@ class LocalResourceAdmission:
             if key in values and arguments.get(key) != values[key]:
                 raise _fail('BAM_SOURCE_MISMATCH')
 
-    @staticmethod
-    def _bam_producer_arguments(binding, values, arguments):
-        if binding.resource_selection_error is not None:
-            raise _fail(binding.resource_selection_error)
-        for keys, code in (
-            (('library_context_path', 'library_context_sha256'), 'BAM_LIBRARY_CONTEXT_REQUIRED'),
-            (('reference_bundle_path', 'reference_bundle_sha256'), 'BAM_REFERENCE_REQUIRED'),
-            (('source_profile',), 'BAM_PROFILE_REQUIRED'),
-        ):
-            if any(key not in values for key in keys):
-                raise _fail(code)
-            if any(arguments.get(key) != values[key] for key in keys):
-                raise _fail('BAM_SOURCE_MISMATCH')
-        if any(arguments.get(key) != values[key] for key in ('source_path', 'source_sha256')):
-            raise _fail('BAM_SOURCE_MISMATCH')
-
-    def _validate_bam_plan(self, binding, record, values, plan):
-        from agent.schemas.orchestration import StepOutputRef
-        by_id = {step.step_id: step for step in plan.steps}
-        consumed = False
-        for step in plan.steps:
-            if step.tool_name == 'inspect_raw_scATAC':
-                self._bam_inspection_arguments(values, step.arguments)
-                consumed = True
-            elif step.tool_name == 'prepare_scATAC_bam_fragments':
-                self._bam_producer_arguments(binding, values, step.arguments)
-                path = step.arguments.get('intake_manifest_path')
-                sha = step.arguments.get('intake_manifest_sha256')
-                if isinstance(path, StepOutputRef) or isinstance(sha, StepOutputRef):
-                    producer = by_id.get(path.step_id) if isinstance(path, StepOutputRef) else None
-                    if (not isinstance(path, StepOutputRef) or not isinstance(sha, StepOutputRef)
-                            or path.step_id != sha.step_id or path.output_key != 'manifest_path'
-                            or sha.output_key != 'manifest_sha256' or producer is None
-                            or producer.tool_name != 'inspect_raw_scATAC'
-                            or path.step_id not in step.depends_on):
-                        raise _fail('BAM_SOURCE_MISMATCH')
-                    self._bam_inspection_arguments(values, producer.arguments)
-                else:
-                    if any(key not in values for key in ('intake_manifest_path', 'intake_manifest_sha256')):
-                        raise _fail('BAM_INTAKE_REQUIRED')
-                    if (path, sha) != (values['intake_manifest_path'], values['intake_manifest_sha256']):
-                        raise _fail('BAM_SOURCE_MISMATCH')
-                    self._validate_bam_intake(record, step.arguments)
-                consumed = True
-        if not consumed:
-            raise _fail('BAM_SOURCE_MISMATCH')
 
     @staticmethod
     def _fastq_inspection_arguments(values, arguments):
@@ -1965,50 +1793,6 @@ class LocalResourceAdmission:
             if key in values and arguments.get(key) != values[key]:
                 raise _fail('FASTQ_SOURCE_MISMATCH')
 
-    @staticmethod
-    def _fastq_producer_arguments(binding, values, arguments):
-        if binding.resource_selection_error is not None:
-            raise _fail(binding.resource_selection_error)
-        for keys, code in (
-            (('library_context_path', 'library_context_sha256'), 'FASTQ_LIBRARY_CONTEXT_REQUIRED'),
-            (('reference_bundle_path', 'reference_bundle_sha256'), 'FASTQ_REFERENCE_REQUIRED'),
-        ):
-            if any(key not in values for key in keys):
-                raise _fail(code)
-            if any(arguments.get(key) != values[key] for key in keys):
-                raise _fail('FASTQ_SOURCE_MISMATCH')
-
-    def _validate_fastq_plan(self, binding, values, plan):
-        from agent.schemas.orchestration import StepOutputRef
-        records = self._collection_records(binding.members)
-        by_id = {step.step_id: step for step in plan.steps}
-        consumed = False
-        for step in plan.steps:
-            if step.tool_name == 'inspect_raw_scATAC':
-                self._fastq_inspection_arguments(values, step.arguments)
-                consumed = True
-            elif step.tool_name == 'prepare_scATAC_fragments':
-                self._fastq_producer_arguments(binding, values, step.arguments)
-                path = step.arguments.get('intake_manifest_path')
-                sha = step.arguments.get('intake_manifest_sha256')
-                if isinstance(path, StepOutputRef) or isinstance(sha, StepOutputRef):
-                    producer = by_id.get(path.step_id) if isinstance(path, StepOutputRef) else None
-                    if (not isinstance(path, StepOutputRef) or not isinstance(sha, StepOutputRef)
-                            or path.step_id != sha.step_id or path.output_key != 'manifest_path'
-                            or sha.output_key != 'manifest_sha256' or producer is None
-                            or producer.tool_name != 'inspect_raw_scATAC'
-                            or path.step_id not in step.depends_on):
-                        raise _fail('FASTQ_SOURCE_MISMATCH')
-                    self._fastq_inspection_arguments(values, producer.arguments)
-                else:
-                    if any(key not in values for key in ('intake_manifest_path', 'intake_manifest_sha256')):
-                        raise _fail('FASTQ_INTAKE_REQUIRED')
-                    if (path, sha) != (values['intake_manifest_path'], values['intake_manifest_sha256']):
-                        raise _fail('FASTQ_SOURCE_MISMATCH')
-                    self._validate_fastq_intake(records, step.arguments)
-                consumed = True
-        if not consumed:
-            raise _fail('FASTQ_SOURCE_MISMATCH')
 
     def _validate_group_consumption(self, binding, steps, *, resolved=False, plan=None):
         from agent.schemas.orchestration import StepOutputRef
@@ -2114,14 +1898,6 @@ class LocalResourceAdmission:
         Ports allowing upstream resources retain the compiler's exact dependency
         contract; request-only resource ports must consume their captured members.
         """
-        if type(binding) is RegisteredInput and binding.composition == _FRAGMENTS_COMPOSITION:
-            values = _serialize(binding.execution_inputs)
-            for step in steps:
-                if step.tool_name in ('build_scATAC_cell_by_ccre', 'build_scATAC_cell_by_features'):
-                    args = step.resolved_arguments if resolved else step.arguments
-                    for key in ('reference_manifest_path', 'reference_manifest_sha256'):
-                        if key in values and args.get(key) != values[key]:
-                            raise _fail('LOCAL_RESOURCE_CONSUMPTION_MISMATCH')
         if binding.resource_choice is None:
             return
         from agent.orchestration.registry import ArtifactSemanticKind
@@ -2198,33 +1974,23 @@ class LocalResourceAdmission:
         from agent.schemas.orchestration import StepOutputRef
         binding = self._submission_binding(submission)
         values = self.validate_binding(binding)
+        if binding.composition == _NATIVE_COMPOSITION:
+            self._validate_native_consumption(binding, plan.steps)
+            return
         self._validate_resource_choice_consumption(binding, plan.steps)
         self._validate_neutral_h5ad(binding, plan.steps)
         if type(binding) is RegisteredInputGroup:
             self._validate_group_consumption(binding, plan.steps)
             return
-        if type(binding) is RegisteredInputCollection and binding.composition == _FASTQ_COMPOSITION:
-            self._validate_fastq_plan(binding, values, plan)
+        if type(binding) is RegisteredInput and binding.tool_name == 'inspect_raw_scATAC':
+            inspections = [step for step in plan.steps if step.tool_name == 'inspect_raw_scATAC']
+            if not inspections: raise _fail('BAM_SOURCE_MISMATCH')
+            for step in inspections: self._bam_inspection_arguments(values, step.arguments)
             return
-        if type(binding) is RegisteredInput:
-            record = self.load(binding.resource_id)
-            if record.input_type == 'bam':
-                source = values | dict(source_path=record.source_path, source_sha256=record.source_sha256)
-                self._validate_bam_plan(binding, record, source, plan)
-                return
-        if type(binding) is RegisteredInput and binding.tool_name == 'import_scATAC_fragments':
-            self._validate_fragments_requirements(binding, values)
-            imports = [step for step in plan.steps if step.tool_name == binding.tool_name]
-            if not imports:
-                raise _fail('FRAGMENTS_SOURCE_MISMATCH')
-            keys = ('source_path', 'source_sha256', 'reference_bundle_path',
-                    'reference_bundle_sha256', 'source_profile', 'namespace',
-                    'source_index_path', 'source_index_sha256')
-            for step in imports:
-                if any(step.arguments.get(key) != values.get(key) for key in keys):
-                    raise _fail('FRAGMENTS_SOURCE_MISMATCH')
-                if 'source_selection' in values and step.arguments.get('source_selection') != values['source_selection']:
-                    raise _fail('FRAGMENTS_SOURCE_MISMATCH')
+        if type(binding) is RegisteredInputCollection:
+            inspections = [step for step in plan.steps if step.tool_name == 'inspect_raw_scATAC']
+            if not inspections: raise _fail('FASTQ_SOURCE_MISMATCH')
+            for step in inspections: self._fastq_inspection_arguments(values, step.arguments)
             return
         if type(binding) is not RegisteredInput or binding.tool_name != 'inspect_scATAC':
             return
@@ -2280,6 +2046,10 @@ class LocalResourceAdmission:
         Completed historical turns do not call this guard.
         """
         binding = self._submission_binding(submission)
+        if binding.composition == _NATIVE_COMPOSITION:
+            self.validate_binding(binding)
+            self._validate_native_consumption(binding, steps, resolved=True)
+            return
         self._validate_resource_choice_consumption(binding, steps, resolved=True)
         self._validate_neutral_h5ad(binding, steps, resolved=True)
         if type(binding) is RegisteredInputGroup:
@@ -2289,57 +2059,16 @@ class LocalResourceAdmission:
             self.validate_binding(binding, verify_source=True)
             self._validate_group_consumption(binding, steps, resolved=True, plan=plan)
             return
-        if type(binding) is RegisteredInput:
-            record = self.load(binding.resource_id)
-            if record.input_type == 'bam':
-                values = _serialize(binding.execution_inputs) | dict(
-                    source_path=record.source_path, source_sha256=record.source_sha256)
-                inspections = False
-                prepared = False
-                consumed = False
-                for step in steps:
-                    if step.tool_name == 'inspect_raw_scATAC':
-                        self._bam_inspection_arguments(values, step.resolved_arguments)
-                        inspections = consumed = True
-                    elif step.tool_name == 'prepare_scATAC_bam_fragments':
-                        self._bam_producer_arguments(binding, values, step.resolved_arguments)
-                        self._validate_bam_intake(record, step.resolved_arguments)
-                        prepared = consumed = True
-                if not consumed:
-                    raise _fail('BAM_SOURCE_MISMATCH')
-                # Raw-only inspection requires the registered full-byte pin at
-                # first acceptance. Accepted production covers that exact source
-                # completely, including an explicit upstream inspection; its
-                # historical presentation can outlive current source availability.
-                self.validate_binding(binding, verify_source=inspections and not prepared)
-                return
-        inspections = any(step.tool_name in {'inspect_scATAC', 'inspect_raw_scATAC'} for step in steps)
-        h5ad_steps = ([step for step in steps if step.tool_name in {'inspect_scATAC', 'epizoo_embed_cells', 'pca_embed_cells'}]
-                     if type(binding) is RegisteredInput and binding.tool_name == 'inspect_scATAC' else [])
-        producers = [step for step in steps if step.tool_name == 'prepare_scATAC_fragments']
-        imports = ([step for step in steps if step.tool_name == 'import_scATAC_fragments']
-                   if type(binding) is RegisteredInput and binding.tool_name == 'import_scATAC_fragments' else [])
-        collection = type(binding) is RegisteredInputCollection
-        if not inspections and not h5ad_steps and not imports and not (collection and producers):
+        values = self.validate_binding(binding)
+        if type(binding) is RegisteredInput and binding.tool_name == 'inspect_raw_scATAC':
+            for step in steps:
+                if step.tool_name == 'inspect_raw_scATAC': self._bam_inspection_arguments(values, step.resolved_arguments)
             return
-        if imports:
-            values = _serialize(binding.execution_inputs)
-            self._validate_fragments_requirements(binding, values)
-            keys = ('source_path', 'source_sha256', 'reference_bundle_path',
-                    'reference_bundle_sha256', 'source_profile', 'namespace',
-                    'source_index_path', 'source_index_sha256')
-            for step in imports:
-                if any(step.resolved_arguments.get(key) != values.get(key) for key in keys):
-                    raise _fail('FRAGMENTS_SOURCE_MISMATCH')
-                if ('source_selection' in values
-                        and step.resolved_arguments.get('source_selection') != values['source_selection']):
-                    raise _fail('FRAGMENTS_SOURCE_MISMATCH')
-            # Scientific owners have accepted these exact consumed arguments.
-            # Completing presentation after a crash is a historical association
-            # read; current source availability must not revoke accepted science.
-            # New consumption already verifies both pins before plan execution.
-            self.validate_binding(binding, verify_source=False)
+        if type(binding) is RegisteredInputCollection:
+            for step in steps:
+                if step.tool_name == 'inspect_raw_scATAC': self._fastq_inspection_arguments(values, step.resolved_arguments)
             return
+        h5ad_steps = [step for step in steps if step.tool_name in {'inspect_scATAC','epizoo_embed_cells','pca_embed_cells'}] if binding.tool_name == 'inspect_scATAC' else []
         if h5ad_steps:
             values = _serialize(binding.execution_inputs)
             for step in h5ad_steps:
@@ -2362,47 +2091,3 @@ class LocalResourceAdmission:
                     for key in keys:
                         if step.resolved_arguments.get(key) != values.get(key):
                             raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
-        if collection:
-            records = self._collection_records(binding.members)
-            paths = sorted(record.source_path for record in records)
-            values = _serialize(binding.execution_inputs)
-            for step in steps:
-                if step.tool_name == 'inspect_raw_scATAC':
-                    if binding.composition == _FASTQ_COMPOSITION:
-                        self._fastq_inspection_arguments(values, step.resolved_arguments)
-                    actual = _serialize(step.resolved_arguments.get('raw_input_paths'))
-                    from agent.tools.data._raw_fastq import explicit_sources
-                    declared = explicit_sources(actual)
-                    if declared is not None:
-                        actual = [row['path'] for row in declared]
-                    if (type(actual) is not list or any(type(path) is not str for path in actual)
-                            or sorted(actual) != paths):
-                        raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        if collection and producers:
-            from agent.tools.data.fastq_fragment_manifest import load_manifest
-            expected = {record.source_path: dict(path=record.source_path,
-                sha256=record.source_sha256, size_bytes=record.size_bytes) for record in records}
-            try:
-                for step in producers:
-                    if binding.composition == _FASTQ_COMPOSITION:
-                        self._fastq_producer_arguments(binding, values, step.resolved_arguments)
-                    # Check the actual compiled producer inputs too; a Planner may
-                    # select a newly inspected manifest through an intra-plan edge.
-                    self._validate_fastq_intake(records, step.resolved_arguments)
-                    manifest = load_manifest(step.result['manifest_path'],
-                        expected_sha256=step.result['manifest_sha256'])
-                    for library in manifest['libraries']:
-                        provenance = library['provenance']
-                        sources = [source['resource'] for source in provenance['sources'] if source['role'] == 'fastq']
-                        if provenance['kind'] != 'fastq_fragment_production' or not sources:
-                            raise ValueError('Missing qualified FASTQ source provenance.')
-                        if any(expected.get(source['path']) != source for source in sources):
-                            raise ValueError('Producer consumed different registered bytes.')
-            except (ValueError, TypeError, OSError, KeyError) as exc:
-                raise _fail('LOCAL_RESOURCE_BINDING_INVALID') from exc
-        # An accepted producer has already verified exact source conservation.
-        # This opt-in Web composition performs historical association reads;
-        # existing raw evidence owners retain their own unfinished-presentation
-        # source/mtime checks. Raw-only acceptance and legacy UA2.4 retain pins.
-        historical_producer = (collection and producers and binding.composition == _FASTQ_COMPOSITION)
-        self.validate_binding(binding, verify_source=not historical_producer)

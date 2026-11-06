@@ -1,0 +1,5 @@
+# Agent reader: native SnapATAC2 H5AD uses explicit Blosc/Zstandard filters.
+hdf5plugin==7.1.0
+zstandard==0.25.0
+# Install snapatac2==2.9.0 in an isolated native runtime, as documented in the
+# raw scATAC guide; do not replace Agent's numerical environment implicitly.

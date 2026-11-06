@@ -9,10 +9,11 @@ import re
 from pathlib import Path
 import subprocess
 
-from ._qc_bedtools import _sha, ENVIRONMENT
+from agent.tools._file_identity import file_sha256 as _sha
 from .scatac_qc_profile import fail, ScATACQCError
 
 PARSER_PROFILE = 'pysam-0.24.1-gencode-transcript-gtf.v1'
+ENVIRONMENT = {'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}
 
 
 def _qualified_attributes(record):

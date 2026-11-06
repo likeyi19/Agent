@@ -77,9 +77,9 @@ def qualified_port(tool_name, port_name, registry=None):
     hooks = hooks_for_tool(tool_name, admitted_registry)
     if hooks is not None:
         return port_name in hooks.producer_ports
-    if tool_name not in _raw().TOOLS or not admitted_registry.contains(tool_name):
+    if tool_name not in _raw().TOOLS:
         return False
-    semantic = admitted_registry.get(tool_name).semantic_planning
+    semantic = admitted_registry.accepted(tool_name).semantic_planning
     return semantic is not None and port_name in {port.name for port in semantic.producer_ports}
 
 

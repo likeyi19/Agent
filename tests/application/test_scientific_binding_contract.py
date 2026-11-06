@@ -80,25 +80,19 @@ def test_species_identity_stays_distinct_from_registered_parameter_bindings():
     ('4/3', 'min_tss_enrichment', '4/3'),
     ('0.123456789012345678', 'min_tss_enrichment', '0.123456789012345678'),
 ])
-def test_registered_type_drives_binding_and_exact_ratio_owner_validates(registry, literal, argument, expected):
+def test_historical_metadata_preserves_numeric_literal_representation(registry, literal, argument, expected):
     utterance = 'Use threshold ' + literal + '.'
-    spec = registry.get('select_scATAC_cells').optional_arguments[argument]
+    spec = registry.accepted('select_scATAC_cells').optional_arguments[argument]
     result = admit_scientific_argument(declaration(utterance, literal, argument=argument), utterance, spec)
     assert result == expected and type(result) is type(expected)
 
 
-@pytest.mark.parametrize('literal,argument', [
-    ('-1', 'min_qc_fragment_records'), ('1.5', 'min_qc_fragment_records'),
-    ('1e3', 'min_qc_fragment_records'), ('1000000000000000001', 'min_qc_fragment_records'),
-    ('-1', 'min_tss_enrichment'), ('-0.1', 'min_tss_enrichment'),
-    ('1e3', 'min_tss_enrichment'), ('1/0', 'min_tss_enrichment'),
-    ('0.1234567890123456789', 'min_tss_enrichment'), ('NaN', 'min_tss_enrichment'),
-])
-def test_invalid_explicit_values_never_become_default_or_float_thresholds(registry, literal, argument):
-    utterance = 'Use threshold ' + literal + '.'
-    spec = registry.get('select_scATAC_cells').optional_arguments[argument]
+@pytest.mark.parametrize('literal', ['-1', '0', 'NaN', '1/0'])
+def test_invalid_current_resolution_never_becomes_a_default(registry, literal):
+    utterance = 'Use resolution ' + literal + '.'
+    spec = registry.get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='invalid_parameter_value'):
-        admit_scientific_argument(declaration(utterance, literal, argument=argument), utterance, spec)
+        admit_scientific_argument(declaration(utterance, literal, 'cluster_cells', 'resolution'), utterance, spec)
 
 
 def test_additional_existing_registered_parameter_needs_no_tool_specific_parser(registry):
@@ -129,13 +123,13 @@ def test_historical_resolution_class_and_admission_stay_strict_and_share_validat
 def test_generic_numeric_spans_reject_truncation_and_units(registry, utterance, literal):
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration(utterance, literal), utterance,
-            registry.get('select_scATAC_cells').optional_arguments['min_tss_enrichment'])
+            registry.accepted('select_scATAC_cells').optional_arguments['min_tss_enrichment'])
 
 
 def test_exact_literal_and_utterance_identity_are_checked(registry):
     utterance = 'Use threshold 4.5.'
     candidate = declaration(utterance, '4.5')
-    spec = registry.get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
+    spec = registry.accepted('select_scATAC_cells').optional_arguments['min_tss_enrichment']
     for invalid in (replace(candidate, literal='4.6'), replace(candidate, end=100)):
         with pytest.raises(IntentError, match='ungrounded_operand'):
             admit_scientific_argument(invalid, utterance, spec)
@@ -143,7 +137,7 @@ def test_exact_literal_and_utterance_identity_are_checked(registry):
 
 @pytest.mark.parametrize('changes', [
     {'tool': ''}, {'tool': '../cluster_cells'}, {'argument': 'resolution.x'},
-    {'literal': ''}, {'literal': '1' * 81}, {'start': True}, {'end': False},
+    {'literal': ''}, {'literal': '1' * 4097}, {'start': True}, {'end': False},
     {'start': -1}, {'start': 5, 'end': 3}, {'end': 4097}, {'unexpected': 1},
 ])
 def test_scoped_argument_shape_is_closed(changes):
@@ -220,7 +214,7 @@ def test_registry_metadata_offers_only_reviewed_free_text_declarations(registry)
 
     offered = {(item['tool'], item['argument']) for item in scientific_parameters(registry)}
     reviewed = {(tool, name) for tool, name, _ in STRING_DECLARATIONS}
-    reviewed.add(('import_scATAC_fragments', 'namespace'))
+    reviewed.update({('compute_motif_accessibility','group_key'),('run_chromvar','group_key'),('prepare_scatac_regulatory_sequences','group_key')})
     reviewed.update((tool_name, name) for tool_name in registry.names()
         for name, spec in {**registry.get(tool_name).required_arguments,
                            **registry.get(tool_name).optional_arguments}.items()
@@ -228,7 +222,7 @@ def test_registry_metadata_offers_only_reviewed_free_text_declarations(registry)
     eligible = set()
     unreviewed = set()
     for tool_name in registry.names():
-        tool = registry.get(tool_name)
+        tool = registry.accepted(tool_name)
         for name, spec in {**tool.required_arguments, **tool.optional_arguments}.items():
             if is_exact_string_argument(spec):
                 eligible.add((tool_name, name))
@@ -295,7 +289,7 @@ def test_paths_devices_unreviewed_assemblies_and_digests_stay_excluded(registry,
     from agent.application.dialogue_execution import _parameter_input, scientific_parameters
     from agent.application.turn_decisions import is_exact_string_argument
 
-    registered = registry.get(tool)
+    registered = registry.accepted(tool)
     spec = registered.required_arguments.get(name, registered.optional_arguments.get(name))
     assert str in spec.accepted_types and not is_exact_string_argument(spec)
     assert not any((item['tool'], item['argument']) == (tool, name)

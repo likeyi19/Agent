@@ -15,7 +15,7 @@ from scipy.io import mmread
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .sequence_prediction import read, write, library, arguments as _arguments
 from . import sequence_reference, peak_h5ad
 

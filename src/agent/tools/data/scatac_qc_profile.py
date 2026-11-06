@@ -58,21 +58,3 @@ def tss_windows(position, contig_length):
         fail('QC_TSS_WINDOW_INVALID')
     return tuple((position + a, position + b)
                  for a, b in (PROFILE.center, PROFILE.left_flank, PROFILE.right_flank))
-
-
-def tss_enrichment(center, left_flank, right_flank):
-    """Exact rational sufficient-statistic result, not rounded authoritative float."""
-    center, left_flank, right_flank = map(unsigned, (center, left_flank, right_flank))
-    flank = unsigned(left_flank + right_flank)
-    return (Fraction(200 * center, 101 * flank), None) if flank else (None, 'ZERO_TSS_BACKGROUND')
-
-
-def fragment_length_bin(length):
-    if type(length) is not int or not 1 <= length <= 2**63 - 1:
-        fail('QC_FRAGMENT_LENGTH_INVALID')
-    return 'nucleosome_free' if length < 147 else 'mononucleosomal' if length < 294 else 'longer'
-
-
-def nucleosome_signal(nucleosome_free, mononucleosomal):
-    a, b = unsigned(nucleosome_free), unsigned(mononucleosomal)
-    return (Fraction(b, a), None) if a else (None, 'ZERO_NUCLEOSOME_FREE')

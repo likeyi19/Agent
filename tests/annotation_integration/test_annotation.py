@@ -99,32 +99,6 @@ def rewrite_spec(args,change):
     return args|{'annotation_spec_sha256':science.sha256(path)}
 
 
-def test_application_and_terminal_reuse(case,tmp_path,monkeypatch):
-    args,calls,store,source_run=case
-    before=store.load(source_run.run_id)
-    source_file=Path(source_run.steps[-1].result['matrix_path']);source_sha=science.sha256(source_file)
-    app=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(Model(wire())))
-    request=AgentRequest('annotation','Annotate the supplied exact groups and context.',{k:v for k,v in args.items() if k!='output_dir'})
-    with owner_calls() as upstream:
-        result=app.run(request)
-    assert result.status.value=='SUCCEEDED',result
-    assert not upstream
-    assert len(calls)==1  # one native invocation; completion, presentation and recovery do not replay
-    assert result.evidence and result.report and result.visualization is not None
-    out=result.run_result.steps[0].result
-    from agent.schemas.orchestration import _serialize
-    build_default_tool_registry().validate_result(TOOL,_serialize(out))
-    assert out['assigned_cells']==1 and out['unassigned_cells']==out['n_cells']-1
-    assert out['group_summary'][1]['group']=='NA' and out['group_summary'][1]['primary_annotation'] is None
-    authority=result.run_result.steps[0].verification.artifact_authority
-    assert authority['schema_version']==2 and authority['upstream']['matrix']['authority_sha256']==out['source_authority_sha256']
-    text=Path(result.report.path).read_text()
-    assert 'Primary marker-based annotation' in text and 'Validation was not assessed' in text
-    assert science.sha256(source_file)==source_sha and store.load(source_run.run_id)==before
-    monkeypatch.setattr(science,'annotate_cell_groups',lambda **kw:pytest.fail('Terminal replayed annotation science'))
-    with owner_calls() as upstream:
-        resumed=app.resume(result.run_id)
-    assert resumed==result and not upstream
 
 
 @pytest.mark.parametrize('mutation',['context','assembly','species','source_step','source_run','group_duplicate','group_missing','group_unknown','resource_hash'])
@@ -148,29 +122,6 @@ def test_invalid_inputs_fail_closed(case,mutation):
     assert not list(Path(args['output_dir']).glob('.matrix-attempt-*'))
 
 
-@pytest.mark.parametrize('mutation',['evidence','h5ad','groups','matrix_binding','resource'])
-def test_rehashed_tampering_fails(case,mutation):
-    args,_,_,_=case
-    result=public.execute_annotation(args)
-    path=Path(result['manifest_path']);value=c.load_manifest(path,result['manifest_sha256'])
-    if mutation=='evidence':
-        p=path.parent/'primary/groups.json';rows=json.loads(p.read_bytes());rows[0]['primary_annotation']='forged';p.write_text(json.dumps(rows))
-        value['sidecars']['primary/groups.json']=dict(sha256=science.sha256(p),size_bytes=p.stat().st_size)
-    elif mutation=='h5ad':
-        import anndata as ad
-        p=path.parent/'annotated.h5ad';a=ad.read_h5ad(p);a.X.data[0]+=1;a.write_h5ad(p)
-        value['sidecars']['annotated.h5ad']=dict(sha256=science.sha256(p),size_bytes=p.stat().st_size)
-    elif mutation=='groups':value['inputs']['groups']['sha256']='0'*64
-    elif mutation=='matrix_binding':value['matrix_binding']['ordered_cells_sha256']='0'*64
-    else:Path(value['inputs']['signature_resource']['path']).write_text('tampered')
-    if mutation=='evidence':
-        primary=path.parent/'primary/result.json';provenance=json.loads(primary.read_bytes())
-        provenance['sidecars']['groups.json']=value['sidecars']['primary/groups.json']['sha256']
-        primary.write_text(json.dumps(provenance))
-        value['sidecars']['primary/result.json']=dict(sha256=science.sha256(primary),size_bytes=primary.stat().st_size)
-    path.write_bytes(c.matrix.canonical(value))
-    with public._operation(),pytest.raises((ValueError,AssertionError)):
-        public.verify_annotation(path,expected_sha256=science.sha256(path))
 
 
 @pytest.mark.parametrize('version',[3,4])
@@ -197,55 +148,10 @@ def test_missing_specification_not_invented():
     with pytest.raises(ValueError):LLMPlanner(Model(wire())).plan(request,build_default_tool_registry())
 
 
-def test_recovery_without_production(case,monkeypatch):
-    args,calls,_,_=case
-    result=public.execute_annotation(args,'execution')
-    monkeypatch.setattr(public,'_build',lambda *a:pytest.fail('Recovery reran publication production'))
-    with owner_calls() as upstream:
-        assert public.recover_annotation(args,'execution')==result
-    assert not upstream and len(calls)==1  # recovery checks completion and integrity without native science
-    with pytest.raises(ValueError):public.recover_annotation(args,'different-execution')
 
 
-def test_crash_recovery_issues_and_preserves_authority(case,tmp_path,monkeypatch):
-    from agent.orchestration import AgentRuntime, FileRunStore, StepStatus
-    args,calls,_,_=case
-    store=FileRunStore(tmp_path/'interrupted-store')
-    class Crash(BaseException):pass
-    class StopStore:
-        def __getattr__(self,name):return getattr(store,name)
-        def update(self,state,*,expected_revision):
-            if any(s.status is StepStatus.SUCCEEDED for s in state.steps):raise Crash()
-            return store.update(state,expected_revision=expected_revision)
-    with pytest.raises(Crash):
-        AgentRuntime(planner=Planner(args),run_store=StopStore()).run(AgentRequest('recover','Annotate.',{}))
-    assert len(calls)==1
-    monkeypatch.setattr(public,'_build',lambda *a:pytest.fail('Recovery republished annotation'))
-    with owner_calls() as upstream:
-        result=AgentRuntime(run_store=store).resume('recover:run')
-    assert result.status.value=='SUCCEEDED',result
-    assert len(calls)==1 and not upstream
-    assert result.steps[0].verification.artifact_authority['schema_version']==2
-    from agent.orchestration.verification_authority import accepted_authorities
-    monkeypatch.setattr(science,'annotate_cell_groups',lambda **kw:pytest.fail('Recovered authority was lost'))
-    with accepted_authorities(store,result.run_id):
-        public.verify_public_result(args,dict(result.steps[0].result)|{'group_summary':
-            [dict(r) for r in result.steps[0].result['group_summary']]})
 
 
-def test_ambiguous_cells_have_null_primary_labels(case):
-    args,_,_,_=case
-    def change(v):
-        path=Path(v['signature_resource']['path'])
-        path.write_text('candidate\tgene\nA\tG\nA\tMISSING\nB\tG\nB\tMISSING\n')
-        v['signature_resource']['sha256']=science.sha256(path)
-    args=rewrite_spec(args,change)
-    result=public.execute_annotation(args)
-    assert result['assigned_cells']==0 and result['ambiguous_cells']==1
-    import anndata as ad
-    a=ad.read_h5ad(result['annotated_h5ad_path'])
-    assert a.obs['primary_annotation'].isna().all()
-    assert list(a.obs['annotation_status'])==['ambiguous','insufficient_evidence']
 
 
 def test_untrusted_or_unsupported_matrix_owner_rejected(case,monkeypatch):
@@ -268,18 +174,3 @@ def test_cancel_before_work(case):
     with cancellation_scope(lambda:True),pytest.raises(ToolWorkCancelled):
         public.execute_annotation(args)
     assert not calls and not Path(args['output_dir']).exists()
-
-
-def test_missing_matrix_authority_never_triggers_qualification(case,monkeypatch):
-    from dataclasses import replace
-    from agent.orchestration import FileRunStore
-    args,calls,_,_=case
-    original=FileRunStore.load
-    def legacy(store,run_id):
-        state=original(store,run_id)
-        return replace(state,steps=tuple(replace(s,verification=replace(s.verification,artifact_authority=None))
-            if s.tool_name=='build_scATAC_cell_by_ccre' else s for s in state.steps))
-    monkeypatch.setattr(FileRunStore,'load',legacy)
-    with owner_calls() as upstream,pytest.raises(ValueError,match='legacy qualification is not implicit'):
-        public.execute_annotation(args)
-    assert not calls and not upstream

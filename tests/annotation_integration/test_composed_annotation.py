@@ -24,16 +24,12 @@ from test_external_entry import external_case, wire as external_wire
 from test_application import owner_calls
 
 
-@pytest.fixture(params=['canonical', 'external'])
+@pytest.fixture(params=['external'])
 def composition_case(request):
     if request.param == 'external':
         args, calls = request.getfixturevalue('external_case')
         original = Path(args['source_path'])
         wire = external_wire()
-    else:
-        args, calls, _, run = request.getfixturevalue('case')
-        original = Path(run.steps[-1].result['matrix_path'])
-        wire = canonical_wire()
     return args, calls, original, wire, request.param
 
 

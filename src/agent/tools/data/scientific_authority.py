@@ -35,10 +35,7 @@ TOOLS = {
 MODULES = {
     'epizoo_adaptation': 'agent.tools.models.epizoo_adaptation.publication',
     'annotation': 'agent.tools.analysis.scatac_annotation',
-    'fastq_fragment_production': 'scatac_fragments',
-    'bam_fragment_production': 'scatac_bam_fragments',
-    'external_fragment_adoption': 'scatac_fragment_import',
-    'qc': 'scatac_barcode_qc', 'selection': 'scatac_cell_selection', 'matrix': 'scatac_matrix',
+    'matrix': 'scatac_matrix_adoption',
 }
 
 
@@ -348,46 +345,13 @@ def describe(kind, path, sha, context):
 
 
 def runtime_compatibility(kind, description, kwargs):
-    if kind == 'epizoo_adaptation':
+    from .raw_history import RETIRED_KINDS, accepted
+    if kind in RETIRED_KINDS or kind == 'matrix' and not is_external(description['manifest']):
+        accepted(kind, description['manifest_path'], description['manifest_sha256'])
+    elif kind == 'epizoo_adaptation':
         from agent.tools.models.epizoo_adaptation.resources import runtime
         if description['manifest']['runtime'] != runtime():
             raise AuthorityError('EpiZoo runtime changed.')
-    if kind in CONTRACTS or kind == 'generic_fragments':
-        if kind == 'bam_fragment_production' and description['profile'] != CONTRACTS[kind].profile_sha256:
-            from ._bam_fragment_io import runtime_identity
-            runtime_identity()
-        if kind == 'fastq_fragment_production':
-            from .fastq_fragments_verifier import verify_packaging
-        elif kind == 'generic_fragments':
-            from .scatac_fragments_v2_verifier import verify_packaging
-        else:
-            from ._external_fragment_io import verify_packaging
-        verify_packaging(kwargs['runtime'])
-        return
-    if kind == 'qc':
-        from ._barcode_qc_binding import backend_runtime, resource_qualification
-        from .scatac_qc_reference import load_scatac_qc_reference_bundle
-        value = description['manifest']; args = value['arguments']
-        supplied = kwargs.get('fragments_authority')
-        if supplied is not None:
-            from .fragments_authority_contract import StoredFragmentAuthority
-            if type(supplied) is not StoredFragmentAuthority:
-                raise AuthorityError('QC requires an issued dependency authority.')
-            supplied.validate(args['fragments_manifest_path'], args['fragments_manifest_sha256'],
-                              producer_kind=description['upstream']['fragments']['kind'])
-        from .authority_context import current
-        context = current()
-        if context is not None and (description['manifest_path'], description['manifest_sha256']) in context.accepted:
-            # Accepted authority has already checked this exact publication and
-            # closure. Current installation governs new QC, not completed QC.
-            return
-        _, bundle, _ = load_scatac_qc_reference_bundle(args['qc_reference_manifest_path'], expected_sha256=args['qc_reference_manifest_sha256'])
-        if backend_runtime()[1] != value['backend_identity'] or resource_qualification(bundle) != value['resource_qualification']:
-            raise AuthorityError('QC runtime/resource qualification changed.')
-    if kind == 'matrix' and not is_external(description['manifest']):
-        from . import _matrix_bedtools as bed
-        if bed.qualify_runtime(kwargs['bedtools_path']) != description['manifest']['backend']:
-            raise AuthorityError('Matrix runtime qualification changed.')
 
 
 def reuse_result(kind, description, proof, kwargs):
@@ -403,11 +367,8 @@ def reuse_result(kind, description, proof, kwargs):
             tuple(tuple(c) for c in proof.result_metadata['contigs']),
             take_snapshots(f['path'] for f in description['files']))
         if kind == 'generic_fragments': return fragment
-        if kind == 'bam_fragment_production':
-            from .bam_fragments_verifier import BamProductionVerification
-            return BamProductionVerification(fragment)
-        from .external_fragments_verifier import ExternalAdoptionVerification
-        return ExternalAdoptionVerification(fragment)
+        from types import SimpleNamespace
+        return SimpleNamespace(fragments=fragment)
     if kind == 'annotation':
         from agent.tools.analysis.scatac_annotation import _summary
         return _summary(description['manifest'], path, sha)
@@ -432,11 +393,11 @@ def issue(context, tool_name, arguments, result, execution_identity):
 
 def _publication_record(context, tool_name, arguments, result, execution_identity, result_metadata):
     """Pure provenance description, not a trust-issuing entry point."""
+    from .raw_history import RETIRED_TOOLS, publication_record
+    if tool_name in RETIRED_TOOLS:
+        return publication_record(context, tool_name, arguments, result, execution_identity, result_metadata)
     kind = TOOLS[tool_name]
-    adoption_modules = {'build_scATAC_cell_by_features': 'fragment_feature_tool',
-                        'build_cell_by_features': 'fragment_feature_matrix',
-                        'import_external_fragments': 'neutral_fragment_import',
-                        'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
+    adoption_modules = {'adopt_scATAC_cell_by_ccre': 'scatac_matrix_adoption',
                         'adopt_cell_by_features': 'regulatory_matrix_adoption',
                         'adopt_scATAC_cell_by_features': 'neutral_matrix_tool'}
     module = _module(adoption_modules.get(tool_name, MODULES[kind]))

@@ -7,9 +7,6 @@ import json
 import pytest
 
 from agent.tools.data import _raw_fastq as f, raw_scatac as raw, raw_scatac_manifest as m
-from agent.tools.data._fragments_binding import fresh_intake
-from agent.tools.data._fragments_fastq import scan_group
-from agent.tools.data._chromap import QualificationGroup
 from agent.orchestration.registry import build_default_tool_registry
 from agent.orchestration.raw_scatac_verifier import verify_raw_scatac_intake
 
@@ -33,26 +30,6 @@ def inspect(root,rows,layout=f.FastqLayout.A):
     verify_raw_scatac_intake(args,result,build_default_tool_registry())
     _,manifest,_=m.load_raw_intake_manifest(result['manifest_path'])
     return args,result,manifest
-
-
-@pytest.mark.parametrize('layout',[f.FastqLayout.A,f.FastqLayout.B])
-@pytest.mark.parametrize('gzip_roles',[(),('R1','R2','R3','I2','I1'),('R1',)])
-@pytest.mark.parametrize('optional',[False,True])
-def test_explicit_roles_content_compression_and_independent_full_scan(tmp_path,layout,gzip_roles,optional):
-    rows=sources(tmp_path,layout=layout,gzip_roles=gzip_roles,optional=optional)
-    args,result,manifest=inspect(tmp_path,rows,layout)
-    assert result['readiness']=='READY'
-    assert f.declared_sources(manifest)==f.explicit_sources(rows)
-    assert manifest.groups[0].grouping_basis is m.GroupingBasis.EXPLICIT
-    assert manifest.groups[0].syntactic_sample_token is None
-    assert not any(e.source is m.EvidenceSource.FILENAME for e in manifest.evidence)
-    assert {e.file_id for e in manifest.evidence if e.claim is m.EvidenceClaim.GROUPING}=={s.id for s in manifest.files}
-    assert all(e.source is m.EvidenceSource.USER_DECLARATION for e in manifest.evidence if e.claim is m.EvidenceClaim.GROUPING)
-    fresh_intake(manifest)
-    group=QualificationGroup(manifest.groups[0].id.removeprefix('group:'),layout,
-        tuple((f.ReadRole(r['role']),r['path']) for r in rows))
-    assert scan_group(group,16)['record_count']==1
-    assert {s.path for s in manifest.files}=={r['path'] for r in rows}
 
 
 @pytest.mark.parametrize('case',['duplicate_path','duplicate_role','unknown_role','mixed','extra','relative','traversal','symlink','directory'])
@@ -92,7 +69,6 @@ def test_mutated_original_or_changed_declarations_invalidate_intake(tmp_path):
     with pytest.raises(ValueError):
         verify_raw_scatac_intake(dict(args,raw_input_paths=forged),result,build_default_tool_registry())
     p=Path(rows[0]['path']);p.write_bytes(p.read_bytes().replace(b'A',b'T'))
-    with pytest.raises(ValueError):fresh_intake(manifest)
     with pytest.raises(ValueError):verify_raw_scatac_intake(args,result,build_default_tool_registry())
 
 
@@ -107,7 +83,7 @@ def test_multiple_lanes_are_explicit_and_do_not_depend_on_directory(tmp_path):
     rows=sources(tmp_path)
     another=tmp_path/'unrelated-name';another.mkdir()
     rows+= [dict(row,lane='002') for row in sources(another)]
-    _,result,manifest=inspect(tmp_path,rows)
+    args,result,manifest=inspect(tmp_path,rows)
     assert result['readiness']=='READY' and result['n_groups']==2
     assert {g.lane for g in manifest.groups}=={'001','002'}
-    fresh_intake(manifest)
+    verify_raw_scatac_intake(args,result,build_default_tool_registry())

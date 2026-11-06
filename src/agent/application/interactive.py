@@ -1016,7 +1016,7 @@ class InteractiveAgentApplication:
                         # Eligibility of an optional table never removes a
                         # separately accepted matrix or existing result view.
                         pass
-                elif self._application.registry.get(step.tool_name).scientific_delivery is not None:
+                elif self._application.registry.accepted(step.tool_name).scientific_delivery is not None:
                     from .native_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
@@ -1071,7 +1071,7 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
-                elif self._application.registry.get(planned.tool_name).scientific_delivery is not None:
+                elif self._application.registry.accepted(planned.tool_name).scientific_delivery is not None:
                     from .native_delivery import accepted_artifacts
                     items.extend(accepted_artifacts(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
@@ -1147,7 +1147,7 @@ class InteractiveAgentApplication:
                 or record['science_profile'] != owner.PROFILES[record['artifact_contract']]
                 or record['verifier'] != owner.VERIFIER):
             raise ValueError('Unsupported accepted processed authority.')
-        spec = self._application.registry.get(step.tool_name)
+        spec = self._application.registry.accepted(step.tool_name)
         spec.result_contract.validate(result)
         output_key = 'analysis_path' if output is None else output.output_key
         ports = [port for port in spec.semantic_planning.producer_ports
@@ -1214,7 +1214,7 @@ class InteractiveAgentApplication:
         from agent.orchestration.prior_outputs import accepted_step_digest
         from agent.orchestration.verification_authority import _accepted
         from agent.tools.data import _barcode_qc_contract as qc, _cell_selection_contract as selection
-        from agent.tools.data import scatac_barcode_qc, scatac_cell_selection
+        from agent.tools.data import raw_history
         from .matrix_delivery import _open_matrix_source
 
         store = self._application.run_store
@@ -1227,7 +1227,7 @@ class InteractiveAgentApplication:
                 or result['contract_version'] != version or record['schema_version'] != 2
                 or record['scope'] != 'scientific_correctness.v1' or record['completion'] != 'succeeded'):
             raise ValueError('Unsupported accepted table authority.')
-        spec = self._application.registry.get(step.tool_name)
+        spec = self._application.registry.accepted(step.tool_name)
         spec.result_contract.validate(result)
         output_key = 'manifest_path' if output is None else output.output_key
         ports = [p for p in spec.semantic_planning.producer_ports
@@ -1252,13 +1252,10 @@ class InteractiveAgentApplication:
         if len(raw) > qc.MAX_MANIFEST or hashlib.sha256(raw).hexdigest() != result['manifest_sha256']:
             raise ValueError('Changed table manifest.')
         is_qc = step.tool_name == 'compute_scATAC_qc'
-        owner = scatac_barcode_qc if is_qc else scatac_cell_selection
+        summary = raw_history.barcode_qc_summary if is_qc else raw_history.cell_selection_summary
         manifest = (qc.BarcodeQCManifest(raw) if is_qc else selection.CellSelectionManifest(raw)).to_dict()
         arguments = (qc.validate_arguments(step.resolved_arguments) if is_qc
                      else selection.arguments(step.resolved_arguments))
-        token = (owner._publication_token(arguments, execution, manifest['qc_resource_identity_sha256'],
-                    manifest['resource_qualification'], manifest['backend_identity']) if is_qc
-                 else owner._publication(arguments, execution)[2])
         profile = manifest['science_profile_sha256' if is_qc else 'selection_profile_sha256']
         if (record['publication_path'] != str(manifest_path)
                 or record['manifest_sha256'] != result['manifest_sha256']
@@ -1266,10 +1263,9 @@ class InteractiveAgentApplication:
                 or record['science_profile'] != profile
                 or _serialize(record['resources']['manifest_identity']) != manifest
                 or _serialize(record['resources']['result_metadata']) != {}
-                or manifest_path.parent.name != prefix + token
                 or record['arguments_sha256'] != qc.digest(arguments)
                 or manifest['arguments'] != arguments
-                or result != owner._summary(manifest, manifest_path, result['manifest_sha256'])):
+                or result != summary(manifest, manifest_path, result['manifest_sha256'])):
             raise ValueError('Accepted result, arguments, manifest and table authority differ.')
         files = {f['path']: _serialize(f) for f in record['files']}
         expected = [dict(path=str(manifest_path), sha256=result['manifest_sha256'], size_bytes=len(raw))]

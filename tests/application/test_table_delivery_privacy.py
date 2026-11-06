@@ -71,9 +71,9 @@ def test_unmistakable_private_paths_in_identifiers_are_ineligible(role, barcode)
                                   contract, role, manifest(contract, role))
 
 
-def test_owner_gzip_writer_has_no_filename_comment_or_extra_metadata(tmp_path):
+def test_historical_gzip_layout_has_no_filename_comment_or_extra_metadata(tmp_path):
     path = tmp_path / 'barcodes.tsv.gz'
-    qc.write_gzip(path, [content('table')])
+    path.write_bytes(compressed(content('table')))
     original = path.read_bytes()
     with path.open('rb') as stream:
         validate_scientific_table(stream, qc.CONTRACT, 'table', manifest(qc.CONTRACT, 'table'))
@@ -213,8 +213,6 @@ def test_large_chunk_boundaries_and_trailer_are_consumed():
 
 
 def test_eligibility_does_not_recalculate_counts_or_thresholds(monkeypatch):
-    import agent.tools.data._barcode_qc_production as qc_production
-    import agent.tools.data._cell_selection_production as selection_production
     import agent.tools.data.barcode_qc_verifier as qc_verifier
     import agent.tools.data.cell_selection_verifier as selection_verifier
     import agent.tools.data.scatac_selection_profile as selection_profile
@@ -222,9 +220,8 @@ def test_eligibility_does_not_recalculate_counts_or_thresholds(monkeypatch):
     def prohibited(*args, **kwargs):
         raise AssertionError('delivery must not invoke scientific production or verification')
 
-    for module, name in ((qc_production, 'produce'), (selection_production, 'produce'),
-                         (qc_verifier, 'verify_barcode_qc'), (selection_verifier, 'verify_cell_selection'),
-                         (selection_profile, 'decide'), (selection_profile, 'thresholds')):
+    for module, name in ((qc_verifier, 'verify_barcode_qc'), (selection_verifier, 'verify_cell_selection'),
+                         (selection_profile, 'thresholds')):
         monkeypatch.setattr(module, name, prohibited)
     for contract, role in ROLES:
         validate_scientific_table(io.BytesIO(compressed(content(role))), contract, role,

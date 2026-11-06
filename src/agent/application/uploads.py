@@ -251,20 +251,12 @@ class H5ADUploadAdmission:
         record = self._owned(self.resources.load(resource_id))
         # The facade owns new-consumption versus completed-retry lifetime checks.
         # Metadata-only transport resolution must not reopen a historical source.
-        if isinstance(record, LocalResourceCollectionRecord):
-            return self.resources.compose_fastq_collection(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error, resource_choice=resource_choice,
+        if isinstance(record, LocalResourceCollectionRecord) or record.input_type in ('external_fragments','bam'):
+            if resource_selection_error is not None: raise ResourceAdmissionError(resource_selection_error)
+            return self.resources.compose_native(resource_id, scientific_inputs or {}, resource_choice=resource_choice,
                 verify_source=verify_source)
         if record.input_type == 'fastq':
             raise ResourceAdmissionError('FASTQ_COLLECTION_REQUIRED')
-        if record.input_type == 'external_fragments':
-            return self.resources.compose_fragments(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error,
-                resource_choice=resource_choice, verify_source=verify_source)
-        if record.input_type == 'bam':
-            return self.resources.compose_bam(resource_id, scientific_inputs,
-                resource_selection_error=resource_selection_error, resource_choice=resource_choice,
-                verify_source=verify_source)
         if scientific_inputs is not None or resource_selection_error is not None:
             return self.resources.compose_h5ad(resource_id, scientific_inputs,
                 resource_selection_error=resource_selection_error, resource_choice=resource_choice,

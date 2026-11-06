@@ -1,10 +1,8 @@
 """Bounded descriptive fragment inspection, with no preprocessing authority."""
-import gzip
 from pathlib import Path
-import struct
 
-from . import _external_fragment_io as io, external_fragment_manifest as m
-from .external_fragments import parse_record
+from . import fragment_io as io, external_fragment_manifest as m
+from .fragment_io import parse_record
 from .scatac_fragments_v2 import absolute_path, sha
 
 RECORD_LIMIT = 10_000
@@ -35,16 +33,7 @@ def inspect_scATAC_fragments(source_path, source_sha256, source_index_path=None,
     if source_index_path is not None:
         io.resource(source_index_path, source_index_sha256)
         if kind != 'bgzf': m.fail('EXTERNAL_FRAGMENTS_INDEX_BINDING_INVALID')
-        try:
-            with gzip.open(source_index_path, 'rb') as stream:
-                header = stream.read(36)
-            if len(header) != 36 or header[:4] != b'TBI\1':
-                m.fail('EXTERNAL_FRAGMENTS_INDEX_MISMATCH')
-            n, fmt, seq, beg, end, meta, skip, length = struct.unpack('<8i', header[4:])
-            if n < 0 or length < 0 or (fmt, seq, beg, end, meta, skip) != (65536, 1, 2, 3, 35, 0):
-                m.fail('EXTERNAL_FRAGMENTS_INDEX_MISMATCH')
-        except (OSError, EOFError, struct.error):
-            m.fail('EXTERNAL_FRAGMENTS_INDEX_MISMATCH')
+        io.source_index_format(source_index_path)
         index_status = 'tbi_header_only_pair_unverified'
     count = support = header_count = header_bytes = 0
     columns = None

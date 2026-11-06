@@ -24,7 +24,8 @@ def tool_spec(owner):
         _semantic_request_member as rm, _semantic_argument_port as scalar)
     from .native_delivery import delivery_spec
     required = dict(
-        input_path=arg((str, Path), 'H5AD with exact cells/features, selected measurement and native layers or feature mask as required.',
+        input_path=arg((str, Path), ('BAM, original fragments or native H5AD, as required by the selected function.' if owner.package == 'snapatac2' else
+            'H5AD with exact cells/features, selected measurement and native layers or feature mask as required.'),
             artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         output_dir=arg((str, Path), 'Managed native publication destination.'),
         function_name=arg((str,), 'Explicit public ' + owner.package + ' function.', choices=tuple(owner.FUNCTIONS),
@@ -37,6 +38,22 @@ def tool_spec(owner):
             scientific_parameter=True, conversational_exact_string=True),
         matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
+    raw_fields = set()
+    if owner.package == 'snapatac2':
+        from agent.tools.analysis import snapatac_raw as raw
+        optional['fragment_order'] = arg((str,),
+            'Task input-order knowledge for pp.import_fragments only: unknown selects native sorting; '
+            'barcode uses established barcode ordering. Explicit kwargs.sorted_by_barcode prevails. '
+            'Capture only explicit task source-order declarations; never ask for this optional information. '
+            'Omission retains the native default; never add this task input for an explicit native-function request.',
+            choices=('unknown', 'barcode'), scientific_parameter=True, conversational_choice=True)
+        for port, (path, sha, description) in raw.PORTS.items():
+            optional[path] = arg((str, Path), description, artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
+            optional[sha] = arg((str,), 'Exact captured ' + port + ' checksum.')
+            raw_fields.update((path, sha))
+        for key in ('species', 'assembly'):
+            optional[key] = arg((str,), 'Supplied source ' + key + '; no inferred reference correspondence.',
+                scientific_parameter=True, conversational_exact_string=True)
     if owner.package == 'Signac':
         optional.update(second_path=arg((str, Path), 'Exact second H5AD for Jaccard or corSparse Y; identical ordered features required.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
             second_sha256=arg((str,), 'Captured second source checksum.'),
@@ -46,29 +63,64 @@ def tool_spec(owner):
     scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
-        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')),
-        *(scalar(k, required=k in required) for k in (*required, *optional) if k not in ('input_path', 'second_path'))]
+        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')
+            + (('native_fragments_file.v1',) if owner.package == 'snapatac2' else ())),
+        *(scalar(k, required=k in required) for k in (*required, *optional)
+            if k not in {'input_path', 'second_path', *raw_fields})]
+    if owner.package == 'snapatac2':
+        from .native_parameters import input_name
+        for port, (path, sha, _) in raw.PORTS.items():
+            ports.append(Consumer(port, (member('path', path), member('sha256', sha)), False,
+                request_sources=(request(path, rm('path', path), rm('sha256', sha)),) + tuple(
+                    request(input_name(owner.TOOL, fn, path),
+                        rm('path', input_name(owner.TOOL, fn, path)), rm('sha256', input_name(owner.TOOL, fn, sha)))
+                    for fn, applies in raw.APPLIES.items() if port in applies)))
     if owner.package == 'Signac':
         ports.append(Consumer('second', (member('dataset', 'second_path'),), False,
             request_sources=(request('second_path', rm('dataset', 'second_path')),),
             accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')))
     pub = owner.publication
+    raw_guidance = (
+        'Native raw functions: pp.make_fragment_file consumes BAM and produces fragments. pp.import_fragments '
+        'directly consumes plain/gzip/zstd fragments plus chrom_sizes. For ordinary tasks bind the offered '
+        'function-scoped fragment_order input: unknown selects sorted_by_barcode=false and SnapATAC2 performs sorting. '
+        'Never ask the researcher for sorting flags or detect/sort order in Agent. '
+        'pp.make_fragment_file guarantees barcode-sorted output; its import may omit fragment_order and retain native true. '
+        'Chromap BED has no barcode-order guarantee. Explicit sorted_by_barcode kwargs take precedence. '
+        'For explicit native-function requests omit task-only fragment_order; omitted kwargs retain native defaults. '
+        'TBI is unused. No canonical fragment import or internal source profile is required. '
+        'metrics.tsse consumes native fragment H5AD and GTF/GFF gene_anno. pp.filter_cells is a separate native selection '
+        'with its own method. pp.make_peak_matrix consumes imported native H5AD and optional peaks BED. '
+        'Its default is paired-insertion; explicit fragment-body count requests need counting_strategy=fragment. '
+        'Use native import min_num_fragments=200, filter_cells min_counts=1000/min_tsse=5.0, and paired-insertion '
+        'matrix counting by omission unless the user requests different semantics. Never substitute old Agent TSS 4 '
+        'or fragment-body counting defaults. A user request to retain low-depth/all barcodes may explicitly bind '
+        'min_num_fragments=0; do not lower thresholds just for a small dataset. Imported barcodes and later filtered '
+        'barcodes are distinct populations. Native import has no X measurement: build a matrix before PCA/LSI. '
+        'Preserve supplied barcode/coordinate history and declared source/reference species/assembly. '
+        'Use optional native reference ports only for the function that consumes them. '
+    ) if owner.package == 'snapatac2' else 'No genome is required for these matrix functions. '
+    notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
     return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
-            k: _planning_result('Exact native publication or result H5AD.', bindable=True, artifact=A.RAW_SCATAC)
-            for k in ('manifest_path', 'manifest_sha256', 'matrix_path', 'matrix_sha256')}),
+            k: _planning_result('Exact native publication/file; null outputs are unavailable for this function.', bindable=True, artifact=A.RAW_SCATAC)
+            for k in ('manifest_path', 'manifest_sha256', 'matrix_path', 'matrix_sha256',
+                *(('fragments_path', 'fragments_sha256') if owner.package == 'snapatac2' else ()))}),
         durable_hooks=DurableToolHooks(owner.execute, owner.recover), exception_classifier=classify,
         recovery_policy_version=owner.POLICY,
-        scientific_authority=ScientificAuthorityHooks(kind=owner.KIND, producer_ports=('matrix', 'dataset'),
+        scientific_authority=ScientificAuthorityHooks(kind=owner.KIND, producer_ports=('matrix', 'dataset')
+                + (('fragments',) if owner.package == 'snapatac2' else ()),
             describe=pub.describe, publication_record=pub.publication_record, reuse_result=pub.reuse_result,
             proof_metadata=pub.proof_metadata, independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.OPERATION, owner.guidance,
             'Invoke only the named supported native function with explicit kwargs unchanged and unspecified native defaults omitted. '
-            'No genome is required for these matrix functions. Preserve source bytes, ordered axes and distinct result semantics.'),
+            'Preserve source bytes, ordered axes and distinct result semantics.', *notes),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('matrix', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
-            Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset', 'matrix_path'),), lineage_from_port='dataset'))))
+            Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset','matrix_path'),member('sha256','matrix_sha256')), lineage_from_port='dataset'),
+            *((Producer('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),)),)
+                if owner.package == 'snapatac2' else ()))))
 
 
 def tool_specs():

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.schemas.orchestration import freeze_json_mapping, _serialize
-from ._fragments_common import snapshot
+from agent.tools._file_identity import snapshot
 
 _CURRENT = ContextVar('scientific_authority_operation', default=None)
 
@@ -67,7 +67,7 @@ class VerificationContext:
         return 'independently_verified_dependency'
 
     def files(self, paths):
-        from .fastq_verification_authority import file_closure
+        from agent.tools._file_identity import file_closure
         entries = []
         for name in sorted(set(map(str, paths))):
             key = (name, snapshot(name))
@@ -114,7 +114,7 @@ class VerificationContext:
         runtime_compatibility(kind, description, kwargs)
         custom_limits = False
         if kind == 'matrix':
-            from ._cell_by_ccre_io import MatrixLimits
+            from ._matrix_storage import MatrixLimits
             custom_limits = kwargs.get('limits', MatrixLimits()) != MatrixLimits()
         if key in self.proofs and not custom_limits:
             self.locations[kind, str(path)] = (key, description['manifest_sha256'])

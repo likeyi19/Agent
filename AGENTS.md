@@ -118,6 +118,48 @@ conservation checks remain once per new publication, with accepted-authority
 reuse preventing repeated upstream reconstruction. The linked record separates
 the full boundary audit, changed workflows, measured calls and remaining limits.
 
+## Raw scientific processing replacement
+
+The [raw scATAC guide](docs/guides/raw-scatac-processing.md) owns current native
+processing. Chromap owns FASTQ mapping; the existing SnapATAC2 interface owns native
+BAM extraction, direct fragments import, QC, filtering and region matrices. Both
+research-task and native-function modes share Registry/Planner/Executor,
+NativePublication, Session, RunStore and Revision. The seven former custom raw
+execution registrations, source canonicalizers, independent scientific replay and
+custom SQLite fragment counting are removed. Only bounded descriptive inspection,
+necessary file adaptation/integrity and isolated read-only accepted legacy readers
+remain. Native measurements/defaults are recorded honestly and do not inherit old
+scientific profile identities.
+
+Ordinary external-fragment tasks carry unknown input order into the existing native
+interface, which selects SnapATAC2 sorting and records that Agent choice separately.
+Explicit sorting kwargs prevail; direct native-function calls retain omitted native
+defaults. Native BAM extraction guarantees barcode order. Import retention (200),
+later filtering (1000 fragments / TSSe 5.0) and paired-insertion matrix defaults
+remain native choices unless explicitly overridden. Imported and later selected
+barcode populations are recorded separately; no source order detector, Agent sort
+or duplicate scientific computation is introduced. The dated final-alignment
+appendix in the replacement report owns alignment evidence and limitations.
+The final closeout confirms function-scoped reference binding and independent native
+returns for `inplace=False`. The post-download JSON error belongs to the external
+acceptance helper's shallow conversion of immutable mappings; existing production
+serialization, evidence delivery and accepted recovery pass without repeating science.
+
+The [replacement report](../agent-data/acceptance/raw-intake-simplification/native-first/REPORT.md)
+owns bounded native and genuine Firefox/official-OpenAI evidence, actual downloads,
+historical preservation and remaining limitations. Earlier raw milestone execution
+contracts are historical. The prior simplification report/evidence and paused SRV-2C
+Session/cancelled Run remain intact. Final engineering closeout is **CONDITIONAL GO
+within bounded scope**: 201 focused checks pass; 65 protected identities and legacy
+downloads remain exact. The single final genuine Firefox/official-OpenAI request
+chose a genome-only resource outside the fragment offers and stopped at clarification,
+with no scientific Run or retry. No shared defect is established by that selection;
+successful post-correction live planning/presentation remain unqualified.
+Work builds on `5a358283fc54710e5d85e637224103fbf97580d6`. The user's final closeout
+instruction authorizes one reviewed completion commit and normal push to
+`origin/main`; earlier no-commit statements describe pre-closeout stages.
+The full PBMC10k evaluation and SRV-2C are not restarted.
+
 ## Architecture and engineering rules
 
 OPT-3A consolidates exact offered-result resolution and source-column binding in

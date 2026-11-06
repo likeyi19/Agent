@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ._fragments_common import canonical, fail
 from . import scatac_fragments_v2 as v2
-from .scatac_fragments_v2_verifier import FragmentVerification, FragmentVerificationRuntime, take_snapshots, check_snapshots
+from .scatac_fragments_v2_verifier import FragmentVerification, take_snapshots, check_snapshots
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class VerifiedFragments:
 
     def iter_fragments(self, namespace):
         """Iterate one explicitly selected library in its canonical order."""
-        from ._fragment_io import _bgzf_lines
+        from .fragment_io import _bgzf_lines
         entries = self.manifest['libraries']
         matches = [e for e in entries if e['namespace'] == namespace]
         if len(matches) != 1:
@@ -133,31 +133,17 @@ def qualified_fragments(path,sha, *, fragments_authority=None):
     value=v2.load_fragments_manifest_v2(path,expected_sha256=sha)
     kinds={e['provenance']['kind'] for e in value['libraries']}
     if len(kinds)!=1: fail('FRAGMENTS_PRODUCER_UNQUALIFIED')
-    kind=next(iter(kinds)); runtime=FragmentVerificationRuntime()
+    kind=next(iter(kinds))
     if fragments_authority is not None:
         from .fragments_authority_contract import StoredFragmentAuthority
         from agent.schemas.verification_authority import AuthorityError
         if type(fragments_authority) is not StoredFragmentAuthority:
             raise AuthorityError('Fragments require stored producer-specific scientific authority.')
         fragments_authority.validate(path,sha,producer_kind=kind)
-    if kind=='fastq_fragment_production':
-        from .fastq_fragments_verifier import verify_fragments
-        from .scatac_fragments import verification_runtime
-        if fragments_authority is None:
-            verify_fragments(path,expected_sha256=sha,runtime=verification_runtime())
-        basis='qualified_fastq_source_and_producer_record';history='alignment_not_rerun'
-    elif kind=='bam_fragment_production':
-        from .bam_fragments_verifier import verify_bam_fragments
-        if fragments_authority is None:
-            verify_bam_fragments(path,expected_sha256=sha,runtime=runtime)
-        basis='independent_bam_transformation';history='upstream_history_declared'
-    elif kind=='external_fragment_adoption':
-        from .external_fragments_verifier import verify_external_fragments
-        if fragments_authority is None:
-            verify_external_fragments(path,expected_sha256=sha,runtime=runtime)
-        basis='independent_external_conservation';history='upstream_history_declared'
-    else: fail('FRAGMENTS_PRODUCER_UNQUALIFIED')
-    view=open_verified_fragments(path,expected_sha256=sha,runtime=runtime)
+    from .raw_history import accepted
+    accepted(kind, path, sha)
+    basis='accepted_historical_scientific_method';history='upstream_history_declared'
+    view=open_verified_fragments(path,expected_sha256=sha)
     if view.manifest!=value: fail('FRAGMENTS_SOURCE_CHANGED')
     return view,dict(kind=kind,profile_ids=sorted({e['provenance']['profile']['id'] for e in value['libraries']}),
         verification_basis=basis,history=history)

@@ -200,7 +200,7 @@ def target(field, declared=None):
     if field == 'epizoo':
         from .epizoo_handoff import target as epizoo_target
         return epizoo_target(declared or EpiZooDeclaration())
-    return {'annotation': 'annotate_scATAC_cell_types', 'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
+    return {'annotation': 'annotate_scATAC_cell_types', 'fragments': 'run_snapatac2', 'bam': 'run_snapatac2', 'fastq': 'run_chromap'}[field]
 
 
 def empty(field):
@@ -226,9 +226,11 @@ def _field(interaction):
 
 
 def validate_arguments(arguments, field='fastq'):
-    from .local_resources import _FASTQ_COMPANION_TOOLS, _BAM_COMPANION_TOOLS, _FRAGMENTS_COMPANION_TOOLS
     from .epizoo_handoff import TOOLS
-    allowed = {'epizoo': TOOLS, 'annotation': ('annotate_scATAC_cell_types',), 'fragments': _FRAGMENTS_COMPANION_TOOLS, 'bam': _BAM_COMPANION_TOOLS, 'fastq': _FASTQ_COMPANION_TOOLS}[field]
+    downstream=('pca_embed_cells','build_cell_neighbors','cluster_cells','compute_cell_umap')
+    allowed = {'epizoo':TOOLS, 'annotation':('annotate_scATAC_cell_types',),
+        'fragments':('run_snapatac2',)+downstream, 'bam':('run_snapatac2',)+downstream,
+        'fastq':('run_chromap','run_snapatac2')+downstream}[field]
     if any(a.tool not in allowed for a in arguments):
         raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
 
@@ -393,8 +395,13 @@ def schema(field='fastq'):
             genome_index_source=identity,
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
             species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
-            source_profile=optional(('10x-atac-fragments.v1',)),
-            feature_category=optional(('peak_set', 'regulatory_regions')),
+            source_profile=dict(optional(('10x-atac-fragments.v1',)), description=(
+                'Map explicitly supplied 10x ATAC/ARC provenance, already Tn5-adjusted zero-based half-open '
+                'intervals, corrected barcodes and read-pair support to this choice. The researcher need '
+                'not name source_profile or its internal identifier. Missing provenance stays null.')),
+            feature_category=dict(optional(('peak_set', 'regulatory_regions')), description=(
+                'Category of the explicitly uploaded feature_source BED only. Leave null when using an installed reference vocabulary, including cCREs. '
+                'This field does not select or redescribe the installed reference features.')),
             resource=identity))
     if field == 'bam':
         return _object(dict(source=identity,
@@ -610,7 +617,7 @@ def source_binding(origin, source, interaction, field=None):
     return _role_binding(origin, source, interaction)
 
 
-def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
+def requirements(binding, declared, input_sets, *, evidence=None, pinned=None, historical=False):
     field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
     from types import SimpleNamespace
     from .local_resources import LocalResourceAdmission, ResourceAdmissionError, _fastq_member
@@ -620,10 +627,10 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
             ('namespace', 'Name the single processing library represented by these fragments.'),
             ('species', 'Specify human or mouse.'), ('assembly', 'Specify the source assembly: hg38 or mm10.'),
             ('source_profile', 'Confirm 10x ATAC/ARC fragment semantics: zero-based half-open adjusted intervals, corrected barcode identifiers and read-pair support.'))
-            if getattr(declared, key) is None]
+            if getattr(declared, key) is None and (historical or key not in ('namespace', 'source_profile'))]
         if any(int(h.split('.')[1]) >= len(binding.members) for h in source_handles(declared)):
             raise ValueError('Fragment role is outside captured attachments.')
-        if declared.feature_category is not None and declared.feature_source is None:
+        if historical and declared.feature_category is not None and declared.feature_source is None:
             missing.append('Attach the custom BED to define the exact matrix regions; its intervals must use the declared assembly and zero-based half-open coordinates.')
         if declared.genome_index_source is not None and declared.genome_source is None:
             missing.append('Identify the plain FASTA paired with the supplied FAI.')
@@ -640,7 +647,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
             ('assembly', 'Specify the source assembly: hg38 or mm10.'),
             ('barcode_policy', 'Confirm from its processing history that CB tags are already corrected cell-barcode identifiers.'),
             ('source_profile', 'Confirm unshifted paired ATAC alignments with duplicate pairs retained.'))
-            if getattr(declared, key) is None]
+            if getattr(declared, key) is None and (historical or key not in ('namespace', 'source_profile', 'barcode_policy'))]
         if declared.source is not None and int(declared.source.split('.')[1]) >= len(binding.members):
             raise ValueError('BAM source is outside captured attachments.')
     else:
@@ -726,7 +733,7 @@ def _extend_catalog(previous, current):
     return current
 
 
-def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None):
+def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, historical=False):
     from .dialogue_execution import _bind_arguments, _with_retained
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
@@ -791,7 +798,7 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
                 if resource_observation['problem']:
                     missing.append(resource_observation['problem'])
     else:
-        missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned)
+        missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned, historical=historical)
     return binding, declared, values, missing, selected
 
 
@@ -974,100 +981,10 @@ def _context_identity(candidates, declared, selected, *, mode='original', scope=
 
 
 def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=()):
-    """Coordinate real intake, independent verification and the context owner.
-
-    No provisional authority is published. The normal planned intake/producer
-    still execute and verify under RunStore; this preparation admits a request
-    resource against the same exact source bytes and intake content identity.
-    """
     if isinstance(declared, AnnotationDeclaration):
         return _prepare_annotation(owner, candidates, declared, selected, arguments)
-    if isinstance(declared, FragmentsDeclaration):
-        return _prepare_fragments(owner, session_id, candidates, declared, selected, arguments)
-    from agent.tools.data import raw_scatac, raw_scatac_manifest, scatac_library_context as library
-    from agent.orchestration.raw_scatac_verifier import verify_raw_scatac_intake
-    field = 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
-    identity = _context_identity(candidates, declared, selected, scope='library.v1')
-    directory = owner._workspace._ensure_directory(owner._workspace.root / (field + '_handoffs'))
-    root = owner._workspace._ensure_directory(directory / identity)
-    if field == 'bam':
-        source = owner.load(candidates.members[int(declared.source.split('.')[1])]['resource_id'])
-        originals = [source]
-        record = owner.bind_raw_source('bam-handoff:' + identity + ':' + declared.source,
-            source, session_id=session_id, input_type='bam')
-    else:
-        originals, typed = [], []
-        for member in declared.members:
-            source = owner.load(candidates.members[int(member.source.split('.')[1])]['resource_id'])
-            originals.append(source)
-            record = owner.bind_raw_source('fastq-handoff:' + identity + ':' + member.source,
-                source, session_id=session_id, input_type='fastq',
-                declaration=dict(library_id=declared.namespace, fastq_layout=declared.layout,
-                                 role=member.role, lane=member.lane, chunk=member.chunk))
-            typed.append(record)
-        owner._verify_records(originals)
-        collection = owner.register_fastq_collection('fastq-handoff:' + identity,
-            [r.resource_id for r in typed], label='Declared FASTQ library',
-            attribution='Session-scoped FASTQ source handoff ' + identity)
-    base = selected.inputs()
-    if set(base).intersection(arguments) and any(base[k] != arguments[k] for k in set(base).intersection(arguments)):
-        raise ValueError('Explicit scientific arguments conflict with configured resources.')
-    values = dict(base, **arguments)
-    values.setdefault('species', declared.species)
-    if field == 'bam':
-        declarations = dict(species=declared.species, raw_assay=declared.assay, source_genome_assembly=declared.assembly,
-                            source_profile=declared.source_profile)
-        if any(k in values and values[k] != v for k, v in declarations.items()):
-            raise ValueError('BAM declarations conflict with configured resources.')
-        values.update(declarations)
-        inspection = dict(raw_input_paths=[dict(path=record.source_path, input_kind='BAM')],
-            output_dir=str(root / 'intake'), **{k: v for k, v in declarations.items() if k != 'source_profile'})
-    else:
-        inspection = dict(raw_input_paths=owner._fastq_sources(typed),
-            output_dir=str(root / 'intake'), species=declared.species, raw_assay=declared.assay, fastq_layout=declared.layout)
-    accepted = {_serialize(r)['context_sha256']: _serialize(r) for r in accepted_contexts
-                if r['identity'] == identity and r.get('identity_scope') == 'library.v1'}
-    if len(accepted) > 1:
-        raise ValueError('Conflicting accepted library context identities.')
-    if accepted:
-        receipt, = accepted.values()
-        _, context, _ = library.load_scatac_library_processing_context(
-            receipt['context_path'], expected_sha256=receipt['context_sha256'])
-        library.validate_library_context_intake_binding(context)
-        # Reuse exact admitted content, with fresh source verification. Do not
-        # invoke intake production or rebuild the already qualified context.
-        _, manifest, _ = raw_scatac_manifest.load_raw_intake_manifest(
-            receipt['intake_path'], expected_sha256=receipt['intake_sha256'])
-        result = raw_scatac._summary(manifest, Path(receipt['intake_path']), receipt['intake_sha256'])
-    else:
-        result = raw_scatac.inspect_raw_scATAC(**inspection)
-    verify_raw_scatac_intake(inspection, result, owner._registry)
-    _, manifest, _ = raw_scatac_manifest.load_raw_intake_manifest(result['manifest_path'], expected_sha256=result['manifest_sha256'])
-    if not accepted:
-        context = library.build_scatac_library_processing_context(
-            intake_manifest_path=result['manifest_path'], expected_intake_sha256=result['manifest_sha256'],
-            selection_mode=library.SelectionMode.ALL_GROUPS,
-            libraries=(library.LibraryDeclaration(namespace=declared.namespace,
-                group_ids=tuple(group.id for group in manifest.groups),
-                membership_basis=library.MembershipBasis.SINGLE_GROUP if len(manifest.groups) == 1
-                    else library.MembershipBasis.CALLER_SHARED_LIBRARY,
-                barcode_interpretation=library.BarcodeInterpretation.CORRECTED_IDENTIFIER if field == 'bam' else library.BarcodeInterpretation.RAW_SEQUENCE,
-                correction_policy=library.CorrectionPolicy.ALREADY_CORRECTED if field == 'bam' else library.CorrectionPolicy.WHITELIST_REQUIRED,
-                whitelist=None if field == 'bam' else library._whitelist(_serialize(selected.fastq_whitelist))),))
-    destination = root / 'context.json'
-    if destination.exists():
-        import hashlib
-        context_sha = hashlib.sha256(library.canonical_library_processing_context_bytes(context)).hexdigest()
-        library.load_scatac_library_processing_context(destination, expected_sha256=context_sha)
-        pointer = dict(manifest_path=str(destination), manifest_sha256=context_sha)
-    else:
-        pointer = library.publish_scatac_library_processing_context(context, destination)
-    owner._verify_records(originals)
-    values.update(library_context_path=pointer['manifest_path'], library_context_sha256=pointer['manifest_sha256'])
-    binding = (owner.compose_bam(record.resource_id, values, resource_choice=selected.resource_choice()) if field == 'bam'
-               else owner.compose_fastq_collection(collection.resource_id, values, resource_choice=selected.resource_choice()))
-    return binding, dict(source_mode='original', identity_scope='library.v1', identity=identity, intake_path=result['manifest_path'], intake_sha256=result['manifest_sha256'],
-                         context_path=pointer['manifest_path'], context_sha256=pointer['manifest_sha256'])
+    from .native_raw_handoff import prepare as native_prepare
+    return native_prepare(owner, session_id, candidates, declared, selected, arguments)
 
 
 def _fragments_identity(candidates, declared, selected):
@@ -1096,38 +1013,6 @@ def _fragments_values(declared, selected, arguments, reference):
     return values
 
 
-def _prepare_fragments(owner, session_id, candidates, declared, selected, arguments):
-    """Existing import binding plus optional owner-qualified private BED resource."""
-    from .reference_supplementation import qualify_bed
-    identity = _fragments_identity(candidates, declared, selected)
-    records = {h: owner.load(candidates.members[int(h.split('.')[1])]['resource_id'])
-               for h in source_handles(declared)}
-    reference = None
-    if declared.feature_source is not None:
-        root = owner._workspace._ensure_directory(owner._workspace.root / 'fragments_handoffs')
-        directory = owner._workspace._ensure_directory(root / identity)
-        values = {} if selected is None else selected.inputs()
-        fasta = None
-        if declared.genome_source is not None:
-            fasta = owner.bind_raw_source('fragments-genome:' + identity, records[declared.genome_source],
-                session_id=session_id, input_type='fasta', source_index=records.get(declared.genome_index_source))
-        from agent.tools.data.scatac_reference import ScATACReferenceError, species_identity
-        from .reference_supplementation import ReferenceSupplementError
-        try:
-            reference = qualify_bed(owner, records[declared.feature_source],
-                parent_path=values.get('reference_bundle_path'), parent_sha256=values.get('reference_bundle_sha256'),
-                category=declared.feature_category, directory=directory, fasta=fasta,
-                species=species_identity(declared.species), assembly=declared.assembly)
-        except ScATACReferenceError as exc:
-            raise ReferenceSupplementError('The supplied BED or its reference genome failed owner qualification.',
-                diagnostic_reason='incompatible_scientific_reference') from exc
-    record = owner.bind_raw_source('fragments-handoff:' + identity, records[declared.source],
-        session_id=session_id, input_type='external_fragments', source_index=records.get(declared.index_source))
-    binding = owner.compose_fragments(record.resource_id,
-        _fragments_values(declared, selected, arguments, reference),
-        resource_choice=None if selected is None else selected.resource_choice())
-    owner._verify_records(list(records.values()))
-    return binding, dict(identity=identity, feature_reference=reference)
 
 
 def _validate_fragments_completion(interaction, admitted, candidates, declared, selected, arguments):
@@ -1209,22 +1094,29 @@ def validate(interaction, preceding):
                 or previous_rows is not None and (digest(previous_rows) != expected['resource_context_sha256']
                     or (rows != previous_rows if evidence is None else _extend_catalog(previous_rows, rows) != rows))):
             raise ValueError('FASTQ resource catalog changed.')
+        registry = build_default_tool_registry()
+        historical = admitted.get('tool') in ('prepare_scATAC_fragments', 'prepare_scATAC_bam_fragments', 'import_scATAC_fragments')
+        if historical:
+            from agent.orchestration.raw_history import ReplayRegistry
+            registry = ReplayRegistry(registry)
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
-            rows, build_default_tool_registry(), field, evidence, admitted.get(field + '_source_evidence'),
-            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())))
+            rows, registry, field, evidence, admitted.get(field + '_source_evidence'),
+            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())), historical=historical)
         if evidence is not None and admitted.get('raw_resource_choice') != (declared.resource or
                 ('resource.' + selected.input_set_id if selected is not None else
                  source.admitted.get('raw_resource_choice') if source is not None else None)):
             raise ValueError('Captured resource selection changed.')
         if (admitted[field] != _serialize(declaration_dict(declared)) or admitted[field + '_sources'] != binding.attribution()
-                or admitted[field + '_arguments'] != values or admitted['tool'] != target(field, declared)
+                or admitted[field + '_arguments'] != values or admitted['tool'] != (
+                    {'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
+                    if historical else target(field, declared))
                 or admitted['revision_id'] != interaction.base_revision_id or admitted['roles']):
             raise ValueError('FASTQ declarations changed.')
         if source is not None and admitted.get('continuation') != {
                 k: expected[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}:
             raise ValueError('FASTQ continuation changed.')
-        if missing:
+        if missing or not historical and admitted['kind'] == 'clarify':
             pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
                 field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
             # Saved prerequisite prose is immutable presentation, not admission
@@ -1242,6 +1134,9 @@ def validate(interaction, preceding):
             validate_completion(admitted, binding, declared, selected, values)
         elif field == 'annotation':
             _validate_annotation_completion(admitted, binding, declared, selected, values)
+        elif (admitted.get(field + '_context') or {}).get('adapter') == 'native-files.v1':
+            from .native_raw_handoff import validate as validate_native
+            validate_native(admitted, binding, declared, selected, values, field)
         elif field == 'fragments':
             _validate_fragments_completion(interaction, admitted, binding, declared, selected, values)
         else:

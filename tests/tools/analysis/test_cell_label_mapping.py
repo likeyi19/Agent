@@ -9,7 +9,7 @@ import pytest
 from sklearn.metrics import accuracy_score, f1_score, recall_score, adjusted_rand_score, normalized_mutual_info_score
 
 from agent.tools.analysis import cell_label_comparison as owner
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 
 
 @pytest.fixture

@@ -27,11 +27,7 @@ def corpus(matrix_bindings, *, profile=None, strategy='de_novo'):
         seen.add(key)
         value=matrix.load_manifest_bytes(Path(binding['manifest_path']).read_bytes())
         from agent.tools.data.fragment_feature_matrix_contract import is_fragment_features
-        options = {}
-        if is_fragment_features(value):
-            from agent.tools.data.scatac_matrix import executable
-            options['bedtools_path'] = executable()
-        verify_cell_by_ccre(binding['manifest_path'],expected_sha256=binding['manifest_sha256'], **options)
+        verify_cell_by_ccre(binding['manifest_path'],expected_sha256=binding['manifest_sha256'])
         if matrix_semantics(value)!=semantics:
             raise ValueError(f'Adaptation requires exact neutral {semantics} for the selected profile.')
         sparse_bytes+=16*value['nnz']+8*(value['shape'][0]+1)

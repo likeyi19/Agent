@@ -82,7 +82,7 @@ def test_all_reference_missing_is_explicit_no_accuracy(tmp_path):
 
 
 def test_inputs_immutable_and_recovery_only_saved_completion(tmp_path):
-    from agent.tools.data.fastq_verification_authority import file_closure
+    from agent.tools._file_identity import file_closure
     args=inputs(tmp_path);before=file_closure([args['prediction_path'],args['reference_path']])
     result=owner.execute(args,'execution-1')
     assert owner.recover(args,'execution-1')==result

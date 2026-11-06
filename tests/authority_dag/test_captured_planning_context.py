@@ -17,8 +17,6 @@ from agent.schemas.prior_output import PriorOutputRef
 from agent.schemas.verification_authority import AuthorityError
 from agent.tools.data.authority_context import VerificationContext
 from test_processed_prior_outputs import processed_source, ScientificPlanModel, consumer
-from test_propagation import chain
-from test_qualification import legacy
 
 
 def capture(sessions, session_id, turn_id='future'):
@@ -222,19 +220,6 @@ def test_custom_nonreusable_report_still_requires_an_exact_accepted_record(custo
     locator = replace(locator, accepted_step_sha256=accepted_step_digest(changed))
     with pytest.raises(AuthorityError, match='No recorded scientific authority'):
         optional_binding_for_locator(locator, store, registry)
-
-
-def test_existing_explicit_legacy_qualification_is_admitted(legacy):
-    from agent.orchestration import build_default_tool_registry
-    from agent.orchestration.verification_authority import qualify_legacy_authorities
-    _, _, state, store = legacy
-    step = state.steps[0]
-    locator = OutputLocator('fragments', state.run_id, step.step_id, 'manifest_path', accepted_step_digest(step))
-    registry = build_default_tool_registry()
-    assert optional_binding_for_locator(locator, store, registry) is None
-    qualify_legacy_authorities(store, state.run_id)
-    assert optional_binding_for_locator(locator, store, registry) == bind_output(
-        store, registry, state.run_id, step.step_id, 'fragments')
 
 
 class DownstreamPlanner:

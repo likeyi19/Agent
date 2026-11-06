@@ -9,7 +9,7 @@ import tempfile
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._native_process import run, r_environment
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .native_matrix import arguments, NativeInvocationError
 from .native_publication import NativePublication
 from .sequence_prediction import library, read, write

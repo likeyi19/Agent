@@ -1,7 +1,7 @@
 """Narrow annotation ports; explicit specification supplies all biological choices."""
 from pathlib import Path
 from agent.tools.analysis import annotation_contract as c, scatac_annotation as public
-from .matrix_registry import MatrixArgument
+from .registry import ExactFileArgument as MatrixArgument
 
 
 def validate_result(value):
@@ -60,7 +60,7 @@ def annotation_tool_spec():
         scalar = key in ('annotation_method','count_slot','group_column')
         spec = _planning_argument((str,) if scalar or key.endswith('_sha256') else (str,Path),
             'Explicit annotation input. Counts default to supplied X; select layers/name explicitly for another count slot. Select the exact obs grouping column.',
-            source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key in c.ANALYSIS_GROUP_ARGUMENTS else S.REQUEST_INPUT_ONLY,
+            source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT if key in c.ANALYSIS_GROUP_ARGUMENTS or key in ('source_path','source_sha256') else S.REQUEST_INPUT_ONLY,
             artifacts=(A.CLUSTERED_ANALYSIS,) if key in c.ANALYSIS_GROUP_ARGUMENTS else (A.RAW_SCATAC,) if key.startswith(('source_','groups_')) else (),
             scientific_parameter=key in ('count_slot','group_column'),
             conversational_exact_string=key in ('count_slot','group_column'),
@@ -69,8 +69,11 @@ def annotation_tool_spec():
         (required if key in common else optional)[key] = argument
     ports = []
     for name,prefix in (('matrix','matrix_manifest'),('specification','annotation_spec'),('source','source'),('groups','groups')):
-        ports.append(SemanticConsumerPortSpec(name,tuple(member(k,prefix+'_'+k) for k in ('path','sha256')),name=='specification',
-            request_sources=(request(prefix+'_path',*(input_member(k,prefix+'_'+k) for k in ('path','sha256'))),)))
+        names=('dataset','sha256') if name=='source' else ('path','sha256')
+        fields=(prefix+'_path',prefix+'_sha256')
+        ports.append(SemanticConsumerPortSpec(name,tuple(member(k,f) for k,f in zip(names,fields)),name=='specification',
+            request_sources=(request(prefix+'_path',*(input_member(k,f) for k,f in zip(names,fields))),),
+            accepted_upstream_types=('native_matrix_h5ad.v1',) if name=='source' else ()))
     for name in ('annotation_method','count_slot','group_column'):
         ports.append(_semantic_argument_port(name,required=False))
     ports.append(SemanticConsumerPortSpec('clustering',

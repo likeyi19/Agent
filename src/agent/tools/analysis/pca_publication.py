@@ -3,7 +3,7 @@ from pathlib import Path
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.schemas.orchestration import _serialize
 from agent.tools.data.authority_context import current, owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .neighbors_publication import read_json, _write_json, _shape, _file, _sha
 
 KIND = 'cell_pca'

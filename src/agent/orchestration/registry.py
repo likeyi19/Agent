@@ -514,6 +514,21 @@ class ArgumentSpec:
             )
 
 
+class ExactFileArgument(ArgumentSpec):
+    """Exact file/checksum metadata for the existing scientific resource ports."""
+    def validate(self, name, value):
+        super().validate(name, value)
+        from agent.schemas.prior_output import PriorOutputRef
+        if isinstance(value, (StepOutputRef, PriorOutputRef)):
+            return
+        from agent.tools.data import scatac_matrix_contract as metadata
+        try:
+            if name.endswith('_sha256'): metadata.sha(value)
+            else: metadata.absolute_path(str(value))
+        except ValueError:
+            raise ToolArgumentError('Invalid exact scientific file binding: ' + name) from None
+
+
 class _EpiZooSpeciesArgument(ArgumentSpec):
     """Legacy string choices or an explicit neutral target species identity."""
 
@@ -864,7 +879,7 @@ class ToolSpec:
                      tuple(port for port in self.semantic_planning.consumer_ports if port.name == source))
             if (argument.accepted_types != (str,) or argument.choices
                     or len(ports) != 1 or len(ports[0].members) not in (1,2)
-                    or len(ports[0].members)==2 and tuple(m.name for m in ports[0].members)!=("path","sha256")):
+                    or len(ports[0].members)==2 and tuple(m.name for m in ports[0].members) not in (("path","sha256"),("dataset","sha256"))):
                 raise ValueError(f"Tool {self.name!r} observation parameter {name!r} requires one dataset port.")
             if len(ports[0].members) == 2:
                 checksum_field = ports[0].members[1].field_name
@@ -1013,6 +1028,10 @@ def _semantic_result_fits_argument(
     result_types: tuple[type, ...], argument_types: tuple[type, ...]
 ) -> bool:
     for result_type in result_types:
+        # A native function can omit an output family. Static compatibility
+        # describes present values; resolved null still fails argument validation.
+        if result_type is type(None):
+            continue
         if result_type is bool and bool not in argument_types:
             return False
         if not any(
@@ -1123,6 +1142,13 @@ class ToolRegistry:
             raise UnknownToolError(
                 f"Tool {name!r} is not in the executable allowlist."
             ) from exc
+
+    def accepted(self, name):
+        """Metadata lookup for reading accepted history; never executable admission."""
+        if self.contains(name):
+            return self.get(name)
+        from .raw_history import tool
+        return tool(name)
 
     def validate_arguments(
         self, name: str, arguments: Mapping[str, object]
@@ -1987,7 +2013,7 @@ def build_default_tool_registry() -> ToolRegistry:
                     (_semantic_member("dataset", "path"),),
                     True,
                     accepted_upstream_types=(
-                        "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1"
+                        "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "native_matrix_h5ad.v1"
                     ),
                     request_sources=(
                         _semantic_request('source_path', _semantic_request_member('dataset', 'source_path')),
@@ -2171,7 +2197,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.QUERY,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1"),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "native_matrix_h5ad.v1"),
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("species", required=True),
@@ -2253,7 +2279,7 @@ def build_default_tool_registry() -> ToolRegistry:
         semantic_planning=SemanticToolSpec(consumer_ports=(
             SemanticConsumerPortSpec('dataset', (_semantic_member('dataset','input_path'),), True,
                 request_sources=(_semantic_request('input_path', _semantic_request_member('dataset','input_path')),),
-                accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1')),
+                accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')),
             _semantic_argument_port('output_dir', required=True),
             _semantic_argument_port('n_components', required=False),
             _semantic_argument_port('preprocessing', required=False, input_name='pca_preprocessing'),
@@ -2763,7 +2789,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.GROUND_TRUTH,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "native_matrix_h5ad.v1"),
                 ),
                 _semantic_argument_port("label_key", required=True),
                 _semantic_argument_port("output_dir", required=True),
@@ -2985,7 +3011,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.REFERENCE,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "native_matrix_h5ad.v1"),
                     required_lineage=SemanticLineage.REFERENCE,
                 ),
                 SemanticConsumerPortSpec(
@@ -2999,7 +3025,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.QUERY,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "native_matrix_h5ad.v1"),
                     required_lineage=SemanticLineage.QUERY,
                 ),
                 SemanticConsumerPortSpec(
@@ -3209,7 +3235,7 @@ def build_default_tool_registry() -> ToolRegistry:
                             lineage=SemanticLineage.GROUND_TRUTH,
                         ),
                     ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1",),
+                    accepted_upstream_types=("raw_scatac_dataset.v1", "native_matrix_h5ad.v1"),
                     required_lineage=SemanticLineage.GROUND_TRUTH,
                 ),
                 _semantic_argument_port(
@@ -3396,7 +3422,7 @@ def build_default_tool_registry() -> ToolRegistry:
             consumer_ports=tuple(
                 (SemanticConsumerPortSpec('input_path',(_semantic_member('dataset','input_path'),),True,
                     request_sources=(_semantic_request('input_path',_semantic_request_member('dataset','input_path')),),
-                    accepted_upstream_types=('scatac_matrix_h5ad.v1',)) if argument=='input_path'
+                    accepted_upstream_types=('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')) if argument=='input_path'
                  else _semantic_argument_port(argument, required=required))
                 for argument, required in (
                     ("input_path", True),
@@ -3799,18 +3825,11 @@ def build_default_tool_registry() -> ToolRegistry:
             ),),
         ),
     )
-    from .fragments_registry import fragments_tool_spec
-    from .external_fragments_registry import external_fragments_tool_spec
-    from .bam_fragments_registry import bam_fragments_tool_spec
-    from .barcode_qc_registry import barcode_qc_tool_spec
-    from .cell_selection_registry import cell_selection_tool_spec
-    from .matrix_registry import matrix_tool_spec
     from .matrix_adoption_registry import matrix_adoption_tool_spec
     from .cell_comparison_registry import tool_spec as cell_comparison_tool_spec
     from .annotation_registry import annotation_tool_spec
     from .corroboration_registry import tool_spec as corroboration_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
-    from .fragment_feature_registry import tool_spec as fragment_feature_tool_spec
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
     from .macs3_registry import tool_spec as macs3_tool_spec
     from .chromvar_registry import tool_spec as chromvar_tool_spec
@@ -3820,6 +3839,7 @@ def build_default_tool_registry() -> ToolRegistry:
     from .cicero_cds_registry import tool_spec as cicero_cds_tool_spec
     from .native_table_registry import tool_specs as native_table_tool_specs
     from .native_matrix_registry import tool_specs as native_matrix_tool_specs
+    from .chromap_registry import tool_spec as chromap_native_tool_spec
     from .chromvar_native_registry import tool_spec as chromvar_native_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
     specs = (
@@ -3828,6 +3848,7 @@ def build_default_tool_registry() -> ToolRegistry:
         motifmatchr_tool_spec(),
         chromvar_native_tool_spec(),
         *native_matrix_tool_specs(),
+        chromap_native_tool_spec(),
         *native_table_tool_specs(),
         cicero_cds_tool_spec(),
         monalisa_tool_spec(),
@@ -3846,18 +3867,11 @@ def build_default_tool_registry() -> ToolRegistry:
         differential_accessibility_spec,
         raw_intake_spec,
         fragment_inspection_tool_spec(),
-        fragments_tool_spec(),
-        external_fragments_tool_spec(),
-        bam_fragments_tool_spec(),
-        barcode_qc_tool_spec(),
-        cell_selection_tool_spec(),
-        matrix_tool_spec(),
         matrix_adoption_tool_spec(),
         annotation_tool_spec(),
         cell_comparison_tool_spec(),
         corroboration_tool_spec(),
         *species_tool_specs(),
-        fragment_feature_tool_spec(),
         *sequence_tool_specs(),
     )
     for spec in specs:

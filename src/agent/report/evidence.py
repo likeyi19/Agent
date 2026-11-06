@@ -23,6 +23,7 @@ from agent.tools.analysis import monalisa as _MONALISA
 from agent.tools.analysis import cicero_cds as _CICERO_CDS
 from agent.tools.analysis.native_tables import PACKAGES as _NATIVE_TABLE_PACKAGES
 from agent.tools.analysis.native_matrix import PACKAGES as _NATIVE_MATRIX_PACKAGES
+from agent.tools.data import chromap_native as _CHROMAP_NATIVE
 from agent.tools.analysis.chromvar_native import RESULT_FIELDS as _CHROMVAR_NATIVE_FIELDS, FACT_FIELDS as _CHROMVAR_NATIVE_FACTS
 from agent.tools.analysis.motifmatchr import RESULT_FIELDS as _MATCH_FIELDS, FACT_FIELDS as _MATCH_FACTS
 from agent.tools.analysis.chromvar import RESULT_FIELDS as _MOTIF_FIELDS, FACT_FIELDS as _MOTIF_FACTS
@@ -30,20 +31,16 @@ from agent.tools.analysis.scatac_regulatory_sequences import RESULT_FIELDS as _R
 from agent.tools.analysis.sequence_prediction import RESULT_FIELDS as _SEQUENCE_FIELDS, EVAL_FIELDS as _SEQUENCE_EVAL_FIELDS
 from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSPECTION_FIELDS
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
-from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS, project_fragments
-from .bam_fragments import (CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS,
-    FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS, project_bam_fragments)
+from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS
+from .bam_fragments import CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS, FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS
 from agent.tools.analysis.annotation_corroboration import RESULT_FIELDS as _CORROBORATION_FIELDS
 from agent.tools.analysis import cell_label_comparison as _CELL_COMPARISON
 from .annotation import CONTRACT_FIELDS as _ANNOTATION_FIELDS, FACT_FIELDS as _ANNOTATION_FACT_FIELDS
 from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
-from .matrix import (CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS, project_matrix)
-from .cell_selection import (CONTRACT_FIELDS as _CELL_SELECTION_FIELDS,
-    FACT_FIELDS as _CELL_SELECTION_FACT_FIELDS, project_cell_selection)
-from .barcode_qc import (CONTRACT_FIELDS as _BARCODE_QC_FIELDS,
-    FACT_FIELDS as _BARCODE_QC_FACT_FIELDS, project_barcode_qc)
-from .external_fragments import (CONTRACT_FIELDS as _EXTERNAL_FRAGMENTS_FIELDS,
-    FACT_FIELDS as _EXTERNAL_FRAGMENTS_FACT_FIELDS, project_external_fragments)
+from .matrix import CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS
+from .cell_selection import CONTRACT_FIELDS as _CELL_SELECTION_FIELDS, FACT_FIELDS as _CELL_SELECTION_FACT_FIELDS
+from .barcode_qc import CONTRACT_FIELDS as _BARCODE_QC_FIELDS, FACT_FIELDS as _BARCODE_QC_FACT_FIELDS
+from .external_fragments import CONTRACT_FIELDS as _EXTERNAL_FRAGMENTS_FIELDS, FACT_FIELDS as _EXTERNAL_FRAGMENTS_FACT_FIELDS
 
 from agent.orchestration.differential_accessibility_verifier import (
     VERIFICATION_R_SCRIPT,
@@ -414,6 +411,10 @@ _PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path',
     'analysis_sha256','source_sha256', *_PCA_FACTS))
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
+    _CHROMAP_NATIVE.TOOL: _ToolProjection(frozenset(_CHROMAP_NATIVE.RESULT_FIELDS), _CHROMAP_NATIVE.FACT_FIELDS, _CHROMAP_NATIVE.POLICY, (
+        _ArtifactProjection('manifest_path', 'native_chromap_manifest', ('native_completion', 'artifact_integrity'), digest_field='manifest_sha256'),
+        _ArtifactProjection('fragments_path', 'native_fragments_file', ('native_output_semantics',), digest_field='fragments_sha256'),
+        _ArtifactProjection('index_path', 'native_chromap_index', ('native_reference_index',), digest_field='index_sha256'))),
     _CELL_COMPARISON.TOOL: _ToolProjection(frozenset(_CELL_COMPARISON.RESULT_FIELDS), _CELL_COMPARISON.FACT_FIELDS, _CELL_COMPARISON.POLICY, (
         _ArtifactProjection("manifest_path", "cell_label_comparison_manifest", ("native_metric_completion", "exact_cell_library_join", "artifact_integrity"), digest_field="manifest_sha256"),
         _ArtifactProjection("comparison_path", "cell_label_comparison_json", ("fixed_label_comparison",), digest_field="comparison_sha256"))),
@@ -1450,64 +1451,6 @@ def _prepare_evidence(
         if step.tool_name == "inspect_raw_scATAC":
             facts.update(_raw_intake_derived_facts(step_result.result))
         fragments_artifacts = []
-        if step.tool_name == "build_scATAC_cell_by_features":
-            from .fragment_features import project
-            try:
-                from agent.orchestration.durable_tool_recovery import execution_identity
-                identity = execution_identity(run_result.run_id, run_result.plan, step, registry.get(step.tool_name))
-                derived, fragments_artifacts = project(step_result.resolved_arguments, step_result.result, identity)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Verified fragment-derived matrix could not be projected.") from exc
-        if step.tool_name == "build_scATAC_cell_by_ccre":
-            try:
-                derived, fragments_artifacts = project_matrix(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified cell-by-cCRE matrix could not be projected.") from exc
-        if step.tool_name == "select_scATAC_cells":
-            try:
-                derived, fragments_artifacts = project_cell_selection(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified cell selection could not be projected.") from exc
-        if step.tool_name == "compute_scATAC_qc":
-            try:
-                derived, fragments_artifacts = project_barcode_qc(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified barcode QC could not be projected.") from exc
-        if step.tool_name == "prepare_scATAC_bam_fragments":
-            try:
-                derived, fragments_artifacts = project_bam_fragments(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified BAM preparation could not be projected.") from exc
-        if step.tool_name == "import_scATAC_fragments":
-            try:
-                derived, fragments_artifacts = project_external_fragments(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified external adoption could not be projected.") from exc
-        if step.tool_name == "prepare_scATAC_fragments":
-            try:
-                derived, fragments_artifacts = project_fragments(
-                    step_result.resolved_arguments, step_result.result, step.step_id)
-                facts.update(derived)
-            except Exception as exc:
-                raise AnalysisEvidenceError("EVIDENCE_SOURCE_RESULT_INVALID",
-                    "Freshly verified fragments could not be projected.") from exc
         evidence_steps.append(
             {
                 "step_id": step.step_id,

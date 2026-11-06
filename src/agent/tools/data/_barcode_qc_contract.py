@@ -190,10 +190,6 @@ def load_manifest(path,expected_sha256):
     return BarcodeQCManifest(raw)
 
 
-def write_gzip(path,lines):
-    with open(path,'xb') as raw:
-        with gzip.GzipFile(filename='',mode='wb',fileobj=raw,mtime=0,compresslevel=6) as f:
-            for line in lines: f.write(line)
 
 
 def gzip_lines(path,max_rows):

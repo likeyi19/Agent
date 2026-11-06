@@ -11,7 +11,7 @@ import pandas as pd
 from scipy import sparse
 
 from . import annotation_contract as c, marker_annotation as science
-from agent.tools.data import scatac_matrix as publication
+from agent.tools.data import matrix_publication as publication
 from agent.tools.data.authority_context import current, VerificationContext, authority_operation, owned_verification
 from agent.tools._cancellation import cancellation_checkpoint
 
@@ -378,7 +378,7 @@ def presentation_data(manifest_path, manifest_sha256, *, max_groups=40, max_gene
     mean raw RP and fraction RP>0, not expression or independent validation.
     """
     from collections import Counter
-    from agent.tools.data.fastq_verification_authority import file_closure
+    from agent.tools._file_identity import file_closure
     manifest = c.load_manifest(manifest_path, manifest_sha256)
     root = Path(manifest_path).parent
     names = ('primary/rp.npz','primary/genes.tsv','primary/cells.tsv','primary/groups.tsv',

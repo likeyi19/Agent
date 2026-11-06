@@ -1,7 +1,7 @@
 """Reference-independent inspection through the existing Registry and roles."""
 from pathlib import Path
 from agent.tools.data.fragment_inspection import inspect_scATAC_fragments, POLICY
-from .external_fragments_registry import classify_external_fragments
+from .native_matrix_registry import classify as classify_external_fragments
 
 FIELDS = {
     'source_path': (str,), 'source_sha256': (str,), 'source_index_sha256': (str, type(None)),

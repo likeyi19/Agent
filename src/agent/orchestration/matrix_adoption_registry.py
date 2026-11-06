@@ -1,8 +1,7 @@
 """Thin exact external matrix tool metadata; no scientific IO in planning."""
 from pathlib import Path
 from .registry import ArgumentSpec, ToolArgumentError
-from .matrix_registry import classify
-from agent.schemas import StepOutputRef
+from agent.schemas import StepOutputRef, ErrorCategory
 from agent.tools.data import scatac_matrix_adoption as public, external_matrix_contract as e, scatac_matrix_contract as m
 
 
@@ -69,3 +68,14 @@ def matrix_adoption_tool_spec():
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             SemanticProducerPortSpec('matrix','scatac_cell_by_ccre.external.v1',(member('manifest_path'),member('manifest_sha256'))),
             SemanticProducerPortSpec('dataset','scatac_matrix_h5ad.v1',(member('dataset','matrix_path'),)),)))
+
+
+def classify(exception):
+    from .registry import ErrorClassification, _classify_tool_exception
+    code=getattr(exception,'code','')
+    if code.startswith('MATRIX_'):
+        category=ErrorCategory.USER_INPUT_ERROR
+        if any(s in code for s in ('MISMATCH','RECOVERY','CHANGED','VERIFICATION')): category=ErrorCategory.VERIFICATION_ERROR
+        elif any(s in code for s in ('LIMIT','CONFLICT','BACKEND','OVERFLOW')): category=ErrorCategory.RESOURCE_ERROR
+        return ErrorClassification(category,code)
+    return _classify_tool_exception(exception)

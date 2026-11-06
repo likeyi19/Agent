@@ -23,6 +23,7 @@ from .registry import (
     ToolRegistry,
     UnknownToolError,
     build_default_tool_registry,
+    _semantic_result_fits_argument as _result_types_fit_argument,
 )
 
 
@@ -306,19 +307,6 @@ def _argument_spec(
             f"{tool_name}.{argument_name}."
         )
     return argument
-
-
-def _result_types_fit_argument(
-    result_types: tuple[type, ...], argument_types: tuple[type, ...]
-) -> bool:
-    for result_type in result_types:
-        if result_type is bool and bool not in argument_types:
-            return False
-        if not any(
-            issubclass(result_type, accepted) for accepted in argument_types
-        ):
-            return False
-    return True
 
 
 def _validate_contract(

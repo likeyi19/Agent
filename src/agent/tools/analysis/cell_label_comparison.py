@@ -19,7 +19,7 @@ from sklearn.metrics import (accuracy_score, adjusted_rand_score, f1_score,
 
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .native_publication import NativePublication
 from .sequence_prediction import arguments, read, write
 

@@ -281,39 +281,3 @@ def read_manifest_bytes(path, expected_sha256):
 def load_fragments_manifest_v2(path, *, expected_sha256):
     """Expected SHA binds exact manifest bytes, including noncanonical JSON."""
     return validate_fragments_manifest_v2(read_manifest_bytes(path, expected_sha256)[1])
-
-
-def publish_fragments_manifest_v2(value, path, *, runtime):
-    """Verify existing canonical artifacts, then atomically publish JSON only.
-
-    No BGZF generation, sorting, indexing, import, overwrite or bundle recovery.
-    Future producers own their private directory staging/atomic bundle rename.
-    """
-    from .scatac_fragments_v2_verifier import verify_fragments_v2
-    path = Path(path)
-    payload = canonical_fragments_manifest_v2_bytes(value)
-    digest = hashlib.sha256(payload).hexdigest()
-    if not path.is_absolute() or path != path.resolve() or not path.parent.is_dir() or path.exists():
-        fail('FRAGMENTS_V2_PUBLICATION_CONFLICT')
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(prefix='.fragments-v2-', dir=path.parent, delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(payload); stream.flush(); os.fsync(stream.fileno())
-        verified = verify_fragments_v2(temporary, expected_sha256=digest, runtime=runtime)
-        protected = {p for p, _ in verified.snapshots}
-        if str(path) in protected:
-            fail('FRAGMENTS_V2_PUBLICATION_CONFLICT')
-        verified.check_unchanged()
-        os.link(temporary, path)  # Atomic no-clobber, including competing writers.
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        return {'manifest_path': str(path), 'manifest_sha256': digest, 'artifact_schema_version': 2}
-    except FileExistsError:
-        fail('FRAGMENTS_V2_PUBLICATION_CONFLICT')
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)

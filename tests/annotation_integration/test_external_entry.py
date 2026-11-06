@@ -121,7 +121,7 @@ def test_uploaded_matrix_then_group_file_continues_original_objective(external_c
 
 
 @pytest.fixture
-def external_case(case,tmp_path,monkeypatch):
+def external_case(case,annotation_scope,tmp_path,monkeypatch):
     from scipy import sparse
     from agent.tools.analysis import scatac_annotation as owner
     args,_,_,run=case
@@ -133,11 +133,11 @@ def external_case(case,tmp_path,monkeypatch):
     source.obsm['existing_embedding']=__import__('numpy').zeros((source.n_obs,2))
     path=tmp_path/'external.h5ad';source.write_h5ad(path,convert_strings_to_categoricals=False)
     old=json.loads(Path(args['annotation_spec_path']).read_bytes())
-    qc=next(s.resolved_arguments for s in run.steps if 'qc_reference_manifest_path' in s.resolved_arguments)
+    qc=annotation_scope
     spec={k:v for k,v in old.items() if k not in ('source_run_id','source_step_id','groups')}
     spec.update(schema=c.EXTERNAL_SPEC,method=c.EXTERNAL_PRIMARY,measurement=c.EXTERNAL_SEMANTICS,
         coordinate_system='zero-based-half-open',grouping_provenance='Explicit independently supplied synthetic grouping',
-        contig_scope=dict(path=qc['qc_reference_manifest_path'],sha256=qc['qc_reference_manifest_sha256']))
+        contig_scope=qc)
     resource=tmp_path/'external-resources.json';resource.write_bytes(c.matrix.canonical(spec))
     groups=tmp_path/'external-groups.tsv'
     import pandas as pd
@@ -442,3 +442,33 @@ def test_participation_tampering_fails_even_with_rehashed_metadata(external_case
     path.write_bytes(c.matrix.canonical(value))
     with pytest.raises(ValueError, match='participation'):
         owner.verify_annotation(path, expected_sha256=science.sha256(path))
+
+
+@pytest.mark.skipif(__import__('os').environ.get('RUN_RAW_NATIVE_QUALIFICATION')!='1',reason='Explicit native runtime qualification')
+def test_native_fragment_matrix_supplies_exact_annotation_file_and_checksum(external_case,tmp_path):
+    """Real native counts + simulated MAESTRO; no biological validation claim."""
+    from agent.orchestration import AgentRuntime,AgentPlan,PlanStep,StepOutputRef,AgentRequest
+    args,calls=external_case
+    source=tmp_path/'native-fragments';source.write_text('chr2\t10\t30\tA\t300\nchr1\t30\t50\tB\t1\n')
+    sizes=tmp_path/'native-sizes';sizes.write_text('chr2\t6001\nchr1\t6001\n')
+    peaks=tmp_path/'native-peaks';peaks.write_text('chr2\t0\t100\nchr1\t0\t1000\n')
+    spec_path=Path(args['annotation_spec_path']);spec=json.loads(spec_path.read_text())
+    spec.update(method=c.REGION_PRIMARY,measurement='fragment_counts');spec_path.write_bytes(c.matrix.canonical(spec))
+    annotation=dict(args,annotation_method=c.REGION_PRIMARY,annotation_spec_sha256=science.sha256(spec_path),
+        source_path=StepOutputRef('matrix','matrix_path'),source_sha256=StepOutputRef('matrix','matrix_sha256'))
+    plan=AgentPlan('native-annotation','native-annotation','Explicit native counts and exact annotation handoff',(
+        PlanStep('import','run_snapatac2',dict(input_path=str(source),chrom_sizes_path=str(sizes),function_name='pp.import_fragments',
+            kwargs=dict(min_num_fragments=0,sorted_by_barcode=False),species='human',assembly='hg38',output_dir=str(tmp_path/'native-import'))),
+        PlanStep('matrix','run_snapatac2',dict(input_path=StepOutputRef('import','matrix_path'),peaks_path=str(peaks),
+            function_name='pp.make_peak_matrix',kwargs=dict(counting_strategy='fragment'),output_dir=str(tmp_path/'native-matrix')),('import',)),
+        PlanStep('annotation','annotate_scATAC_cell_types',annotation,('matrix',))))
+    class Planner:
+        def plan(self,request,registry):return plan
+    run=AgentRuntime(planner=Planner()).run(AgentRequest('native-annotation','Annotate native fragment counts with supplied groups',{}))
+    assert run.status.value=='SUCCEEDED',run.errors
+    assert len(calls)==1
+    original=ad.read_h5ad(run.steps[1].result['matrix_path']);annotated=ad.read_h5ad(run.steps[2].result['annotated_h5ad_path'])
+    assert original.obs_names.tolist()==annotated.obs_names.tolist()==['A','B']
+    assert original.var_names.tolist()==annotated.var_names.tolist()
+    assert (original.X!=annotated.X).nnz==0
+    assert c.load_manifest(run.steps[2].result['manifest_path'])['matrix_binding']['source_sha256']==run.steps[1].result['matrix_sha256']

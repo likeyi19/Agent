@@ -21,8 +21,8 @@ from agent.schemas.verification_authority import (
     AuthorityError, VerifiedArtifactAuthority, canonical, digest,
 )
 from agent.tools.data.authority_context import current, owned_verification
-from agent.tools.data._fragments_common import snapshots, unchanged
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import snapshots, unchanged
+from agent.tools._file_identity import file_closure
 from . import embedding_analysis as science
 
 

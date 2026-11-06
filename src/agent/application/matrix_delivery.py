@@ -297,7 +297,7 @@ MATRIX_CONTRACTS = {
 }
 
 def selects_matrix_port(registry, tool_name, output_key):
-    spec = registry.get(tool_name)
+    spec = registry.accepted(tool_name)
     ports = [p for p in spec.semantic_planning.producer_ports
              if output_key in {member.field_name for member in p.members}]
     return len(ports) == 1 and ports[0].name in {'matrix', 'dataset'}
@@ -325,7 +325,7 @@ def accepted_matrix(service, session_id, revision, origin, output, *, step_id=No
             or record['scope'] != 'scientific_correctness.v1'
             or record['completion'] != 'succeeded'):
         raise ValueError('Unsupported accepted matrix authority.')
-    spec = service._application.registry.get(step.tool_name)
+    spec = service._application.registry.accepted(step.tool_name)
     spec.result_contract.validate(result)
     output_key = 'manifest_path' if output is None else output.output_key
     if not selects_matrix_port(service._application.registry, step.tool_name, output_key):
@@ -358,10 +358,10 @@ def accepted_matrix(service, session_id, revision, origin, output, *, step_id=No
             or _serialize(record['resources']['manifest_identity']) != manifest):
         raise ValueError('Matrix result, manifest and authority differ.')
     if step.tool_name == 'build_scATAC_cell_by_ccre':
-        from agent.tools.data.scatac_matrix import _summary
+        from agent.tools.data.raw_history import matrix_summary as _summary
         expected = _summary(manifest, manifest_path, result['manifest_sha256'])
     elif step.tool_name == 'build_scATAC_cell_by_features':
-        from agent.tools.data.fragment_feature_matrix import _summary
+        from agent.tools.data.raw_history import feature_matrix_summary as _summary
         expected = _summary(manifest, manifest_path, result['manifest_sha256'])
     else:
         from agent.tools.data.scatac_matrix_adoption import _summary
@@ -486,6 +486,11 @@ def _copy(source, destination, omitted=(), _references=None):
             continue
         layout = dict(chunks=item.chunks, compression=item.compression, compression_opts=item.compression_opts,
             shuffle=item.shuffle, fletcher32=item.fletcher32)
+        if item.compression == 'unknown':
+            # The shared storage inspector admits installed native Blosc/Zstd
+            # decoders. Privacy exports use portable gzip while copying exact
+            # values; accepted native files retain their original bytes.
+            layout.update(compression='gzip', compression_opts=4)
         if item.chunks is not None:
             # Native matrix writers use resizable arrays whose chunk can exceed
             # the current tiny shape. Retain that storage contract when copying.

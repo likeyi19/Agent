@@ -2031,14 +2031,12 @@ def verify_step(
     artifact_authority = None
     plain_result = _verify_common_step(step, result, registry, checks)
     if plain_result is not None:
-        if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model','build_scATAC_cell_by_features'):
+        if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model'):
             try:
                 if step.tool_name == 'adapt_epizoo_species':
                     from agent.tools.models.species_adaptation import verify_public_result
                 elif step.tool_name == 'posttrain_epizoo_model':
                     from agent.tools.models.epizoo_posttraining import verify_public_result
-                elif step.tool_name == 'build_scATAC_cell_by_features':
-                    from agent.tools.data.fragment_feature_tool import verify_public_result
                 else:
                     from agent.tools.data.neutral_matrix_tool import verify_public_result
                 verify_public_result(resolved_arguments, plain_result)
@@ -2051,11 +2049,12 @@ def verify_step(
             else:
                 checks.add('species_adaptation_owner', True, 'Exact owner proof, resources and lineage.',
                     'Species adaptation verification failed.', 'SPECIES_ADAPTATION_VERIFICATION_FAILED')
-        elif step.tool_name in ('run_signac', 'run_scanpy', 'run_episcanpy', 'run_snapatac2', 'run_macs3', 'run_cicero', 'run_cicero_cds', 'run_monalisa', 'run_archr'):
+        elif step.tool_name in ('run_signac', 'run_scanpy', 'run_episcanpy', 'run_snapatac2', 'run_macs3', 'run_cicero', 'run_cicero_cds', 'run_monalisa', 'run_archr', 'run_chromap'):
             from agent.tools.analysis.native_matrix import PACKAGES
             from agent.tools.analysis.native_tables import PACKAGES as TABLES
             from agent.tools.analysis import cicero_cds, monalisa, archr
-            owner = next(p for p in (*PACKAGES, *TABLES, cicero_cds, monalisa, archr) if p.TOOL == step.tool_name)
+            from agent.tools.data import chromap_native
+            owner = next(p for p in (*PACKAGES, *TABLES, cicero_cds, monalisa, archr, chromap_native) if p.TOOL == step.tool_name)
             try:
                 owner.verify_result(resolved_arguments, plain_result)
             except (ValueError, TypeError, OSError, RuntimeError, KeyError):
@@ -2145,116 +2144,6 @@ def verify_step(
                 checks.add('matrix_external_conservation', True,
                     'Every external sparse value and ordered axis identity is conserved.',
                     'External matrix conservation verification failed.', 'MATRIX_VERIFICATION_FAILED')
-        elif step.tool_name == "build_scATAC_cell_by_ccre":
-            try:
-                from agent.tools.data.scatac_matrix import verify_public_result, ARGUMENTS
-                verify_public_result(resolved_arguments, plain_result)
-                for name in ARGUMENTS[:-1]:
-                    binding = step.arguments.get(name)
-                    if isinstance(binding, StepOutputRef) and dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
-                        raise ValueError('Dependency identity differs.')
-            except Exception as exc:
-                checks.add('matrix_independent_reconstruction', False,
-                    'Exact upstream authorities, ordered axes and every sparse canonical count are independently verified.',
-                    'Matrix source-level verification failed.', getattr(exc,'code','MATRIX_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('matrix_independent_reconstruction', True,
-                    'Exact upstream authorities, ordered axes and every sparse canonical count are independently verified.',
-                    'Matrix source-level verification failed.', 'MATRIX_VERIFICATION_FAILED')
-        elif step.tool_name == "select_scATAC_cells":
-            try:
-                from agent.tools.data.scatac_cell_selection import verify_public_result
-                verify_public_result(resolved_arguments, plain_result)
-                for name in ('barcode_qc_manifest_path','barcode_qc_manifest_sha256'):
-                    binding = step.arguments.get(name)
-                    if isinstance(binding, StepOutputRef) and dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
-                        raise ValueError('Dependency identity differs.')
-            except Exception as exc:
-                checks.add('cell_selection_independent_reconstruction', False,
-                    'Every threshold decision and selected identity is independently reconstructed.',
-                    'Selection source-level verification failed.', getattr(exc,'code','SELECTION_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('cell_selection_independent_reconstruction', True,
-                    'Every threshold decision and selected identity is independently reconstructed.',
-                    'Selection source-level verification failed.', 'SELECTION_VERIFICATION_FAILED')
-        elif step.tool_name == "compute_scATAC_qc":
-            try:
-                from agent.tools.data.scatac_barcode_qc import verify_public_result
-                verify_public_result(resolved_arguments, plain_result)
-                for name in ('fragments_manifest_path','fragments_manifest_sha256','qc_reference_manifest_path','qc_reference_manifest_sha256'):
-                    binding = step.arguments.get(name)
-                    if isinstance(binding, StepOutputRef) and dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
-                        raise ValueError('Dependency identity differs.')
-            except Exception as exc:
-                checks.add('barcode_qc_independent_reconstruction', False,
-                    'Every observed barcode metric is independently reconstructed.',
-                    'QC source-level verification failed.', getattr(exc,'code','QC_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('barcode_qc_independent_reconstruction', True,
-                    'Every observed barcode metric is independently reconstructed.',
-                    'QC source-level verification failed.', 'QC_VERIFICATION_FAILED')
-        elif step.tool_name == "prepare_scATAC_bam_fragments":
-            try:
-                from agent.tools.data.scatac_bam_fragments import verify_public_result
-                verify_public_result(resolved_arguments, plain_result)
-                for name in ('intake_manifest_path', 'intake_manifest_sha256'):
-                    binding = step.arguments.get(name)
-                    if isinstance(binding, StepOutputRef):
-                        if dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
-                            raise ValueError('Dependency identity differs.')
-            except Exception as exc:
-                checks.add('bam_fragments_transformation', False,
-                    'BAM source contents, Agent transformation and canonical artifacts are verified.',
-                    'BAM preparation failed independent verification.',
-                    getattr(exc, 'code', 'BAM_FRAGMENTS_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('bam_fragments_transformation', True,
-                    'BAM source contents, Agent transformation and canonical artifacts are verified.',
-                    'BAM preparation failed independent verification.', 'BAM_FRAGMENTS_VERIFICATION_FAILED')
-        elif step.tool_name == "import_scATAC_fragments":
-            try:
-                from agent.tools.data.scatac_fragment_import import verify_public_result
-                verify_public_result(resolved_arguments, plain_result)
-            except Exception as exc:
-                checks.add('external_fragments_conservation', False,
-                    'External source contents, conservation and canonical artifacts are verified.',
-                    'External adoption failed independent verification.',
-                    getattr(exc, 'code', 'EXTERNAL_FRAGMENTS_VERIFICATION_FAILED'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('external_fragments_conservation', True,
-                    'External source contents, conservation and canonical artifacts are verified.',
-                    'External adoption failed independent verification.', 'EXTERNAL_FRAGMENTS_VERIFICATION_FAILED')
-        elif step.tool_name == "prepare_scATAC_fragments":
-            try:
-                from agent.tools.data.scatac_fragments import verify_public_result
-                captured = None
-                from agent.tools.data.authority_context import current
-                if authority_execution_identity is not None and current() is None:
-                    from agent.tools.data.fastq_verification_authority import capture_publication, check_integrity
-                    captured = capture_publication(resolved_arguments, plain_result, authority_execution_identity)
-                    from agent.tools.data._fragments_common import snapshots, unchanged
-                    authority_snapshots = snapshots(f['path'] for f in captured.record['files'])
-                verify_public_result(resolved_arguments, plain_result)
-                # StepOutputRef resolution supplies exact paired intake identities;
-                # verify them against the actual dependency result, not ordering.
-                for name in ('intake_manifest_path', 'intake_manifest_sha256'):
-                    binding = step.arguments.get(name)
-                    if isinstance(binding, StepOutputRef):
-                        if dependency_results[binding.step_id][binding.output_key] != resolved_arguments[name]:
-                            raise ValueError('Dependency identity differs.')
-                if captured is not None:
-                    check_integrity(captured, resolved_arguments, plain_result, authority_execution_identity)
-                    unchanged(authority_snapshots)
-                    artifact_authority = captured.record
-            except Exception as exc:
-                checks.add('fragments_independent_verification', False,
-                    'Canonical fragments match independently verified lineage and content.',
-                    'Canonical fragments failed independent verification.',
-                    getattr(exc, 'code', 'FRAGMENTS_VERIFICATION_MISMATCH'), ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('fragments_independent_verification', True,
-                    'Canonical fragments match independently verified lineage and content.',
-                    'Canonical fragments failed independent verification.', 'FRAGMENTS_VERIFICATION_MISMATCH')
         elif step.tool_name == "inspect_raw_scATAC":
             try:
                 verify_raw_scatac_intake(resolved_arguments, plain_result, registry)

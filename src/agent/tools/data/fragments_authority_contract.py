@@ -8,7 +8,7 @@ import hashlib
 from types import MappingProxyType
 from typing import Callable
 
-from agent.schemas.verification_authority import AuthorityError, VerificationScope
+from agent.schemas.verification_authority import AuthorityError, VerificationScope, digest
 from . import scatac_fragments_v2 as v2
 from . import fastq_fragment_manifest as fastq, bam_fragment_manifest as bam
 from . import external_fragment_manifest as external
@@ -110,7 +110,11 @@ def validate_publication_integrity(authority, arguments, result, execution_ident
         raise AuthorityError('Producer qualification is required.')
     CONTRACTS[kind].require(authority)
     if kind == 'fastq_fragment_production':
-        from .fastq_verification_authority import check_integrity
-        check_integrity(authority, arguments, result, execution_identity)
+        from agent.tools._file_identity import file_closure
+        value = authority.to_dict()
+        if (value['execution_identity'] != execution_identity or value['arguments_sha256'] != digest(arguments)
+                or value['publication_path'] != result['manifest_path'] or value['manifest_sha256'] != result['manifest_sha256']
+                or file_closure(pin['path'] for pin in value['files']) != value['files']):
+            raise AuthorityError('Historical FASTQ execution or file integrity changed')
     else:
         raise AuthorityError('This producer has no enabled persistence/reuse adapter yet.')

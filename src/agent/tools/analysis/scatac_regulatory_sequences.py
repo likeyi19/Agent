@@ -13,7 +13,7 @@ from anndata.io import read_elem, sparse_dataset
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from . import replicate_pseudobulk as features
 from . import sequence_prediction as shared
 from .sequence_reference import resolve_genome, extract, coordinates, check_declarations

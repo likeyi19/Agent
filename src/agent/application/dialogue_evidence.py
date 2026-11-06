@@ -15,6 +15,7 @@ from agent.tools.analysis import monalisa as _MONALISA
 from agent.tools.analysis import cicero_cds as _CICERO_CDS
 from agent.tools.analysis.native_tables import PACKAGES as _NATIVE_TABLE_PACKAGES
 from agent.tools.analysis.native_matrix import PACKAGES as _NATIVE_MATRIX_PACKAGES
+from agent.tools.data import chromap_native as _CHROMAP_NATIVE
 from typing import Literal, Mapping
 
 from agent.report.evidence import (
@@ -46,9 +47,10 @@ EVIDENCE_SCOPE_LIMITATIONS = (
 RESULT_LIMITATIONS = {
     'inspect_scATAC_fragments': 'Structural observations cover only the inspected prefix unless reached_eof is true. Distinct barcode strings are not cells. Reference compatibility, processing history, index correspondence and QC readiness are not established.',
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
-    'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. Thresholds can be adjusted; native defaults are pragmatic starting values, not universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
-    'call_scATAC_peaks': 'Native MACS3 discovers experimental accessible regions in one exact library population. Count each canonical fragment record once, not read-pair support. No second Tn5 shift. narrowPeak/BED are zero-based half-open; XLS positions are one-based closed. Native p/q fields are minus-log10 probabilities, fold enrichment and pileup are not cell-by-peak counts. Peak-calling q-values do not establish differential accessibility between conditions; that requires experimental replicates and the separate statistical method. Empty calls have no downstream feature reference. The accepted reference and population can feed the existing fragment-overlap matrix owner, independently of downstream choices.',
+    'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. These historical Agent thresholds use the recorded custom QC method; they are not SnapATAC2 defaults, universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
+    'call_scATAC_peaks': 'Native MACS3 discovers experimental accessible regions in one exact library population. Count each canonical fragment record once, not read-pair support. No second Tn5 shift. narrowPeak/BED are zero-based half-open; XLS positions are one-based closed. Native p/q fields are minus-log10 probabilities, fold enrichment and pileup are not cell-by-peak counts. Peak-calling q-values do not establish differential accessibility between conditions; that requires experimental replicates and the separate statistical method. Empty calls have no downstream feature reference. Accepted peaks retain exact feature files and source/population provenance. Counting is a separately selected native method with compatible explicit inputs.',
     **{p.TOOL: p.guidance for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
+    _CHROMAP_NATIVE.TOOL: _CHROMAP_NATIVE.LIMITATIONS,
     'run_chromvar': 'Native chromVAR functions preserve their distinct output semantics: computeExpectations returns peak expectations with native norm/group behavior; count accessors return totals of the supplied measurement; computeVariability returns motif z-score variability with native chi-square/BH statistics and optional bootstrap bounds. These are not replicate-level differential tests or TF binding evidence. kwargs are exact supplied parameters; omitted arguments use native defaults. Counts require no genome or motif scan. Existing deviations are reused without upstream computation.',
     'run_motifmatchr': 'Native motifmatchr::matchMotifs scans all supplied genomic peaks against the selected motif collection. Native matches output is boolean; scores output retains matches/scores/counts, while positions output retains 1-based closed genomic hits with strands and scores. n_matches counts peak/motif incidences for matrices and is null for positions; n_positions counts native genomic hits. Ordered peaks and motif metadata remain available. Counts, clustering, chromVAR backgrounds and deviations are not computed. parameters.kwargs contains exact supplied native arguments; omitted optional arguments use native defaults, not invented user instructions. Sequence matches are not expression, binding, enrichment or causal evidence. The actual mode-specific files and ordered metadata are downloadable from the accepted result.',
     'compute_motif_accessibility': 'Native chromVAR measures motif-associated accessibility with GC/accessibility-matched backgrounds. X is bias-corrected deviation; z-scores are separate. High variability or group mean is descriptive, not motif enrichment, expression, uniquely identified TF activity, physical binding, causality or replicate-level condition significance. Related TF motifs may be indistinguishable. Supplied groups, including vendor clusters, are not validated cell types. Preserve undefined values, original axes, actual source count semantics, collection and genome identities. Downloads and the native heatmap are available from accepted results without repeating science.',
@@ -257,9 +259,9 @@ def _step_summary(sessions, run, step, planned, value):
             or step.verification.target_id != step.step_id):
         raise _Unavailable('source_step_not_accepted')
     projection = _TOOL_PROJECTIONS.get(step.tool_name)
-    if projection is None or step.tool_name not in sessions._application.registry.names():
+    if projection is None:
         raise _Unsupported('unsupported_tool')
-    spec = sessions._application.registry.get(step.tool_name)
+    spec = sessions._application.registry.accepted(step.tool_name)
     if (frozenset(spec.result_contract.required_fields) != projection.contract_fields
             or spec.recovery_policy_version != projection.recovery_identity):
         raise _Unsupported('unsupported_result_contract')
@@ -424,7 +426,7 @@ def _selection_parameter_facts(sessions, run, step, planned, evidence):
     # readable, but cannot establish the additional parameter-origin facts.
     if not isinstance(effective, Mapping) or set(effective) != set(names):
         return ()
-    spec = sessions._application.registry.get(step.tool_name)
+    spec = sessions._application.registry.accepted(step.tool_name)
     try:
         for name in names:
             declaration = name in planned.arguments
@@ -860,7 +862,7 @@ def annotation_field_semantics(field):
 def field_semantics(registry, tool, field):
     """Shared reviewed meanings for R5 and interactive evidence; no new facts."""
     from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
-    spec = registry.get(tool)
+    spec = registry.accepted(tool)
     semantics = {}
     if tool in ('adapt_epizoo_species', 'posttrain_epizoo_model') and field in (
             'model_state', 'strategy', 'transfer_assessment', 'training_configuration'):

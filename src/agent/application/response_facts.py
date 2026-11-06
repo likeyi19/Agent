@@ -20,6 +20,11 @@ ROLES = {
     'compute_scATAC_qc': 'QC', SELECTION: 'cell selection', MATRIX: 'matrix',
 }
 LABELS = {
+    'source_profile': 'source processing history (the original coordinate, barcode-correction and duplicate/support conventions)',
+    'namespace': 'a name for this single processing library',
+    'import_scATAC_fragments.source_profile': 'whether these are 10x ATAC/ARC fragments with already Tn5-adjusted zero-based half-open intervals, corrected barcode identifiers and read-pair support',
+    'prepare_scATAC_bam_fragments.source_profile': 'whether the paired ATAC BAM has unshifted alignments and retains duplicate pairs',
+    'import_scATAC_fragments.namespace': 'a name for this single fragment library',
     'run_chromvar.matrix_semantics': 'the actual raw measurement in the selected count matrix',
     'run_chromvar.count_slot': 'X or the exact layer holding those counts',
     'run_motifmatchr.assembly': 'the genome assembly used for these peaks',
@@ -135,7 +140,7 @@ def _revision(sessions, state, rid):
             from .turn_context import selection_parameters
             specs = parameter_specs(sessions._application.registry)
             effective = selection_parameters(step, specs)
-            required = set(specs).intersection(sessions._application.registry.get(SELECTION).required_arguments)
+            required = set(specs).intersection(sessions._application.registry.accepted(SELECTION).required_arguments)
             if not required <= set(effective): raise SessionError('Missing accepted parameters.')
             for key, spec in specs.items():
                 if key in effective:

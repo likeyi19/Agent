@@ -566,7 +566,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if references_candidate(interaction, prior):
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify):
-            if decision.choices and decision.reason in ('missing_parameter_value','ambiguous_parameter'):
+            from .turn_decisions import PARAMETER_CLARIFICATION_REASONS
+            if decision.choices and decision.reason in PARAMETER_CLARIFICATION_REASONS:
                 offered_parameters = {p['tool']+'.'+p['argument'] for p in visible['dialogue'].get('scientific_parameters',())}
                 if any('.' in name and name not in offered_parameters for name in decision.choices):
                     raise IntentError('invalid_decision')
@@ -738,7 +739,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 'No new analysis was started.')
             return TurnOutcome('answer' if isinstance(decision, Answer) else 'execute',
                                'failed', text=error.message, error=error)
-        return _terminal(sessions, interaction, Clarify(reason))
+        return _terminal(sessions, interaction, Clarify(reason, exc.parameters))
     changes = dict(admitted=admitted, status='admitted')
     if isinstance(decision, Answer) and decision.intent == 'guidance' and captured.get('prerequisite'):
         changes['prerequisite'] = {k: _serialize(v) for k, v in captured['prerequisite'].items()

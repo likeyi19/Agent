@@ -15,9 +15,9 @@ import pysam
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._native_process import run, r_environment
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
-from agent.tools.data import _external_fragment_io as fragment_io
-from agent.tools.data.external_fragments import parse_record
+from agent.tools._file_identity import file_closure
+from agent.tools.data import fragment_io as fragment_io
+from agent.tools.data.fragment_io import parse_record
 from . import peak_h5ad, sequence_reference
 from .native_matrix import arguments, native_kwargs, NativeInvocationError
 from .native_publication import NativePublication

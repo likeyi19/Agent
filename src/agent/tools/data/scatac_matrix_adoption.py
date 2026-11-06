@@ -2,7 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 from typing import TypedDict
-from . import scatac_matrix as shared, scatac_matrix_contract as m, external_matrix_contract as e
+from . import matrix_publication as shared, scatac_matrix_contract as m, external_matrix_contract as e
 from . import _external_matrix_io as scientific
 from .cell_by_ccre_verifier import verify_cell_by_ccre
 from .scatac_fragments_v2_verifier import take_snapshots, check_snapshots

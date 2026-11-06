@@ -19,7 +19,11 @@ def test_worker_dispatch_exactly_matches_reviewed_catalogs():
     dispatches = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == 'dispatch' for t in n.targets)]
     actual = [set(ast.literal_eval(k) for k in n.keys) for n in dispatches]
-    expected = [set(p.FUNCTIONS) for p in (owner.EPISCANPY, owner.SCANPY, owner.SNAPATAC2)]
+    from agent.tools.analysis import snapatac_raw
+    expected = [set(p.FUNCTIONS) for p in (owner.EPISCANPY, owner.SCANPY)] + [set(owner.SNAPATAC2.FUNCTIONS) - set(snapatac_raw.FUNCTIONS)]
+    raw_tree = ast.parse(Path(snapatac_raw.__file__).with_name('snapatac_raw_worker.py').read_text())
+    raw_dispatch = next(n.value for n in ast.walk(raw_tree) if isinstance(n, ast.Assign) and any(isinstance(t,ast.Name) and t.id=='functions' for t in n.targets))
+    assert {ast.literal_eval(k) for k in raw_dispatch.keys} == set(snapatac_raw.FUNCTIONS)
     assert actual == expected
     for package in owner.PACKAGES:
         assert set(k for f in package.FUNCTIONS.values() for k in f) == set(k for k,_ in package.NATIVE_ARGUMENTS)

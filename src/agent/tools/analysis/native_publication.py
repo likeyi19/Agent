@@ -7,7 +7,7 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.tools.data.authority_context import owned_verification
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from .sequence_prediction import read
 
 

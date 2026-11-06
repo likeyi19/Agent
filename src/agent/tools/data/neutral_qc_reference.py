@@ -129,7 +129,7 @@ def verify_integrity(bundle):
         expected_sha256=scoped['reference']['sha256'])
     if (parent.species != scope_parent.species or parent.target_assembly != scope_parent.target_assembly
             or parent.genome != scope_parent.genome): fail('QC_PARENT_MISMATCH')
-    from ._external_fragment_io import resource
+    from .fragment_io import resource
     required = [scoped['reference']['path'], scoped['classification_source']['path']]
     for p in (parent, scope_parent):
         required.extend((p.genome.fasta.path, p.genome.fai.path, p.features.bed.path))
@@ -198,7 +198,7 @@ def qualify_reference(*, reference_path, reference_sha256, primary_scope_path,
     dep_paths = [parent.genome.fasta.path, parent.genome.fai.path, parent.features.bed.path,
                  scoped['reference']['path'], scoped['classification_source']['path'],
                  scope_parent.genome.fasta.path, scope_parent.genome.fai.path, scope_parent.features.bed.path]
-    from ._external_fragment_io import resource
+    from .fragment_io import resource
     dependencies = tuple(legacy.QCResource(**resource(p)) for p in sorted(set(dep_paths)))
     contigs = tuple(legacy.QCContig(c['name'], c['length'],
         'primary_nuclear_qc' if c['classification'] == 'primary_nuclear' else c['classification']) for c in scoped['contigs'])

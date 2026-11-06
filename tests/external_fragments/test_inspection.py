@@ -12,13 +12,16 @@ def arguments(path):
     return dict(source_path=str(path), source_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
-@pytest.mark.parametrize('encoding', ['plain', 'gzip', 'bgzf'])
+@pytest.mark.parametrize('encoding', ['plain', 'gzip', 'bgzf', 'zstandard'])
 def test_no_reference_or_declarations_needed_and_no_authority(tmp_path, encoding):
     data = b'# structural example\nchrUn\t1\t7\tA-1\t3\nchrUn\t9\t15\tB-1\t2\n'
     source = tmp_path/'opaque'
     if encoding == 'bgzf':
         import pysam
         with pysam.BGZFile(str(source), 'wb') as f: f.write(data)
+    elif encoding=='zstandard':
+        import zstandard
+        source.write_bytes(zstandard.ZstdCompressor().compress(data))
     else: source.write_bytes(gzip.compress(data) if encoding == 'gzip' else data)
     before = source.read_bytes()
     result = inspect_scATAC_fragments(**arguments(source))
@@ -68,22 +71,21 @@ def test_structural_result_cannot_supply_canonical_or_qualified_input(monkeypatc
     import json
     from agent.orchestration import LLMPlanner, PlannerError, build_default_tool_registry
     from agent.schemas import AgentRequest, RunMode
-    from agent.tools.data import _external_fragment_io
-    monkeypatch.setattr(_external_fragment_io, 'resource',
+    from agent.tools.data import fragment_io
+    monkeypatch.setattr(fragment_io, 'resource',
         lambda *a, **k: pytest.fail('Planning or failed compilation performed scientific IO'))
     def source(target, name): return dict(target=target, source=dict(kind='input', input=name))
     payload = dict(schema_version=4, decision=dict(kind='plan', steps=[
         dict(step_id='inspect', tool='inspect_scATAC_fragments', control_dependencies=[],
              sources=[source('source', 'source_path')]),
-        dict(step_id='import', tool='import_scATAC_fragments', control_dependencies=[], sources=[
-            dict(target='source', source=dict(kind='step', step='inspect')),
-            source('reference', 'reference_bundle_path'), source('source_profile', 'source_profile'),
-            source('namespace', 'namespace')])]))
+        dict(step_id='import', tool='run_snapatac2', control_dependencies=[], sources=[
+            dict(target='dataset', source=dict(kind='step', step='inspect')),
+            source('chrom_sizes','chrom_sizes_path'),
+            dict(target='function_name',source=dict(kind='registered_choice',value='pp.import_fragments'))])]))
     class Model:
         model_id = 'scripted-test'
         def complete(self, **kwargs): return json.dumps(payload)
     request = AgentRequest('inspection-not-authority', 'Inspect then import.', dict(
         source_path='/unopened/source', source_sha256='1'*64,
-        reference_bundle_path='/unopened/reference', reference_bundle_sha256='2'*64,
-        source_profile='10x-atac-fragments.v1', namespace='sample'), RunMode.PLAN_ONLY)
+        chrom_sizes_path='/unopened/sizes',chrom_sizes_sha256='2'*64), RunMode.PLAN_ONLY)
     with pytest.raises(PlannerError): LLMPlanner(Model()).plan(request, build_default_tool_registry())

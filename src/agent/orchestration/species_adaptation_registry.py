@@ -1,7 +1,8 @@
 """Two public tools; fixed mechanics stay outside semantic planning."""
 from pathlib import Path
 from agent.schemas.orchestration import _serialize
-from .matrix_registry import MatrixArgument, classify as matrix_classify
+from .registry import ExactFileArgument as MatrixArgument
+from .matrix_adoption_registry import classify as matrix_classify
 from .registry import ArgumentSpec
 from agent.tools.data import neutral_matrix_tool as adoption
 from agent.tools.models import species_adaptation as adaptation, epizoo_posttraining as posttraining

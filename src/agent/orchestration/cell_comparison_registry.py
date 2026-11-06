@@ -19,7 +19,7 @@ def tool_spec():
             source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT, artifacts=(A.RAW_SCATAC,A.CELL_ANNOTATION))
         ports.append(Consumer(role+'_dataset', (member('dataset',key),), True,
             request_sources=(request(key,rm('dataset',key)),),
-            accepted_upstream_types=('scatac_matrix_h5ad.v1',)))
+            accepted_upstream_types=('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')))
         required[role+'_label_key'] = arg((str,), 'Exact '+role+' categorical label column; native MAESTRO uses primary_annotation.',
             scientific_parameter=True, conversational_exact_string=True, observation_source=role+'_dataset')
     optional = {}

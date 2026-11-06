@@ -92,38 +92,6 @@ def test_raw_application_plan_only_still_has_no_artifacts(raw_context, tmp_path)
     assert not list(tmp_path.rglob("raw-scatac-intake-*.json"))
 
 
-def test_full_fastq_application_without_pysam(intake_case, tmp_path):
-    source = intake_case()
-    inputs = {k: v for k, v in source.args.items() if k != "output_dir"}
-    code = r'''
-import importlib.abc, json, sys
-class NoPysam(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname == 'pysam' or fullname.startswith('pysam.'):
-            raise ModuleNotFoundError('optional dependency intentionally blocked')
-sys.meta_path.insert(0, NoPysam())
-from agent.application import ResearchAgentApplication
-from agent.orchestration import LLMPlanner
-from agent.schemas import AgentRequest
-class Model:
-    model_id = 'scripted'
-    def complete(self, **kwargs):
-        if "selection_schema_version" in kwargs["response_schema"].get("properties", {}):
-            self.scope_calls = getattr(self, "scope_calls", 0) + 1
-            return json.dumps({"selection_schema_version": 1, "decision": {
-                "kind": "select", "capability_ids": ["raw_preprocessing"]}})
-        return json.dumps({'schema_version': 4, 'decision': {'kind':'plan', 'steps':[
-            {'step_id':'raw','tool':'inspect_raw_scATAC','sources':[], 'control_dependencies':[]}]}})
-result = ResearchAgentApplication(sys.argv[1], planner=LLMPlanner(Model())).run(
-    AgentRequest('no-pysam', 'Inspect raw FASTQ readiness', json.loads(sys.argv[2])))
-assert result.status.value == 'SUCCEEDED', result
-assert result.evidence and result.report and result.visualization is None
-assert 'pysam' not in sys.modules
-'''
-    result = subprocess.run([sys.executable, "-c", code, str(tmp_path / "workspace"), json.dumps(inputs)], capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
 def test_application_preserves_supported_preparation_readiness(intake_case, raw_context, tmp_path, monkeypatch):
     """Synthetic assessed M10.1 preparation; does not add a production repair route."""
     from agent.tools.data import raw_scatac, raw_scatac_manifest as m

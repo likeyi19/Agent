@@ -9,7 +9,14 @@ from agent.orchestration.raw_scatac_verifier import verify_raw_scatac_intake
 from agent.orchestration import build_default_tool_registry
 import sys
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from bam_fragments.conftest import bam_factory, pair
+@pytest.fixture
+def bam_factory(tmp_path):
+    def make(species='human'):
+        import pysam
+        path=tmp_path/'source.bam'
+        with pysam.AlignmentFile(path,'wb',header={'HD':{'VN':'1.6'},'SQ':[{'SN':'chr1','LN':1000}]}): pass
+        return dict(source_path=str(path))
+    return make
 
 @pytest.mark.parametrize('changes', [dict(source='source.16'), dict(source='/file'), dict(assay='RNA'),
     dict(species='macaque'), dict(species='human', assembly='mm10'), dict(barcode_policy='raw_CB'),

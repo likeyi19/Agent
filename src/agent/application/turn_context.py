@@ -20,7 +20,7 @@ def supplied_input_context(inputs, registry):
     values = freeze_json_mapping({} if inputs is None else inputs, 'execution_inputs')
     consumers = {}
     for tool_name in registry.names():
-        tool = registry.get(tool_name)
+        tool = registry.accepted(tool_name)
         if tool.semantic_planning is None:
             continue
         for port in tool.semantic_planning.consumer_ports:
@@ -46,7 +46,7 @@ def supplied_input_context(inputs, registry):
 
 
 def parameter_specs(registry):
-    spec = registry.get(SELECTION)
+    spec = registry.accepted(SELECTION)
     return {k:v for k,v in {**spec.required_arguments, **spec.optional_arguments}.items()
             if v.planning is not None and v.planning.scientific_parameter}
 
@@ -102,7 +102,7 @@ def result_descriptions(sessions, state, captured):
     for group in groups:
         item, locator = group['canonical'], locators[group['handle']]
         step = steps[group['handle']]
-        spec = sessions._application.registry.get(step.tool_name)
+        spec = sessions._application.registry.accepted(step.tool_name)
         values = []
         nested = step.result.get('parameters', {})
         if not isinstance(nested, Mapping):
@@ -205,7 +205,7 @@ def snapshot(sessions, state, *, tool_names=None):
             if any(o['source']['run_id'] == locator.run_id and o['source']['step_id'] == locator.step_id for o in operations):
                 continue
             parameters = selection_parameters(step, specs)
-            required = set(specs).intersection(sessions._application.registry.get(SELECTION).required_arguments)
+            required = set(specs).intersection(sessions._application.registry.accepted(SELECTION).required_arguments)
             if not required <= set(parameters): raise IntentError('unavailable_context')
             for key, value in parameters.items(): specs[key].validate(key, value)
             operations.append(dict(handle=f'op.{len(operations)}', source=asdict(locator), parameters=parameters))

@@ -22,7 +22,7 @@ from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._native_process import run, r_environment
 from agent.tools.data.authority_context import current
-from agent.tools.data.fastq_verification_authority import file_closure
+from agent.tools._file_identity import file_closure
 from . import peak_h5ad
 from .native_publication import NativePublication
 from .sequence_prediction import arguments as path_arguments, library, read, write
@@ -122,6 +122,16 @@ class MatrixPackage:
         self.package, self.version, self.runtime = package, version, runtime
         if package == 'Signac':
             self.invoke = self.invoke_signac
+        if package == 'snapatac2':
+            from . import snapatac_raw as raw
+            self.invoke = self.invoke_snapatac2
+            functions = {**functions, **raw.FUNCTIONS}
+            native_arguments = tuple(native_arguments) + tuple((key, 'Native ' + key + '; omitted retains its installed default.')
+                for key in sorted(set().union(*map(set, raw.FUNCTIONS.values())) - {k for k, _ in native_arguments}))
+            self.RESULT_FIELDS = dict(RESULT_FIELDS, matrix_path=(str, type(None)), matrix_sha256=(str, type(None)),
+                n_cells=(int, type(None)), n_features=(int, type(None)),
+                fragments_path=(str, type(None)), fragments_sha256=(str, type(None)))
+            self.DELIVERY_FILES = {**DELIVERY_FILES, **raw.RAW_FILES}
         self.FUNCTIONS, self.NATIVE_ARGUMENTS, self.guidance = functions, native_arguments, guidance
         self.TOOL = 'run_' + package.lower()
         self.KIND = 'native_' + package.lower() + '_matrix'
@@ -143,15 +153,31 @@ class MatrixPackage:
         if package == 'Signac':
             historical.append(self.PROFILE)
             self.PROFILE = digest(dict(contract=self.CONTRACT, version=version, adaptation='ordered independent pairwise native matrices.v5'))
+        if package == 'snapatac2':
+            historical.append(self.PROFILE)
+            self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
+                adaptation='native fragment BAM QC filtering and feature matrices; exact bound file ports.v5'))
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
-            profile=self.PROFILE, verifier=self.VERIFIER, files=tuple(DELIVERY_FILES),
-            arguments=arguments, outputs={'matrix': 'result.h5ad'}, historical_profiles=historical)
+            profile=self.PROFILE, verifier=self.VERIFIER, files=raw.files if package == 'snapatac2' else tuple(DELIVERY_FILES),
+            arguments=arguments, outputs=(lambda value: raw.outputs(value) if value['profile'] == self.PROFILE else {'matrix': 'result.h5ad'})
+                if package == 'snapatac2' else {'matrix': 'result.h5ad'}, historical_profiles=historical)
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
 
     def native_arguments(self, args):
         function = args.get('function_name')
         kwargs = native_kwargs(self.FUNCTIONS, args)
+        if self.package == 'snapatac2':
+            from . import snapatac_raw as raw
+            if args.get('fragment_order') is not None:
+                if function != 'pp.import_fragments' or args['fragment_order'] not in ('unknown', 'barcode'):
+                    raise ValueError('fragment_order is source knowledge for native fragment import only')
+                kwargs = dict(kwargs)
+                kwargs.setdefault('sorted_by_barcode', args['fragment_order'] == 'barcode')
+            if function in raw.FUNCTIONS:
+                raw.input_paths(args)
+            elif any(args.get(path) is not None or args.get(sha) is not None for path, sha, _ in raw.PORTS.values()):
+                raise ValueError('Raw reference files do not apply to this native matrix function')
         if (args.get('second_path') or args.get('second_count_slot') or args.get('second_sha256')) and (self.package != 'Signac' or function not in ('corSparse', 'Jaccard')):
             raise ValueError('A second matrix applies only to Signac corSparse/Jaccard')
         if function == 'Jaccard' and not args.get('second_path'):
@@ -176,15 +202,22 @@ class MatrixPackage:
         is_r = self.package == 'Signac'
         override = os.environ.get('AGENT_' + self.package.upper() + ('_RSCRIPT' if is_r else '_PYTHON'))
         executable = Path(override) if override else library().root.parent / 'runtimes' / self.runtime / 'env/bin' / ('Rscript' if is_r else 'python')
-        script = Path(__file__).parent / ('r/signac_functions_v1.R' if is_r else 'native_matrix_worker.py')
+        from . import snapatac_raw as raw
+        raw_call = self.package == 'snapatac2' and args['function_name'] in raw.FUNCTIONS
+        script = Path(__file__).parent / ('snapatac_raw_worker.py' if raw_call else 'r/signac_functions_v1.R' if is_r else 'native_matrix_worker.py')
         if not executable.is_file():
             raise ValueError(f'Provision the isolated {self.package} {self.version} scientific runtime')
         implementation_paths = [executable.resolve(), script]
+        if raw_call:
+            implementation_paths.append(script.with_name('native_matrix_worker.py'))
         if not is_r:
             implementation_paths.append(executable.parent.parent / 'pyvenv.cfg')
         implementation = file_closure(implementation_paths)
         request = dict(stage=str(stage), package=self.package, version=self.version,
             function_name=args['function_name'], kwargs=self.native_arguments(args), second_matrix=bool(args.get('second_path')))
+        if raw_call:
+            request['raw_inputs'] = {key: args[key] for key in ('input_path', 'matrix_semantics', 'species', 'assembly',
+                *(record[0] for record in raw.PORTS.values())) if key in args}
         request_sha = write(stage / 'request.json', request)
         if is_r:
             mmwrite(stage / 'input.mtx', sparse.csc_matrix(matrix.X.T))
@@ -207,7 +240,10 @@ class MatrixPackage:
             raise AuthorityError('Native completion differs from the exact requested invocation')
         if file_closure(implementation_paths) != implementation:
             raise AuthorityError('Native implementation changed during invocation')
-        receipt['implementation'] = implementation
+        native_implementation = receipt.get('implementation', [])
+        if native_implementation and file_closure(r['path'] for r in native_implementation) != sorted(native_implementation, key=lambda r:r['path']):
+            raise AuthorityError('Native package implementation changed during invocation')
+        receipt['implementation'] = sorted(implementation + native_implementation, key=lambda r:r['path'])
         if is_r:
             if args.get('second_path'):
                 values = mmread(stage/'output.mtx').toarray()
@@ -247,6 +283,10 @@ class MatrixPackage:
 
     def execute(self, values, execution_identity=None):
         args = arguments(values)
+        if self.package == 'snapatac2':
+            from . import snapatac_raw as raw
+            if args['function_name'] in raw.FUNCTIONS:
+                return raw.execute(self, args, execution_identity)
         kwargs = self.native_arguments(args)
         root = Path(args['output_dir']); root.mkdir(parents=True, exist_ok=True)
         if any(root.iterdir()):
@@ -356,6 +396,12 @@ class MatrixPackage:
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
+        return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
+
+    def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
+                        matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
+                        gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
+                        whitelist_sha256=None, species=None, assembly=None, fragment_order=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 
@@ -508,7 +554,7 @@ SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
     ('direction', 'Native direction; omitted retains the installed function default.'),
     ('min_log_fc', 'Native min_log_fc; omitted retains the installed function default.'),
     ('min_pct', 'Native min_pct; omitted retains the installed function default.'),
-), 'Native AnnData features/spectral, graphs/embeddings and clustering; use_rep selects the actual embedding. mnc_correct needs supplied batches; marker_regions/diff_test return separate native statistics, not replicate-level DA. Non-inplace returns are in uns.agent_native_return. No automatic feature selection or embedding.')
+), 'Native BAM/fragments ingestion, QC, filtering and region matrices, alongside AnnData feature selection, spectral embeddings, graphs and clustering. Each call uses its selected native function and actual count unit. Non-inplace returns remain independent in uns.agent_native_return; no automatic embedding or biological validation.')
 
 SIGNAC = MatrixPackage('Signac', '1.16.0', 'signac-1', {
     'RunSVD': ('assay', 'n', 'scale.embeddings', 'reduction.key', 'scale.max', 'verbose', 'irlba.work', 'tol'),

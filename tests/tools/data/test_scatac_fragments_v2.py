@@ -16,7 +16,7 @@ from agent.tools.data import scatac_fragments_v2_verifier as v
 from agent.tools.data import scatac_fragment_reader as reader
 from agent.tools.data import scatac_reference as ref
 from agent.tools.data._fragments_common import MAX_SUPPORT, MAX_TOTAL, canonical
-from agent.tools.data._fragment_io import BGZF_EOF
+BGZF_EOF = bytes.fromhex('1f8b08040000000000ff0600424302001b0003000000000000000000')
 
 
 def sha(data):
@@ -120,61 +120,6 @@ def factory(tmp_path):
     return make
 
 
-@pytest.fixture
-def runtime(monkeypatch):
-    monkeypatch.setattr(v, 'verify_packaging', lambda _: None)
-    def records(path):
-        return Path(str(path) + '.tbi').read_bytes().splitlines(keepends=True)
-    def names(runtime, path):
-        return list(dict.fromkeys(row.split(b'\t')[0].decode() for row in records(path)))
-    def query(runtime, path, region):
-        if ':' in region:
-            chrom, span = region.split(':'); left, right = map(int, span.split('-')); left -= 1
-        else:
-            chrom = region; left = 0; right = 2**29
-        return sha(b''.join(row for row in records(path) if row.split(b'\t')[0].decode() == chrom
-            and int(row.split(b'\t')[1]) < right and int(row.split(b'\t')[2]) > left))
-    monkeypatch.setattr(v, '_tabix_contigs', names); monkeypatch.setattr(v, '_query', query)
-    return v.FragmentVerificationRuntime()
-
-
-@pytest.mark.parametrize('strand', [False, True])
-@pytest.mark.parametrize('kind', ['external_fragment_adoption', 'bam_fragment_production', 'fastq_fragment_production'])
-def test_roundtrip_scopes_and_two_namespaces(factory, runtime, strand, kind):
-    path, digest, value = factory(strand=strand, two=True, kind=kind)
-    assert m.load_fragments_manifest_v2(path, expected_sha256=digest) == value
-    verified = v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-    assert verified.artifact_content == verified.bound_resource_identities == 'verified'
-    assert verified.producer_history == 'not_verified'
-    assert verified.producer_profile_qualification == 'not_established'
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    assert view.contract_version == 'scatac-fragments.v2'
-    assert [lib.namespace for lib in view.libraries] == ['a', 'b']
-    a, b = list(view.iter_fragments('a')), list(view.iter_fragments('b'))
-    assert a[0].cell_identity == ('a', 'ACGT-1') and b[0].cell_identity == ('b', 'ACGT-1')
-    assert a[0].support == 301 and a[0].strand == ('+' if strand else None)
-    assert [r.contig for r in a] == ['chr2', 'chr1']
-    assert view.manifest == value and path.read_bytes() == canonical(value)
-    copy = view.libraries[0].provenance; copy['kind'] = 'forged'
-    assert view.libraries[0].provenance['kind'] == kind
-    with pytest.raises(ValueError, match='NAMESPACE_UNKNOWN'):
-        list(view.iter_fragments('absent'))
-
-
-def test_strand_is_a_preserved_key_state(factory, runtime):
-    rows = [f'chr2\t0\t10\tbarcode-1\t{n}\t{s}\n' for n, s in enumerate(('+', '-', '.'), 1)]
-    path, digest, _ = factory(strand=True, rows=rows)
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    assert [r.strand for r in view.iter_fragments('a')] == ['+', '-', '.']
-    assert view.libraries[0].n_fragment_records == 3 and view.libraries[0].sum_support == 6
-
-
-def test_exact_uint64_and_wide_aggregate(factory, runtime):
-    rows = [f'chr2\t{i}\t{i+1}\tB-1\t{MAX_SUPPORT}\n' for i in range(2)]
-    path, digest, _ = factory(rows=rows)
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    assert view.libraries[0].sum_support == 2 * MAX_SUPPORT
-    assert all(type(row.support) is int and row.support == MAX_SUPPORT for row in view.iter_fragments('a'))
 
 
 @pytest.mark.parametrize('value', [0, -1, True, 1.0, MAX_SUPPORT + 1])
@@ -192,64 +137,6 @@ def test_checked_cross_library_aggregate(factory):
                      max_support=MAX_SUPPORT)
     with pytest.raises(m.FragmentsV2Error, match='SUPPORT_INVALID'):
         m.validate_fragments_manifest_v2(seal(value))
-
-
-def test_stream_support_aggregate_overflow_is_independently_checked(factory, runtime, monkeypatch):
-    path, digest, _ = factory()
-    monkeypatch.setattr(v, 'MAX_TOTAL', 301)
-    with pytest.raises(m.FragmentsV2Error, match='SUPPORT_INVALID'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-@pytest.mark.parametrize('row,strand', [
-    ('chr2\t0\t10\tACGT-1\t1\t?\n', True),
-    ('chr2\t0\t10\tACGT-1\t1\n', True),
-    ('chr2\t0\t10\tACGT-1\t1\t+\n', False),
-    ('unknown\t0\t10\tACGT-1\t1\n', False),
-    ('chr2\t-1\t10\tACGT-1\t1\n', False),
-    ('chr2\t1\t1\tACGT-1\t1\n', False),
-    ('chr2\t0\t1001\tACGT-1\t1\n', False),
-    ('chr2\t00\t10\tACGT-1\t1\n', False),
-    ('chr2\t0\t10\t\t1\n', False),
-    ('chr2\t0\t10\twhite space\t1\n', False),
-    ('chr2\t0\t10\tbad\rbarcode\t1\n', False),
-    ('chr2\t0\t10\tnonASCIIé\t1\n', False),
-    ('chr2\t0\t10\t' + 'a'*257 + '\t1\n', False),
-    ('chr2\t0\t10\tB-1\t01\n', False),
-    ('chr2\t0\t10\tB-1\t+1\n', False),
-])
-def test_bad_records(factory, runtime, row, strand):
-    path, digest, _ = factory(rows=[row], strand=strand)
-    with pytest.raises(m.FragmentsV2Error):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-@pytest.mark.parametrize('rows', [
-    ['chr2\t0\t10\tB\t1\n'] * 2,
-    ['chr2\t10\t20\tB\t1\n', 'chr2\t1\t2\tB\t1\n'],
-    ['chr1\t0\t10\tB\t1\n', 'chr2\t0\t10\tB\t1\n'],
-    ['chr2\t0\t10\tZ\t1\n', 'chr2\t0\t10\tA\t1\n'],
-])
-def test_order_and_duplicate_keys(factory, runtime, rows):
-    path, digest, _ = factory(rows=rows)
-    with pytest.raises(m.FragmentsV2Error, match='RECORD_INVALID'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-@pytest.mark.parametrize('strands', [('+', '+'), ('-', '+')])
-def test_stranded_duplicate_or_wrong_order(factory, runtime, strands):
-    path, digest, _ = factory(strand=True, rows=[f'chr2\t0\t10\tB\t1\t{s}\n' for s in strands])
-    with pytest.raises(m.FragmentsV2Error, match='RECORD_INVALID'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-@pytest.mark.parametrize('field', ['manifest_sha256', 'reference_identity_sha256', 'ordered_contig_sha256', 'assembly'])
-def test_wrong_reference(factory, runtime, field):
-    path, _, value = factory()
-    value['reference'][field] = 'hg19' if field == 'assembly' else '0'*64
-    with pytest.raises(m.FragmentsV2Error):
-        digest = write_manifest(path, value)
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
 
 
 @pytest.mark.parametrize('mutation', ['kind', 'unknown_field', 'status', 'support_unit', 'source_role', 'profile_missing', 'qualified_claim'])
@@ -306,92 +193,6 @@ def test_nested_contract_failures(factory, mutation):
         m.validate_fragments_manifest_v2(seal(value))
 
 
-def test_explicit_processing_claims_are_retained_but_not_verified(factory, runtime):
-    path, _, value = factory(); p = value['libraries'][0]['provenance']
-    p['processing']['tn5'] = {'status': 'declared', 'description': 'Source declares +4/-5 adjustment; adoption preserves coordinates.'}
-    p['source_selection'] = 'producer_subset'
-    record = path.parent / 'producer-record.txt'; record.write_text('Synthetic identity, no execution proof.')
-    p['producer_record'] = artifact(record)
-    digest = write_manifest(path, value)
-    result = v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-    assert result.manifest['libraries'][0]['provenance'] == p
-    assert result.producer_history == 'not_verified'
-
-
-@pytest.mark.parametrize('field', ['bgzf', 'tabix', 'profile', 'source'])
-def test_bound_file_corruption(factory, runtime, field):
-    path, digest, value = factory(); entry = value['libraries'][0]
-    target = (path.parent / entry[field]['path'] if field in ('bgzf', 'tabix') else
-              Path(entry['provenance']['profile']['resource']['path']) if field == 'profile' else
-              Path(entry['provenance']['sources'][0]['resource']['path']))
-    target.write_bytes(target.read_bytes() + b'corrupt')
-    with pytest.raises(m.FragmentsV2Error):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-@pytest.mark.parametrize('mode', ['gzip', 'eof', 'crc', 'partial_line', 'trailing', 'header'])
-def test_rehashed_bgzf_corruption(factory, runtime, mode):
-    path, _, value = factory(); e = value['libraries'][0]; target = path.parent / e['bgzf']['path']
-    data = target.read_bytes(); raw = gzip.decompress(data)
-    if mode == 'gzip': data = gzip.compress(raw)
-    elif mode == 'eof': data = data[:-28]
-    elif mode == 'crc': data = data[:-36] + bytes([data[-36] ^ 1]) + data[-35:]
-    elif mode == 'partial_line': data = bgzf(raw[:-1])
-    elif mode == 'trailing': data += b'extra'
-    else: data = bgzf(b'#header\n' + raw)
-    target.write_bytes(data); e['bgzf'] = artifact(target) | {'path': e['bgzf']['path']}
-    digest = write_manifest(path, value)
-    with pytest.raises(m.FragmentsV2Error):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-def test_stale_rehashed_index_fails_functional_check(factory, runtime):
-    path, _, value = factory(); e = value['libraries'][0]; index = path.parent / e['tabix']['path']
-    index.write_bytes(index.read_bytes().replace(b'301', b'302'))
-    e['tabix'] = artifact(index) | {'path': e['tabix']['path']}
-    digest = write_manifest(path, value)
-    with pytest.raises(m.FragmentsV2Error, match='INDEX_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-def test_narrow_index_queries_are_checked_separately(factory, runtime, monkeypatch):
-    path, digest, _ = factory(); query = v._query
-    monkeypatch.setattr(v, '_query', lambda r, p, region: '0'*64 if ':' in region else query(r, p, region))
-    with pytest.raises(m.FragmentsV2Error, match='INDEX_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-def test_source_mutation_during_verification_fails(factory, runtime, monkeypatch):
-    path, digest, value = factory(); original = v._verify_stream
-    profile = Path(value['libraries'][0]['provenance']['profile']['resource']['path'])
-    def changed(*args):
-        result = original(*args)
-        profile.write_bytes(profile.read_bytes())
-        return result
-    monkeypatch.setattr(v, '_verify_stream', changed)
-    with pytest.raises(m.FragmentsV2Error, match='SOURCE_CHANGED'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-def test_changed_reference_resource_and_tbi_limit(factory, runtime, monkeypatch):
-    path, digest, value = factory()
-    monkeypatch.setattr(v, 'TBI_LIMIT', 999)
-    with pytest.raises(m.FragmentsV2Error, match='INDEX_POLICY_UNSUPPORTED'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-    bundle = ref.load_scatac_reference_bundle(value['reference']['manifest_path'])[1]
-    Path(bundle.ccre.bed.path).write_text('chr2\t0\t999\n')
-    with pytest.raises(m.FragmentsV2Error, match='REFERENCE_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
-def test_independent_verifier_recounts_forged_summary(factory, runtime, monkeypatch):
-    path, _, value = factory(); value['libraries'][0]['sum_support'] += 1
-    digest = write_manifest(path, value)
-    monkeypatch.setattr(reader, '_record', lambda *a: pytest.fail('Reader used as verifier'))
-    with pytest.raises(m.FragmentsV2Error, match='STREAM_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)
-
-
 @pytest.mark.parametrize('mode', ['digest', 'duplicate', 'nan', 'schema', 'utf16', 'oversize'])
 def test_strict_manifest_loading(factory, mode):
     path, digest, _ = factory(); payload = path.read_bytes()
@@ -407,24 +208,6 @@ def test_strict_manifest_loading(factory, mode):
         m.load_fragments_manifest_v2(path, expected_sha256=digest)
 
 
-def test_noncanonical_json_byte_identity_and_no_source_io(factory, runtime, monkeypatch):
-    path, _, value = factory(); payload = json.dumps(value, indent=2).encode(); path.write_bytes(payload)
-    view = reader.open_verified_fragments(path, expected_sha256=sha(payload), runtime=runtime)
-    assert view.verification.manifest_bytes == payload
-    assert sha(view.verification.manifest_bytes) == view.verification.manifest_sha256
-    monkeypatch.setattr(ref, 'reinspect_scatac_reference_bundle_sources', lambda *a: pytest.fail('IO during load'))
-    assert m.load_fragments_manifest_v2(path, expected_sha256=sha(payload)) == value
-    assert m.canonical_fragments_manifest_v2_bytes(value) == canonical(value)
-
-
-@pytest.mark.parametrize('encoding', ['utf-16', 'utf-8-sig'])
-def test_reader_rejects_non_utf8_v2_encoding(factory, runtime, encoding):
-    path, _, value = factory()
-    payload = json.dumps(value).encode(encoding); path.write_bytes(payload)
-    with pytest.raises(m.FragmentsV2Error):
-        reader.open_verified_fragments(path, expected_sha256=sha(payload), runtime=runtime)
-
-
 def test_identity_preserves_science_excludes_physical_encoding(factory):
     _, _, value = factory(); changed = deepcopy(value)
     changed['libraries'][0]['bgzf']['sha256'] = '0'*64
@@ -432,101 +215,3 @@ def test_identity_preserves_science_excludes_physical_encoding(factory):
     assert m.fragments_identity(changed) == value['fragments_identity_sha256']
     changed['libraries'][0]['provenance']['support']['definition'] = 'Different counted population.'
     assert m.fragments_identity(changed) != value['fragments_identity_sha256']
-
-
-@pytest.mark.parametrize('when', ['before', 'during'])
-def test_reader_rejects_drift(factory, runtime, when):
-    path, digest, value = factory()
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    stream = view.iter_fragments('a')
-    if when == 'during': next(stream)
-    target = path.parent / value['libraries'][0]['bgzf']['path']
-    target.write_bytes(target.read_bytes())  # Same bytes still changes the trusted-local snapshot.
-    with pytest.raises(m.FragmentsV2Error, match='SOURCE_CHANGED'):
-        list(stream)
-
-
-def test_streaming_path_has_bounded_record_storage(factory, runtime, monkeypatch):
-    # Many records/barcodes; measured reader memory excludes fixture creation
-    # and up-front verification. A materialized FragmentRecord list exceeds 10 MB.
-    rows = [f'chr2\t0\t10\tB{i:06}\t1\n' for i in range(50000)]
-    path, digest, _ = factory(rows=rows)
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    original = reader._record; seen = 0
-    def counted(*args):
-        nonlocal seen
-        seen += 1
-        return original(*args)
-    monkeypatch.setattr(reader, '_record', counted)
-    tracemalloc.start()
-    try:
-        stream = view.iter_fragments('a')
-        assert seen == 0
-        assert next(stream).barcode_identifier == 'B000000' and seen == 1
-        assert sum(1 for _ in stream) == 49999
-        assert tracemalloc.get_traced_memory()[1] < 2 * 1024 * 1024
-    finally:
-        tracemalloc.stop()
-
-
-def test_atomic_manifest_publication_and_conflict(factory, runtime):
-    path, digest, value = factory(); original = path.read_bytes()
-    target = path.parent / 'published.json'
-    result = m.publish_fragments_manifest_v2(value, target, runtime=runtime)
-    assert result['manifest_sha256'] == digest and target.read_bytes() == original
-    with pytest.raises(m.FragmentsV2Error, match='PUBLICATION_CONFLICT'):
-        m.publish_fragments_manifest_v2(value, target, runtime=runtime)
-    assert path.read_bytes() == original
-
-
-def test_publication_verification_failure_leaves_no_manifest(factory, runtime):
-    path, _, value = factory(); target = path.parent / 'published.json'
-    (path.parent / value['libraries'][0]['tabix']['path']).write_bytes(b'wrong')
-    with pytest.raises(m.FragmentsV2Error):
-        m.publish_fragments_manifest_v2(value, target, runtime=runtime)
-    assert not target.exists() and not list(path.parent.glob('.fragments-v2-*'))
-
-
-def test_publication_competing_writer_is_not_overwritten(factory, runtime, monkeypatch):
-    path, _, value = factory(); target = path.parent / 'published.json'; link = m.os.link
-    def compete(source, destination):
-        Path(destination).write_bytes(b'other writer')
-        link(source, destination)
-    monkeypatch.setattr(m.os, 'link', compete)
-    with pytest.raises(m.FragmentsV2Error, match='PUBLICATION_CONFLICT'):
-        m.publish_fragments_manifest_v2(value, target, runtime=runtime)
-    assert target.read_bytes() == b'other writer'
-    assert not list(path.parent.glob('.fragments-v2-*'))
-
-
-def test_reader_checks_drift_when_closed_early(factory, runtime):
-    path, digest, _ = factory()
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    stream = view.iter_fragments('a'); next(stream)
-    path.write_bytes(path.read_bytes())
-    with pytest.raises(m.FragmentsV2Error, match='SOURCE_CHANGED'):
-        stream.close()
-
-
-@pytest.mark.parametrize('version', [None, True, 3, '2'])
-def test_common_reader_rejects_unknown_version_without_fallback(factory, runtime, version):
-    path, _, value = factory(); value['schema_version'] = version
-    payload = canonical(value); path.write_bytes(payload)
-    with pytest.raises(ValueError, match='CONTRACT_UNSUPPORTED'):
-        reader.open_verified_fragments(path, expected_sha256=sha(payload), runtime=runtime)
-
-
-@pytest.mark.parametrize('strand', [False, True])
-def test_real_qualified_tabix_and_corruption(factory, strand):
-    if not Path('/usr/bin/tabix').is_file():
-        pytest.skip('Qualified local packaging runtime unavailable')
-    path, digest, value = factory(strand=strand, real_index=True)
-    runtime = v.FragmentVerificationRuntime()
-    view = reader.open_verified_fragments(path, expected_sha256=digest, runtime=runtime)
-    assert sum(row.support for row in view.iter_fragments('a')) == 302
-    index = path.parent / value['libraries'][0]['tabix']['path']
-    index.write_bytes(b'not an index')
-    value['libraries'][0]['tabix'] = artifact(index) | {'path': value['libraries'][0]['tabix']['path']}
-    digest = write_manifest(path, value)
-    with pytest.raises(m.FragmentsV2Error, match='INDEX_MISMATCH'):
-        v.verify_fragments_v2(path, expected_sha256=digest, runtime=runtime)

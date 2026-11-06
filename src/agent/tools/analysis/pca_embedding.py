@@ -11,7 +11,7 @@ import pandas as pd
 from scipy import sparse
 
 from . import embedding_analysis as common
-from agent.tools.data._fragments_common import snapshots, unchanged
+from agent.tools._file_identity import snapshots, unchanged
 
 CONTRACT = 'cell-pca-embedding.v1'
 TFIDF_CONTRACT = 'cell-pca-embedding.v2'

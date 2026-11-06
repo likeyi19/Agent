@@ -109,17 +109,17 @@ def matrix_accepted(application, monkeypatch, *, name='initial', tool='build_scA
     path.write_bytes(raw)
     sha = hashlib.sha256(raw).hexdigest()
     if tool == 'build_scATAC_cell_by_ccre':
-        from agent.tools.data.scatac_matrix import _summary
+        from agent.tools.data.raw_history import matrix_summary as _summary
         result = _summary(manifest, path, sha)
     elif tool == 'build_scATAC_cell_by_features':
-        from agent.tools.data.fragment_feature_matrix import _summary
+        from agent.tools.data.raw_history import feature_matrix_summary as _summary
         result = _summary(manifest, path, sha)
     else:
         from agent.tools.data.scatac_matrix_adoption import _summary
         result = _summary(manifest, path, sha, contract=contract)
     arguments = dict(output_dir=str(root))
     plan = AgentPlan(name + ':plan', name, 'fixture', (PlanStep('step0', tool, arguments),))
-    identity = execution_identity(name + ':run', plan, plan.steps[0], application.registry.get(tool))
+    identity = execution_identity(name + ':run', plan, plan.steps[0], application.registry.accepted(tool))
     proof = {k: manifest[k] for k in ('identity_sha256', 'logical_matrix_sha256', 'nnz',
                                    'total_count', 'zero_row_count')}
     if 'diagnostic' in manifest:

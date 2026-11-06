@@ -176,7 +176,7 @@ def test_file_followup_discusses_only_the_committed_predecessor_recipe_without_c
     assert all(files(guarded)[path] == sha for path, sha in before.items() if not path.startswith('sessions/'))
 
 
-def test_selected_recipe_context_is_optional_when_its_details_exceed_the_bound(app, monkeypatch):
+def test_selected_recipe_details_remain_available_above_the_preferred_budget(app, monkeypatch):
     from dataclasses import replace
     from agent.schemas.orchestration import _serialize
     accepted_export(app, monkeypatch)
@@ -190,11 +190,12 @@ def test_selected_recipe_context_is_optional_when_its_details_exceed_the_bound(a
     monkeypatch.setattr(type(guarded.sessions), 'composed_export', large)
     def response(payload):
         evidence = payload['evidence']; selected = evidence['delivery']['selected_export']
-        assert selected['status'] == 'available_for_preparation' and 'contents' not in selected
-        assert selected['contents_omitted']
+        assert selected['status'] == 'available_for_preparation'
+        assert selected['contents']['representations'][0]['method']['description']=='x'*40000
+        assert 'contents_omitted' not in selected
         cells = next(c for c in evidence['claims'] if c['field'] == 'n_cells')
         return dict(support='supported', paragraphs=[dict(kind='finding',
-            text='The accepted PCA has four cells and the recipe remains available; its optional details exceed this answer context.',
+            text='The accepted PCA has four cells and the selected recipe describes its exact representation source.',
             citations=[cells['claim_id']], comparisons=[])])
     outcome = ask(guarded, 'bounded-export', 'Explain the accepted PCA and selected export.', Model(selection, response=response))
     assert outcome.status == 'answered' and outcome.scientific is not None

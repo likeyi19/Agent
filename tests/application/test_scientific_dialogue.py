@@ -47,7 +47,8 @@ class Model:
         labels = {t['handle']: t['label'] for t in value['evidence']['targets']}
         text = ' '.join(f"{labels[rows[i]['target']]}, group {rows[i]['subject']}: "
                         f"{rows[i].get('semantics', {}).get('label', rows[i]['field'])} = {rows[i]['value']}." for i in ids)
-        text += ' ' + ' '.join(value['evidence']['meanings'].values())
+        text += ' ' + ' '.join(v for k,v in value['evidence']['meanings'].items()
+                              if not k.startswith('field_definition_'))
         return json.dumps(dict(support=self.support, paragraphs=[dict(text=text,
             kind='finding' if ids else 'limitation', citations=ids, comparisons=[p['id'] for p in value['evidence'].get('comparison', {}).get('pairs', ()) if {p['left'], p['right']} <= set(ids)])]))
 
@@ -321,15 +322,15 @@ def test_historical_target_uses_exact_offered_identity_without_lexical_gate(app,
     assert follow.status == 'answered' and follow.scientific.claims[0].value == 2
 
 
-def test_incompatible_matrix_comparison_and_context_bound(app, monkeypatch):
+def test_incompatible_matrix_comparison_and_preferred_context_budget(app, monkeypatch):
     accepted(app,'build_scATAC_cell_by_features',overrides={'assembly':'first'})
     accepted(app,'build_scATAC_cell_by_features',name='next',overrides={'assembly':'second'})
     app = forbid_work(app,monkeypatch)
     compared = ask(app,'comparison','Compare with the parent.',Model(question('r0',comparison=dict(output='r1',subject=None)), ['n_cells']))
     assert compared.status == 'answered'
     assert any('No compatible measurement pairs' in x for x in compared.scientific.limitations)
-    monkeypatch.setattr(sd,'MAX_CONTEXT_BYTES',10)
-    assert ask(app,'bounded','Explain this result',Model(question())).status == 'unavailable'
+    monkeypatch.setattr(sd,'PREFERRED_CONTEXT_BYTES',10)
+    assert ask(app,'bounded','Explain this result',Model(question(),['n_cells'])).status == 'answered'
 
 
 def test_changed_evidence_is_reloaded_on_followup(app, monkeypatch):
@@ -353,9 +354,9 @@ def test_context_omits_automatic_detail_but_preserves_whole_summary(app, monkeyp
     def evidence(*args, **kwargs):
         view = original(*args, **kwargs)
         if kwargs.get('detail') is not None:
-            return replace(view, status='available', detail=(EvidenceFact(
-                'candidate.0', 'available', {'markers': ['GENE'] * 6000},
-                '/candidate/0', artifact_name='candidate_evidence', artifact_sha256='a' * 64),))
+            return replace(view, status='available', detail=tuple(EvidenceFact(
+                f'candidate.{i}', 'available', {'markers': ['GENE'] * 1500},
+                f'/candidate/{i}', artifact_name='candidate_evidence', artifact_sha256='a' * 64) for i in range(3)))
         return view
     monkeypatch.setattr(app.sessions, 'evidence', evidence)
     public, claims = sd.context(app.sessions, 'session', admitted)
@@ -363,8 +364,10 @@ def test_context_omits_automatic_detail_but_preserves_whole_summary(app, monkeyp
     assert not any(c.field.startswith('detail.') for c in claims)
     assert any('Automatic supplementary detail was omitted' in v for v in public['limitations'])
     admitted['detail'] = dict(section='annotation_rationale', field=None, other_field=None, limit=8, offset=0)
-    with pytest.raises(IntentError, match='unavailable_context'):
-        sd.context(app.sessions, 'session', admitted)
+    explicit, explicit_claims = sd.context(app.sessions, 'session', admitted)
+    assert len(json.dumps(explicit).encode()) > sd.PREFERRED_CONTEXT_BYTES
+    assert len([c for c in explicit_claims if c.field.startswith('detail.candidate.')]) == 3
+    assert len(next(c.value for c in explicit_claims if c.field == 'group_summary')) == 2
 
 
 def test_retry_reuses_admitted_references_without_reinterpreting(app, monkeypatch):
@@ -458,7 +461,7 @@ def test_model_lifecycle_summary_survives_six_source_completion_budget(app,monke
     targets=[dict(revision_id=rid,output_name=o.name,accepted_step_sha256=o.accepted_step_sha256,subject=None)
         for o in revision.outputs]
     public,claims=sd.context(app.sessions,'session',dict(target=None,comparison=None),evidence_targets=targets)
-    assert len(claims)<=sd.MAX_CLAIMS and len(json.dumps(public).encode())<=sd.MAX_CONTEXT_BYTES
+    assert len(claims)<=len(targets)*sd.MAX_CLAIMS_PER_TARGET
     for i in range(6):
         values={c.field:c.value for c in claims if c.target=='t'+str(i)}
         assert values['strategy']=='de_novo' and values['model_state']=='initialization'
@@ -478,8 +481,7 @@ def test_pca_method_configuration_stays_whole_in_composed_completion(app, monkey
         accepted_step_sha256=o.accepted_step_sha256, subject=None) for o in revision.outputs]
     public, claims = sd.context(app.sessions, 'session', dict(target=None, comparison=None),
         evidence_targets=targets)
-    assert len(claims) <= sd.MAX_CLAIMS
-    assert len(json.dumps(public).encode()) <= sd.MAX_CONTEXT_BYTES
+    assert len(claims) <= len(targets)*sd.MAX_CLAIMS_PER_TARGET
     for i in range(6):
         values = {c.field: c.value for c in claims if c.target == f't{i}'}
         assert values['parameters'] == parameters

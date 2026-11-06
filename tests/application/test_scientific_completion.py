@@ -487,6 +487,8 @@ def test_public_provenance_projects_only_known_source_fields():
 
 @pytest.mark.parametrize('explain,limit', [(False, 8), (True, 8), (False, 1), (True, 1)])
 def test_precise_comparison_completes_with_existing_readers_and_same_figure_facts(tmp_path, monkeypatch, explain, limit):
+    from agent.application import scientific_dialogue as sd
+    monkeypatch.setattr(sd,'PREFERRED_CONTEXT_BYTES',1)
     facade, coords, _, old, calls, models = overlay_service(tmp_path, monkeypatch,
         compare=True, explain=explain, limit=limit)
     original = coords.read_bytes()

@@ -1070,8 +1070,9 @@ historical requests #11/#12; no design cause for #11's Planner refusal is establ
 One bounded official OpenAI/Firefox confirmation also executes strict-result to
 two-sided mapping with #11's unchanged utterance. This does not erase the refusal or
 attribute later planning success to the unrelated role-cardinality fix.
-Two-result completion context exceeds the existing 32 KiB R5 bound; each exact
-result remains readable. Factual review and scientific owners are unchanged.
+At the Phase 0 freeze, two-result completion context exceeded the then-existing
+32 KiB R5 bound; each exact result remained readable. That separate limitation is
+addressed by the SRV-1/R5 work below, without changing Phase 0 science.
 The final decision is bounded CONDITIONAL GO for controlled explicit-mapping use
 and a reviewed evaluation baseline, not universal provider or biological qualification.
 The combined closeout confirms this bounded Phase 0 completion and authorizes one
@@ -1079,6 +1080,23 @@ dedicated reviewed implementation commit and normal push. Earlier no-commit reco
 describe the pre-closeout stages. The separate SRV-1/R5 context improvement follows
 in its own work unit and commit; SRV-1 remains open. The full PBMC10k/SRV-2C
 evaluation has not started.
+
+The [SRV-1/R5 context report](../agent-data/acceptance/scientific-results/srv-1-r5-context/REPORT.md)
+owns the focused multi-result explanation improvement. Completion summarizes this
+Run's accepted results by default; retained historical results remain selectable,
+and explicit comparisons retain exact older operands. Shared field definitions use
+the existing meanings table without merging facts or sources. The 32 KiB evidence
+budget is an organization preference, not a provider context-window claim. Bounded
+necessary facts may exceed it; the complete language prompt/schema plus the existing
+16 KiB answer allowance has a separate 1 MiB operational resource ceiling. Provider
+capacity is not inferred from bytes; normal provider rejection remains distinct
+from citation or semantic-review failure. The existing 128-field owner bound now
+supplies each target's claim allowance rather than dividing 64 slots among results.
+Requested detail, figure provenance and selected export contents retain priority.
+The report separates deterministic larger-context dispatch from one genuine official
+OpenAI/Firefox supported read-only answer with 26 exact citations and all five units
+reviewed. Historical responses, source publications, algorithms and configuration
+remain exact. This is bounded R5 closeout in its own commit; SRV-1 remains open.
 
 All scientific capabilities have equal architectural status through existing
 Registry, resource, execution, evidence and Web owners. Scientific applicability

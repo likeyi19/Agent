@@ -86,7 +86,7 @@ def test_registry_field_description_is_reused_without_rephrasing(app):
     model=Model(question(),['species'])
     assert ask(app,'registry','Explain this result',model).status=='answered'
     claim=next(c for c in model.calls[-1]['evidence']['claims'] if c['field']=='species')
-    assert claim['semantics']['description']==app.registry.get('epizoo_embed_cells').result_contract.planning_fields['species'].description
+    assert model.calls[-1]['evidence']['meanings'][claim['semantics']['description_ref']]==app.registry.get('epizoo_embed_cells').result_contract.planning_fields['species'].description
 
 
 def test_owner_profile_is_not_exposed_for_a_different_accepted_profile(app):

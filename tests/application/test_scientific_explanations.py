@@ -109,7 +109,9 @@ def test_answer_review_failure_preserves_results_and_identity(app, monkeypatch, 
     assert (after.session_id, after.generation, after.active_revision_id, after.revisions, after.turns) == (
         before.session_id, before.generation, before.active_revision_id, before.revisions, before.turns)
     assert {p: p.read_bytes() for p in app._workspace.runs.rglob('*') if p.is_file()} == files
-    assert 'scientific details remain available' in outcome.text
+    assert 'remain available' in outcome.text
+    if failure == 'provider':
+        assert 'language provider' in outcome.text and 'valid evidence bindings' not in outcome.text
     assert caplog.records[-1].scientific_answer_stage == stage
     assert 'PRIVATE_PROVIDER_DATA' not in caplog.text + outcome.text
 
@@ -205,7 +207,7 @@ def test_threshold_origin_semantics_use_pinned_effective_values(app, monkeypatch
         for name in ('min_qc_fragment_records', 'min_tss_enrichment', 'min_tss_flank_evidence', 'max_qc_fragment_records'):
             fact = facts['selection_threshold_origins.' + name]
             assert fact['value'] == ('explicit_execution_argument' if name in arguments else 'existing_owner_default')
-            description = fact['semantics']['description']
+            description = e['meanings'][fact['semantics']['description_ref']]
             assert 'effective_thresholds.' + name in description
             assert 'non-null threshold is enabled' in description
             assert 'null denotes a disabled optional filter' in description

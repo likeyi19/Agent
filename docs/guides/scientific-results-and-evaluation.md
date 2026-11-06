@@ -119,10 +119,29 @@ explicit current source selections take precedence, including distinct sources f
 repeated operations. The decision is bounded CONDITIONAL GO for controlled use.
 A historical strict-result request was refused despite complete inputs; a later
 single confirmation with the same wording succeeded. This is not universal
-first-attempt reliability. Completion prose can be unavailable when multiple result
-summaries exceed the existing context bound; exact evidence and downloads remain
-available. Scientific factual review is unchanged.
+first-attempt reliability. Scientific factual review is unchanged.
 It does not start the full published-data SRV-2C evaluation or close SRV-1.
+
+Scientific explanations summarize newly executed accepted results by default;
+retained results remain available for explicit historical reading or comparison.
+Their facts are kept separately attributed even when values or field definitions
+are equal. A mapped publication already records its original metrics, so an
+ordinary completion does not need to repeat an entire retained strict result.
+
+The separate [SRV-1/R5 context report](../../../agent-data/acceptance/scientific-results/srv-1-r5-context/REPORT.md)
+records removal of the former hard 32 KiB evidence rejection. That size is now a
+preferred organization budget: optional automatic detail and unsolicited delivery
+descriptions can be omitted with disclosure. Requested detail, figure provenance,
+selected export contents and necessary accepted summaries may exceed it. Repeated
+field definitions share their existing reviewed meanings; source facts and citations
+are not merged. Each target uses the existing 128-field owner allowance, with room
+for requested detail, rather than sharing 64 slots across all selected results.
+Existing source/fact/view limits remain. The complete prompt, response schema and
+16 KiB answer reserve have a 1 MiB operational resource ceiling. This is an Agent
+resource policy, not a model token-window estimate. Model capacities and tokenizer
+ratios are not invented; actual provider limits use ordinary request/error handling.
+Provider rejection, resource-budget refusal and factual-review withholding remain
+distinct, while accepted science and saved historical responses are preserved.
 
 An optional accepted UMAP supplies the same coordinates for prediction, reference
 and agreement panels. Missing/unmatched reference coverage is gray. Exact

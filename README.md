@@ -45,6 +45,11 @@ from harmonized-label metrics; unknown correspondences are not inferred. See the
 [SRV-2C Phase 0 checkpoint](../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md).
 The full published-data evaluation has not started.
 
+Scientific explanations prioritize the newly accepted analysis while keeping
+earlier results available for explicit reading or comparison. The separate
+[SRV-1/R5 context closeout](../agent-data/acceptance/scientific-results/srv-1-r5-context/REPORT.md)
+records supported read-only explanation and bounded handling of larger evidence.
+
 The [CWC-1 readiness assessment](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
 records its then-current 27-tool inventory, genuine replicated differential-accessibility
 and clustering-evaluation journeys, statistical downloads and long-session follow-up.

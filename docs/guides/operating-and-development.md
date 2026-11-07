@@ -126,6 +126,11 @@ the ordinary regression suite does not invoke it.
 The configured `workspace_root` owns Sessions, RunStore state, run artifacts,
 uploads and private registrations together. The configured
 `scientific_resource_root` owns the shared ScientificResourceLibrary.
+Reusable references and model resources normally register in the single active
+`/home/likeyi/program/agent-data/resources/library` through its existing installation
+owner. Isolate experiments with Sessions/workspaces and private uploads. Historical
+acceptance library indexes remain where needed for reproducibility; they are not
+preferred alternative catalogs and do not need copying for each new experiment.
 Operator configuration, reusable biological inputs, scientific resources and
 model checkpoints remain outside Git. [R4](../architecture/ua3.6.5-r4-unified-scientific-resource-library.md)
 and [R7](../architecture/ua3.6.5-r7-agent-internal-state-lifecycle-simplification.md)

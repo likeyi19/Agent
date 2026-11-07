@@ -57,6 +57,25 @@ it does not silently repair parameters or retry with a different method. Chromap
 presence-only switches accept `true`; `false` cannot disable a native preset and is
 rejected as unrepresentable, rather than being silently omitted.
 
+Ordinary research tasks may select the native matrix `counting_strategy` through
+a reviewed Registry scalar choice, considering the current objective and stated
+downstream goals. A prospective MAESTRO region-count analysis can justify
+fragment-overlap counts; no annotation method or region vocabulary is mandatory.
+The Planner chooses methods, while the existing component binder resolves their
+actual reference inputs. Genuine scientific ambiguity still requires clarification.
+A future annotation goal does not authorize running annotation immediately.
+
+The scalar is forwarded to `pp.make_peak_matrix` without changing native counting.
+Explicit scalar or native kwargs selections retain their values; contradictory
+values fail before native execution. Explicit native-function calls keep omitted
+defaults. The recorded scalar and effective native parameters distinguish the
+selected representation from omission; the exact admitted user declarations and
+compiled plan establish whether it came from the researcher or Planner. They are
+not interchangeable sources of intent. Later alternative matrices may reuse exact
+accepted fragment storage through existing dataset ports, without relabelling a
+previous matrix or rerunning import. No new representation is selected by a
+deterministic annotation workflow.
+
 Ordinary fragment tasks carry unknown barcode ordering through the existing input
 handoff. Agent selects `sorted_by_barcode=false` and SnapATAC2 sorts the original
 source itself. Researchers need no sorting flag or order detector. Explicit native
@@ -163,7 +182,9 @@ New import results record the retained barcode population and effective native
 import threshold. They do not invent a pre-import barcode count or scan the source
 again to obtain one. Later native filtering separately records input, selected and
 output populations, including whether an independent selection was applied.
-Native defaults remain in force unless the user requests alternatives. Explicit
+Native defaults remain in force unless an explicit user setting or the reviewed
+Planner counting choice selects an alternative. Direct native calls preserve
+omitted defaults. Explicit
 minimum depth, QC thresholds and counting strategy are forwarded through their
 native kwargs. An empty native selection remains empty; no threshold is lowered
 to make a small fixture succeed. Native TSSe is distinct from the retired Agent

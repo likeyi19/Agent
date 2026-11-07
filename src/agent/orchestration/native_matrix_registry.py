@@ -41,6 +41,14 @@ def tool_spec(owner):
     raw_fields = set()
     if owner.package == 'snapatac2':
         from agent.tools.analysis import snapatac_raw as raw
+        optional['counting_strategy'] = arg((str,),
+            'Native pp.make_peak_matrix counting strategy. For research tasks select a representation compatible '
+            'with the current objective and stated downstream method: fragment gives fragment-body overlaps, '
+            'insertion gives endpoints, paired-insertion gives paired endpoints. MAESTRO region-count annotation '
+            'accepts fragment counts, not insertion counts. Preserve explicit kwargs; for explicit native calls '
+            'omit an unrequested choice and retain native defaults.',
+            choices=('fragment', 'insertion', 'paired-insertion'), scientific_parameter=True,
+            conversational_choice=True, planner_choice=True)
         optional['fragment_order'] = arg((str,),
             'Task input-order knowledge for pp.import_fragments only: unknown selects native sorting; '
             'barcode uses established barcode ordering. Explicit kwargs.sorted_by_barcode prevails. '
@@ -91,10 +99,15 @@ def tool_spec(owner):
         'TBI is unused. No canonical fragment import or internal source profile is required. '
         'metrics.tsse consumes native fragment H5AD and GTF/GFF gene_anno. pp.filter_cells is a separate native selection '
         'with its own method. pp.make_peak_matrix consumes imported native H5AD and optional peaks BED. '
-        'Its default is paired-insertion; explicit fragment-body count requests need counting_strategy=fragment. '
-        'Use native import min_num_fragments=200, filter_cells min_counts=1000/min_tsse=5.0, and paired-insertion '
-        'matrix counting by omission unless the user requests different semantics. Never substitute old Agent TSS 4 '
-        'or fragment-body counting defaults. A user request to retain low-depth/all barcodes may explicitly bind '
+        'Its native default is paired-insertion. Research tasks may select the registered counting_strategy '
+        'choice for a scientifically justified downstream method, without inventing a user declaration. '
+        'Choose methods and compatible regions from the objective and available references, not integration order; '
+        'no annotation method or region vocabulary is mandatory. Explicit native calls retain omitted defaults, '
+        'and explicit user kwargs or counting choices prevail. Reuse accepted fragment storage when a later '
+        'matrix needs different counting; do not relabel or silently convert an existing measurement. '
+        'Use native import min_num_fragments=200 and filter_cells min_counts=1000/min_tsse=5.0 by omission. '
+        'Never substitute old Agent TSS 4 or global fragment-body counting defaults. '
+        'A user request to retain low-depth/all barcodes may explicitly bind '
         'min_num_fragments=0; do not lower thresholds just for a small dataset. Imported barcodes and later filtered '
         'barcodes are distinct populations. Native import has no X measurement: build a matrix before PCA/LSI. '
         'Preserve supplied barcode/coordinate history and declared source/reference species/assembly. '

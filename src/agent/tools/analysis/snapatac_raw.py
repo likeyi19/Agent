@@ -151,6 +151,12 @@ def execute(owner, args, execution_identity):
             summary['parameters']['fragment_order'] = args['fragment_order']
             summary['parameters']['agent_selected_parameters'] = {
                 key: value for key, value in kwargs.items() if key not in args.get('kwargs', {})}
+        if args.get('counting_strategy') is not None:
+            # A supplied scalar may be a user declaration or registered Planner
+            # choice. The captured request/plan owns that attribution; do not
+            # mislabel it as a native default or synthetic user instruction.
+            summary['parameters']['counting_strategy'] = args['counting_strategy']
+            summary['parameters']['omitted_optional_arguments'] = 'native defaults except recorded counting strategy'
         if name == 'pp.import_fragments':
             summary['parameters']['population'] = dict(stage='native_import', retained_barcodes=len(cells),
                 min_num_fragments=receipt['effective_parameters']['min_num_fragments'],

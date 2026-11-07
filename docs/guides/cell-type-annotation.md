@@ -103,8 +103,12 @@ for missing CellMarker resources yet.
 The Web operator's `scientific_resource_root` is also the scientific execution
 library. It is scoped to each operation, so separate deployments do not share a
 process-global reference selection. Standalone tool/CLI callers may continue to
-set `AGENT_SCIENTIFIC_RESOURCE_ROOT`. The qualified SWC-2 deployment uses
-`resources/library-swc2`; production defaults are unchanged. Existing
+set `AGENT_SCIENTIFIC_RESOURCE_ROOT`. The historical qualified SWC-2 deployment uses
+`resources/library-swc2`; its index remains reproducibility evidence. The same
+CellMarker 2.0 entry is now registered in the active shared `resources/library`,
+with identical files, hashes, context, signature-bound mappings and provenance.
+Ordinary discovery uses that active library; tasks need no separate common-reference
+library. Existing
 `AGENT_ANNOTATION_MAESTRO_ROOT`, `AGENT_ANNOTATION_RSCRIPT` and
 `AGENT_ANNOTATION_R_LIBRARY` native runtime requirements remain.
 

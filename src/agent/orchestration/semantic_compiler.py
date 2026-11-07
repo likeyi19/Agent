@@ -968,6 +968,25 @@ def compile_semantic_plan(
     for step in candidate.steps:
         tool = registry.get(step.tool_name)
         state = states[step.step_id]
+        if tool.native_functions is not None:
+            # Check after request binding so source order cannot hide explicit
+            # native function intent or kwargs. Omitted native defaults stay
+            # omitted when the researcher selected the function itself.
+            choices = {
+                next(port.members[0].field_name for port in tool.semantic_planning.consumer_ports
+                     if port.name == source.target_port): source.choice
+                for source in step.sources if isinstance(source, SemanticRegisteredChoiceSource)
+            }
+            for name, value in choices.items():
+                if name == 'function_name':
+                    continue
+                if 'function_name' not in choices:
+                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
+                        'An explicit native function retains omitted native defaults; use supplied parameter sources.')
+                kwargs = state.arguments.get('kwargs', {})
+                if name in kwargs and kwargs[name] != value:
+                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
+                        'A registered native choice conflicts with supplied native kwargs.')
         missing = sorted(set(tool.required_arguments).difference(state.arguments))
         if missing:
             port_arguments: dict[str, set[str]] = defaultdict(set)

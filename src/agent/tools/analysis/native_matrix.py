@@ -169,6 +169,12 @@ class MatrixPackage:
         kwargs = native_kwargs(self.FUNCTIONS, args)
         if self.package == 'snapatac2':
             from . import snapatac_raw as raw
+            if args.get('counting_strategy') is not None:
+                if function != 'pp.make_peak_matrix':
+                    raise ValueError('counting_strategy applies only to native pp.make_peak_matrix')
+                if 'counting_strategy' in kwargs and kwargs['counting_strategy'] != args['counting_strategy']:
+                    raise ValueError('Explicit native kwargs and scalar have conflicting counting_strategy values')
+                kwargs = dict(kwargs, counting_strategy=args['counting_strategy'])
             if args.get('fragment_order') is not None:
                 if function != 'pp.import_fragments' or args['fragment_order'] not in ('unknown', 'barcode'):
                     raise ValueError('fragment_order is source knowledge for native fragment import only')
@@ -401,7 +407,7 @@ class MatrixPackage:
     def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
-                        whitelist_sha256=None, species=None, assembly=None, fragment_order=None):
+                        whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 

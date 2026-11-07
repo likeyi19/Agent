@@ -233,12 +233,6 @@ def discover(resources, session_id):
         q = record.reference_qualification
         if q['scope'] != 'session' or q['session_id'] != session_id: continue
         choices.append(input_set(record))
-        if q['profile'] == 'scatac-qc-reference-bundle.v1':
-            try:
-                choices.extend(_raw_reference_choices(_serialize(q['inputs']), record.resource_id[6:46],
-                    record.label, q['files']))
-            except (ValueError, OSError):
-                pass  # An unavailable parent must not hide unrelated valid resources.
     return tuple(choices)
 
 
@@ -321,7 +315,7 @@ class ScientificResourceLibrary:
         identities = set()
         for row in value['resources']:
             if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
-                    or row['kind'] not in ('annotation', 'genome', 'qc', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator', 'motif_collection')
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'regions', 'gene_annotation', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator', 'motif_collection')
                     or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
                     or row['id'] in identities):
                 _fail('Scientific resource identity is corrupt.')
@@ -396,6 +390,18 @@ class ScientificResourceLibrary:
             knowledge = resource['knowledge']
             pins = {knowledge[k + '_path']: knowledge[k + '_sha256'] for k in ('snapshot', 'table')}
             qualifier = lambda: reference(resource)
+        elif kind in ('regions', 'gene_annotation'):
+            # Exact operator-declared components. Native packages parse their
+            # scientific content; installation does not qualify a whole bundle.
+            from agent.tools.data.scatac_reference import _sha
+            keys = {'species', 'assembly', 'file'} | ({'coordinate_system'} if kind == 'regions' else set())
+            if (set(resource) != keys or set(resource['file']) != {'path','sha256'}
+                    or kind == 'regions' and resource['coordinate_system'] != 'zero_based_half_open'):
+                _fail('Exact declared native reference component required.')
+            for key in ('species','assembly'): _label(resource[key])
+            _sha(resource['file']['sha256'])
+            pins = {resource['file']['path']:resource['file']['sha256']}
+            qualifier = lambda: None
         elif kind == 'genome':
             from agent.tools.data import scatac_reference as r, regulatory_feature_reference as owner
             from agent.tools.data.chromap_reference_index import verify_fasta_fai
@@ -457,9 +463,22 @@ class ScientificResourceLibrary:
         with (self.root / '.index.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             rows = self.entries()
-            existing = [r for r in rows if r['kind'] == kind and r['resource'] == resource]
+            def same_resource(row):
+                if row['kind'] != kind:
+                    return False
+                if kind != 'genome':
+                    return row['resource'] == resource
+                # Future duplicate installations reuse exact genome bytes and
+                # declarations. Historical aliases stay intact. Size-equivalent
+                # FAI inputs with different FASTAs are only native-port aliases,
+                # never the same mapping/sequence reference.
+                old = row['resource']
+                return (all(old[k] == resource[k] for k in ('species','assembly'))
+                    and all(old['genome'][k] == resource['genome'][k] for k in ('contig_count','ordered_contig_sha256'))
+                    and all(old['genome'][k]['sha256'] == resource['genome'][k]['sha256'] for k in ('fasta','fai')))
+            existing = sorted((r for r in rows if same_resource(r)), key=lambda r:r['id'])
             if existing:
-                if len(existing) != 1: _fail('Duplicate scientific resources in the library.')
+                if len(existing) != 1 and kind != 'genome': _fail('Duplicate scientific resources in the library.')
                 self.check(existing[0])
                 return existing[0]
             qualifier()
@@ -563,6 +582,8 @@ class ScientificResourceLibrary:
                 result['contig_scope'] = dict(path=relocated['qc_reference_manifest_path'],
                     sha256=relocated['qc_reference_manifest_sha256'])
             return result
+        if kind in ('regions', 'gene_annotation'):
+            return dict(resource, file=copy(resource['file']))
         if kind == 'genome':
             genome = dict(resource['genome'])
             return dict(resource, genome=dict(genome, fasta=copy(genome['fasta']), fai=copy(genome['fai'])))
@@ -611,6 +632,10 @@ class ScientificResourceLibrary:
                           annotation_spec_sha256=digest(resource))
         elif kind == 'qc': inputs = resource
         elif kind == 'genome': inputs = dict(library_genome=entry)
+        elif kind in ('regions', 'gene_annotation'):
+            port = 'peaks' if kind == 'regions' else 'gene_anno'
+            inputs = dict(species=resource['species'], assembly=resource['assembly'],
+                **{port + '_path':resource['file']['path'], port + '_sha256':resource['file']['sha256']})
         elif kind == 'epizoo_transfer': inputs = dict(library_epizoo_transfer=entry)
         else: _fail('Models use the existing native model selection interface.')
         return ScientificInputSet('library-' + entry['id'], entry['label'], inputs, h5ad_companion=kind in ('genome','epizoo_transfer'))
@@ -620,11 +645,6 @@ class ScientificResourceLibrary:
         for row in self.entries():
             if row['kind'] in ('epizoo', 'marker_reference', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection'): continue
             result.append(self.input_set(row))
-            if row['kind'] == 'qc':
-                try:
-                    result.extend(_raw_reference_choices(row['resource'], row['id'], row['label'], row['files']))
-                except (ValueError, OSError):
-                    pass  # Keep the original QC offer; do not offer an invalid parent.
         return tuple(result)
 
     def models(self):

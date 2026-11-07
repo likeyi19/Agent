@@ -5,8 +5,12 @@ The root [README](../../README.md) owns usage examples and current boundaries.
 accepted limitations. The [documentation index](../README.md) separates current
 owner records from historical acceptance evidence.
 
-Use the existing `agent` Python environment and run commands from the repository
-root. The implementation is under `src/agent`; normal module entry points use
+Activate the existing Conda environment with `conda activate agent`, or launch
+noninteractive commands with `conda run --no-capture-output -n agent`. Invoking
+`agent/bin/python` directly selects an interpreter but does not activate Conda's
+configured environment variables. This distinction applies to Web acceptance
+servers and their subprocesses, including provider credentials and native tools.
+Run commands from the repository root. The implementation is under `src/agent`; normal module entry points use
 `PYTHONPATH=src`. Packaging and an installed console script remain deferred.
 The tracked empty `pyproject.toml` retains its existing project-marker behavior.
 
@@ -22,9 +26,17 @@ For the Web application:
 
 ```bash
 python -m pip install -r requirements/web.txt
-PYTHONPATH=src python -m agent.web --config /path/to/operator-web.json \
+PYTHONPATH=src conda run --no-capture-output -n agent python -m agent.web --config /path/to/operator-web.json \
   --host 127.0.0.1 --port 8000
 ```
+
+The local deployment's existing `agent-data/config/launch-uat.sh` already uses
+`conda run` and accepts the same Web arguments, including an explicit `--config`
+override for an isolated acceptance workspace. Use it for Firefox acceptance.
+Before any live submission, verify the service process's interpreter, Conda prefix
+and environment name, and only the boolean presence of `OPENAI_API_KEY`. Never
+print variable values or substitute another credential after a launch failure.
+The server inherits activated variables; native subprocesses inherit them in turn.
 
 The [README usage section](../../README.md#usage) covers CLI planning, execution,
 continuation and cancellation. The [M18.3 configuration record](../history/m18.3-basic-web-application.md)

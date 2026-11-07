@@ -96,35 +96,29 @@ def test_qc_reference_reuses_existing_owner_across_task_roles(resources, tmp_pat
     with pytest.raises(ValueError): library.check(entry)
 
 
-def test_qualified_qc_parent_offered_to_exact_fragment_and_bam_roles(resources, tmp_path, monkeypatch):
-    from agent.application import raw_handoff as handoff
+def test_qc_projects_native_inputs_without_companion_aliases(resources, tmp_path, monkeypatch):
+    from agent.application.native_raw_handoff import resource_evidence
     from agent.tools.data import scatac_qc_reference as owner
     library = shared.ScientificResourceLibrary(tmp_path/'library')
     entry = library.install('qc', resources[-1].inputs(), label='Simulated QC', version='test',
         provenance='Synthetic fixture', usage='Isolated test only')
-    monkeypatch.setattr(owner, 'reinspect_scatac_qc_reference_bundle_sources',
-        lambda *a: pytest.fail('Discovery reconstructed native science'))
-    choices = library.choices()
-    assert len(choices) == 3 and choices[0] == library.input_set(entry)
-    fragments, = handoff.resources(choices, 'fragments')
-    bam, = handoff.resources(choices, 'bam')
-    assert not handoff.resources(choices, 'fastq')  # No whitelist or inferred processing context.
-    assert fragments.inputs() == bam.inputs()
+    monkeypatch.setattr(owner,'reinspect_scatac_qc_reference_bundle_sources',lambda *a:pytest.fail('Discovery repeated science'))
+    choice, = library.choices()
+    assert choice == library.input_set(entry) and not choice.fragments_companion and not choice.bam_companion
+    evidence = resource_evidence((choice,))[choice.input_set_id]
+    assert set(evidence['components']) == {'reference','chrom_sizes','peaks','gene_anno'}
     bundle = owner.load_scatac_qc_reference_bundle(entry['resource']['qc_reference_manifest_path'])[1]
-    assert fragments.inputs()['reference_bundle_sha256'] == bundle.parent_manifest.sha256
-    declared = handoff.FragmentsDeclaration(species='human', assembly='hg38')
-    evidence = handoff.resource_evidence(choices, 'fragments')
-    assert handoff._resolve_resource(declared, (fragments,), evidence)[1] == fragments
-    for declaration in (replace(declared, species='mouse', assembly='mm10'),
-                        replace(declared, species=None, assembly='mm10')):
-        assert handoff._resolve_resource(declaration, (fragments,), evidence)[1] is None
-    admission = LocalResourceAdmission(tmp_path/'catalog', approved_source_roots=(tmp_path,),
-        scientific_resource_root=library.root)
-    for choice in (fragments, bam):
-        assert shared.check_choice(admission, 'any-session', 'resource.' + choice.input_set_id) == choice.inputs()
+    from agent.tools.data._fragment_reference import load
+    parent=load(bundle.parent_manifest.path,bundle.parent_manifest.sha256)
+    assert evidence['components']['chrom_sizes']['sha256']==parent.genome.fai.sha256
+    assert evidence['components']['peaks']['sha256']==parent.ccre.bed.sha256
+    # Existing exact historical handles remain readable, with no new aliases.
+    admission=LocalResourceAdmission(tmp_path/'catalog',approved_source_roots=(tmp_path,),scientific_resource_root=library.root)
+    legacy='resource.fref-'+entry['id']
+    assert shared.check_choice(admission,'any',legacy)['reference_bundle_sha256']==bundle.parent_manifest.sha256
     Path(bundle.parent_manifest.path).write_text('substituted')
-    assert library.choices() == (library.input_set(entry),)
-    with pytest.raises(ValueError): shared.check_choice(admission, 'any', 'resource.' + fragments.input_set_id)
+    assert resource_evidence(library.choices())[choice.input_set_id] is None
+    with pytest.raises(ValueError):shared.check_choice(admission,'any',legacy)
 
 
 def test_private_qc_parent_scope_and_loose_files_never_grant_reuse(resources, tmp_path):
@@ -132,8 +126,8 @@ def test_private_qc_parent_scope_and_loose_files_never_grant_reuse(resources, tm
     assert shared.discover(admission, 'one') == ()  # Fixture files exist, but are not admitted.
     record = shared.persist(admission, resources[-1].inputs(), session_id='one', origin_turn_id='first', label='Private QC')
     choices = shared.discover(admission, 'one')
-    assert len(choices) == 3 and shared.discover(admission, 'two') == ()
-    for choice in choices[1:]:
+    assert len(choices) == 1 and shared.discover(admission, 'two') == ()
+    for choice in choices:
         assert shared.check_choice(admission, 'one', 'resource.' + choice.input_set_id) == choice.inputs()
         with pytest.raises(ValueError): shared.check_choice(admission, 'two', 'resource.' + choice.input_set_id)
     q = _serialize(record.reference_qualification)

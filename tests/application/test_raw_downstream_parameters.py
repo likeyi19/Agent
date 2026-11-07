@@ -21,13 +21,13 @@ def raw_binding(request, tmp_path):
                 fastq_layout='tenx-atac-r1-r2-r3.v1', role=role, lane='001', chunk='001', compression='plain')))
         record = owner.register_fastq_collection('test', [r.resource_id for r in records],
             label='Synthetic collection', attribution='Binding test only')
-        compose = owner.compose_fastq_collection
+        compose = owner.compose_native
     else:
         path = tmp_path / ('source.bam' if kind == 'bam' else 'source.fragments')
         path.write_bytes(b'Registered bytes are not scientific qualification')
         record = owner.register('source', path, input_type='bam' if kind == 'bam' else 'external_fragments',
             label='Synthetic source', attribution='Binding test only')
-        compose = owner.compose_bam if kind == 'bam' else owner.compose_fragments
+        compose = owner.compose_native
     return kind, lambda values: compose(record.resource_id, values)
 
 

@@ -42,8 +42,7 @@ def selected(tmp_path):
 
 
 def fragments_choice(tmp_path, identifier='approved', **changes):
-    values = dict(reference_bundle_path=str(tmp_path / 'reference.json'), reference_bundle_sha256='a' * 64,
-                  source_profile='10x-atac-fragments.v1', namespace='explicit-fixture')
+    values = dict(chrom_sizes_path=str(tmp_path / 'genome.fai'),chrom_sizes_sha256='a'*64)
     return ScientificInputSet(identifier, 'Approved fixture declarations', values,
                               fragments_companion=True, **changes)
 
@@ -60,7 +59,7 @@ def test_definition_identity_captures_every_operator_field_and_is_detached(tmp_p
     assert str(tmp_path) not in str(token) and 'execution_inputs' not in token
     for changed in (replace(choice, input_set_id='another'), replace(choice, label='Another label'),
                     replace(choice, fragments_default=True),
-                    replace(choice, execution_inputs=choice.inputs() | {'reference_bundle_sha256': 'b' * 64})):
+                    replace(choice, execution_inputs=choice.inputs() | {'chrom_sizes_sha256': 'b' * 64})):
         assert changed.resource_choice() != token
     token['input_set_id'] = 'changed'
     assert choice.resource_choice()['input_set_id'] == 'approved'
@@ -69,9 +68,9 @@ def test_definition_identity_captures_every_operator_field_and_is_detached(tmp_p
 def test_same_explicit_and_default_choice_captures_identical_values_and_identity(selected, tmp_path):
     owner, records = selected
     choice = fragments_choice(tmp_path, fragments_default=True)
-    explicit = owner.compose_fragments(records['external_fragments'].resource_id, choice.inputs(),
+    explicit = owner.compose_native(records['external_fragments'].resource_id, choice.inputs(),
                                      resource_choice=choice.resource_choice())
-    default = owner.compose_fragments(records['external_fragments'].resource_id, choice.inputs(),
+    default = owner.compose_native(records['external_fragments'].resource_id, choice.inputs(),
                                     resource_choice=choice.resource_choice())
     assert canonical(submission(explicit)) == canonical(submission(default))
     assert owner._submission_binding(submission(explicit)) == explicit
@@ -86,9 +85,9 @@ def test_identical_values_do_not_erase_changed_choice_from_retry_identity(select
     owner, records = selected
     first = fragments_choice(tmp_path, 'first')
     second = fragments_choice(tmp_path, 'second')
-    original = owner.compose_fragments(records['external_fragments'].resource_id, first.inputs(),
+    original = owner.compose_native(records['external_fragments'].resource_id, first.inputs(),
                                       resource_choice=first.resource_choice())
-    changed = owner.compose_fragments(records['external_fragments'].resource_id, second.inputs(),
+    changed = owner.compose_native(records['external_fragments'].resource_id, second.inputs(),
                                      resource_choice=second.resource_choice())
     assert original.execution_inputs == changed.execution_inputs
     assert submission(original) != submission(changed)
@@ -110,12 +109,12 @@ def test_shared_binding_reconstruction_and_role_binding_preserve_choice(selected
     if kind == 'h5ad':
         binding = owner.compose_h5ad(records[kind].resource_id, resource_choice=token)
     elif kind == 'external_fragments':
-        binding = owner.compose_fragments(records[kind].resource_id, fragments_choice(tmp_path).inputs(),
+        binding = owner.compose_native(records[kind].resource_id, fragments_choice(tmp_path).inputs(),
                                          resource_choice=token)
     elif kind == 'bam':
-        binding = owner.compose_bam(records[kind].resource_id, resource_choice=token)
+        binding = owner.compose_native(records[kind].resource_id, {},resource_choice=token)
     elif kind == 'fastq':
-        binding = owner.compose_fastq_collection(records[kind].resource_id, resource_choice=token)
+        binding = owner.compose_native(records[kind].resource_id, {},resource_choice=token)
     else:
         binding = owner.compose_group([records['h5ad'].resource_id, records['second'].resource_id],
                                       resource_choice=token)
@@ -136,7 +135,7 @@ def test_shared_binding_reconstruction_and_role_binding_preserve_choice(selected
 def test_partial_or_forged_metadata_fails_closed_before_scientific_admission(selected, malformed):
     owner, records = selected
     with pytest.raises(ResourceAdmissionError) as rejected:
-        owner.compose_bam(records['bam'].resource_id, resource_choice=malformed)
+        owner.compose_native(records['bam'].resource_id, {},resource_choice=malformed)
     assert rejected.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'
 
 
@@ -155,40 +154,20 @@ def test_absent_metadata_preserves_legacy_attribution_and_explicit_null_is_nonca
 
 def captured_pipeline(owner, records, tmp_path):
     choice = fragments_choice(tmp_path)
-    values = choice.inputs() | dict(qc_reference_manifest_path=str(tmp_path / 'qc.json'),
-        qc_reference_manifest_sha256='b' * 64, reference_manifest_path=str(tmp_path / 'reference.json'),
-        reference_manifest_sha256='a' * 64, min_qc_fragment_records=1, min_tss_enrichment='1')
-    choice = replace(choice, execution_inputs=values)
-    binding = owner.compose_fragments(records['external_fragments'].resource_id, values,
-                                     resource_choice=choice.resource_choice())
-    inputs = _serialize(binding.execution_inputs)
-    imported = PlanStep('import', 'import_scATAC_fragments', {key: inputs[key] for key in
-        ('source_path', 'source_sha256', 'reference_bundle_path', 'reference_bundle_sha256',
-         'source_profile', 'namespace')} | dict(output_dir=str(tmp_path / 'import')))
-    qc = PlanStep('qc', 'compute_scATAC_qc', dict(
-        fragments_manifest_path=StepOutputRef('import', 'manifest_path'),
-        fragments_manifest_sha256=StepOutputRef('import', 'manifest_sha256'),
-        qc_reference_manifest_path=inputs['qc_reference_manifest_path'],
-        qc_reference_manifest_sha256=inputs['qc_reference_manifest_sha256'],
-        output_dir=str(tmp_path / 'qc')), depends_on=('import',))
-    selected = PlanStep('select', 'select_scATAC_cells', dict(
-        barcode_qc_manifest_path=StepOutputRef('qc', 'manifest_path'),
-        barcode_qc_manifest_sha256=StepOutputRef('qc', 'manifest_sha256'),
-        min_qc_fragment_records=1, min_tss_enrichment='1', output_dir=str(tmp_path / 'select')),
-        depends_on=('qc',))
-    matrix = PlanStep('matrix', 'build_scATAC_cell_by_ccre', dict(
-        fragments_manifest_path=StepOutputRef('import', 'manifest_path'),
-        fragments_manifest_sha256=StepOutputRef('import', 'manifest_sha256'),
-        selected_cells_manifest_path=StepOutputRef('select', 'manifest_path'),
-        selected_cells_manifest_sha256=StepOutputRef('select', 'manifest_sha256'),
-        reference_manifest_path=inputs['reference_manifest_path'],
-        reference_manifest_sha256=inputs['reference_manifest_sha256'], output_dir=str(tmp_path / 'matrix')),
-        depends_on=('import', 'select'))
-    return binding, AgentPlan('plan', 'request', 'scripted', (imported, qc, selected, matrix))
+    values = choice.inputs() | dict(gene_anno_path=str(tmp_path/'genes.gtf'),gene_anno_sha256='b'*64,
+        peaks_path=str(tmp_path/'regions.bed'),peaks_sha256='c'*64)
+    choice = replace(choice,execution_inputs=values)
+    binding = owner.compose_native(records['external_fragments'].resource_id,values,resource_choice=choice.resource_choice())
+    imported = PlanStep('import','run_snapatac2',dict(function_name='pp.import_fragments',
+        **{key:binding.execution_inputs[key] for key in ('input_path','input_sha256','chrom_sizes_path','chrom_sizes_sha256')},output_dir=str(tmp_path/'import')))
+    qc = PlanStep('qc','run_snapatac2',dict(function_name='metrics.tsse',input_path=StepOutputRef('import','matrix_path'),
+        gene_anno_path=values['gene_anno_path'],gene_anno_sha256=values['gene_anno_sha256'],output_dir=str(tmp_path/'qc')),depends_on=('import',))
+    matrix = PlanStep('matrix','run_snapatac2',dict(function_name='pp.make_peak_matrix',input_path=StepOutputRef('qc','matrix_path'),
+        peaks_path=values['peaks_path'],peaks_sha256=values['peaks_sha256'],output_dir=str(tmp_path/'matrix')),depends_on=('qc',))
+    return binding,AgentPlan('plan','request','scripted',(imported,qc,matrix))
 
 
-@pytest.mark.parametrize('step_index,field', [(1, 'qc_reference_manifest_path'),
-    (1, 'qc_reference_manifest_sha256'), (3, 'reference_manifest_path'), (3, 'reference_manifest_sha256')])
+@pytest.mark.parametrize('step_index,field', [(1,'gene_anno_path'),(1,'gene_anno_sha256'),(2,'peaks_path'),(2,'peaks_sha256')])
 def test_downstream_compiled_and_resolved_consumers_pin_every_resource_group_member(
         selected, tmp_path, step_index, field):
     owner, records = selected
@@ -214,12 +193,11 @@ def test_resource_association_does_not_replace_upstream_payload_bindings_or_lega
     owner, records = selected
     binding, plan = captured_pipeline(owner, records, tmp_path)
     owner.validate_plan(submission(binding), plan)
-    assert isinstance(plan.steps[1].arguments['fragments_manifest_path'], StepOutputRef)
-    assert isinstance(plan.steps[3].arguments['selected_cells_manifest_path'], StepOutputRef)
-    # Absence of the additive metadata retains the previous application guard;
-    # the ordinary compiler and scientific owners still own its admission.
-    legacy = replace(binding, resource_choice=None)
+    assert isinstance(plan.steps[1].arguments['input_path'], StepOutputRef)
+    assert isinstance(plan.steps[2].arguments['input_path'], StepOutputRef)
+    # Removing optional choice display metadata grants no source substitution.
+    legacy = replace(binding,resource_choice=None)
     steps = list(plan.steps)
-    steps[1] = replace(steps[1], arguments=dict(steps[1].arguments) | {
-        'qc_reference_manifest_sha256': 'f' * 64})
-    owner.validate_plan(submission(legacy), replace(plan, steps=tuple(steps)))
+    steps[1] = replace(steps[1],arguments=dict(steps[1].arguments,gene_anno_sha256='f'*64))
+    with pytest.raises(ResourceAdmissionError):
+        owner.validate_plan(submission(legacy),replace(plan,steps=tuple(steps)))

@@ -5,7 +5,8 @@ import json
 
 import pytest
 
-from agent.application.raw_handoff import FastqDeclaration, FastqMember, declaration, merge, requirements
+from agent.application.raw_handoff import FastqDeclaration, FastqMember, declaration, merge
+from agent.application.native_raw_handoff import requirements
 from agent.application.turn_decisions import IntentError, parse_decision
 from agent.application.local_resources import LocalResourceAdmission, ResourceAdmissionError
 from agent.application.input_sets import ScientificInputSet
@@ -20,7 +21,7 @@ def members(*roles):
 
 @pytest.mark.parametrize('change', [dict(layout='unresolved'), dict(layout='unsupported-role-set'),
     dict(barcode_policy='already_corrected'), dict(assay='SCATAC'), dict(resource='/tmp/context.json'),
-    dict(namespace='a/b'), dict(namespace='x'*65), dict(species='guessed-human'),
+    dict(namespace='a/b'), dict(namespace='x'*65),
     dict(members=members('R1','R1'))])
 def test_closed_declarations(change):
     with pytest.raises(ValueError):
@@ -45,23 +46,23 @@ def test_no_member_reassignment_or_duplicate_slot():
 def test_owner_layout_completeness_and_forged_handle():
     binding = SimpleNamespace(members=({}, {}, {}))
     base = FastqDeclaration(layout=LAYOUT, namespace='sample', members=members('R1','R2'))
-    missing, _ = requirements(binding, base, ())
+    missing, _ = requirements(binding, base, (), {})
     assert any('R3 (genomic-read-2)' in item for item in missing)
-    missing, _ = requirements(binding, replace(base, layout=None), ())
+    missing, _ = requirements(binding, replace(base, layout=None), (), {})
     assert not any('R3' in item for item in missing)
     with pytest.raises(ResourceAdmissionError):
-        requirements(binding, replace(base, members=members('R1','I2')), ())
+        requirements(binding, replace(base, members=members('R1','I2')), (), {})
     with pytest.raises(ValueError, match='outside captured'):
-        requirements(binding, replace(base, members=(FastqMember('source.15','R3','001','001'),)), ())
+        requirements(binding, replace(base, members=(FastqMember('source.15','R3','001','001'),)), (), {})
 
 
 def test_wire_remains_closed_and_non_executable():
-    value = dict(kind='request_roles', target='prepare_scATAC_fragments', required_roles=[], roles=[],
+    value = dict(kind='request_roles', target='run_chromap', required_roles=[], roles=[],
         arguments=[], fastq=asdict(FastqDeclaration()))
     wire = lambda decision: json.dumps(dict(turn_schema_version=1, decision=decision))
     assert parse_decision(wire(value)).fastq == FastqDeclaration()
-    for change in (dict(target='prepare_scATAC_bam_fragments'), dict(fastq=value['fastq'] | {'shell': 'run'}),
-                   dict(required_roles=[dict(tool='prepare_scATAC_fragments',port='intake')])):
+    for change in (dict(target='run_snapatac2'), dict(fastq=value['fastq'] | {'shell': 'run'}),
+                   dict(required_roles=[dict(tool='run_chromap',port='intake')])):
         with pytest.raises(IntentError):
             parse_decision(wire(value | change))
 
@@ -78,7 +79,7 @@ def test_legacy_inputset_choice_and_catalog_identity_unchanged():
 def test_fastq_variant_does_not_admit_unrelated_epizoo_declarations():
     from agent.application.turn_decisions import RequestRoles, ScopedArgument
     with pytest.raises(ValueError, match='registered scientific consumers'):
-        RequestRoles('prepare_scATAC_fragments', (), fastq=FastqDeclaration(),
+        RequestRoles('run_chromap', (), fastq=FastqDeclaration(),
             arguments=(ScopedArgument('epizoo_embed_cells','species','human',0,5),))
 
 
@@ -149,8 +150,6 @@ def test_failed_metadata_publication_leaves_original_intact_and_can_retry(tmp_pa
 def test_original_sources_reach_owner_with_exact_bytes_for_both_layouts(tmp_path, layout, roles, compressed):
     import gzip
     from pathlib import Path
-    from agent.tools.data.raw_scatac import inspect_raw_scATAC
-    from agent.orchestration.raw_scatac_verifier import verify_raw_scatac_intake
     from agent.orchestration.registry import build_default_tool_registry
     owner = LocalResourceAdmission(tmp_path/'workspace', approved_source_roots=(tmp_path,),
         registry=build_default_tool_registry())
@@ -166,27 +165,21 @@ def test_original_sources_reach_owner_with_exact_bytes_for_both_layouts(tmp_path
         assert record.source_path == str(path) and path.read_bytes() == data
         assert owner.load(source.resource_id) == source
         records.append(record)
-    arguments = dict(raw_input_paths=owner._fastq_sources(records), output_dir=str(tmp_path/'intake'), species='human',
-        raw_assay='TENX_ATAC', fastq_layout=layout)
-    result = inspect_raw_scATAC(**arguments)
-    verify_raw_scatac_intake(arguments, result, owner._registry)
-    assert result['readiness'] == 'READY' and result['n_files'] == 3 and result['n_groups'] == 1
+    collection=owner.register_fastq_collection('declared',[r.resource_id for r in records],label='Library',attribution='Synthetic')
+    binding=owner.compose_native(collection.resource_id,{})
+    assert binding.execution_inputs['read1_path']==(records[0].source_path,)
+    assert binding.execution_inputs['read2_path']==(next(r.source_path for r in records if r.fastq_member['role']==('R3' if layout==LAYOUT else 'R2')),)
+    owner.validate_binding(binding)
 
 
-def test_legacy_intake_cannot_substitute_filename_roles_for_explicit_task_roles(tmp_path):
-    from agent.tools.data.raw_scatac import inspect_raw_scATAC
-    owner = LocalResourceAdmission(tmp_path/'workspace', approved_source_roots=(tmp_path,))
+def test_native_source_roles_are_explicit_and_never_inferred_from_filenames(tmp_path):
+    owner=LocalResourceAdmission(tmp_path/'workspace',approved_source_roots=(tmp_path,))
     records=[]
-    for role in ('R1','R2','R3'):
-        path=tmp_path/f'Library_S1_L001_{role}_001.fastq'
-        path.write_bytes(b'@read\nACGT\n+\nIIII\n')
-        records.append(owner.register(role,path,input_type='fastq',label=role,attribution='simulated',
-            fastq_member=dict(library_id='library',fastq_layout=LAYOUT,role=role,lane='001',chunk='001',compression='plain')))
-    result=inspect_raw_scATAC([r.source_path for r in records],tmp_path/'intake',
-        species='human',raw_assay='TENX_ATAC',fastq_layout=LAYOUT)
-    values=dict(intake_manifest_path=result['manifest_path'],intake_manifest_sha256=result['manifest_sha256'])
-    owner._validate_fastq_intake(records,values)
-    swapped=[replace(r,fastq_member=dict(r.fastq_member,role={'R1':'R3','R3':'R1'}.get(r.fastq_member['role'],r.fastq_member['role']))) for r in records]
-    owner._fastq_groups(swapped)  # Structurally complete, but contradicts this legacy intake.
-    with pytest.raises(ResourceAdmissionError):
-        owner._validate_fastq_intake(swapped,values)
+    for filename_role,declared_role in [('R1','R3'),('R2','R2'),('R3','R1')]:
+        path=tmp_path/f'Library_S1_L001_{filename_role}_001.fastq';path.write_bytes(b'@read\nACGT\n+\nIIII\n')
+        records.append(owner.register(filename_role,path,input_type='fastq',label=filename_role,attribution='Explicit role fixture',
+            fastq_member=dict(library_id='library',fastq_layout=LAYOUT,role=declared_role,lane='001',chunk='001',compression='plain')))
+    collection=owner.register_fastq_collection('explicit',[r.resource_id for r in records],label='Library',attribution='Synthetic')
+    bound=owner.compose_native(collection.resource_id,{})
+    assert bound.execution_inputs['read1_path']==(records[2].source_path,)
+    assert bound.execution_inputs['read2_path']==(records[0].source_path,)

@@ -380,6 +380,8 @@ def build_semantic_planning_prompt(
     active = current_context()
     if active is not None:
         payload['research_context'] = active.public_research_context()
+        if active.task.get('native_inputs'):
+            payload['instructions'] += ('task.native_inputs describes application-resolved native reference ports. Select the scientific functions and dataset dependencies; omit those reference sources. Agent resolves exact chromosome sizes, regions and gene annotation for the selected functions after planning. Their absence from catalog.request_inputs is not an unsupported method or a reason to ask for internal reference IDs. Optional unused resources impose no prerequisite.',)
         payload['instructions'] += ('Result groups are reference metadata only. Only active_outputs handles authorize executable source selection; readable results, matching counts and recorded dependencies do not grant new authority. Accepted parameter values are not current user declarations. task.retained_parameters records explicitly selected prior settings; compiler and admission enforce their exact consumers.',)
     if active is not None and active.items:
         payload['active_outputs'] = active.public_items()

@@ -19,7 +19,7 @@ def bam_factory(tmp_path):
     return make
 
 @pytest.mark.parametrize('changes', [dict(source='source.16'), dict(source='/file'), dict(assay='RNA'),
-    dict(species='macaque'), dict(species='human', assembly='mm10'), dict(barcode_policy='raw_CB'),
+    dict(species='human', assembly='mm10'), dict(barcode_policy='raw_CB'),
     dict(source_profile='shifted'), dict(source_profile='duplicates_removed'), dict(resource='path'), dict(namespace='../sample')])
 def test_invalid_bam_declarations(changes):
     with pytest.raises(ValueError): BamDeclaration(**changes)
@@ -32,7 +32,7 @@ def test_closed_bam_declaration_and_immutable_merge():
     for answer in (BamDeclaration(source='source.1'), BamDeclaration(species='mouse'), FastqDeclaration()):
         with pytest.raises(ValueError): merge(initial, answer)
     with pytest.raises(ValueError): declaration(asdict(final) | dict(proven=True), 'bam')
-    with pytest.raises(ValueError): RequestRoles('prepare_scATAC_fragments', (), bam=initial)
+    with pytest.raises(ValueError): RequestRoles('run_chromap', (), bam=initial)
     with pytest.raises(ValueError): RoleAnswer('@roles', (), fastq=FastqDeclaration(), bam=initial)
 
 

@@ -278,43 +278,7 @@ class _ScientificFileResponse(StreamingResponse):
 _epizoo_selection = select_epizoo_resource
 
 
-def _raw_selection(selected, input_sets, family):
-    """Capture configured context; missing science inputs do not veto dialogue."""
-    if selected is not None:
-        if not getattr(selected, family + '_companion'):
-            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-    else:
-        defaults = tuple(s for s in input_sets if getattr(s, family + '_companion')
-                         and getattr(s, family + '_default'))
-        if len(defaults) != 1:
-            return {}, family.upper() + '_RESOURCE_AMBIGUOUS' if defaults else None
-        selected = defaults[0]
-    return selected.inputs(), None
-
-
-def _fragments_selection(selected, input_sets):
-    return _raw_selection(selected, input_sets, 'fragments')
-
-
-def _bam_selection(selected, input_sets):
-    return _raw_selection(selected, input_sets, 'bam')
-
-
-def _fastq_selection(selected, input_sets):
-    return _raw_selection(selected, input_sets, 'fastq')
-
-
-def _input_set_choice(selected, input_sets, family=None):
-    """Capture configured choice identity after the existing selection policy.
-
-    This records operator configuration, never scientific qualification. A
-    default is captured only when its family policy offers exactly one.
-    """
-    if selected is None and family is not None:
-        defaults = tuple(choice for choice in input_sets
-            if getattr(choice, family + '_companion') and getattr(choice, family + '_default'))
-        if len(defaults) == 1:
-            selected = defaults[0]
+def _input_set_choice(selected, input_sets):
     return None if selected is None else selected.resource_choice()
 
 
@@ -653,33 +617,15 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
             if uploads is None:
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
             selected_source = uploads.resources.load(body.resource_id)
-            if selected_source.input_type == 'fastq':
+            if selected_source.input_type in ('fastq','bam','external_fragments'):
                 if body.epizoo_resource_id is not None:
                     raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-                companion_inputs, selection_error = _fastq_selection(input_set, input_sets)
-                inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
-                    resource_selection_error=selection_error,
-                    resource_choice=_input_set_choice(input_set, input_sets, 'fastq'), verify_source=False)
-                workers.submit(session_id, body, inputs)
-                return {'session_id': session_id, 'turn_id': body.turn_id}
-            if selected_source.input_type == 'bam':
-                if body.epizoo_resource_id is not None:
-                    raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-                companion_inputs, selection_error = _bam_selection(input_set, input_sets)
-                inputs = uploads.resolve(body.resource_id, scientific_inputs=companion_inputs,
-                    resource_selection_error=selection_error,
-                    resource_choice=_input_set_choice(input_set, input_sets, 'bam'), verify_source=False)
-                workers.submit(session_id, body, inputs)
-                return {'session_id': session_id, 'turn_id': body.turn_id}
-            if selected_source.input_type == 'external_fragments':
-                if body.epizoo_resource_id is not None:
-                    raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
-                companion_inputs, selection_error = _fragments_selection(input_set, input_sets)
-                inputs = uploads.resolve(body.resource_id,
-                    scientific_inputs=companion_inputs, resource_selection_error=selection_error,
-                    resource_choice=_input_set_choice(input_set, input_sets, 'fragments'), verify_source=False)
-                workers.submit(session_id, body, inputs)
-                return {'session_id': session_id, 'turn_id': body.turn_id}
+                from agent.application.native_raw_handoff import configured_inputs
+                tool = 'run_chromap' if selected_source.input_type == 'fastq' else 'run_snapatac2'
+                inputs = uploads.resolve(body.resource_id, scientific_inputs=configured_inputs(input_set,tool),
+                    resource_choice=_input_set_choice(input_set,input_sets),verify_source=False)
+                workers.submit(session_id,body,inputs)
+                return {'session_id':session_id,'turn_id':body.turn_id}
             if (selected_source.input_type != 'h5ad'
                     or input_set is not None and not input_set.h5ad_companion):
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')

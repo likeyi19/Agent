@@ -215,4 +215,4 @@ def test_completed_fastq_library_is_rejected_as_independent_h5ad_group(selection
         attribution='Existing explicit source-specific library contract.')
     with pytest.raises(ResourceAdmissionError):
         owner.compose_group([collection.resource_id, records[1].resource_id])
-    assert owner.compose_fastq_collection(collection.resource_id).collection_sha256 == collection.collection_sha256
+    assert owner.compose_native(collection.resource_id,{}).collection_sha256 == collection.collection_sha256

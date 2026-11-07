@@ -18,6 +18,8 @@ def tool_spec():
             scientific_parameter=True, conversational_choice=True, planner_choice=True))
     optional = {field: arg((str, Path, list), 'Exact native ' + port + ' input; read/barcode lists are lanes of one declared library.',
         artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT) for port, field in owner.PORTS.items() if port != 'reference'}
+    optional.update({port + '_sha256':arg((str,), 'Expected exact native input identity.',
+        source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT) for port in ('reference','index','whitelist')})
     optional['kwargs'] = arg((dict,), 'Explicit native flags, forwarded unchanged; omitted flags retain native defaults.',
         scientific_parameter=True, conversational_json_object=True, conversational_members=owner.NATIVE_ARGUMENTS)
     ports = tuple(C(port, (member('dataset', field),), port == 'reference',
@@ -39,7 +41,7 @@ def tool_spec():
             'Group lanes/chunks only from explicit one-library roles. One native map call receives matching ordered read1/read2/barcode lists. '
             'Native ATAC preset, shift, deduplication and whitelist settings remain explicit choices; no Agent canonicalization or replay. '
             'For supported native function requests forward supplied flags and do not rewrite parameters.'),
-        semantic_planning=SemanticToolSpec(consumer_ports=ports + (scalar('output_dir', required=True),
+        semantic_planning=SemanticToolSpec(consumer_ports=ports + tuple(scalar(port + '_sha256', required=False) for port in ('reference','index','whitelist')) + (scalar('output_dir', required=True),
             scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), 'function_name', required=True),
             scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), 'kwargs', required=False)), producer_ports=(
             P('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),)),

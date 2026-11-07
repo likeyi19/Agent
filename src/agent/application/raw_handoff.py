@@ -14,6 +14,14 @@ from .epizoo_handoff import EpiZooDeclaration
 
 _ANNOTATION_REFERENCE_MISSING = 'No deployed annotation reference matches the declared biological context. Clarify the species, assembly or tissue applicability when needed; otherwise the operator must provision a compatible gene/signature reference in the scientific resource library.'
 
+def _context_text(*values):
+    from agent.tools.analysis.marker_annotation import identifier
+    for value in values:
+        if value is not None:
+            identifier(value)
+            if len(value) > 128: raise ValueError('Source declaration exceeds its bound')
+
+
 @dataclass(frozen=True)
 class FastqMember:
     source: str
@@ -37,9 +45,12 @@ class FastqDeclaration:
     species: str | None = None
     barcode_policy: str | None = None
     resource: str | None = None
+    resource_preference: dict | None = None
     members: tuple[FastqMember, ...] = ()
 
     def __post_init__(self):
+        from .resource_continuation import validate_preference
+        validate_preference(self.resource_preference)
         from agent.tools.data._raw_fastq import FastqLayout
         from agent.tools.data.scatac_library_context import _namespace
         if self.assay not in (None, 'TENX_ATAC') or self.layout not in (None, FastqLayout.A.value, FastqLayout.B.value):
@@ -48,8 +59,7 @@ class FastqDeclaration:
             _namespace(self.namespace)
             if len(self.namespace) > 64:
                 raise ValueError('Library namespace exceeds the member admission bound.')
-        if self.species not in (None, 'human', 'mouse'):
-            raise ValueError('Unsupported canonical FASTQ species.')
+        _context_text(self.species)
         if self.barcode_policy not in (None, 'raw_sequence_whitelist'):
             raise ValueError('FASTQ requires declared raw barcode sequences and whitelist correction.')
         if self.resource is not None and (type(self.resource) is not str or re.fullmatch(r'resource\.[a-z][a-z0-9_-]{0,63}', self.resource) is None):
@@ -71,20 +81,23 @@ class BamDeclaration:
     barcode_policy: str | None = None
     source_profile: str | None = None
     resource: str | None = None
+    resource_preference: dict | None = None
 
     def __post_init__(self):
+        from .resource_continuation import validate_preference
+        validate_preference(self.resource_preference)
         from agent.tools.data.scatac_library_context import _namespace
         if self.source is not None and (type(self.source) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', self.source) is None):
             raise ValueError('Invalid BAM source handle.')
         if self.namespace is not None:
             _namespace(self.namespace)
         for value, choices in ((self.assay, ('SCATAC', 'TENX_ATAC')),
-                (self.species, ('human', 'mouse')), (self.assembly, ('hg38', 'mm10')),
                 (self.barcode_policy, ('corrected_cb_already_corrected',)),
                 (self.source_profile, ('agent-cb-paired-atac.v1', 'agent-cb-paired-atac.v2'))):
             if value is not None and value not in choices:
                 raise ValueError('Unsupported BAM scientific declaration.')
-        if self.species and self.assembly and {'human': 'hg38', 'mouse': 'mm10'}[self.species] != self.assembly:
+        _context_text(self.species, self.assembly)
+        if (self.species,self.assembly) in (('human','mm10'),('mouse','hg38')):
             raise ValueError('BAM species/assembly declarations conflict.')
         if self.resource is not None and (type(self.resource) is not str or re.fullmatch(r'resource\.[a-z][a-z0-9_-]{0,63}', self.resource) is None):
             raise ValueError('Invalid BAM resource handle.')
@@ -100,12 +113,15 @@ class FragmentsDeclaration:
     assembly: str | None = None
     source_profile: str | None = None
     resource: str | None = None
+    resource_preference: dict | None = None
     feature_source: str | None = None
     feature_category: str | None = None
     genome_source: str | None = None
     genome_index_source: str | None = None
 
     def __post_init__(self):
+        from .resource_continuation import validate_preference
+        validate_preference(self.resource_preference)
         from agent.tools.data.scatac_library_context import _namespace
         from agent.tools.data.external_fragment_manifest import PROFILE_ID
         for value in (self.source, self.index_source, self.feature_source, self.genome_source, self.genome_index_source):
@@ -116,11 +132,11 @@ class FragmentsDeclaration:
             raise ValueError('Fragment, index and feature roles require distinct files.')
         if self.namespace is not None:
             _namespace(self.namespace)
-        if (self.species not in (None, 'human', 'mouse') or self.assembly not in (None, 'hg38', 'mm10')
-                or self.source_profile not in (None, PROFILE_ID)
+        if (self.source_profile not in (None, PROFILE_ID)
                 or self.feature_category not in (None, 'peak_set', 'regulatory_regions')):
             raise ValueError('Unsupported external source declaration.')
-        if self.species and self.assembly and {'human': 'hg38', 'mouse': 'mm10'}[self.species] != self.assembly:
+        _context_text(self.species, self.assembly)
+        if (self.species,self.assembly) in (('human','mm10'),('mouse','hg38')):
             raise ValueError('Fragment species/assembly declarations conflict.')
         if self.resource is not None and (type(self.resource) is not str or re.fullmatch(r'resource\.[a-z][a-z0-9_-]{0,63}', self.resource) is None):
             raise ValueError('Invalid external resource handle.')
@@ -251,14 +267,14 @@ def declaration(value, field='fastq'):
             value['uploaded'] = AnnotationUploads(**value['uploaded'])
         return AnnotationDeclaration(**value)
     if field == 'fragments':
-        if type(value) is not dict or set(value) != set(FragmentsDeclaration.__dataclass_fields__):
+        if type(value) is not dict or set(value) - {'resource_preference'} != set(FragmentsDeclaration.__dataclass_fields__) - {'resource_preference'}:
             raise ValueError('Invalid fragment declaration shape.')
         return FragmentsDeclaration(**value)
     if field == 'bam':
-        if type(value) is not dict or set(value) != set(BamDeclaration.__dataclass_fields__):
+        if type(value) is not dict or set(value) - {'resource_preference'} != set(BamDeclaration.__dataclass_fields__) - {'resource_preference'}:
             raise ValueError('Invalid BAM declaration shape.')
         return BamDeclaration(**value)
-    if type(value) is not dict or set(value) != set(FastqDeclaration.__dataclass_fields__):
+    if type(value) is not dict or set(value) - {'resource_preference'} != set(FastqDeclaration.__dataclass_fields__) - {'resource_preference'}:
         raise ValueError('Invalid FASTQ declaration shape.')
     return FastqDeclaration(**dict(value, members=tuple(FastqMember(**m) for m in value['members'])))
 
@@ -269,7 +285,7 @@ def scientific_metadata_fields(declared):
                              AnnotationDeclaration, EpiZooDeclaration):
         raise ValueError('A typed scientific declaration is required.')
     fixed = {'source', 'members', 'namespace', 'operation', 'resource',
-             'genome_resource', 'uploaded', 'groups_result'}
+             'genome_resource', 'resource_preference', 'uploaded', 'groups_result'}
     return tuple(name for name in declared.__dataclass_fields__
                  if name not in fixed and not name.endswith('_source'))
 
@@ -322,7 +338,7 @@ def merge(previous, additions, *, pending=False, unknown_fields=()):
                 continue
             correctable = pending and (key in scientific_metadata_fields(previous)
                 or isinstance(previous, AnnotationDeclaration) and key == 'groups_result')
-            if (key not in ('resource', 'genome_resource') and not correctable
+            if (key not in ('resource', 'genome_resource', 'resource_preference') and not correctable
                     and values[key] is not None and values[key] != value):
                 if pending:
                     from .turn_decisions import IntentError
@@ -343,6 +359,8 @@ def merge(previous, additions, *, pending=False, unknown_fields=()):
 def declaration_dict(value):
     """Preserve the exact pre-extension declaration identity when absent."""
     result = asdict(value)
+    if result.get('resource_preference') is None:
+        result.pop('resource_preference', None)
     if isinstance(value,EpiZooDeclaration):
         for key in ('chain_source','reference_species'):
             if result[key] is None: result.pop(key)
@@ -361,6 +379,7 @@ def schema(field='fastq'):
         from .epizoo_handoff import schema as epizoo_schema
         return epizoo_schema()
     from .turn_decisions import _object
+    from .resource_continuation import preference_schema
     from agent.tools.data._raw_fastq import FastqLayout, ReadRole
     def optional(choices):
         return ({'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
@@ -394,7 +413,7 @@ def schema(field='fastq'):
             genome_source=identity,
             genome_index_source=identity,
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-            species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
+            species=identity, assembly=identity,
             source_profile=dict(optional(('10x-atac-fragments.v1',)), description=(
                 'Map explicitly supplied 10x ATAC/ARC provenance, already Tn5-adjusted zero-based half-open '
                 'intervals, corrected barcodes and read-pair support to this choice. The researcher need '
@@ -402,19 +421,19 @@ def schema(field='fastq'):
             feature_category=dict(optional(('peak_set', 'regulatory_regions')), description=(
                 'Category of the explicitly uploaded feature_source BED only. Leave null when using an installed reference vocabulary, including cCREs. '
                 'This field does not select or redescribe the installed reference features.')),
-            resource=identity))
+            resource_preference=preference_schema()))
     if field == 'bam':
         return _object(dict(source=identity,
             assay=optional(('SCATAC', 'TENX_ATAC')),
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-            species=optional(('human', 'mouse')), assembly=optional(('hg38', 'mm10')),
+            species=identity, assembly=identity,
             barcode_policy=optional(('corrected_cb_already_corrected',)),
             source_profile=optional(('agent-cb-paired-atac.v2',)),
-            resource=identity))
+            resource_preference=preference_schema()))
     return _object(dict(assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
         namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-        species=optional(('human', 'mouse')), barcode_policy=optional(('raw_sequence_whitelist',)),
-        resource=identity,
+        species=identity, barcode_policy=optional(('raw_sequence_whitelist',)),
+        resource_preference=preference_schema(),
         members={'type': 'array', 'maxItems': 16, 'items': _object(dict(
             source={'type': 'string', 'minLength': 1, 'maxLength': 128},
             role={'type': 'string', 'enum': [r.value for r in ReadRole]},
@@ -437,6 +456,11 @@ def resources(input_sets, field='fastq'):
 
 
 def offers(input_sets, field='fastq'):
+    if field in ('fastq', 'fragments', 'bam'):
+        from .native_raw_handoff import resource_evidence as native_evidence
+        return [dict(label=row['label'], species=row['species'], assembly=row['assembly'],
+                     inputs=sorted(row['components']))
+                for row in native_evidence(input_sets).values() if row is not None]
     result = [dict(handle='resource.' + s.input_set_id, label=s.label, default=getattr(s, field + '_default', False))
               for s in resources(input_sets, field)]
     if field == 'annotation':
@@ -570,9 +594,6 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         return [needed + ' must be provisioned before preprocessing.'
                 + (' Configured references are unavailable, invalid or incompatible.' if choices else '')], None
     field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
-    defaults = [s for s in candidates if getattr(s, field + '_default', False)]
-    if len(defaults) == 1:
-        return [], defaults[0]
     # Identical mappings/whitelists differ only in display/configuration identity.
     # Stable ID order is an explicit tie policy for these equivalent aliases only.
     def equivalence(choice):
@@ -592,11 +613,9 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         values.pop('annotation_spec_path' if isinstance(declared, AnnotationDeclaration) else 'reference_bundle_path')
         values.setdefault('species', evidence[choice.input_set_id]['species'])
         return digest(values), digest(_serialize(choice.fastq_whitelist))
-    equivalent = {}
-    for choice in candidates:
-        key = equivalence(choice)
-        equivalent[key] = min((choice, equivalent.get(key, choice)), key=lambda s: s.input_set_id)
-    candidates = list(equivalent.values())
+    from .resource_continuation import distinct_choices
+    candidates = distinct_choices(candidates, default=lambda s: getattr(s, field + '_default', False),
+        identity=equivalence, order=lambda s:s.input_set_id)
     if len(candidates) == 1:
         return [], candidates[0]
     return ['Choose a reference: ' + '; '.join(f'{s.label} ({descriptions[s.input_set_id]})' for s in candidates) + '.'], None
@@ -618,6 +637,7 @@ def source_binding(origin, source, interaction, field=None):
 
 
 def requirements(binding, declared, input_sets, *, evidence=None, pinned=None, historical=False):
+    """Read saved pre-component raw declarations; new raw tasks use the native owner."""
     field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
     from types import SimpleNamespace
     from .local_resources import LocalResourceAdmission, ResourceAdmissionError, _fastq_member
@@ -733,7 +753,7 @@ def _extend_catalog(previous, current):
     return current
 
 
-def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, historical=False):
+def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, historical=False, native=False):
     from .dialogue_execution import _bind_arguments, _with_retained
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
@@ -760,6 +780,9 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
             and 'group_column' in source.admitted[field + '_arguments']
             and values.get('group_column') != source.admitted[field + '_arguments'].get('group_column')):
         declared = replace(declared, grouping_provenance=None)
+    preference = getattr(addition, 'resource_preference', None)
+    if preference is not None and interaction.utterance[preference['start']:preference['end']] != preference['literal']:
+        raise ValueError('Resource preference no longer matches the user request')
     choices = tuple(ScientificInputSet(**_serialize(r)) for r in rows)
     pinned = None if source is None else source.admitted.get('raw_resource_choice')
     if field == 'epizoo':
@@ -797,7 +820,16 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
                     raise ValueError('Failed resource qualification cannot carry a success observation.')
                 if resource_observation['problem']:
                     missing.append(resource_observation['problem'])
+    elif native and field in ('fastq', 'fragments', 'bam'):
+        from .native_raw_handoff import requirements as native_requirements
+        missing, selected = native_requirements(binding, declared, choices, evidence)
     else:
+        if getattr(declared, 'resource_preference', None) is not None:
+            from .resource_continuation import match_preference
+            questions, preferred = match_preference(declared.resource_preference, resources(choices, field))
+            if questions:
+                return binding, declared, values, questions, None
+            declared = replace(declared, resource='resource.' + preferred.input_set_id)
         missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned, historical=historical)
     return binding, declared, values, missing, selected
 
@@ -830,7 +862,12 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         if digest(previous_rows) != reference['resource_context_sha256']:
             raise IntentError('invalid_prerequisite')
         rows = _extend_catalog(previous_rows, catalog(input_sets))
-    evidence = resource_evidence(input_sets, field)
+    native = field in ('fastq', 'fragments', 'bam')
+    if native:
+        from .native_raw_handoff import resource_evidence as native_evidence
+        evidence = native_evidence(input_sets, field=field)
+    else:
+        evidence = resource_evidence(input_sets, field)
     source_evidence = None
     previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
     addition = getattr(decision, field) or empty(field)
@@ -870,7 +907,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                     source_evidence['accepted_groups'] = group_choices
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
         addition, decision.arguments, rows, sessions._application.registry, field, evidence, source_evidence,
-        unknown_fields=() if initial else decision.unknown_fields, declared=declared)
+        unknown_fields=() if initial else decision.unknown_fields, declared=declared, native=native)
     owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
     owner.validate_binding(binding)
     # Candidate validation intentionally does not open unused attachments.
@@ -878,7 +915,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if any(r.session_id not in (None, state.session_id) for r in records):
         raise IntentError('invalid_prerequisite')
     owner._verify_records(records)
-    if selected is not None and not missing and reference_resources is not None:
+    if selected is not None and not missing and reference_resources is not None and not native:
         from .shared_resources import check_choice
         check_choice(reference_resources, state.session_id, 'resource.' + selected.input_set_id)
     resource_observation = None
@@ -913,6 +950,11 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
         arguments=[asdict(a) for a in decision.arguments])
+    if native:
+        admitted['resource_resolution'] = 'native-inputs.v1'
+        # Native selection is per function. A corrected name identifying
+        # several component aliases must not retain an older whole-set choice.
+        admitted['raw_resource_choice'] = None if selected is None else 'resource.' + selected.input_set_id
     if initial:
         admitted.update(intent)
     if field == 'epizoo':
@@ -949,6 +991,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                                                    projection=projection)
         else:
             binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
+                resource_evidence=evidence if native else None,
                 accepted_contexts=tuple(i.admitted[field + '_context'] for i in state.interactions[:-1]
                     if i.admitted and field + '_context' in i.admitted))
         admitted.update(inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution(),
@@ -980,15 +1023,15 @@ def _context_identity(candidates, declared, selected, *, mode='original', scope=
                        resource=None if selected is None else selected.resource_choice(), **({'source_mode': mode} if mode else {})))
 
 
-def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=()):
+def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=(), resource_evidence=None):
     if isinstance(declared, AnnotationDeclaration):
         return _prepare_annotation(owner, candidates, declared, selected, arguments)
     from .native_raw_handoff import prepare as native_prepare
-    return native_prepare(owner, session_id, candidates, declared, selected, arguments)
+    return native_prepare(owner, session_id, candidates, declared, selected, arguments, resource_evidence=resource_evidence)
 
 
 def _fragments_identity(candidates, declared, selected):
-    return digest(dict(sources=candidates.attribution(), declaration=asdict(declared),
+    return digest(dict(sources=candidates.attribution(), declaration=declaration_dict(declared),
                        resource=None if selected is None else selected.resource_choice()))
 
 
@@ -1102,10 +1145,12 @@ def validate(interaction, preceding):
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
             rows, registry, field, evidence, admitted.get(field + '_source_evidence'),
-            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())), historical=historical)
-        if evidence is not None and admitted.get('raw_resource_choice') != (declared.resource or
-                ('resource.' + selected.input_set_id if selected is not None else
-                 source.admitted.get('raw_resource_choice') if source is not None else None)):
+            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())), historical=historical,
+            native=admitted.get('resource_resolution') == 'native-inputs.v1')
+        expected_choice = (None if selected is None else 'resource.' + selected.input_set_id) if admitted.get('resource_resolution') == 'native-inputs.v1' else (declared.resource or
+            ('resource.' + selected.input_set_id if selected is not None else
+             source.admitted.get('raw_resource_choice') if source is not None else None))
+        if evidence is not None and admitted.get('raw_resource_choice') != expected_choice:
             raise ValueError('Captured resource selection changed.')
         if (admitted[field] != _serialize(declaration_dict(declared)) or admitted[field + '_sources'] != binding.attribution()
                 or admitted[field + '_arguments'] != values or admitted['tool'] != (
@@ -1134,7 +1179,7 @@ def validate(interaction, preceding):
             validate_completion(admitted, binding, declared, selected, values)
         elif field == 'annotation':
             _validate_annotation_completion(admitted, binding, declared, selected, values)
-        elif (admitted.get(field + '_context') or {}).get('adapter') == 'native-files.v1':
+        elif (admitted.get(field + '_context') or {}).get('adapter') in ('native-files.v1', 'native-inputs.v1'):
             from .native_raw_handoff import validate as validate_native
             validate_native(admitted, binding, declared, selected, values, field)
         elif field == 'fragments':

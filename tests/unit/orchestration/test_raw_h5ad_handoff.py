@@ -4,9 +4,8 @@ from agent.orchestration import build_default_tool_registry, build_semantic_comp
 
 
 @pytest.mark.parametrize('producer,key', [
-    ('build_scATAC_cell_by_ccre', 'matrix_path'),
-    ('build_scATAC_cell_by_features', 'matrix_path'),
-    ('adopt_scATAC_cell_by_ccre', 'matrix_path'),
+    ('run_snapatac2','matrix_path'),
+    ('run_episcanpy','matrix_path'),
     ('annotate_scATAC_cell_types', 'annotated_h5ad_path'),
 ])
 def test_published_matrix_can_feed_pca_without_intermediate_inspection(producer, key):
@@ -20,9 +19,8 @@ def test_published_matrix_can_feed_pca_without_intermediate_inspection(producer,
 
 
 @pytest.mark.parametrize('producer,key', [
-    ('build_scATAC_cell_by_ccre', 'matrix_path'),
-    ('build_scATAC_cell_by_features', 'matrix_path'),
-    ('adopt_scATAC_cell_by_ccre', 'matrix_path'),
+    ('run_snapatac2','matrix_path'),
+    ('run_episcanpy','matrix_path'),
     ('annotate_scATAC_cell_types', 'annotated_h5ad_path'),
 ])
 def test_published_matrix_can_feed_read_only_inspection(producer, key):

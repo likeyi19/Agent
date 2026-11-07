@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from agent.application import InteractiveBoundaryError
 from agent.application.local_resources import LocalResourceAdmission
 from agent.application.uploads import H5ADUploadAdmission
-from agent.web.app import _bam_selection, create_app
+from agent.web.app import create_app
 from agent.web.config import ScientificInputSet, WebConfigurationError, load_web_configuration
 
 from helpers import harness, submission
@@ -20,38 +20,6 @@ def context(identifier='selected', *, default=False, **inputs):
         source_profile='agent-cb-paired-atac.v2') | inputs
     return ScientificInputSet(identifier, 'Qualified ' + identifier + ' BAM context', values,
                               bam_companion=True, bam_default=default)
-
-
-@pytest.mark.parametrize('defaults', [(), (context('default', default=True),),
-    (context('first', default=True), context('second', default=True))])
-def test_explicit_context_has_priority_and_does_not_copy_other_defaults(defaults):
-    selected = context('explicit', reference_bundle_sha256='c' * 64)
-    assert _bam_selection(selected, defaults + (selected,)) == (selected.inputs(), None)
-
-
-@pytest.mark.parametrize('contexts,expected', [
-    ((), ({}, None)), ((context(),), ({}, None)),
-    ((context('first', default=True), context('second', default=True)), ({}, 'BAM_RESOURCE_AMBIGUOUS')),
-])
-def test_inspection_remains_usable_without_a_unique_context_default(contexts, expected):
-    assert _bam_selection(None, contexts) == expected
-
-
-def test_unique_explicitly_configured_default_and_incomplete_context_are_preserved():
-    selected = context('default', default=True)
-    assert _bam_selection(None, (context(), selected)) == (selected.inputs(), None)
-    partial = ScientificInputSet('partial', 'Inspection declarations', {'species': 'human'}, bam_companion=True)
-    assert _bam_selection(partial, (selected,)) == ({'species': 'human'}, None)
-
-
-@pytest.mark.parametrize('selection', [
-    ScientificInputSet('matrix', 'Matrix', {'species': 'human'}, h5ad_companion=True),
-    ScientificInputSet('fragments', 'Fragments', {'namespace': 'library'}, fragments_companion=True),
-    ScientificInputSet('unmarked', 'Unmarked', {}),
-])
-def test_other_context_roles_do_not_become_bam_contexts(selection):
-    with pytest.raises(InteractiveBoundaryError):
-        _bam_selection(selection, (context('default', default=True),))
 
 
 @pytest.mark.parametrize('changes', [
@@ -115,17 +83,43 @@ def test_uploaded_bam_uses_existing_registration_and_context_binding(tmp_path):
         public = client.put('/api/v1/uploads/bam', params={'filename': 'sample.bam', 'input_type': 'bam'},
             content=b'uploaded byte source', headers={'Content-Type': 'application/octet-stream'}).json()
         record = uploads.resources.load(public['resource_id'])
-        binding = uploads.resolve(record.resource_id, scientific_inputs=selected.inputs())
+        binding = uploads.resolve(record.resource_id,scientific_inputs={})
         assert binding.resource_id == record.resource_id and binding.record_sha256 == record.record_sha256
-        assert binding.execution_inputs['source_sha256'] == record.source_sha256
-        assert binding.execution_inputs['raw_input_paths'] == (record.source_path,)
-        assert all(binding.execution_inputs[key] == value for key, value in selected.inputs().items())
+        assert binding.execution_inputs['input_sha256'] == record.source_sha256
+        assert binding.execution_inputs['input_path'] == record.source_path
+        assert set(binding.execution_inputs)=={'input_path','input_sha256'}
         assert not backend.models and not backend.science_calls
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         before = backend.service._application.sessions.load('session')
-        for changes in (dict(input_set_id='matrix'), dict(input_set_id='selected', epizoo_resource_id='other')):
+        for changes in (dict(input_set_id='selected', epizoo_resource_id='other'),):
             response = client.post('/api/v1/sessions/session/turns',
                 json=submission(resource_id=record.resource_id, **changes))
             assert response.status_code == 400 and response.json()['error']['code'] == 'INTERACTIVE_INPUT_INVALID'
         assert backend.service._application.sessions.load('session') == before
         assert not backend.models and not backend.science_calls
+
+
+@pytest.mark.parametrize('explicit',[False,True])
+def test_http_native_capture_projects_only_explicit_ports_and_never_preselects_defaults(tmp_path,monkeypatch,explicit):
+    from agent.web.app import _LocalWorkers
+    backend=harness(tmp_path)
+    root=backend.service._application._workspace.root/'uploads';root.mkdir()
+    backend.service.resources=LocalResourceAdmission(backend.service._application._workspace,
+        approved_source_roots=(root,),registry=backend.service._application.registry)
+    uploads=H5ADUploadAdmission(backend.service.resources,root,max_bytes=1024)
+    fai=tmp_path/'genome.fai';fai.write_text('chr1\t1000\n')
+    import hashlib
+    selected=ScientificInputSet('native','Native genome',dict(species='human',assembly='hg38',
+        chrom_sizes_path=str(fai),chrom_sizes_sha256=hashlib.sha256(fai.read_bytes()).hexdigest(),kwargs={'barcode_tag':'CB'}),bam_companion=True,bam_default=True)
+    captured=[]
+    monkeypatch.setattr(_LocalWorkers,'submit',lambda self,sid,body,inputs:captured.append(inputs))
+    with TestClient(create_app(backend.service,uploads=uploads,input_sets=(selected,))) as client:
+        resource=client.put('/api/v1/uploads/native',params={'filename':'source.bam','input_type':'bam'},content=b'native byte source',headers={'Content-Type':'application/octet-stream'}).json()
+        response=client.post('/api/v1/sessions/research/turns',json=submission(resource_id=resource['resource_id'],input_set_id='native' if explicit else None))
+        assert response.status_code==202,response.text
+    assert len(captured)==1
+    values=captured[0].execution_inputs
+    assert set(values)==({'input_path','input_sha256','chrom_sizes_path','chrom_sizes_sha256','kwargs'} if explicit else {'input_path','input_sha256'})
+    if explicit:assert dict(values['kwargs'])=={'barcode_tag':'CB'}
+    assert (captured[0].resource_choice is not None)==explicit
+    assert not backend.models and not backend.science_calls

@@ -2,7 +2,8 @@
 from dataclasses import asdict, replace
 from types import SimpleNamespace
 import pytest
-from agent.application.raw_handoff import FragmentsDeclaration, FastqDeclaration, BamDeclaration, declaration, merge, requirements
+from agent.application.raw_handoff import FragmentsDeclaration, FastqDeclaration, BamDeclaration, declaration, merge
+from agent.application.native_raw_handoff import requirements
 from agent.application.turn_decisions import RequestRoles, RoleAnswer, parse_decision, decision_schema
 
 
@@ -23,21 +24,15 @@ def test_exact_partial_declarations_and_immutable_roles():
     with pytest.raises(ValueError): declaration(asdict(final) | dict(qualified=True), 'fragments')
     for conflicting in (dict(fastq=FastqDeclaration()), dict(bam=BamDeclaration())):
         with pytest.raises(ValueError): RoleAnswer('@roles', (), fragments=final, **conflicting)
-    with pytest.raises(ValueError): RequestRoles('prepare_scATAC_fragments', (), fragments=final)
+    with pytest.raises(ValueError): RequestRoles('run_chromap', (), fragments=final)
     with pytest.raises(ValueError): requirements(SimpleNamespace(members=({},)), final, (), evidence={})
 
 
-def test_missing_history_and_roles_remain_questions_without_science():
-    missing, selected = requirements(SimpleNamespace(members=({}, {})), FragmentsDeclaration(), (), evidence={})
-    assert selected is None
-    assert any('assembly' in x for x in missing)
-    assert not any('corrected' in x or 'profile' in x or 'namespace' in x for x in missing)
-    declared = FragmentsDeclaration(source='source.0', namespace='sample', species='human', assembly='hg38',
-        source_profile='10x-atac-fragments.v1', feature_category='peak_set')
-    missing, selected = requirements(SimpleNamespace(members=({}, {})), declared, (), evidence={})
-    assert any('plain genome FASTA' in x for x in missing)
-    assert not any('custom BED' in x for x in missing)
-    assert selected is None
+def test_source_is_required_but_unused_history_and_references_are_not():
+    missing,selected=requirements(SimpleNamespace(members=({},{})),FragmentsDeclaration(),(),{})
+    assert selected is None and len(missing)==1 and 'attachment' in missing[0]
+    declared=FragmentsDeclaration(source='source.0',feature_category='peak_set')
+    assert requirements(SimpleNamespace(members=({},{})),declared,(),{})==([],None)
 
 
 def test_scientific_arguments_cannot_replace_source_declarations():
@@ -47,22 +42,6 @@ def test_scientific_arguments_cannot_replace_source_declarations():
     assert _fragments_values(declared, selected, {'namespace': 'original'}, None)['namespace'] == 'original'
     with pytest.raises(ValueError):
         _fragments_values(declared, selected, {'namespace': 'other'}, None)
-
-
-def test_named_grounding_failure_and_natural_provenance_question():
-    import json
-    from agent.application.turn_decisions import DeclarationGroundingError, Clarify
-    from agent.application.responses import clarification_text
-    raw = json.dumps(dict(turn_schema_version=1, decision=dict(kind='execute_plan',
-        target='import_scATAC_fragments', arguments=[dict(tool='import_scATAC_fragments',
-            argument='source_profile', value='10x-atac-fragments.v1',
-            literal='invented provenance', evidence='invented provenance')])))
-    with pytest.raises(DeclarationGroundingError) as error:
-        parse_decision(raw, utterance='Prepare these fragments for downstream analysis.')
-    assert error.value.parameters == ('import_scATAC_fragments.source_profile',)
-    question = clarification_text(Clarify(error.value.reason, error.value.parameters))
-    assert 'Tn5-adjusted' in question and 'corrected barcode' in question and 'read-pair' in question
-    assert '10x-atac-fragments.v1' not in question
 
 
 def test_ordinary_provenance_can_bind_reviewed_choice_without_internal_name():
@@ -84,6 +63,6 @@ def test_named_parameter_clarification_matches_offered_wire(reason):
     import json
     result = parse_decision(json.dumps(dict(turn_schema_version=1,
         decision=dict(kind='clarify', reason=reason,
-                      choices=['import_scATAC_fragments.source_profile']))))
+                      choices=['run_snapatac2.function_name']))))
     assert result.reason == reason
-    assert result.choices == ('import_scATAC_fragments.source_profile',)
+    assert result.choices == ('run_snapatac2.function_name',)

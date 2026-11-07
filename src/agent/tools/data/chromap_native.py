@@ -109,7 +109,11 @@ def execute(values, execution_identity=None):
         for path in paths:
             if ',' in str(path):
                 raise ValueError('Chromap comma-separated source lists cannot represent a path containing a comma')
-            sources.extend(file_closure([path]))
+            pins = file_closure([path])
+            expected = args.get(key.removesuffix('_path') + '_sha256')
+            if expected is not None and pins[0]['sha256'] != expected:
+                raise AuthorityError('Native Chromap input identity changed')
+            sources.extend(pins)
     executable = Path(os.environ.get('AGENT_CHROMAP_BIN', ''))
     if not executable.is_absolute() or not executable.is_file():
         raise ValueError('Provision the native Chromap executable through AGENT_CHROMAP_BIN')
@@ -169,5 +173,5 @@ def execute(values, execution_identity=None):
 
 
 def invoke(reference_path, output_dir, function_name, index_path=None, read1_path=None, read2_path=None,
-           barcode_path=None, whitelist_path=None, kwargs=None):
+           barcode_path=None, whitelist_path=None, kwargs=None, reference_sha256=None, index_sha256=None, whitelist_sha256=None):
     return execute({k: v for k, v in locals().items() if v is not None})

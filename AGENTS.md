@@ -120,6 +120,24 @@ the full boundary audit, changed workflows, measured calls and remaining limits.
 
 ## Raw scientific processing replacement
 
+The [resource-selection correction](../agent-data/acceptance/raw-resource-selection/REPORT.md)
+builds on `c19d1be5a7f78d64c9eae435fa830681bc43f4f3`. Raw language
+interpretation captures user-quoted preferences; deterministic application binding
+resolves components after native function selection. Genome-only import, separate
+regions/gene annotation and accepted H5AD reuse do not require a complete raw
+reference bundle. Exact component aliases and qualified ordered chromosome-size
+identities prevent false ambiguity without equating different FASTA references.
+The 455-contig and 194-contig hg38 references remain genuinely distinct; historical
+resources, declarations and results stay exact. A final genuine Firefox/official
+OpenAI request correctly preserves the objective at this reference clarification,
+without a scientific Run or fabricated matrix. Native/component tests separately
+cover genuine small science. Saved question prose is not replay authority.
+Conda activation, including existing configured credentials, belongs to startup:
+use the existing Conda launcher, not merely its Python executable. The report
+separates the original startup failure, withdrawn backup-key workaround, corrected
+startup, application defect and bounded final evidence. No staging, commit, push
+or SRV-2C restart is performed.
+
 The [raw scATAC guide](docs/guides/raw-scatac-processing.md) owns current native
 processing. Chromap owns FASTQ mapping; the existing SnapATAC2 interface owns native
 BAM extraction, direct fragments import, QC, filtering and region matrices. Both
@@ -159,6 +177,20 @@ Work builds on `5a358283fc54710e5d85e637224103fbf97580d6`. The user's final clos
 instruction authorizes one reviewed completion commit and normal push to
 `origin/main`; earlier no-commit statements describe pre-closeout stages.
 The full PBMC10k evaluation and SRV-2C are not restarted.
+
+The [resource architecture consolidation](../agent-data/acceptance/raw-resource-selection/architecture-consolidation/REPORT.md)
+removes Web raw bundle/default preselection and the remaining FASTQ whole-bundle
+execution path. Existing component resolution supplies independent FASTA/whitelist
+mapping inputs and function-scoped SnapATAC2 inputs. Mapped FASTA identity constrains
+its downstream FAI; reference-free operations require no biological declarations.
+Native packages retain parsing and scientific legality. Legacy raw declaration and
+binding readers serve saved records only; retired composers are not restored.
+Both distinct hg38 references, original scientific evidence and the paused SRV-2C
+remain protected. The report owns verification, conservative inventory/cleanup and
+bounded live-provider limitations. The final combined review retains CONDITIONAL GO.
+The user's final closeout instruction authorizes one reviewed completion commit and
+normal push to `origin/main`; earlier no-commit statements record pre-closeout stages.
+SRV-2C remains unstarted by this closeout.
 
 ## Architecture and engineering rules
 

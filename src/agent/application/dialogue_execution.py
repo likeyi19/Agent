@@ -1753,6 +1753,11 @@ def planning_task(interaction, state):
     admitted = origin.admitted or {}
     task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
     current = interaction.admitted or {}
+    for field in ('fastq', 'fragments', 'bam'):
+        receipt = current.get(field + '_context', {})
+        if receipt.get('adapter') == 'native-inputs.v1':
+            from .native_raw_handoff import public_inputs
+            task['native_inputs'] = public_inputs(receipt)
     if current.get('annotation_source_evidence'):
         evidence = current['annotation_source_evidence']
         task['source_observation'] = dict(declarations=_serialize(evidence['declarations']),
@@ -1882,6 +1887,59 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
                 # attribution; scientific scalar declarations change no identity.
                 admitted['registered_input'] = _serialize(interaction.submission['registered_input'])
     return admitted
+
+
+def prepare_native_task(sessions, interaction, admitted):
+    """Plan and resolve native inputs before immutable intent publication.
+
+    This is the existing nondurable PLAN_ONLY mode, followed by the ordinary
+    durable executor only after all requested inputs have been bound. A saved
+    candidate conveys no execution or retry permission.
+    """
+    from .turns import _AdmittedPlanner
+    from .native_raw_handoff import bind_plan, ResourcePrerequisite
+    from .shared_resources import scientific_resource_scope
+    from agent.orchestration.runtime import AgentRuntime
+    from agent.orchestration.active_context import ActivePlanningContext, planning_context
+    from agent.orchestration.planner import PlannerError
+    from agent.schemas import ErrorCategory, RunMode
+    field = next(f for f in ('fastq','fragments','bam') if admitted.get(f + '_context',{}).get('adapter') == 'native-inputs.v1')
+    app = sessions._application
+    sid = sessions._interaction_session_id
+    current = replace(interaction, admitted=admitted)
+    state = sessions.load(sid)
+    task = planning_task(current, state)
+    context,_ = sessions.planning_context_for_interaction(sid, interaction.turn_id, reuse=admitted.get('context') == 'current')
+    context = (replace(context, task=task) if context is not None else
+        ActivePlanningContext(sid,interaction.base_revision_id,interaction.base_generation,(),task=task))
+    request = AgentRequest(admitted['request_id'], _execution_objective(current,state.interactions), admitted['inputs'])
+    prepared,_ = app._prepare_request(request)
+    question = None
+    bindings = []
+    def bind_native(plan):
+        nonlocal question
+        try:
+            return bind_plan(plan,admitted[field + '_context'],bindings=bindings)
+        except ResourcePrerequisite as exc:
+            question = (plan,exc.questions)
+            raise PlannerError('NATIVE_RESOURCE_REQUIRED',str(exc),category=ErrorCategory.USER_INPUT_ERROR) from exc
+    reference_owner = getattr(sessions,'_reference_resources',None)
+    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context):
+        planning = AgentRuntime(planner=_AdmittedPlanner(app.runtime.planner,lambda *a:None,bind_native),
+            registry=app.registry,executor=app.runtime.executor).run(replace(prepared,mode=RunMode.PLAN_ONLY))
+    admitted = dict(admitted,native_planning_trace=[row.to_dict() for row in planning.trace])
+    if question is not None:
+        plan,questions = question
+        admitted.update(native_resource_plan=plan.to_dict(),choices=list(questions))
+        pending = dict(origin_turn_id=admitted.get('continuation',{}).get('origin_turn_id',interaction.turn_id),
+            binding_turn_id=interaction.turn_id,field=field,tool=admitted['tool'],
+            resource_context_sha256=digest(admitted['resource_catalog']))
+        return admitted,pending,None
+    if planning.plan is None or not planning.verification or not planning.verification.passed:
+        return admitted,None,next(iter(planning.errors),None)
+    admitted['native_plan'] = planning.plan.to_dict()
+    admitted['native_resource_bindings'] = bindings
+    return admitted,None,None
 
 
 def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
@@ -2086,8 +2144,13 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 for i in state.interactions))
         sessions._store._update(sid, link)
 
-    execution_app = ResearchAgentApplication(app.workspace_root,
-        planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)
+    delegate = app.runtime.planner
+    if 'native_plan' in admitted:
+        from agent.schemas.run_state import _decode_plan
+        class PreparedPlanner:
+            def plan(self, request, registry):
+                return _decode_plan(admitted['native_plan'])
+        delegate = PreparedPlanner()
     from agent.orchestration.active_context import planning_context
     from agent.orchestration.executor import execution_input_guard
     grouped = (registered and interaction.submission['registered_input'].get('composition')
@@ -2097,6 +2160,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     from .shared_resources import scientific_resource_scope
     reference_owner = getattr(sessions, '_reference_resources', None)
     with scientific_resource_scope(None if reference_owner is None else reference_owner.library), execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
+        execution_app = ResearchAgentApplication(app.workspace_root,
+            planner=_AdmittedPlanner(delegate, accept), registry=app.registry, executor=app.runtime.executor)
         result = execution_app.run(request)
     state = sessions.load(sid)
     if any(t.turn_id == interaction.turn_id for t in state.turns):

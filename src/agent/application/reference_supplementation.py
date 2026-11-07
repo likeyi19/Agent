@@ -28,7 +28,7 @@ def _fail(message):
 
 
 def prepare_fai(resources, fasta, directory):
-    """Existing htslib preparation, shared by H5AD and explicit BED handoff."""
+    """Existing htslib preparation for explicit genome/H5AD reference installation."""
     path = fasta.source_path
     index = Path(fasta.source_index['path']) if fasta.source_index else directory / 'genome.fai'
     if fasta.source_index:
@@ -52,55 +52,6 @@ def prepare_fai(resources, fasta, directory):
             finally:
                 temporary.unlink(missing_ok=True)
     return index
-
-
-def qualify_bed(resources, source, *, parent_path=None, parent_sha256=None, category, directory,
-                fasta=None, species=None, assembly=None):
-    """Qualify uploaded regions with an existing genome or explicit plain FASTA.
-
-    Uploaded intervals are parsed only by the existing reference owner. No
-    sequence, index or BED copy and no deployment registration is needed.
-    """
-    from agent.tools.data import regulatory_feature_reference as owner, scatac_reference
-    from agent.tools.data._fragment_reference import load
-    resources._verify_records([source] + ([] if fasta is None else [fasta]))
-    parent = load(parent_path, parent_sha256) if parent_path is not None else None
-    if parent is None and fasta is None:
-        _fail('A qualified genome or an explicit plain FASTA is required.')
-    if parent is not None:
-        species = parent.species if type(parent.species) is dict else scatac_reference.species_identity(parent.species)
-        assembly = parent.target_assembly
-        fasta_path, fai_path = parent.genome.fasta.path, parent.genome.fai.path
-        provenance = parent.genome.fasta.provenance
-    if fasta is not None:
-        with open(fasta.source_path, 'rb') as stream:
-            if stream.read(2) == b'\x1f\x8b':
-                raise ReferenceSupplementError('Supply a plain FASTA; compressed genome upload preparation is unsupported.',
-                    diagnostic_reason='incompatible_scientific_reference')
-        fasta_path, fai_path = fasta.source_path, prepare_fai(resources, fasta, directory)
-        provenance = scatac_reference.SourceProvenance(basis='caller_supplied',
-            source='Explicit task FASTA; species and assembly are declared, not independently established.')
-    reference = owner.build_regulatory_feature_reference(
-        species=species, target_assembly=assembly, fasta_path=fasta_path,
-        fai_path=fai_path, feature_bed_path=source.source_path,
-        feature_category=category, genome_provenance=provenance,
-        feature_provenance=scatac_reference.SourceProvenance(basis='caller_supplied',
-            source='Task-selected BED registration ' + source.resource_id + '; ' + source.record_sha256))
-    if parent is not None and (reference.genome.fasta.sha256 != parent.genome.fasta.sha256
-            or reference.genome.fai.sha256 != parent.genome.fai.sha256
-            or reference.genome.ordered_contig_sha256 != parent.genome.ordered_contig_sha256
-            or reference.genome.contig_count != parent.genome.contig_count):
-        _fail('The selected reference genome changed.')
-    path = directory / 'reference.json'
-    if path.exists():
-        _, previous, sha = owner.load_regulatory_feature_reference(path)
-        if previous != reference:
-            _fail('Previously qualified custom regions changed.')
-        pointer = dict(manifest_path=str(path), manifest_sha256=sha)
-    else:
-        pointer = owner.publish_regulatory_feature_reference(reference, path)
-    resources._verify_records([source] + ([] if fasta is None else [fasta]))
-    return {k: pointer[k] for k in ('manifest_path', 'manifest_sha256')}
 
 
 def requirement(inputs, category):

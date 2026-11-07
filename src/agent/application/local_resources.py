@@ -1545,7 +1545,7 @@ class LocalResourceAdmission:
         if set(values).intersection(source):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         allowed = {}
-        for name in (tool_name, *_RAW_ANALYSIS_TOOLS):
+        for name in (tool_name, *(('run_snapatac2',) if tool_name == 'run_chromap' else ()), *_RAW_ANALYSIS_TOOLS):
             spec = registry.get(name)
             for key, argument in (dict(spec.required_arguments) | dict(spec.optional_arguments)).items():
                 if key not in source and key != 'output_dir' and (name == tool_name or argument.planning.scientific_parameter):

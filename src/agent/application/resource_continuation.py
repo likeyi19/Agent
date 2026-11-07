@@ -15,6 +15,57 @@ COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
                 'h5ad-science.v1': 'h5ad'}
 
 
+def preference_schema():
+    from .turn_decisions import _object
+    text = dict(type='string', minLength=1, maxLength=512)
+    return {'anyOf': [_object(dict(literal=text, evidence=text)), {'type': 'null'}],
+        'description': 'Quote the exact reference identity explicitly requested by the researcher. A species/assembly declaration or an application-selected candidate is not a reference preference. Otherwise use null.'}
+
+
+def validate_preference(value):
+    if value is not None and (type(value) is not dict or set(value) != {'literal','start','end'}
+            or type(value['literal']) is not str or not value['literal'].strip() or len(value['literal']) > 512
+            or type(value['start']) is not int or type(value['end']) is not int
+            or not 0 <= value['start'] < value['end'] <= 4096
+            or value['end'] - value['start'] != len(value['literal'])):
+        raise ValueError('Invalid grounded resource preference')
+
+
+def preference_matches(preference, choices, *, label=lambda s:s.label,
+                       identity=lambda s:'resource.' + s.input_set_id):
+    """Textual identification only; scientific consumers own applicability."""
+    if preference is None:
+        return []
+    name = ' '.join(preference['literal'].casefold().split())
+    exact = [s for s in choices if name in (' '.join(label(s).casefold().split()), identity(s))]
+    return exact or [s for s in choices if name in ' '.join(label(s).casefold().split())]
+
+
+def match_preference(preference, choices):
+    """Resolve a user identity for a consumer requiring one whole resource."""
+    if preference is None:
+        return [], None
+    matches = preference_matches(preference, choices)
+    if len(matches) != 1:
+        return [('The requested reference “' + preference['literal'] + '” is '
+                 + ('ambiguous: ' + '; '.join(s.label for s in matches) if matches else 'not available in this Session')
+                 + '. Please identify the reference you want; no alternative was selected.')], None
+    return [], matches[0]
+
+
+def distinct_choices(candidates, *, default, identity, order):
+    """Existing unique/default/alias policy over already applicable resources."""
+    defaults = [choice for choice in candidates if default(choice)]
+    if len(defaults) == 1:
+        return defaults
+    groups = {}
+    for choice in candidates:
+        key = identity(choice)
+        if key not in groups or order(choice) < order(groups[key]):
+            groups[key] = choice
+    return sorted(groups.values(), key=order)
+
+
 def source_kind(submission):
     submission = submission or {}
     if 'registered_input' in submission:

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from agent.application import InteractiveBoundaryError
 from agent.application.local_resources import LocalResourceAdmission
 from agent.application.uploads import H5ADUploadAdmission
-from agent.web.app import _fragments_selection, create_app
+from agent.web.app import create_app
 from agent.web.config import ScientificInputSet
 
 from helpers import harness, submission, wait_turn
@@ -19,43 +19,6 @@ def context(identifier='reviewed', *, default=False, **inputs):
         namespace=identifier, source_selection='full_export') | inputs
     return ScientificInputSet(identifier, identifier.title() + ' fragments declarations', values,
                               fragments_companion=True, fragments_default=default)
-
-
-@pytest.mark.parametrize('defaults', [(), (context('first', default=True),),
-    (context('first', default=True), context('second', default=True))])
-def test_explicit_context_has_priority_over_any_default_configuration(defaults):
-    explicit = context('selected', reference_bundle_sha256='b' * 64)
-    assert _fragments_selection(explicit, defaults + (explicit,)) == (explicit.inputs(), None)
-
-
-def test_unique_configured_default_supplies_only_declared_values():
-    chosen = context('default', default=True)
-    other = context('other')
-    assert _fragments_selection(None, (chosen, other)) == (chosen.inputs(), None)
-    assert set(_fragments_selection(None, (chosen,))[0]) == set(chosen.execution_inputs)
-
-
-@pytest.mark.parametrize('contexts,code', [
-    ((), None),
-    ((context('nondefault'),), None),
-    ((context('first', default=True), context('second', default=True)), 'FRAGMENTS_RESOURCE_AMBIGUOUS'),
-])
-def test_missing_or_ambiguous_defaults_remain_available_for_interpretation(contexts, code):
-    assert _fragments_selection(None, contexts) == ({}, code)
-
-
-@pytest.mark.parametrize('field', ['reference_bundle_path', 'reference_bundle_sha256', 'source_profile', 'namespace'])
-def test_genuinely_missing_declarations_do_not_use_other_context_defaults(field):
-    values = context('chosen').inputs()
-    del values[field]
-    incomplete = ScientificInputSet('chosen', 'Chosen declarations', values, fragments_companion=True)
-    assert _fragments_selection(incomplete, (incomplete, context('default', default=True))) == (values, None)
-
-
-def test_h5ad_context_does_not_become_fragments_context():
-    h5ad = ScientificInputSet('mouse', 'Mouse matrix', {'species': 'mouse'}, h5ad_companion=True)
-    with pytest.raises(InteractiveBoundaryError):
-        _fragments_selection(h5ad, (context('default', default=True),))
 
 
 def test_safe_choice_and_missing_source_do_not_mutate_session_or_construct_provider(tmp_path):

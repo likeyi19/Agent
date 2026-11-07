@@ -306,11 +306,11 @@ def _check_plan(plan, admitted, inputs, bindings, registry):
 
 class _AdmittedPlanner:
     """Delegate unchanged planning/recovery, then check effects before execution."""
-    def __init__(self, delegate, accept):
-        self.delegate, self.accept = delegate, accept
+    def __init__(self, delegate, accept, prepare=lambda plan: plan):
+        self.delegate, self.accept, self.prepare = delegate, accept, prepare
 
     def plan(self, request, registry):
-        plan = self.delegate.plan(request, registry)
+        plan = self.prepare(self.delegate.plan(request, registry))
         self.accept(request, plan)
         return plan
 
@@ -319,7 +319,12 @@ class _AdmittedPlanner:
         method = getattr(self.delegate, name)  # Preserve absence for legacy planners.
         def delegated(request, registry, **kwargs):
             result = method(request, registry, **kwargs)
-            plan = result.attempt.plan if name == 'plan_with_recovery' else result.plan
+            if name == 'plan_with_recovery':
+                plan = self.prepare(result.attempt.plan)
+                result = replace(result, attempt=replace(result.attempt, plan=plan))
+            else:
+                plan = self.prepare(result.plan)
+                result = replace(result, plan=plan)
             self.accept(request, plan)
             return result
         return delegated
@@ -667,6 +672,15 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 admitted['resource_catalog'] = catalog(input_sets)
         else:
             admitted = admit(sessions, interaction, decision)
+        if any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam')):
+            from .dialogue_execution import prepare_native_task
+            admitted, pending, error = prepare_native_task(sessions, interaction, admitted)
+            if pending is not None:
+                _update(sessions, turn_id, admitted=admitted, status='clarification', prerequisite=pending)
+                return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', tuple(admitted['choices']), True))
+            if 'native_plan' not in admitted:
+                _update(sessions, turn_id, admitted=admitted, status='failed')
+                return TurnOutcome('execute', 'failed', error=error, text='' if error is None else error.message)
     except Exception as exc:
         log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context,
             stage=diagnostic_stage, error=exc, kind=None if decision is None else type(decision).__name__,

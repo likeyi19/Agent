@@ -188,20 +188,17 @@ def test_incomplete_candidate_permission_does_not_weaken_source_or_graph_validat
 
 
 def test_required_reference_resource_absence_is_not_numeric_parameter_pending(tmp_path):
-    tool = 'prepare_scATAC_fragments'
-    response = dict(schema_version=4, decision=dict(kind='plan', steps=[
-        dict(step_id='requested', tool=tool, sources=[], control_dependencies=[])]))
-    app, _, _, _ = setup(tmp_path, tool, 'raw_preprocessing', response, provide_artifact=False)
-    inputs = dict(intake_manifest_path='/explicit/intake.json', intake_manifest_sha256='a' * 64,
-        library_context_path='/explicit/library.json', library_context_sha256='b' * 64)
-    view = app.submit_turn('session', 'initial', 'Prepare fragments with the declared intake and library.',
-        expected_generation=0, execution_inputs=inputs)
-    state = app._application.sessions.load('session')
-    run = app._application.run_store.load(view.run_id)
-    assert view.status == 'failed' and state.interactions[-1].prerequisite is None
-    assert run.errors[-1].code == 'MISSING_REQUIRED_SOURCE'
-    assert set(run.errors[-1].details['argument_names']) == {'reference_bundle_path', 'reference_bundle_sha256'}
-    assert not run.steps and not state.revisions
+    from agent.orchestration.semantic_compiler import SemanticPlanCompileError
+    registry=build_default_tool_registry()
+    request=AgentRequest('missing-reference','Build the native reference index.',dict(output_dir=str(tmp_path)))
+    response=dict(schema_version=4,decision=dict(kind='plan',steps=[dict(step_id='requested',tool='run_chromap',
+        sources=[dict(target='function_name',source=dict(kind='registered_choice',choice='index'))],control_dependencies=[])]))
+    with pytest.raises(SemanticPlanCompileError) as caught:
+        candidate=parse_semantic_wire_v4(json.dumps(response),request,registry)
+        compile_semantic_plan(request,candidate,registry,build_m92_semantic_compiler_contract(registry))
+    assert caught.value.code=='MISSING_REQUIRED_SOURCE'
+    reference=registry.get('run_chromap').required_arguments['reference_path']
+    assert not reference.planning.scientific_parameter
 
 
 def test_named_backend_instruction_preserves_planner_rejection_even_for_wrong_interpreter_target(tmp_path):
@@ -222,15 +219,15 @@ def test_named_backend_instruction_preserves_planner_rejection_even_for_wrong_in
 
 
 def test_selection_omission_uses_native_defaults_without_parameter_clarification(tmp_path):
-    registry = build_default_tool_registry()
-    request = AgentRequest('defaults', 'Select cells from these QC results.', dict(
-        barcode_qc_manifest_path='/explicit/qc.json', barcode_qc_manifest_sha256='a' * 64,
-        output_dir=str(tmp_path)))
-    candidate = parse_semantic_wire_v4(json.dumps(incomplete('select_scATAC_cells')), request, registry)
-    plan = compile_semantic_plan(request, candidate, registry, build_m92_semantic_compiler_contract(registry))
-    arguments = plan.steps[0].arguments
-    import inspect
-    defaults = inspect.signature(registry.get('select_scATAC_cells').function).parameters
-    assert 'min_qc_fragment_records' not in arguments and 'min_tss_enrichment' not in arguments
-    assert defaults['min_qc_fragment_records'].default == 1000
-    assert str(defaults['min_tss_enrichment'].default) == '4'
+    registry=build_default_tool_registry()
+    request=AgentRequest('defaults','Filter the native QC data.',dict(input_path='/explicit/native.h5ad',output_dir=str(tmp_path)))
+    response=dict(schema_version=4,decision=dict(kind='plan',steps=[dict(step_id='requested',tool='run_snapatac2',
+        sources=[dict(target='dataset',source=dict(kind='input',input='input_path')),
+            dict(target='function_name',source=dict(kind='registered_choice',choice='pp.filter_cells'))],control_dependencies=[])]))
+    candidate=parse_semantic_wire_v4(json.dumps(response),request,registry)
+    plan=compile_semantic_plan(request,candidate,registry,build_m92_semantic_compiler_contract(registry))
+    arguments=plan.steps[0].arguments
+    assert arguments['function_name']=='pp.filter_cells'
+    assert 'kwargs' not in arguments
+    assert not {'min_qc_fragment_records','min_tss_enrichment','min_counts','min_tsse'} & arguments.keys()
+    # Native invocation/default values are independently qualified by native_raw.

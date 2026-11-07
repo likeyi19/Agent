@@ -1,5 +1,10 @@
 # Raw scATAC processing with native scientific tools
 
+The [resource-selection correction report](../../../agent-data/acceptance/raw-resource-selection/REPORT.md)
+owns the subsequent function-input binding changes and bounded acceptance. Its
+final genuine request reaches a legitimate choice between distinct 194- and
+455-contig references; native science is qualified separately on small inputs.
+
 Agent plans and invokes supported native functions through the existing Registry,
 Executor, scientific publication, RunStore, Revision, Session and Web owners.
 Scientific task requests and explicit native-function requests use this same route.
@@ -72,14 +77,52 @@ coordinate convention is not an import eligibility gate. The separate bounded
 `inspect_scATAC_fragments` operation may describe a TBI header but establishes no
 source/index correspondence or downstream scientific authority.
 
-The existing ScientificResourceLibrary projects selected installed resources into
-these ports. Task handoff binds FAI, GTF and regions to their particular native
-functions; an available unused GTF does not require TSS QC for an import/matrix-only
-goal. Source species/assembly bind to import, then follow the native H5AD metadata.
+The [architecture consolidation report](../../../agent-data/acceptance/raw-resource-selection/architecture-consolidation/REPORT.md)
+records the final owner audit, retained historical dependencies and focused qualification.
+
+The existing ScientificResourceLibrary supplies these ports after the Planner
+selects native functions. Raw-task interpretation captures a quoted user reference
+preference, without choosing an internal resource ID. The application resolves one
+applicable component or an explicitly configured default. A named reference is
+preserved; a missing, conflicting or ambiguous preference asks for clarification.
+Different applicable reference versions are described by their labels and actual
+component differences. Resource presence never establishes source species or assembly.
+
+Native import consumes chromosome sizes, including a genome resource's FAI;
+matrix construction consumes its exact regions; TSSe consumes gene annotation.
+Genome-only resources and independently installed `regions` or `gene_annotation`
+entries are usable. The latter pin operator-declared files/context; native packages
+own scientific parsing and validity. A historical reference/QC bundle remains one
+source of components and is not a prerequisite for these functions. Unused GTF,
+regions or genome files do not block other functions. Input resolution uses the
+existing PLAN_ONLY path before scientific reservation; a resource question creates
+no failed scientific Run. Exact selected inputs and automatic/explicit/default
+selection reasons are captured with the Interaction. Web source capture no longer
+runs a separate raw default selector or passes retired bundle/profile arguments
+into native tools. An explicitly selected advanced InputSet projects its actual
+file ports through this same component view.
+
+Exact component bytes are aliases for the same native port. For chromosome sizes,
+existing qualified ordered-contig identities also identify equivalent size inputs
+despite different FASTA wrapping or FAI offsets. This does not equate the underlying
+FASTA references for mapping or sequence prediction. Different names, lengths or
+ordering remain distinct. No chromosome aliases or source conversions are inferred.
+Supplied source species/assembly bind to import, then follow the native H5AD metadata.
+BAM extraction and other reference-free functions need no genome, feature reference
+or species/assembly prerequisite. Unknown context never merges resources carrying
+different known coordinate declarations. An explicit supported native dictionary
+or supplied file can satisfy its input without an unrelated bundle.
 Supplied custom regions retain their declared assembly and exact
 coordinates. Explicit native-function mode may instead bind the exact supported
 reference files directly. There is no inferred chromosome aliasing, coordinate
 conversion or species correspondence.
+
+FASTQ mapping resolves the actual FASTA and declared barcode whitelist independently;
+a genome-only resource is sufficient and no QC annotation or region BED is required.
+A unique prebuilt index is reused only through its recorded exact FASTA association.
+Otherwise indexing is an ordinary planned native operation. Downstream fragment
+import uses the FAI associated with that mapped FASTA. Expected FASTA, index and
+whitelist checksums are checked against the same consumed file identities.
 
 FASTQ lanes belong to the explicitly declared library. Matching R1/R2/barcode
 lists are passed together to one Chromap map call; native software owns barcode

@@ -989,7 +989,7 @@ The basic same-origin browser application is available through FastAPI:
 
 ```bash
 python -m pip install -r requirements/web.txt
-PYTHONPATH=src python -m agent.web --config /path/to/operator-web.json \
+PYTHONPATH=src conda run --no-capture-output -n agent python -m agent.web --config /path/to/operator-web.json \
   --host 127.0.0.1 --port 8000
 ```
 
@@ -997,6 +997,9 @@ Open the configured address, create or reopen a Session, choose an admitted
 model and optional operator-configured scientific input set, and submit a request.
 The browser polls durable turn state and restores exact stored responses after
 refresh. Provider credentials and scientific input paths remain server-side.
+Conda activation supplies the existing environment's configuration; choosing its
+Python executable directly does not load those variables. See the
+[operating guide](docs/guides/operating-and-development.md) for server acceptance checks.
 Alibaba Cloud `qwen3.8-max` is available through the same model-profile mechanism;
 the [Qwen provider guide](docs/guides/alibaba-qwen-provider.md) gives exact private
 credential setup and normal Web launch/selection steps.

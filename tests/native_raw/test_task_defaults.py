@@ -82,18 +82,17 @@ def test_explicit_natural_source_order_uses_existing_choice_binding():
         input_path='/captured/source',chrom_sizes_path='/captured/sizes',fragment_order=values[ORDER]))=={'sorted_by_barcode':True}
 
 
-def test_task_handoff_supplies_unknown_order_without_touching_user_kwargs(sample,monkeypatch):
-    from agent.application.native_raw_handoff import reference_inputs
+def test_task_handoff_supplies_unknown_order_without_touching_user_kwargs(sample):
+    from agent.application.native_raw_handoff import prepare
     from agent.application.raw_handoff import FragmentsDeclaration,BamDeclaration
-    from agent.tools.data import _fragment_reference
-    reference=SimpleNamespace(genome=SimpleNamespace(fai=SimpleNamespace(path=str(sample.sizes),sha256='a'*64)),
-        ccre=SimpleNamespace(bed=SimpleNamespace(path=str(sample.peaks),sha256='b'*64)))
-    monkeypatch.setattr(_fragment_reference,'load',lambda *a:reference)
-    selected=SimpleNamespace(inputs=lambda:dict(reference_bundle_path='/captured/reference',reference_bundle_sha256='c'*64))
-    external=reference_inputs(selected,FragmentsDeclaration(source='source.0',species='human',assembly='hg38'))
-    assert external[ORDER]=='unknown' and not any('kwargs' in key for key in external)
-    bam=reference_inputs(selected,BamDeclaration(source='source.0',species='human',assembly='hg38'))
-    assert ORDER not in bam  # Native BAM extraction itself guarantees ordering.
+    candidates=SimpleNamespace(members=[dict(resource_id='source')],attribution=lambda:{'source':'captured'})
+    source=SimpleNamespace(resource_id='typed')
+    owner=SimpleNamespace(load=lambda _:source,bind_raw_source=lambda *a,**k:source,
+        compose_native=lambda _,values,**k:values)
+    for declaration in (FragmentsDeclaration,BamDeclaration):
+        external,receipt=prepare(owner,'session',candidates,declaration(source='source.0',species='human',assembly='hg38'),None,{},resource_evidence={})
+        assert (external.get(ORDER)=='unknown') == (declaration is FragmentsDeclaration)
+        assert not any('kwargs' in key for key in external)
 
 
 def test_unused_reference_and_source_declarations_do_not_require_native_qc(sample):
@@ -218,18 +217,12 @@ def test_real_native_bam_output_uses_guaranteed_barcode_order(native,sample):
     assert ad.read_h5ad(imported['matrix_path']).obs_names.tolist()==['A','Z']
 
 
-def test_grounded_task_order_prevails_without_replacing_reference_files(sample,monkeypatch):
-    from agent.application import native_raw_handoff as handoff
+def test_grounded_task_order_prevails_without_replacing_reference_files(sample):
+    from agent.application.native_raw_handoff import prepare
     from agent.application.raw_handoff import FragmentsDeclaration
-    reference=input_name('run_snapatac2','pp.make_peak_matrix','peaks_path')
-    monkeypatch.setattr(handoff,'reference_inputs',lambda *a,**k:{ORDER:'unknown',reference:'/captured/regions'})
     candidates=SimpleNamespace(members=[dict(resource_id='source')],attribution=lambda:{'source':'captured'})
     source=SimpleNamespace(resource_id='typed')
     owner=SimpleNamespace(load=lambda _:source,bind_raw_source=lambda *a,**k:source,
-        _verify_records=lambda _:None,compose_native=lambda _,values,**k:values)
-    declared=FragmentsDeclaration(source='source.0',species='human',assembly='hg38')
-    values,receipt=handoff.prepare(owner,'session',candidates,declared,None,{ORDER:'barcode'})
-    assert values[ORDER]=='barcode' and values[reference]=='/captured/regions'
-    assert ORDER not in receipt['resources']
-    with pytest.raises(ValueError,match='cannot replace selected native reference'):
-        handoff.prepare(owner,'session',candidates,declared,None,{reference:'/substituted/regions'})
+        compose_native=lambda _,values,**k:values)
+    values,receipt=prepare(owner,'session',candidates,FragmentsDeclaration(source='source.0',species='human',assembly='hg38'),None,{ORDER:'barcode'},resource_evidence={})
+    assert values[ORDER]=='barcode' and receipt['resources'][ORDER]=='barcode'

@@ -5,7 +5,7 @@ import pytest
 from agent.application import InteractiveBoundaryError
 from agent.application.local_resources import LocalResourceAdmission
 from agent.application.uploads import H5ADUploadAdmission
-from agent.web.app import _fastq_selection, create_app
+from agent.web.app import create_app
 from agent.web.config import ScientificInputSet, WebConfigurationError, load_web_configuration
 from agent.tools.data import _raw_fastq as owner
 
@@ -19,26 +19,6 @@ def context(identifier='reviewed', *, default=False):
             library_context_path='/operator/qualified/library.json', library_context_sha256='a' * 64,
             reference_bundle_path='/operator/qualified/reference.json', reference_bundle_sha256='b' * 64),
         fastq_companion=True, fastq_default=default)
-
-
-@pytest.mark.parametrize('defaults', [(), (context('one', default=True),),
-    (context('one', default=True), context('two', default=True))])
-def test_explicit_fastq_context_wins_without_hidden_replacement(defaults):
-    selected = context('selected')
-    assert _fastq_selection(selected, defaults + (selected,)) == (selected.inputs(), None)
-
-
-@pytest.mark.parametrize('contexts,expected', [((), ({}, None)),
-    ((context(),), ({}, None)), ((context(default=True),), (context().inputs(), None)),
-    ((context('one', default=True), context('two', default=True)), ({}, 'FASTQ_RESOURCE_AMBIGUOUS'))])
-def test_only_unique_explicit_defaults_are_supplied_and_inspection_has_no_producer_requirement(contexts, expected):
-    assert _fastq_selection(None, contexts) == expected
-
-
-def test_invalid_explicit_companion_never_falls_back_to_default():
-    wrong = ScientificInputSet('bam', 'BAM context', {}, bam_companion=True)
-    with pytest.raises(InteractiveBoundaryError):
-        _fastq_selection(wrong, (context(default=True),))
 
 
 @pytest.mark.parametrize('changes', [dict(fastq_companion='true'), dict(fastq_default=True),

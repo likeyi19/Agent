@@ -48,27 +48,6 @@ def plan(*steps):
     return AgentPlan('plan', 'request', 'scripted', steps)
 
 
-def inspect(binding, **changes):
-    keys = ('raw_input_paths', 'raw_assay', 'fastq_layout', 'species', 'source_genome_assembly')
-    return PlanStep('inspect', 'inspect_raw_scATAC',
-        {key: _serialize(binding.execution_inputs[key]) for key in keys if key in binding.execution_inputs} | changes)
-
-
-def context(tmp_path):
-    return dict(library_context_path=str(tmp_path / 'library.json'), library_context_sha256='a' * 64,
-        reference_bundle_path=str(tmp_path / 'reference.json'), reference_bundle_sha256='b' * 64,
-        species='human', source_genome_assembly='hg38')
-
-
-def prepare(binding, **changes):
-    keys = ('library_context_path', 'library_context_sha256',
-            'reference_bundle_path', 'reference_bundle_sha256')
-    arguments = {key: binding.execution_inputs[key] for key in keys if key in binding.execution_inputs}
-    arguments.update(intake_manifest_path=StepOutputRef('inspect', 'manifest_path'),
-                     intake_manifest_sha256=StepOutputRef('inspect', 'manifest_sha256'))
-    return PlanStep('prepare', 'prepare_scATAC_fragments', arguments | changes, depends_on=('inspect',))
-
-
 def test_collection_persists_in_same_catalog_and_preserves_inline_fingerprint(supplied):
     admission, records, collection = supplied
     assert isinstance(collection, LocalResourceCollectionRecord)
@@ -76,21 +55,17 @@ def test_collection_persists_in_same_catalog_and_preserves_inline_fingerprint(su
     assert admission.register_fastq_collection('library', [record.resource_id for record in records[::-1]],
         label=collection.label, attribution=collection.attribution) == collection
     legacy = admission.resolve_collection(collection.members, tool_name='inspect_raw_scATAC')
-    composed = admission.compose_fastq_collection(collection.resource_id)
+    composed = admission.compose_native(collection.resource_id,{})
     assert legacy.collection_sha256 == composed.collection_sha256 == collection.collection_sha256
-    assert composed.composition == 'fastq-science.v1'
+    assert composed.composition == 'native-science.v1'
     assert admission._submission_binding(submit(composed)) == composed
     assert 'composition' not in legacy.attribution()
     assert set(legacy.attribution()) == {'members', 'collection_sha256', 'tool_name'}
-    assert composed.execution_inputs['raw_assay'] == 'TENX_ATAC'
-    assert composed.execution_inputs['fastq_layout'] == owner.FastqLayout.A.value
+    assert len(composed.execution_inputs['read1_path']) == len(composed.execution_inputs['read2_path']) == len(composed.execution_inputs['barcode_path']) == 1
     assert collection.public() == dict(resource_id=collection.resource_id, input_type='fastq',
         label='Research library', status='registered', fastq_collection=True)
     assert not (admission._workspace.root / 'collections').exists()
     assert len(list((admission._workspace.root / 'local_resources').glob('*.json'))) == 4
-    admission.validate_plan(submit(composed), plan(inspect(composed)))
-    admission.validate_result(submit(composed), [SimpleNamespace(tool_name='inspect_raw_scATAC',
-        resolved_arguments=_serialize(inspect(composed).arguments))])
 
 
 @pytest.mark.parametrize('layout,roles', [(owner.FastqLayout.A.value, ('R1', 'R2', 'R3', 'I1')),
@@ -152,76 +127,17 @@ def test_conflicting_collection_completion_never_rewrites_accepted_catalog(suppl
 def test_scientific_companion_cannot_replace_typed_source_or_invent_inputs(supplied, values):
     admission, _, collection = supplied
     with pytest.raises(ResourceAdmissionError) as error:
-        admission.compose_fastq_collection(collection.resource_id, values)
+        admission.compose_native(collection.resource_id, values)
     assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'
-
-
-@pytest.mark.parametrize('keys,code', [(('library_context_path', 'library_context_sha256'),
-    'FASTQ_LIBRARY_CONTEXT_REQUIRED'), (('reference_bundle_path', 'reference_bundle_sha256'),
-    'FASTQ_REFERENCE_REQUIRED')])
-def test_producer_prerequisites_do_not_block_ordinary_inspection(supplied, tmp_path, keys, code):
-    admission, _, collection = supplied
-    inputs = {key: value for key, value in context(tmp_path).items() if key not in keys}
-    binding = admission.compose_fastq_collection(collection.resource_id, inputs)
-    admission.validate_plan(submit(binding), plan(inspect(binding)))
-    with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(inspect(binding), prepare(binding)))
-    assert error.value.code == code
-
-
-@pytest.mark.parametrize('field', ['raw_input_paths', 'raw_assay', 'fastq_layout', 'species'])
-def test_compiled_inspection_requires_exact_declared_members_and_context(supplied, tmp_path, field):
-    admission, _, collection = supplied
-    binding = admission.compose_fastq_collection(collection.resource_id, context(tmp_path))
-    changes = {field: ['/other.fastq'] if field == 'raw_input_paths' else 'other'}
-    with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(inspect(binding, **changes)))
-    assert error.value.code == 'FASTQ_SOURCE_MISMATCH'
-
-
-@pytest.mark.parametrize('field', ['library_context_path', 'library_context_sha256',
-    'reference_bundle_path', 'reference_bundle_sha256'])
-def test_compiled_producer_requires_exact_selected_context(supplied, tmp_path, field):
-    admission, _, collection = supplied
-    binding = admission.compose_fastq_collection(collection.resource_id, context(tmp_path))
-    admission.validate_plan(submit(binding), plan(inspect(binding), prepare(binding)))
-    with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(inspect(binding), prepare(binding, **{field: 'other'})))
-    assert error.value.code == 'FASTQ_SOURCE_MISMATCH'
-
-
-@pytest.mark.parametrize('changes', [dict(intake_manifest_sha256=StepOutputRef('other', 'manifest_sha256')),
-    dict(intake_manifest_path=StepOutputRef('inspect', 'other')), dict(intake_manifest_sha256='a' * 64)])
-def test_compiled_intake_pair_cannot_point_at_other_source(supplied, tmp_path, changes):
-    admission, _, collection = supplied
-    binding = admission.compose_fastq_collection(collection.resource_id, context(tmp_path))
-    prepared = prepare(binding, **changes)
-    steps = (inspect(binding), prepared)
-    if changes.get('intake_manifest_sha256') == StepOutputRef('other', 'manifest_sha256'):
-        steps = (steps[0], replace(inspect(binding), step_id='other'),
-                 replace(prepared, depends_on=('inspect', 'other')))
-    with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(*steps))
-    assert error.value.code == 'FASTQ_SOURCE_MISMATCH'
-
-
-def test_ambiguous_defaults_remain_operation_specific(supplied):
-    admission, _, collection = supplied
-    binding = admission.compose_fastq_collection(collection.resource_id,
-        resource_selection_error='FASTQ_RESOURCE_AMBIGUOUS')
-    admission.validate_plan(submit(binding), plan(inspect(binding)))
-    with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(inspect(binding), prepare(binding)))
-    assert error.value.code == 'FASTQ_RESOURCE_AMBIGUOUS'
 
 
 def test_source_drift_blocks_completion_and_new_science_but_keeps_historical_metadata(supplied):
     admission, records, collection = supplied
-    binding = admission.compose_fastq_collection(collection.resource_id)
+    binding = admission.compose_native(collection.resource_id,{})
     Path(records[0].source_path).unlink()
-    assert admission.compose_fastq_collection(collection.resource_id, verify_source=False) == binding
+    assert admission.compose_native(collection.resource_id,{},verify_source=False) == binding
     with pytest.raises(ResourceAdmissionError) as error:
-        admission.validate_plan(submit(binding), plan(inspect(binding)))
+        admission.validate_binding(binding)
     assert error.value.code == 'LOCAL_RESOURCE_INTEGRITY_INVALID'
     with pytest.raises(ResourceAdmissionError):
         admission.register_fastq_collection('other', [record.resource_id for record in records],

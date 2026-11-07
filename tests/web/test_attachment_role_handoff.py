@@ -98,8 +98,8 @@ def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_
 
 
 @pytest.mark.parametrize('field,target', [
-    ('fastq', 'prepare_scATAC_fragments'), ('bam', 'prepare_scATAC_bam_fragments'),
-    ('fragments', 'import_scATAC_fragments'), ('annotation', 'annotate_scATAC_cell_types'),
+    ('fastq', 'run_chromap'), ('bam', 'run_snapatac2'),
+    ('fragments', 'run_snapatac2'), ('annotation', 'annotate_scATAC_cell_types'),
     ('epizoo', 'epizoo_embed_cells'),
 ])
 def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, field, target):
@@ -140,15 +140,15 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
 
 
 @pytest.mark.parametrize('field,target,declarations', [
-    ('fastq', 'prepare_scATAC_fragments', (
-        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
-        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
-    ('bam', 'prepare_scATAC_bam_fragments', (
-        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
-        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
-    ('fragments', 'import_scATAC_fragments', (
-        ('select_scATAC_cells', 'min_tss_enrichment', '4', 4),
-        ('select_scATAC_cells', 'min_qc_fragment_records', '100', 100))),
+    ('fastq', 'run_chromap', (
+        ('pca_embed_cells', 'n_components', '10', 10),
+        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
+    ('bam', 'run_snapatac2', (
+        ('pca_embed_cells', 'n_components', '10', 10),
+        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
+    ('fragments', 'run_snapatac2', (
+        ('pca_embed_cells', 'n_components', '10', 10),
+        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
     ('annotation', 'annotate_scATAC_cell_types', (
         ('annotate_scATAC_cell_types', 'count_slot', 'X', 'X'),
         ('annotate_scATAC_cell_types', 'group_column', 'clusters', 'clusters'))),

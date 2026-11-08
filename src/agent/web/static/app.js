@@ -1227,19 +1227,30 @@ async function loadEvidence(detail = false) {
     element("detail-content").replaceChildren();
   }
   target.textContent = "Reading accepted evidence…";
+  let view;
   try {
-    const view = await api(`${revisionPath(sessionId, revisionId)}/evidence?${query}`);
+    view = await api(`${revisionPath(sessionId, revisionId)}/evidence?${query}`);
+  } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
+    target.textContent = `${error.code || "EVIDENCE_REQUEST_FAILED"}: ${error.message}`;
+    if (!detail) element("result-facts").textContent = "Evidence request failed. Use Show evidence to retry.";
+    return;
+  }
+  if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
+  try {
     renderEvidence(view, target);
     if (!detail) {
-      state.evidence = view;
       const group = (state.revision.result_groups || []).find((g) => g.outputs.some((o) => o.name === view.output_name));
       const binding = group?.outputs.find((o) => o.name === view.output_name);
       element("result-selection").value = "@field";
       element("result-method").textContent = `${group?.label || "Accepted result"} · ${readableLabel(binding?.field || view.output_name)}`;
       element("result-facts").replaceChildren(...evidenceFactNodes(view.facts, view.field_labels || {}));
       if (!view.facts.length) element("result-facts").textContent = `Selected field unavailable: ${view.reason || "not supplied by this accepted summary"}.`;
-      selectResultFigure(group);
+      // Field evidence uses the same source-bound gallery as result summaries.
+      // A manually opened artifact remains a separate, explicit preview.
+      const gallery = group && resultFigureGallery(resultFigureArtifacts(group));
+      if (gallery) element("result-facts").append(gallery);
+      if (!state.artifactPreview) clearArtifactView();
       element("result-limitations").replaceChildren(textList(view.limitations));
       element("result-limitations-panel").hidden = !view.limitations.length;
       element("detail-section").replaceChildren(...view.supported_details.map((section) => {
@@ -1252,11 +1263,14 @@ async function loadEvidence(detail = false) {
       if (!view.supported_details.length) {
         element("detail-content").textContent = "No reviewed detailed-evidence section is offered for this output.";
       }
+      state.evidence = view;
+      state.resultChoice = {revisionId, selection: "@field"};
+      saveConveniences();
     }
   } catch (error) {
-    if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
-    target.textContent = `${error.code}: ${error.message}`;
-    if (!detail) element("result-facts").textContent = "Summary unavailable. Use Show evidence to retry.";
+    console.error("Accepted evidence rendering failed.", error);
+    target.textContent = "EVIDENCE_RENDER_FAILED: Accepted evidence was received, but this browser could not display it. Reload the page to try again.";
+    if (!detail) element("result-facts").textContent = "Accepted evidence was received. Its display could not be completed.";
   }
 }
 
@@ -2424,6 +2438,7 @@ element("continue-revision").addEventListener("click", () => activateViewedRevis
 element("load-evidence").addEventListener("click", () => loadEvidence());
 element("evidence-output").addEventListener("change", () => loadEvidence());
 element("result-selection").addEventListener("change", () => {
+  state.evidenceEpoch += 1;
   state.artifactPreview = false;
   state.resultChoice = {revisionId: state.viewedRevisionId, selection: element("result-selection").value};
   renderResultSelection();

@@ -23,13 +23,13 @@ def counts(a, slot):
     if slot == 'X': x = a.X
     elif slot.startswith('layers/') and slot[7:] in a.layers: x = a.layers[slot[7:]]
     else: raise ValueError('Select X or an existing layers/name count slot')
-    if isinstance(x, np.ndarray) and x.ndim == 2 and x.nbytes <= 512 * 1024**2:
+    if isinstance(x, np.ndarray) and x.ndim == 2:
         x = sparse.csr_matrix(x)
     if not (sparse.isspmatrix_csr(x) or sparse.isspmatrix_csc(x)) or x.shape != a.shape:
         raise ValueError('Count slot must be cell-by-peak sparse CSR or CSC')
     x.check_format(full_check=True)
-    if not x.has_canonical_format or x.nnz > 100000000 or x.dtype.kind not in 'biuf':
-        raise ValueError('Canonical sparse raw counts within execution bounds required')
+    if not x.has_canonical_format or x.dtype.kind not in 'biuf':
+        raise ValueError('Canonical sparse raw counts required')
     v = x.data
     if not np.isfinite(v).all() or (v < 0).any() or (v > 2**53-1).any() or np.any(v != np.floor(v)):
         raise ValueError('Finite nonnegative integral counts exactly representable in float64 required')
@@ -39,20 +39,24 @@ def counts(a, slot):
 def logical(x):
     import hashlib
     h=hashlib.sha256(); h.update(str(x.shape).encode()); h.update(x.format.encode()); h.update(x.dtype.str.encode())
-    for v in (x.indptr,x.indices,x.data): h.update(v.dtype.str.encode()); h.update(v.tobytes())
+    for v in (x.indptr,x.indices,x.data):
+        h.update(v.dtype.str.encode())
+        # Preserve the historical digest without a whole-array byte copy.
+        for start in range(0, len(v), 131072):
+            cancellation_checkpoint()
+            h.update(v[start:start+131072].tobytes())
     return h.hexdigest()
 
 
 def _validate_matrix(a):
-    if not 1 <= a.n_obs <= 100000 or not 1 <= a.n_vars <= 2000000 or not a.obs_names.is_unique or not a.var_names.is_unique:
-        raise ValueError('Nonempty unique bounded cell and feature axes required')
+    if not 1 <= a.n_obs or not 1 <= a.n_vars or not a.obs_names.is_unique or not a.var_names.is_unique:
+        raise ValueError('Nonempty unique cell and feature axes required')
     for name in [*a.obs_names,*a.var_names]: legacy.identifier(name)
 
 
 def load_matrix(binding):
     path=legacy.checked_file(binding['source_path'],binding['source_sha256'])
-    if path.stat().st_size > peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB source limit')
-    peak_h5ad.inspect(path)
+    peak_h5ad.inspect(path, max_logical_bytes=None)
     a=ad.read_h5ad(path)
     _validate_matrix(a)
     if not c.direct(binding['method']) or c.input_problems(binding['species'], binding['assembly'], binding['value_semantics']):
@@ -116,8 +120,7 @@ def coordinates(features, spec):
 def prepare(args,spec):
     """Load and qualify once for an owner invocation; no persistent input cache."""
     path=legacy.checked_file(args['source_path'],args['source_sha256'])
-    if path.stat().st_size>peak_h5ad.MAX_BYTES: raise ValueError('Peak H5AD exceeds 1 GiB limit')
-    peak_h5ad.inspect(path)
+    peak_h5ad.inspect(path, max_logical_bytes=None)
     a=ad.read_h5ad(path); _validate_matrix(a); x=counts(a,args['count_slot'])
     metadata = [('species',spec['species']),('assembly',spec['assembly'])]
     if args['count_slot'] == a.uns.get('count_slot', 'X'):
@@ -205,19 +208,14 @@ def annotate_cell_groups(*,binding,specification,runtime,output_dir, _matrix=Non
     pd.DataFrame(groups,columns=['cell_id','group']).to_csv(root/'groups.tsv',sep='\t',index=False,quoting=csv.QUOTE_NONE)
     script=Path(legacy.__file__).parent/'r/maestro_markers_v1.R'
     env=dict(os.environ,R_LIBS_USER=runtime.r_library,R_ENVIRON_USER='/dev/null',R_PROFILE_USER='/dev/null')
-    with (root/'marker-runtime.txt').open('w') as log:
-        with subprocess.Popen([runtime.rscript,'--vanilla',str(script),str(root),str(upstream)],env=env,stdout=log,stderr=subprocess.STDOUT) as process:
-            try:
-                while True:
-                    cancellation_checkpoint()
-                    try:status=process.wait(timeout=.2);break
-                    except subprocess.TimeoutExpired:pass
-                if status:raise subprocess.CalledProcessError(status,process.args)
-            except BaseException:
-                process.terminate()
-                try:process.wait(timeout=5)
-                except subprocess.TimeoutExpired:process.kill();process.wait()
-                raise
+    from agent.tools._native_process import run
+    timeout = float(os.environ.get('AGENT_ANNOTATION_R_TIMEOUT_SECONDS', '7200'))
+    if not np.isfinite(timeout) or timeout <= 0:
+        raise ValueError('Annotation R timeout must be finite and positive')
+    command = [runtime.rscript, '--vanilla', str(script), str(root), str(upstream)]
+    status = run(command, root/'marker-runtime.txt', environment=env, timeout=timeout)
+    if status:
+        raise subprocess.CalledProcessError(status, command)
     f=pd.read_csv(root/'markers-signature-input.tsv',sep='\t',dtype={'cluster':str,'gene':str},keep_default_na=False,quoting=csv.QUOTE_NONE)
     result=legacy.score_candidates(cells,groups,genes,list(f[['cluster','gene','avg_logFC']].itertuples(index=False,name=None)),legacy.read_signatures(signature['path']))
     for key,rows in result.items():(root/f'{key}.json').write_text(json.dumps(rows,sort_keys=True,allow_nan=False)+'\n')

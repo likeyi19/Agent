@@ -39,7 +39,12 @@ def required_store():
 def runtime_store(function):
     @wraps(function)
     def call(runtime, *args, **kwargs):
-        with prior_output_store(runtime.run_store):
+        from agent.schemas import RunMode
+        request = args[0] if args else kwargs.get('request')
+        store = runtime.run_store
+        if store is None and function.__name__ == 'run' and getattr(request, 'mode', None) is RunMode.PLAN_ONLY:
+            store = _STORE.get()  # Explicit application scope; planning writes no Run.
+        with prior_output_store(store):
             return function(runtime, *args, **kwargs)
     return call
 

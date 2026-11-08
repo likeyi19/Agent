@@ -968,6 +968,10 @@ def compile_semantic_plan(
     for step in candidate.steps:
         tool = registry.get(step.tool_name)
         state = states[step.step_id]
+        from .active_context import prepare_selected_inputs
+        state.arguments = prepare_selected_inputs(tool, state.arguments,
+            {selected.step_id: (selected.tool_name, dict(states[selected.step_id].arguments))
+             for selected in candidate.steps})
         if tool.native_functions is not None:
             # Check after request binding so source order cannot hide explicit
             # native function intent or kwargs. Omitted native defaults stay
@@ -1173,6 +1177,7 @@ def build_semantic_compiler_contract(
                 member.name: member.field_name for member in consumer.members
             }
             for semantic_type in consumer.accepted_upstream_types:
+                names = {local: upstream for kind, local, upstream in consumer.upstream_member_names if kind == semantic_type}
                 for producer_tool_name, producer in producers[semantic_type]:
                     producer_members = {
                         member.name: member.field_name
@@ -1186,7 +1191,7 @@ def build_semantic_compiler_contract(
                             target_port=consumer.name,
                             members=tuple(
                                 ChannelMember(
-                                    producer_members[logical_name],
+                                    producer_members[names.get(logical_name, logical_name)],
                                     argument_name,
                                 )
                                 for logical_name, argument_name in (

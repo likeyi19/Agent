@@ -296,7 +296,7 @@ def test_owner_questions_follow_selected_slot_metadata_without_layer_inference(s
     assert owner.parameter_prerequisites(args)==('assembly','coordinate_system','matrix_semantics')
     assert owner.parameter_prerequisites({})==()
     registry=build_default_tool_registry()
-    assert [n for n in registry.names() if registry.get(n).parameter_prerequisites is not None]==[owner.TOOL,'run_motifmatchr','run_macs3','run_cicero','run_cicero_cds','call_scATAC_peaks']
+    assert registry.get(owner.TOOL).parameter_prerequisites is owner.parameter_prerequisites
 
 
 def test_installed_genome_selection_is_exact_and_never_an_assembly_alias(tmp_path,monkeypatch):

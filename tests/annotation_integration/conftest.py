@@ -45,3 +45,14 @@ def completed(matrix_source,tmp_path):
     run=AgentRuntime(planner=Planner(),run_store=store).run(AgentRequest('authority-request','Adopt supplied counts',{}))
     assert run.status.value=='SUCCEEDED',run.errors
     return 'external_matrix_adoption',matrix_source,run,store
+
+
+@pytest.fixture(autouse=True)
+def simulated_process_boundary(monkeypatch):
+    """These owner/application tests simulate native science in this process.
+
+    Genuine OS isolation and native MAESTRO run in the separate native_execution
+    suite/evidence; monkeypatched scientific functions cannot cross an exec.
+    """
+    from agent.tools import _native_process
+    monkeypatch.setattr(_native_process, 'call', lambda operation, arguments, local: local())

@@ -32,20 +32,21 @@ def validate_preference(value):
 
 
 def preference_matches(preference, choices, *, label=lambda s:s.label,
-                       identity=lambda s:'resource.' + s.input_set_id):
+                       identity=lambda s:'resource.' + s.input_set_id, aliases=lambda s:()):
     """Textual identification only; scientific consumers own applicability."""
     if preference is None:
         return []
     name = ' '.join(preference['literal'].casefold().split())
-    exact = [s for s in choices if name in (' '.join(label(s).casefold().split()), identity(s))]
+    exact = [s for s in choices if name in (' '.join(label(s).casefold().split()), identity(s),
+        *(' '.join(value.casefold().split()) for value in aliases(s)))]
     return exact or [s for s in choices if name in ' '.join(label(s).casefold().split())]
 
 
-def match_preference(preference, choices):
+def match_preference(preference, choices, *, aliases=lambda s:()):
     """Resolve a user identity for a consumer requiring one whole resource."""
     if preference is None:
         return [], None
-    matches = preference_matches(preference, choices)
+    matches = preference_matches(preference, choices, aliases=aliases)
     if len(matches) != 1:
         return [('The requested reference “' + preference['literal'] + '” is '
                  + ('ambiguous: ' + '; '.join(s.label for s in matches) if matches else 'not available in this Session')

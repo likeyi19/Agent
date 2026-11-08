@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import colorsys
 import hashlib
 import importlib.metadata
@@ -146,6 +146,7 @@ class _EvidenceSnapshot:
     run_id: str
     request_id: str
     plan_id: str
+    cell_results: Mapping = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -403,7 +404,55 @@ def _verified_evidence_snapshot(
         run_id=run_result.run_id,
         request_id=run_result.request_id,
         plan_id=run_result.plan.plan_id,
+        cell_results=_cell_results(run_result),
     )
+
+
+def _cell_results(run_result):
+    """Use the common capability contract on freshly verified execution records."""
+    from agent.tools.analysis.cell_result import describe, file
+    from agent.schemas import StepOutputRef
+    rows = {s.step_id: s for s in run_result.steps}
+    planned = {s.step_id: s for s in run_result.plan.steps}
+    views, visiting = {}, set()
+    def view(sid):
+        if sid in views:
+            return views[sid]
+        if sid in visiting:
+            raise ValueError('Cyclic scientific figure ancestry')
+        visiting.add(sid)
+        step = rows[sid]
+        desc = describe(step.tool_name, step.result)
+        if desc is None:
+            visiting.remove(sid)
+            return None
+        artifact = file(step.tool_name, step.result)
+        origin, grouping = artifact['sha256'], None
+        if desc['grouping']:
+            grouping = dict(**artifact, field=desc['grouping'], step_id=sid, tool_name=step.tool_name)
+        if desc['preserves_counts']:
+            argument = desc['input_argument']
+            ref = planned[sid].arguments.get(argument)
+            identity = step.result.get('source_identity', {}).get('sha256')
+            origin = identity or step.resolved_arguments.get('source_sha256')
+            if isinstance(ref, StepOutputRef):
+                parent = rows[ref.step_id]
+                if (ref.step_id not in planned[sid].depends_on
+                        or parent.result[ref.output_key] != step.resolved_arguments[argument]):
+                    raise ValueError('Figure source ancestry changed')
+                parent_view = view(ref.step_id)
+                if parent_view is not None:
+                    if identity and identity != parent_view['file']['sha256']:
+                        raise ValueError('Figure source digest changed')
+                    origin = parent_view['source_sha256']
+                    grouping = grouping or parent_view['groups']
+        result = dict(**desc, file=artifact, source_sha256=origin, groups=grouping)
+        views[sid] = result
+        visiting.remove(sid)
+        return result
+    for sid in rows:
+        view(sid)
+    return views
 
 
 def _first_occurrence(values: Sequence[str]) -> tuple[str, ...]:
@@ -641,6 +690,9 @@ def _supported_figure_sources(
                 "Verified evidence has invalid workflow identity.",
             )
         kind = _FIGURE_KIND_BY_TOOL.get(tool_name)
+        capability = snapshot.cell_results.get(step_id)
+        if tool_name != 'compute_cell_umap' and capability is not None and capability['coordinates']:
+            kind = 'umap_leiden' if capability['groups'] else 'umap_coordinates'
         if kind is None:
             continue
         step = step_records.get(step_id)
@@ -676,16 +728,34 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
         facts = step["facts"]
         assert isinstance(facts, Mapping)
         ordinal = len(projections) + 1
-        if tool_name == "compute_cell_umap":
+        additional_sources = ()
+        capability = snapshot.cell_results.get(step_id)
+        if tool_name == "compute_cell_umap" or capability is not None and capability['coordinates']:
+            native = tool_name != 'compute_cell_umap'
             source = _source_artifact(
                 artifacts,
                 step_id=step_id,
-                kind="cell_umap_h5ad",
+                kind="native_matrix_h5ad" if native else "cell_umap_h5ad",
                 tool_name=tool_name,
             )
             path = Path(str(source["artifact_path"])).expanduser().resolve()
-            data = _read_umap_presentation(path, expected_n_cells=facts.get("n_cells"),
-                                           clustered=facts.get("clustering_present", True))
+            if native:
+                from agent.tools.analysis.categorical import coordinates, observations, require_same_cells
+                ids, xy = coordinates(path, capability['file']['sha256'], capability['coordinates'])
+                grouping, labels = capability['groups'], ()
+                if grouping is not None:
+                    other, values = observations(grouping['path'], grouping['sha256'], grouping['field'])
+                    require_same_cells(ids, other)
+                    if values.isna().any():
+                        raise ValueError('Accepted clustering contains missing labels')
+                    labels = tuple(map(str, values))
+                    additional_sources = (_source_artifact(artifacts, step_id=grouping['step_id'],
+                        kind='native_matrix_h5ad', tool_name=grouping['tool_name']),)
+                categories = _first_occurrence(labels)
+                data = _UmapData(ids, xy, labels, categories, _categorical_palette(len(categories)) if categories else (), _umap_point_size(len(ids)))
+            else:
+                data = _read_umap_presentation(path, expected_n_cells=facts.get("n_cells"),
+                                               clustered=facts.get("clustering_present", True))
             digest = _umap_plot_digest(data.cell_ids, data.coordinates, data.labels)
             legend_columns = max(1, math.ceil(len(data.categories) / 20))
             width_px = int((8.0 + 1.5 * (legend_columns - 1)) * _DPI)
@@ -720,6 +790,10 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                 for name in ("leiden_labels_sha256", "category_order", "palette", "palette_version"):
                     presentation.pop(name)
                 presentation.update(clustering_present=False, point_color="#4477AA")
+            if native:
+                presentation = dict(presentation, coordinate_slot=capability['coordinates'],
+                    grouping_slot=None if grouping is None else grouping['field'],
+                    source_sha256=capability['source_sha256'], projection_version=3)
         elif tool_name == "evaluate_cell_clustering":
             source = _source_artifact(
                 artifacts,
@@ -785,7 +859,7 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                 figure_kind=kind,
                 filename=filename,
                 source_step_ids=(step_id,),
-                source_artifacts=(source,),
+                source_artifacts=(source, *additional_sources),
                 plotting_data_sha256=digest,
                 width_px=width_px,
                 height_px=height_px,
@@ -1584,6 +1658,12 @@ def verify_analysis_visualizations(
         version = figure_set.get("annotation_projection_version", 1)
         if type(version) is not int or version not in (1, 2):
             raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Unsupported annotation projection version.")
+        # Projection 3 introduced native written-slot coordinates. Preserve
+        # figureless/native and dedicated-only historical bundle meanings.
+        if not any(isinstance(row, Mapping) and isinstance(row.get('presentation'), Mapping)
+                   and row['presentation'].get('projection_version') == 3
+                   for row in source_manifest.get('figures', ())):
+            snapshot = replace(snapshot, cell_results={})
         projections = _derive_figure_projections(snapshot, annotation_figures=version == 2) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         renderer = _renderer_contract()
     except (AnalysisVisualizationError, TypeError) as exc:

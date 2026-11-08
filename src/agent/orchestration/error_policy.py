@@ -45,6 +45,12 @@ _MANUAL = RecoveryDisposition.MANUAL_RECONCILIATION
 # Safe messages and static recovery classes for production boundary codes.  An
 # unknown code deliberately receives the fail-closed defaults below.
 _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
+    'NATIVE_EXECUTION_UNAVAILABLE': ErrorPolicyEntry('Native execution is unavailable or its cleanup could not be confirmed. The operator must check the configured memory budget and systemd/cgroup v2 environment before further execution. No automatic retry was performed.', _NO),
+    'NATIVE_EXECUTION_BUSY': ErrorPolicyEntry('The configured native execution slot is occupied. No additional task was started; ask the operator to check execution availability.', _NO),
+    'NATIVE_TEMPORARY_LIMIT': ErrorPolicyEntry('The native task exceeds the operator-configured temporary-storage budget. Its scientific inputs and parameters were not changed.', _NO),
+    'NATIVE_MEMORY_EXHAUSTED': ErrorPolicyEntry('The native task exhausted its configured memory resources. No scientific result was accepted and no automatic retry or data reduction was performed.', _NO),
+    'NATIVE_EXECUTION_TIMEOUT': ErrorPolicyEntry('The native task exceeded the configured execution time. Its owned process subtree was stopped; no automatic retry was performed.', _NO),
+    'NATIVE_EXECUTION_FAILED': ErrorPolicyEntry('The isolated native task failed. Operator diagnostics were retained; no scientific conclusion or automatic retry was produced.', _NO),
     'NATIVE_RESOURCE_REQUIRED': ErrorPolicyEntry('A selected native function requires an available, unambiguous reference input. Please identify the required reference.', _NO, True),
     'NATIVE_FUNCTION_REJECTED': ErrorPolicyEntry('The native function rejected the supplied arguments. No values were changed or retried.', _NO, True),
     'CHROMVAR_FUNCTION_INPUT_INVALID': ErrorPolicyEntry('The selected chromVAR function needs compatible H5AD input and its supported native arguments. Count functions need the actual count slot and measurement; computeVariability needs separately identified chromVAR deviations and z_scores. No function, input object or parameter was substituted.', _NO),

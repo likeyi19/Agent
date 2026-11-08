@@ -1,7 +1,9 @@
 """Task-scoped source declarations; scientific qualification remains with owners.
 
 These are bounded variants of existing role continuation, not a scientific planner.
-Only explicitly captured attachments can supply scientific source roles.
+Raw file roles use exact captured attachments. Current annotation capture and
+selected-method preparation delegate to annotation_preparation; shared declaration
+types and narrowly scoped historical readers remain here.
 """
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -623,6 +625,15 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
 
 def source_binding(origin, source, interaction, field=None):
     field = field or (_field(source) if source is not None else _field(interaction))
+    if (field == 'annotation' and source is not None
+            and source.admitted.get('annotation_preparation') == 'selected-method.v2'):
+        from .annotation_preparation import capture_sources
+        return capture_sources(origin, source, interaction)
+    return attachment_binding(origin, source, interaction, field)
+
+
+def attachment_binding(origin, source, interaction, field):
+    """Existing exact captured-file association, including historical replay."""
     if field in ('annotation', 'epizoo'):
         origin = _candidate_view(origin)
         interaction = _candidate_view(interaction)
@@ -840,6 +851,9 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     from .resource_continuation import catalog
     from .local_resources import LocalResourceAdmission
     field = 'epizoo' if decision.epizoo is not None else 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    if field == 'annotation':
+        from .annotation_preparation import admit as admit_annotation
+        return admit_annotation(sessions, interaction, decision, input_sets)
     if field not in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo') or (decision.fastq is not None and field != 'fastq'):
         raise IntentError('invalid_prerequisite')
     validate_arguments(decision.arguments, field)
@@ -873,7 +887,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     addition = getattr(decision, field) or empty(field)
     declared = merge(previous, addition, pending=True,
                      unknown_fields=() if initial else decision.unknown_fields)
-    if field in ('annotation', 'epizoo'):
+    if field == 'epizoo':
         candidate = source_binding(origin, source, interaction, field)
         declared_source = declared.source
         if ((origin.submission or {}).get('candidate_input') is not None
@@ -885,12 +899,9 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                     or candidate.members[position]['record_sha256'] != selected['record_sha256']):
                 raise IntentError('invalid_prerequisite')
         if declared_source is not None:
-            if field == 'epizoo':
-                from agent.tools.models.epizoo_inputs import observe_source as observe
-            else:
-                from agent.tools.analysis.annotation_input import observe
+            from agent.tools.models.epizoo_inputs import observe_source as observe
             if int(declared_source.split('.')[1]) >= len(candidate.members):
-                raise ValueError('Annotation source is outside the captured attachments.')
+                raise ValueError('EpiZoo source is outside the captured attachments.')
             member = candidate.members[int(declared_source.split('.')[1])]
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
             record = owner.load(member['resource_id'])
@@ -898,13 +909,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 raise IntentError('invalid_prerequisite')
             owner._verify_records([record])
             source_evidence = observe(record.source_path, record.source_sha256)
-            if field == 'epizoo':
-                source_evidence['interface_version'] = 2
-            if field == 'annotation':
-                from .annotation_groups import choices
-                group_choices = choices(sessions, interaction)
-                if group_choices:
-                    source_evidence['accepted_groups'] = group_choices
+            source_evidence['interface_version'] = 2
     binding, declared, values, missing, selected = _completion(interaction, origin, source,
         addition, decision.arguments, rows, sessions._application.registry, field, evidence, source_evidence,
         unknown_fields=() if initial else decision.unknown_fields, declared=declared, native=native)
@@ -918,30 +923,6 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if selected is not None and not missing and reference_resources is not None and not native:
         from .shared_resources import check_choice
         check_choice(reference_resources, state.session_id, 'resource.' + selected.input_set_id)
-    resource_observation = None
-    if field == 'annotation' and declared.uploaded is not None and not missing:
-        import csv
-        from agent.tools.analysis.annotation_input import resource_specification, qualify_resources
-        spec, _ = resource_specification(evidence[selected.input_set_id] if selected else None, declared, binding.members)
-        resource_observation = dict(specification_sha256=digest(spec), qualification=None, problem='')
-        try:
-            resource_observation['qualification'] = qualify_resources(spec)
-        except (ValueError, OSError, TypeError, KeyError, csv.Error) as exc:
-            from .interactive import _unsafe_fact_value
-            detail = str(exc)
-            if len(detail) > 512 or _unsafe_fact_value(detail):
-                detail = 'The supplied resource cannot be qualified; check its content and declared compatibility.'
-            resource_observation['problem'] = 'Uploaded annotation reference: ' + detail
-            missing.append(resource_observation['problem'])
-    projection = None
-    if field == 'annotation' and declared.groups_result is not None and not missing:
-        from .annotation_groups import project, GroupAssociationError
-        try:
-            projection = project(sessions, interaction, declared.groups_result,
-                binding.members[int(declared.source.split('.')[1])])
-        except GroupAssociationError as exc:
-            source_evidence['group_projection_problem'] = str(exc)
-            missing.append(str(exc))
     admitted = dict(kind='clarify' if missing else 'execute', tool=target(field, declared),
         revision_id=interaction.base_revision_id, resource_catalog=rows, raw_resource_evidence=evidence,
         raw_resource_choice=(declared.resource or ('resource.' + selected.input_set_id if selected is not None
@@ -959,10 +940,6 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         admitted.update(intent)
     if field == 'epizoo':
         admitted['epizoo_source_evidence'] = source_evidence
-    if field == 'annotation':
-        admitted['annotation_source_evidence'] = source_evidence
-        if declared.uploaded is not None:
-            admitted['annotation_resource_observation'] = resource_observation
     if not initial:
         admitted['continuation'] = {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}
         if decision.unknown_fields:
@@ -986,9 +963,6 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                 pending=dict(origin_turn_id=origin.turn_id,binding_turn_id=interaction.turn_id,
                     field=field,tool=target(field,declared),resource_context_sha256=digest(rows))
                 return admitted,pending
-        elif field == 'annotation' and declared.groups_result is not None:
-            binding, receipt = _prepare_annotation(owner, binding, declared, selected, values,
-                                                   projection=projection)
         else:
             binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
                 resource_evidence=evidence if native else None,
@@ -997,15 +971,6 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         admitted.update(inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution(),
             **{field + '_context': receipt}, operation='plan',
             request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)))
-        if field == 'annotation' and declared.uploaded is not None and reference_resources is not None:
-            from .shared_resources import persist
-            uploaded_source = declared.uploaded.gene_source or declared.uploaded.signature_source
-            persist(reference_resources, dict(annotation_spec_path=receipt['resource']['path'],
-                annotation_spec_sha256=receipt['resource']['sha256']), session_id=state.session_id,
-                origin_turn_id=origin.turn_id, label='Qualified annotation references',
-                qualification=resource_observation['qualification'],
-                publication_source=(binding.members[int(uploaded_source.split('.')[1])]['source_path']
-                                    if uploaded_source is not None else None))
     return admitted, pending
 
 
@@ -1024,8 +989,6 @@ def _context_identity(candidates, declared, selected, *, mode='original', scope=
 
 
 def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=(), resource_evidence=None):
-    if isinstance(declared, AnnotationDeclaration):
-        return _prepare_annotation(owner, candidates, declared, selected, arguments)
     from .native_raw_handoff import prepare as native_prepare
     return native_prepare(owner, session_id, candidates, declared, selected, arguments, resource_evidence=resource_evidence)
 
@@ -1112,6 +1075,9 @@ def validate(interaction, preceding):
     from .input_sets import ScientificInputSet
     from agent.orchestration.registry import build_default_tool_registry
     field = _field(interaction)
+    if (interaction.admitted or {}).get('annotation_preparation') in ('selected-method.v1', 'selected-method.v2'):
+        from .annotation_preparation import validate as validate_annotation
+        return validate_annotation(interaction, preceding)
     try:
         captured = _serialize(interaction.snapshot)
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
@@ -1330,7 +1296,7 @@ def _annotation_requirements(binding, declared, arguments, observation):
     return declared, values, missing
 
 
-def _annotation_binding(candidates, declared, selected, arguments, pointer, projection=None):
+def _historical_annotation_binding(candidates, declared, selected, arguments, pointer, projection=None):
     from .local_resources import RegisteredInputGroup, group_role_inputs
     from agent.orchestration.registry import build_default_tool_registry
     from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY, EXTERNAL_SEMANTICS, REGION_PRIMARY
@@ -1348,48 +1314,6 @@ def _annotation_binding(candidates, declared, selected, arguments, pointer, proj
     bound = RegisteredInputGroup(members, values, roles,
         resource_choice=None if selected is None else selected.resource_choice(), attachment_candidates=True)
     return replace(bound, execution_inputs=group_role_inputs(bound, roles, build_default_tool_registry()))
-
-
-def _prepare_annotation(owner, candidates, declared, selected, arguments, *, projection=None):
-    """Bind a reviewed resource to declared grouping through its existing owner."""
-    from agent.tools.analysis import annotation_contract as c
-    from agent.tools.analysis.marker_annotation import sha256
-    identity = _context_identity(candidates, declared, selected)
-    directory = owner._workspace._ensure_directory(owner._workspace.root / 'annotation_handoffs')
-    root = owner._workspace._ensure_directory(directory / identity)
-    from agent.tools.analysis.annotation_input import resource_base, resource_specification
-    specification, problems = resource_specification(resource_base(selected.inputs()) if selected else None, declared, candidates.members)
-    if problems:
-        raise ValueError('Incomplete uploaded annotation resources.')
-    content = c.matrix.canonical(specification)
-    path = root / 'resources.json'
-    # Ordinary immutable workspace publication, never mutate selected resources.
-    if path.exists():
-        if path.read_bytes() != content:
-            raise ValueError('Captured annotation resource binding changed.')
-    else:
-        import os, tempfile
-        fd, temporary = tempfile.mkstemp(dir=root, prefix='.resources-')
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(content); stream.flush(); os.fsync(stream.fileno())
-            try:
-                os.link(temporary, path)
-            except FileExistsError:
-                if path.read_bytes() != content:
-                    raise ValueError('Captured annotation resource binding changed.')
-            directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-    pointer = dict(path=str(path), sha256=sha256(path))
-    bound = _annotation_binding(candidates, declared, selected, arguments, pointer, projection)
-    owner.validate_binding(bound)
-    return bound, dict(identity=identity, specification=specification, resource=pointer,
-                       **({'group_projection': projection} if projection is not None else {}))
 
 
 def _validate_annotation_completion(admitted, candidates, declared, selected, arguments):
@@ -1420,7 +1344,7 @@ def _validate_annotation_completion(admitted, candidates, declared, selected, ar
     projection = receipt.get('group_projection')
     if projection is not None and projection['selection'] not in admitted['annotation_source_evidence'].get('accepted_groups', ()):
         raise ValueError('Grouping projection is outside captured accepted results')
-    bound = _annotation_binding(candidates, declared, selected, arguments, pointer, projection)
+    bound = _historical_annotation_binding(candidates, declared, selected, arguments, pointer, projection)
     if _serialize(admitted['inputs']) != _serialize(bound.execution_inputs) or admitted['registered_input'] != bound.attribution():
         raise ValueError('Annotation binding changed.')
 

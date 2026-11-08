@@ -29,7 +29,7 @@ def require_same_cells(left, right):
         raise ValueError('Scientific entities must have identical cell identities and exact order.')
 
 
-def coordinates(path, sha):
+def coordinates(path, sha, field='X_umap'):
     """Read only a pinned two-dimensional UMAP and its unique ordered obs axis."""
     from agent.tools.analysis.marker_annotation import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
@@ -38,7 +38,25 @@ def coordinates(path, sha):
         obs = handle['obs']
         inspect(handle, observation_fields=(obs.attrs['_index'],))
         ids = ordered_ids(_series(obs[obs.attrs['_index']]), source='Coordinates')
-        values = np.asarray(read_elem(handle['obsm']['X_umap']))
+        if (not isinstance(handle.get('obsm', getlink=True), h5py.HardLink)
+                or not isinstance(handle['obsm'], h5py.Group)
+                or not isinstance(field, str) or '/' in field or field not in handle['obsm']):
+            raise ValueError('Select an exact coordinate slot.')
+        # Validate the selected storage before decoding, not unrelated X.
+        item = handle['obsm'][field]
+        if not isinstance(handle['obsm'].get(field, getlink=True), h5py.HardLink):
+            raise ValueError('Indirect coordinate storage is unsupported.')
+        if not isinstance(item, h5py.Dataset) or item.shape != (len(ids), 2):
+            raise ValueError('Selected coordinates must be a two-dimensional cell layout.')
+        if item.is_virtual or item.external or item.dtype.kind not in 'fi':
+            raise ValueError('Unsupported coordinate storage.')
+        import math
+        if item.chunks and math.prod(item.chunks) * item.dtype.itemsize > 16 * 1024**2:
+            raise ValueError('Coordinate storage chunk exceeds the read bound.')
+        creation = item.id.get_create_plist()
+        if any(creation.get_filter(i)[0] not in (1, 2, 3, 32001, 32015) for i in range(creation.get_nfilters())):
+            raise ValueError('Unsupported coordinate filter.')
+        values = np.asarray(read_elem(item))
         if values.shape != (len(ids), 2) or values.dtype.kind not in 'fi' or not np.isfinite(values).all():
             raise ValueError('Selected coordinates must be a finite two-dimensional cell layout.')
         return ids, values

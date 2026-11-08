@@ -51,7 +51,7 @@ NATIVE_ARGUMENTS = (
     ('parametric', 'Native deviation/variability test choice; not replicate-level accessibility inference.'),
     ('norm','computeExpectations: native per-cell normalization; omitted uses native FALSE.'),
     ('bootstrap_error','computeVariability: native bootstrap confidence bounds; omitted uses TRUE.'),
-    ('bootstrap_samples','computeVariability: native bootstrap resamples; omitted uses 1000; execution cap 10000.'),
+    ('bootstrap_samples','computeVariability: native bootstrap resamples; omitted uses 1000.'),
     ('bootstrap_quantiles','computeVariability: native two quantiles as a JSON number array.'),
     ('na.rm','computeVariability: native missing-value handling; omitted uses TRUE.'),
 )
@@ -99,9 +99,6 @@ def native_arguments(args):
         elif not (value is None or type(value) in (bool,int) or type(value) is float and math.isfinite(value)
                   or type(value) is str and len(value)<=128 and not any(ord(c)<32 for c in value)):
             raise ValueError('Native arguments must be bounded JSON data')
-    samples = kwargs.get('bootstrap_samples',1000)
-    if type(samples) in (int,float) and samples > 10000:
-        raise ValueError('Bootstrap exceeds the 10000-resample execution bound')
     seed = args.get('seed')
     if seed is not None and (type(seed) is not int or not 0<=seed<=2147483647):
         raise ValueError('Explicit R seed must be an integer from 0 to 2147483647')
@@ -158,8 +155,6 @@ def prepare_input(args,stage):
             matrix=sparse_dataset(element) if isinstance(element,h5py.Group) else element
             if matrix.shape!=(len(cells),len(features)):
                 raise ValueError('Counts and ordered axes differ')
-            if args.get('kwargs',{}).get('norm') is not None and args.get('kwargs',{}).get('norm') is not False and len(cells)*len(features)>16_000_000:
-                raise ValueError('Native norm denominator exceeds the 16000000-element memory bound; the explicit parameter is not changed')
             x=peak_h5ad.read_native_matrix(matrix)
             mmwrite(stage/'counts.mtx',x.T.tocsc())
             effective['measurement']=effective.get('matrix_semantics', 'unspecified_measurement')
@@ -172,9 +167,6 @@ def prepare_input(args,stage):
                     raise ValueError('The supplied bias column must be numeric in original feature order')
                 peak_h5ad.native_double_values(bias)
                 feature_table['bias'] = bias
-                iterations = args.get('kwargs', {}).get('niterations', 50)
-                if type(iterations) in (int, float) and len(features) * iterations > 16_000_000:
-                    raise ValueError('Native background result exceeds 16000000-element execution bound')
                 effective['measurement'] = 'native_1_based_background_feature_indices'
 
         if args.get('group_key') is not None:
@@ -182,8 +174,6 @@ def prepare_input(args,stage):
             if any(not isinstance(s,str) or not s or any(c in s for c in '\t\r\n') for s in values):
                 raise ValueError('Native grouping requires supplied nonmissing text labels in exact cell order')
             cell_table['group']=values
-        if args['function_name'] in ('getSampleCorrelation', 'getSampleDistance') and len(cells)**2 > 16_000_000:
-            raise ValueError('Native sample matrix exceeds the 16000000-element execution bound')
         cell_table.to_csv(stage/'cells.tsv',sep='\t',index=False)
         feature_table.to_csv(stage/'features.tsv',sep='\t',index=False)
     return effective,len(cells),len(features)
@@ -213,7 +203,13 @@ def native(args,stage):
     return receipt
 
 
-def execute(values,execution_identity=None):
+def execute(values, execution_identity=None):
+    from agent.tools._native_process import call
+    return call('chromvar_native', dict(values=values, execution_identity=execution_identity),
+                lambda: _execute(values, execution_identity))
+
+
+def _execute(values, execution_identity=None):
     args=arguments(values);kwargs=native_arguments(args)
     root=Path(args['output_dir']);root.mkdir(parents=True,exist_ok=True)
     if any(root.iterdir()):

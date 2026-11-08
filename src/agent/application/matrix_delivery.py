@@ -84,9 +84,12 @@ def _safe_objects(file, *, maximum_depth=2):
     """Visit closed shallow objects without following indirect links."""
     seen = {h5py.h5o.get_info(file.id).addr}
     count = 0
+    logical_bytes = 0
+    from .delivery_policy import current
+    policy = current()
 
     def visit(group, depth):
-        nonlocal count
+        nonlocal count, logical_bytes
         _reject(depth > maximum_depth)
         for name in group:
             count += 1
@@ -99,6 +102,10 @@ def _safe_objects(file, *, maximum_depth=2):
                 visit(item, depth + 1)
             else:
                 _reject(not isinstance(item, h5py.Dataset) or item.is_virtual or bool(item.external))
+                import math
+                logical_bytes += math.prod(item.shape or ()) * item.dtype.itemsize
+                _reject(logical_bytes > policy.logical_bytes)
+                _reject(item.chunks is not None and math.prod(item.chunks) * item.dtype.itemsize > policy.chunk_bytes)
                 # Both publication writers use ordinary contiguous datasets or
                 # gzip-compressed CSR arrays, never third-party filter plugins.
                 creation = item.id.get_create_plist()
@@ -221,10 +228,10 @@ class MatrixDeliveryError(ValueError):
 
     _MESSAGES = {
         'MATRIX_DOWNLOAD_UNAVAILABLE': 'The accepted matrix is unavailable or ineligible for download.',
-        'MATRIX_DOWNLOAD_LIMIT': 'The accepted matrix exceeds the 1 GiB download limit.',
+        'MATRIX_DOWNLOAD_LIMIT': 'The accepted matrix exceeds the configured download limit.',
         'MATRIX_DOWNLOAD_BUSY': 'Matrix download capacity is unavailable. Try again shortly.',
         'SCIENTIFIC_DOWNLOAD_UNAVAILABLE': 'The accepted scientific file is unavailable or ineligible for download.',
-        'SCIENTIFIC_DOWNLOAD_LIMIT': 'The accepted scientific file exceeds the 1 GiB download limit.',
+        'SCIENTIFIC_DOWNLOAD_LIMIT': 'The accepted scientific file exceeds the configured download limit.',
         'SCIENTIFIC_DOWNLOAD_BUSY': 'Scientific download capacity is unavailable. Try again shortly.',
         'MODEL_DOWNLOAD_LIMIT': 'The accepted model checkpoint exceeds the 5 GiB download limit.',
     }
@@ -434,7 +441,7 @@ def _private_metadata(item, *, recurse=True):
         return recurse and any(_private_metadata(child) for child in item.values())
     if h5py.check_string_dtype(item.dtype) is not None:
         selections = [()] if item.ndim == 0 else (
-            slice(i, min(i+4096, len(item))) for i in range(0, len(item), 4096))
+            slice(i, min(i+16, len(item))) for i in range(0, len(item), 16))
         return any(private(text) for selection in selections for text in strings(item, selection))
     if item.dtype.names:
         for field in item.dtype.names:
@@ -507,8 +514,8 @@ def _copy(source, destination, omitted=(), _references=None):
         if item.shape is None: continue  # AnnData's empty/null scalar encoding.
         if item.shape == (): target[()] = item[()]
         elif h5py.check_string_dtype(item.dtype) is not None:
-            for left in range(0, len(item), 4096):
-                right = min(left + 4096, len(item))
+            for left in range(0, len(item), 16):
+                right = min(left + 16, len(item))
                 target[left:right] = _string_block(item, left, right)
         else:
             from itertools import product
@@ -591,7 +598,9 @@ class MatrixDownloadPreparer:
     eligibility stays separate; copy, hashing, reservation and cleanup are reused.
     """
 
-    def __init__(self):
+    def __init__(self, policy=None):
+        from .delivery_policy import DeliveryPolicy
+        self.policy = policy or DeliveryPolicy.configured(source_default=MAX_MATRIX_BYTES)
         self._lock = Lock()
         self._active = 0
         self._reserved_bytes = 0
@@ -603,7 +612,7 @@ class MatrixDownloadPreparer:
 
     def _reserve(self, size):
         with self._lock:
-            if (self._active >= MAX_MATRIX_TRANSFERS
+            if (self._active >= self.policy.transfers or size + self._reserved_bytes > self.policy.temporary_bytes
                     or shutil.disk_usage(tempfile.gettempdir()).free
                     < size + self._reserved_bytes + _DISK_MARGIN_BYTES):
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_BUSY')
@@ -618,11 +627,17 @@ class MatrixDownloadPreparer:
     def _reserve_growth(self, size):
         """Admit measured growth of an already held snapshot, without a new slot."""
         with self._lock:
-            if shutil.disk_usage(tempfile.gettempdir()).free < size + self._reserved_bytes + _DISK_MARGIN_BYTES:
+            if (size + self._reserved_bytes > self.policy.temporary_bytes
+                    or shutil.disk_usage(tempfile.gettempdir()).free < size + self._reserved_bytes + _DISK_MARGIN_BYTES):
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_BUSY')
             self._reserved_bytes += size
 
     def prepare(self, artifact):
+        from .delivery_policy import scope
+        with scope(self.policy):
+            return self._prepare(artifact)
+
+    def _prepare(self, artifact):
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
@@ -685,26 +700,28 @@ class MatrixDownloadPreparer:
         size = artifact.size_bytes
         if type(size) is not int or size < 1:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
-        limit = (model_delivery.MAX_METADATA_BYTES if model_metadata else model_delivery.MAX_CHECKPOINT_BYTES) if model else MAX_MATRIX_BYTES
+        limit = (model_delivery.MAX_METADATA_BYTES if model_metadata else model_delivery.MAX_CHECKPOINT_BYTES) if model else self.policy.source_bytes
         if size > limit and model and not model_metadata:
             raise MatrixDeliveryError('MODEL_DOWNLOAD_LIMIT')
         if size > limit:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_LIMIT')
+        if not model and not export and not sequence and not native_projection and size > self.policy.delivered_bytes:
+            raise MatrixDeliveryError(prefix + '_DOWNLOAD_LIMIT')
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
-        delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, MAX_MATRIX_BYTES)
+        delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, self.policy.delivered_bytes)
         original = artifact.manifest['original_source'] if integrated else None
         original_size = 0 if original is None else original['size_bytes']
         if integrated:
             if type(original_size) is not int or original_size < 1:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
-            if original_size > MAX_MATRIX_BYTES:
+            if original_size > self.policy.source_bytes:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
             delivered_limit = min(original_size + size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES,
-                                  MAX_MATRIX_BYTES)
+                                  self.policy.delivered_bytes)
         extra_sources = artifact.manifest['sources'] if composed else ()
         if (composed and (not 1 <= len(extra_sources) <= 32 or any(
-                type(s['size_bytes']) is not int or not 0 < s['size_bytes'] <= MAX_MATRIX_BYTES
+                type(s['size_bytes']) is not int or not 0 < s['size_bytes'] <= self.policy.source_bytes
                 or type(s['sha256']) is not str or re.fullmatch('[0-9a-f]{64}', s['sha256']) is None
                 for s in extra_sources))):
             raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
@@ -712,12 +729,12 @@ class MatrixDownloadPreparer:
         if composed:
             components = artifact.manifest['components']
             if (not 1 <= len(components) <= 32 or any(type(c['logical_bytes']) is not int
-                    or not 0 <= c['logical_bytes'] <= MAX_MATRIX_BYTES for c in components)):
+                    or not 0 <= c['logical_bytes'] <= self.policy.logical_bytes for c in components)):
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
             delivered_limit = (size + sum(c['logical_bytes'] for c in components)
                 + analysis_delivery.COMPOSED_METADATA_BYTES
                 + len(components) * analysis_delivery.COMPOSED_FIELD_OVERHEAD_BYTES)
-            if delivered_limit > MAX_MATRIX_BYTES:
+            if delivered_limit > self.policy.delivered_bytes:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
         # A derivative temporarily owns both source and destination snapshots.
         # Reserve both under the same transfer slot and disk admission policy.
@@ -786,9 +803,9 @@ class MatrixDownloadPreparer:
                 snapshot, derivative = derivative, None
             elif sequence or native_projection:
                 data = (native if native is not None else sequence_delivery).prepare(snapshot, artifact.role)
+                if len(data) > self.policy.delivered_bytes:
+                    raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
                 if native_projection:
-                    if len(data) > MAX_MATRIX_BYTES:
-                        raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
                     # The source snapshot is overwritten, not duplicated. Admit
                     # only actual growth before writing, including short-label
                     # redaction and row-dependent CSV expansion. Keep its slot.

@@ -51,8 +51,8 @@ The native function names do not turn insertion counts into independent fragment
 normalization/group behavior. In this release, `norm=TRUE` sums the per-cell
 fractions before optional group averaging; do not assume the returned vector
 sums to one. Group labels come from an exact selected column, never biological
-inference. `norm=TRUE` uses a native dense denominator, so the adapter rejects
-more than 16 million denominator elements without changing the parameter.
+inference. `norm=TRUE` uses a native dense denominator. Its allocation runs within
+the shared kernel execution budget; Agent does not change the parameter.
 
 Variability uses the exact source motif and cell order. Native objects are
 constructed locally from the stored assays and names; no uploaded R object or
@@ -69,10 +69,12 @@ backgrounds or deviations are recomputed by this invocation.
 
 The existing isolated chromVAR runtime and `AGENT_CHROMVAR_RSCRIPT` override are
 reused. No environment or resource installation is performed by the runner.
-Native calls run in a bounded process group with cooperative cancellation and a
-two-hour wall-time limit. Matrix exchange stays sparse and uses the existing
-2 GiB stored-matrix bound; H5AD storage safety and exact integer-to-double
-conversion remain. Bootstrap resamples have a 10,000 execution cap. Native validity constraints
+Python preparation and native R calls run in the shared kernel-controlled task
+with cooperative cancellation and a configurable whole-task timeout (two hours
+by default). Matrix exchange stays sparse; HDF5 storage safety and exact
+integer-to-double conversion remain. The former 2 GiB matrix-allocation bound is
+removed. Bootstrap resamples are passed unchanged; the shared task memory/timeout
+budgets govern execution. Native validity constraints
 remain with R. An explicit seed controls R/BiocParallel; execution uses SerialParam.
 Omitting the seed does not promise repeatability.
 
@@ -393,7 +395,7 @@ R seed. Exact ordered cell/region identities accompany the sparse matrix and
 coordinates. Requested summary fields come from actual `obs`. Native Cicero
 owns k, normalization, numerical validity, region-name parsing and aggregation.
 No embedding, genome length or annotation is invented. Its native dense
-aggregation and membership allocations are limited to 16 million elements.
+aggregation and membership allocations are governed by the shared kernel task budget.
 
 The resulting `cds.zip` contains only `exprs.mtx` and `object.json`, representing
 actual exprs, pData, fData and dense/sparse storage for the supported Cicero calls.
@@ -425,7 +427,7 @@ The data-only exchange uses `format="cicero-cds-exchange.v1"` and
 factor `levels`/`ordered`). Numeric strings retain R's nonfinite values and
 17-digit precision. `exprs.mtx` is coordinate real/integer MatrixMarket with
 regions as rows and observations as columns; its dimensions must match those
-axes. Dense native storage is reconstructed only within the allocation bound.
+axes. Dense native storage is reconstructed inside the shared kernel task boundary.
 Source identities belong to the pinned publication, not invented object fields.
 The existing upload-role owner exposes `run_cicero_cds.dataset`,
 `run_cicero_cds.genomic_coords` and `run_scanpy.dataset`; no separate intake is
@@ -528,7 +530,7 @@ retain supplied measurement semantics; neither totals nor deviation comparisons
 become independent-molecule counts or replicate-level accessibility inference.
 Signac `corSparse` receives features-by-cells and omits Y; a second matrix is not
 silently created. Its dense native values use lossless sparse storage in H5AD.
-Sample similarity allocations are bounded to 16 million elements.
+Sample similarity allocations use the shared kernel task budget; Agent imposes no element-count limit.
 
 MACS3 `cmbreps` currently takes exactly two tracks through the existing dataset and
 control ports; `fisher` expects native -log10 p-values. `pileup` and `filterdup`
@@ -615,8 +617,7 @@ This is native likelihood-ratio signal comparison, not replicate-aware edgeR DA.
 
 Background sampling forwards `niterations`, `w`, `bs` and an optional explicit R
 seed. No GC estimate or bias is invented. Results reference the exact ordered
-`features.tsv`; indices remain 1-based and may repeat. The result has a 16-million
-element execution bound. The native package retains numerical validation/defaults.
+`features.tsv`; indices remain 1-based and may repeat. Execution uses the shared kernel task budget. The native package retains numerical validation/defaults.
 `getSampleDepths` remains unavailable: its real BAM/BED file-list, pairing and
 read-group semantics are not supplied by this count-matrix adapter.
 
@@ -626,7 +627,7 @@ No feature alignment, automatic binarization or Seurat object is fabricated.
 Jaccard receives cells × features; corSparse receives features × cells and native
 Y. `cov=true` selects native covariance. Rectangular values and both cell axes are
 stored in `uns.Signac_pairwise`; single-source corSparse remains
-`obsp.Signac_corSparse`. Pairwise output is bounded to 16 million elements.
+`obsp.Signac_corSparse`. Pairwise computation runs within the shared kernel task budget.
 
 A scientific task may compose multiple native calls. When no function is fixed by
 the user, the existing Planner may select a reviewed `function_name` from Registry.
@@ -726,3 +727,18 @@ scientific object/enrichment tools and their source/parameter contracts. The fix
 Interpreter schema stays exactly 32,340 bytes; no alternate protocol, missing
 capabilities or provider-specific workaround is introduced. The budget is not an
 API limit or a claim about provider latency.
+
+
+## Shared native execution resources
+
+The [native execution guide](native-execution.md) owns current operator memory,
+timeout, cancellation and concurrency policy. The current MatrixPackage,
+chromVAR and Cicero CDS adapters isolate Python preparation and native Python/R
+children together. The shared command runner uses the same boundary for other
+repository-controlled native commands. Historical publications retain exact
+profiles; execution-resource policy is not a scientific parameter or a new
+publication protocol. Arbitrary NNZ, cell/feature, quadratic element-count and
+iteration/worker-count proxies have been removed from these affected adapters.
+Native numerical validity, reviewed function/argument ports and defaults remain
+owned by the native packages. This does not qualify all in-process Python tools
+for hard memory isolation or add any new scientific package integration.

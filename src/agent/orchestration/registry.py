@@ -379,6 +379,7 @@ class SemanticConsumerPortSpec:
     request_sources: tuple[SemanticRequestSourceSpec, ...] = ()
     accepted_upstream_types: tuple[str, ...] = ()
     required_lineage: SemanticLineage | None = None
+    upstream_member_names: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "consumer port name", 128)
@@ -401,6 +402,17 @@ class SemanticConsumerPortSpec:
             raise TypeError("Accepted upstream semantic types must be a tuple.")
         for semantic_type in self.accepted_upstream_types:
             _planning_text(semantic_type, "accepted upstream type", 128)
+        if (type(self.upstream_member_names) is not tuple
+                or any(type(row) is not tuple or len(row) != 3 for row in self.upstream_member_names)):
+            raise TypeError('Upstream member mappings must be triples in a tuple.')
+        keys = []
+        for semantic_type, local, upstream in self.upstream_member_names:
+            if semantic_type not in self.accepted_upstream_types or local not in {m.name for m in self.members}:
+                raise ValueError('Upstream member mapping must belong to the declared port.')
+            _planning_text(upstream, 'upstream member', 128)
+            keys.append((semantic_type, local))
+        if len(keys) != len(set(keys)):
+            raise ValueError('Repeated upstream member mapping.')
         if self.required_lineage is not None and not isinstance(
             self.required_lineage, SemanticLineage
         ):
@@ -765,6 +777,7 @@ class ToolSpec:
     # request inputs. This supplies questions, never execution/validity authority.
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
     native_functions: NativeFunctionCatalog | None = None
+    application_inputs: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -782,6 +795,8 @@ class ToolSpec:
             raise TypeError('Scientific delivery requires reviewed metadata and scientific authority.')
         required = dict(self.required_arguments)
         optional = dict(self.optional_arguments)
+        if not isinstance(self.application_inputs, frozenset) or not self.application_inputs <= required.keys() | optional.keys():
+            raise ValueError('Application inputs must be registered execution arguments.')
         if self.native_functions is not None:
             catalog = self.native_functions
             function = required.get('function_name')
@@ -1076,7 +1091,8 @@ def _validate_semantic_registry(specs: tuple[ToolSpec, ...]) -> None:
                         member.name: member.field_name
                         for member in producer.members
                     }
-                    missing = set(consumer_members).difference(producer_members)
+                    names = {local: upstream for kind, local, upstream in consumer.upstream_member_names if kind == semantic_type}
+                    missing = {names.get(name, name) for name in consumer_members}.difference(producer_members)
                     if missing:
                         raise ValueError(
                             f"Semantic type {semantic_type!r} does not provide "
@@ -1084,7 +1100,7 @@ def _validate_semantic_registry(specs: tuple[ToolSpec, ...]) -> None:
                             f"{consumer_spec.name}.{consumer.name}."
                         )
                     for logical_name, argument_name in consumer_members.items():
-                        result_name = producer_members[logical_name]
+                        result_name = producer_members[names.get(logical_name, logical_name)]
                         argument = consumer_spec.required_arguments.get(
                             argument_name,
                             consumer_spec.optional_arguments.get(argument_name),
@@ -1204,7 +1220,14 @@ class ToolRegistry:
         attempt: int | None = None,
     ) -> AgentError:
         spec = self.get(name)
-        classification = spec.exception_classifier(exception)
+        from agent.tools._native_process import NativeExecutionError
+        if isinstance(exception, NativeExecutionError):
+            classification = ErrorClassification(
+                ErrorCategory.ENVIRONMENT_ERROR if exception.code == 'NATIVE_EXECUTION_UNAVAILABLE'
+                else ErrorCategory.TOOL_EXECUTION_ERROR if exception.code == 'NATIVE_EXECUTION_FAILED'
+                else ErrorCategory.RESOURCE_ERROR, exception.code)
+        else:
+            classification = spec.exception_classifier(exception)
         retryable = classification.code in spec.retryable_error_codes
         error = classified_agent_error(
             category=classification.category,

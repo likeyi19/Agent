@@ -43,13 +43,13 @@ NATIVE_ARGUMENTS = (
     ('return_agg_info', 'make_cicero_cds optional original-cell to aggregate mapping; omitted default false.'),
     ('silent', 'Native diagnostic suppression.'),
     ('window', 'Genomic window size, native default 500000.'),
-    ('sample_num', 'Native sampled genomic windows; execution cap 1000.'),
-    ('maxit', 'Distance parameter native optimization iterations; cap 1000.'),
+    ('sample_num', 'Native sampled genomic windows.'),
+    ('maxit', 'Distance parameter native optimization iterations.'),
     ('s', 'Native distance exponent, default 0.75.'),
     ('distance_constraint', 'Native minimum distance used in parameter estimation.'),
     ('distance_parameter_convergence', 'Native convergence threshold.'),
-    ('max_elements', 'Native maximum regions per genomic window; execution cap 1000.'),
-    ('max_sample_windows', 'Native maximum sampled windows; execution cap 1000.'),
+    ('max_elements', 'Native maximum regions per genomic window.'),
+    ('max_sample_windows', 'Native maximum sampled windows.'),
 )
 FACT_FIELDS = ('function_name', 'n_observations', 'n_regions', 'parameters', 'source_identity',
     'software_versions', 'native_output_type', 'limitations')
@@ -74,9 +74,6 @@ LIMITATIONS = ('Native Cicero invocation, not biological validation. Aggregates 
 def native_arguments(args):
     # Reuse the existing ordinary JSON and fixed-function boundary.
     kw = native_kwargs(FUNCTIONS, args)
-    for key in ('sample_num', 'maxit', 'max_elements', 'max_sample_windows'):
-        if type(kw.get(key)) in (int, float) and kw[key] > 1000:
-            raise ValueError(key + ' exceeds the 1000 native execution bound')
     seed = args.get('seed')
     if seed is not None and (type(seed) is not int or not 0 <= seed <= 2147483647):
         raise ValueError('R seed must fit its native integer representation')
@@ -94,29 +91,37 @@ def unpack(source, target):
     with zipfile.ZipFile(source) as bundle:
         if sorted(bundle.namelist()) != sorted(MEMBERS):
             raise ValueError('Cicero exchange requires exactly exprs.mtx and object.json')
-        if sum(i.file_size for i in bundle.infolist()) > peak_h5ad.MAX_LOGICAL_BYTES:
-            raise ValueError('Cicero exchange exceeds 2 GiB decoded bound')
+        from agent.tools._native_process import NativeExecutionError
+        try:
+            budget = int(os.environ.get('AGENT_NATIVE_ARCHIVE_BYTES', str(2 * 1024**3)))
+            if budget <= 0:
+                raise ValueError()
+        except ValueError:
+            raise NativeExecutionError('NATIVE_EXECUTION_UNAVAILABLE', 'Configure a positive native archive disk budget') from None
+        if sum(i.file_size for i in bundle.infolist()) > budget:
+            raise NativeExecutionError('NATIVE_TEMPORARY_LIMIT', 'Archive expansion exceeds the operator temporary-storage budget')
         for name in MEMBERS:
             with bundle.open(name) as inp, (target / name).open('wb') as out:
                 shutil.copyfileobj(inp, out)
-    if (target / 'object.json').stat().st_size > 64 * 1024**2:
-        raise ValueError('Cicero object metadata exceeds 64 MiB')
-    obj = read(target / 'object.json')
+    # This member contains scientific axes/data, not a control-plane request.
+    # Keep the existing strict JSON parser; kernel memory and archive disk
+    # budgets govern its decoding instead of an axis-size proxy.
+    from .sequence_prediction import io
+    path = target / 'object.json'
+    obj = io.read_json(path, limit=path.stat().st_size)
     if obj.get('format') != 'cicero-cds-exchange.v1' or obj.get('storage') not in ('dense', 'sparse'):
         raise ValueError('Unsupported Cicero exchange format')
     observations, regions = obj['observations']['ids'], obj['regions']['ids']
     if not isinstance(observations, list) or not isinstance(regions, list):
         raise ValueError('Cicero axes must be explicit arrays')
-    if len(observations) * len(regions) > 16_000_000:
-        raise ValueError('Native CDS matrix exceeds 16000000-element execution bound')
     with (target / 'exprs.mtx').open() as stream:
         if stream.readline().strip().lower() not in ('%%matrixmarket matrix coordinate real general', '%%matrixmarket matrix coordinate integer general'):
             raise ValueError('Cicero exchange uses sparse real/integer MatrixMarket coordinates')
         for line in stream:
             if not line.startswith('%'):
                 rows, cols, nnz = map(int, line.split())
-                if (rows, cols) != (len(regions), len(observations)) or not 0 <= nnz <= 16_000_000:
-                    raise ValueError('Cicero matrix dimensions/storage differ from bounded axes')
+                if (rows, cols) != (len(regions), len(observations)) or nnz < 0:
+                    raise ValueError('Cicero matrix dimensions/storage differ from explicit axes')
                 break
         else:
             raise ValueError('Missing Cicero MatrixMarket dimensions')
@@ -133,9 +138,6 @@ def prepare(args, stage):
     cells = _strict_ids(a.obs_names, 'cell'); regions = _strict_ids(a.var_names, 'region')
     if any(any(c in s for c in '\t\r\n') for s in cells + regions):
         raise ValueError('Cicero exchange identifiers cannot contain TSV delimiters')
-    # Native aggregation materializes aggregate x region and cell membership arrays.
-    if a.n_obs * (a.n_vars + a.n_obs) > 16_000_000:
-        raise ValueError('Native Cicero dense aggregation exceeds 16000000 elements')
     slot = args.get('count_slot', 'X')
     x = a.X if slot == 'X' else a.layers[slot.removeprefix('layers/')]
     x = peak_h5ad.read_native_matrix(x)
@@ -160,6 +162,12 @@ def prepare(args, stage):
 
 
 def execute(values, execution_identity=None):
+    from agent.tools._native_process import call
+    return call('cicero_cds', dict(values=values, execution_identity=execution_identity),
+                lambda: _execute(values, execution_identity))
+
+
+def _execute(values, execution_identity=None):
     args = arguments(values); kw = native_arguments(args)
     missing = parameter_prerequisites(args)
     if missing:
@@ -177,8 +185,6 @@ def execute(values, execution_identity=None):
     with tempfile.TemporaryDirectory(prefix='.cicero-cds-', dir=root) as temp:
         stage = Path(temp); prepare(args, stage)
         if args.get('genomic_coords_path'):
-            if Path(args['genomic_coords_path']).stat().st_size > 16 * 1024**2:
-                raise ValueError('Chromosome lengths exceed 16 MiB execution bound')
             shutil.copyfile(args['genomic_coords_path'], stage / 'genome.tsv')
         sha = write(stage / 'request.json', dict(stage=str(stage), function_name=args['function_name'], kwargs=kw, seed=args.get('seed')))
         code = run([str(executable), '--vanilla', str(script), str(stage / 'request.json')], stage / 'native.log', environment=r_environment())

@@ -1,5 +1,48 @@
 # Scientific results and evaluation
 
+## Accepted native handoff and delivery
+
+The SRV-2C replacement derives a transient cell-result view from accepted RunStore
+records, publication contracts, native function identity, actual written slots and
+exact dependencies. Native Leiden groups and native 2-D UMAP coordinates can be
+reused across turns. Custom supported keys retain their names; independent returns
+and inherited fields are not newly computed slots. A loose H5AD with similarly
+named fields has no accepted computational authority. Dedicated analysis and
+historical figure identities retain their meanings.
+
+The existing renderer can display native Leiden UMAP and later compatible
+annotation colors using the same exact coordinates. Source ancestry and ordered
+cells must agree. Composition and marker/RP panels use actual annotation evidence;
+unassigned labels remain missing categories. Rendering creates neither a synthetic
+analysis result nor another scientific Run.
+
+`MatrixDownloadPreparer` owns finite source, destination, decoded-storage,
+decoded-chunk, temporary-storage and concurrent-transfer limits. Defaults are
+1 GiB source/destination, 2 GiB decoded storage, 16 MiB decoded chunks, 8 GiB
+aggregate temporary reservation and two transfers. Operators may configure
+`AGENT_DELIVERY_SOURCE_BYTES`, `AGENT_DELIVERY_DELIVERED_BYTES`,
+`AGENT_DELIVERY_LOGICAL_BYTES`, `AGENT_DELIVERY_CHUNK_BYTES`,
+`AGENT_DELIVERY_TEMPORARY_BYTES` and `AGENT_DELIVERY_TRANSFERS` with finite positive
+integers. Checkpoint-specific limits remain separate. Configuration does not alter
+scientific admission or annotation capacity.
+
+The same private snapshot, streaming, privacy export and checksum owners serve
+native matrices and other supported scientific exports. Both source and delivered
+checksums remain explicit; a privacy export may change encoded bytes while
+preserving exact scientific values and axes. Capacity is held until the transfer
+closes and released on failure. SRV-2C exercised the accepted 1,126,032,034-byte
+native H5AD using a 2 GiB source/destination policy, with exact count/axis/coordinate
+comparison. This is local engineering evidence, not a new Firefox acceptance.
+
+The [implementation report](../../../agent-data/acceptance/scientific-results/srv-2c/implementation-2026-11-07/REPORT.md)
+records the original handoff acceptance. The subsequent
+[execution-safety report](../../../agent-data/acceptance/scientific-results/srv-2c/execution-safety-2026-11-07/REPORT.md)
+qualifies aggregate Python/R containment and supersedes that earlier blocker.
+The [engineering closeout](../../../agent-data/acceptance/scientific-results/srv-2c/closeout-2026-11-08/REPORT.md)
+records final review, commit/push and the conditions for a separately authorized
+Gate 1 continuation. Containment does not guarantee full-data annotation success.
+
+
 SRV shifts development from broad tool integration to useful, interpretable,
 reproducible research workflows. The Agent paper should evaluate workflow
 reliability, researcher effort and scientific utility, while attributing native

@@ -76,19 +76,28 @@ def projections(snapshot):
             # Only already accepted coordinates in this run. Later explicit
             # cross-run recoloring remains with the Interaction overlay owner.
             for coordinate in artifacts:
-                if coordinate['artifact_kind']!='cell_umap_h5ad':continue
+                capability = snapshot.cell_results.get(coordinate['producing_step_id'])
+                native = (coordinate['artifact_kind'] == 'native_matrix_h5ad' and capability is not None
+                          and capability['coordinates'])
+                if coordinate['artifact_kind']!='cell_umap_h5ad' and not native:continue
                 cp=_pin(coordinate)
                 from agent.tools.analysis.categorical import coordinates
-                ids,xy=coordinates(cp,_sha(coordinate))
-                from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY
-                with h5py.File(cp,'r') as handle:metadata=read_elem(handle['uns'][PROVENANCE_KEY])
-                if metadata.get('embedding',{}).get('source_sha256')!=data['source_sha256'] or list(ids)!=data['cells']:
+                ids,xy=coordinates(cp,_sha(coordinate), capability['coordinates'] if native else 'X_umap')
+                if native:
+                    source_identity = capability['source_sha256']
+                else:
+                    from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY
+                    with h5py.File(cp,'r') as handle:metadata=read_elem(handle['uns'][PROVENANCE_KEY])
+                    source_identity = metadata.get('embedding',{}).get('source_sha256')
+                if source_identity!=data['source_sha256'] or list(ids)!=data['cells']:
                     continue  # No relationship: do not assume it or refit.
                 value=dict(cell_ids=list(ids),coordinates=xy.tolist(),labels=data['labels'])
                 suffix=coordinate['producing_step_id']
                 from dataclasses import replace
                 projection=_projection(sid,'annotation_umap',sources+[coordinate],value,
                     dict(coordinate_reused=True,correspondence='exact_original_source_and_ordered_cells',n_cells=len(ids)))
+                if native:
+                    projection=replace(projection,presentation=dict(projection.presentation,projection_version=3))
                 result.append(replace(projection,figure_id=projection.figure_id+'-'+suffix,filename=projection.figure_id+'-'+suffix+'.png'))
         else:
             manifest,sha=comparison.load(path,_sha(source))
@@ -115,7 +124,7 @@ def projections(snapshot):
 
 def _palette(labels):
     categories=sorted({x for x in labels if x is not None})
-    palette=dict(zip(categories,v._categorical_palette(len(categories))))
+    palette=dict(zip(categories,v._categorical_palette(len(categories)))) if categories else {}
     palette[None]='#bdbdbd'
     return palette
 

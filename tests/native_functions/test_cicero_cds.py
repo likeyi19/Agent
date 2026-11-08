@@ -68,6 +68,7 @@ def test_no_arbitrary_archive_members_or_object_deserialization(tmp_path,members
 
 
 def test_native_values_not_prevalidated_and_objects_are_protected():
+    assert owner.native_arguments(dict(function_name='estimate_distance_parameter',kwargs={'maxit':1001}))=={'maxit':1001}
     assert owner.native_arguments(dict(function_name='make_cicero_cds',kwargs={'k':-2}))=={'k':-2}
     for kw in ({'cds':'anything'},{'reduced_coordinates':'/private/file'},{'source':'system()'}):
         with pytest.raises(ValueError):owner.native_arguments(dict(function_name='make_cicero_cds',kwargs=kw))

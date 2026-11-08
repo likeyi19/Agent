@@ -809,6 +809,11 @@ def method_facts(path):
 
 def source_bound_cluster_rows(cell_ids, analysis_path, analysis_sha256, source_sha256):
     """Project fixed labels only for the exact original file and ordered cells."""
+    from .cell_result import native_group_rows
+    from agent.tools.data.authority_context import current
+    native = native_group_rows(current(), analysis_path, analysis_sha256, source_sha256, cell_ids)
+    if native is not None:
+        return native
     from .marker_annotation import checked_file
     grouped = _read_analysis(checked_file(analysis_path, analysis_sha256))
     ids, _, _ = _validate_neighbors_artifact(grouped, expected_stages=frozenset({'clustering'}))

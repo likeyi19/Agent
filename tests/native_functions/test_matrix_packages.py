@@ -67,7 +67,6 @@ def test_layer_requires_own_measurement_and_conflicts_fail(source, tmp_path):
     (owner.SNAPATAC2, 'tl.spectral', {'features': '/etc/passwd'}),
     (owner.SNAPATAC2, 'pp.select_features', {'blacklist': '/etc/passwd'}),
     (owner.SIGNAC, 'RunTFIDF', {'idf': {'code': 'system()'}}),
-    (owner.EPISCANPY, 'pp.lsi', {'n_components': 513}),
 ])
 def test_dispatch_has_no_unbound_objects_code_or_files(source, package, function, kwargs):
     with pytest.raises(ValueError):
@@ -76,6 +75,7 @@ def test_dispatch_has_no_unbound_objects_code_or_files(source, package, function
 
 
 def test_explicit_values_and_omitted_defaults_are_not_repaired():
+    assert owner.EPISCANPY.native_arguments({'function_name': 'pp.lsi', 'kwargs': {'n_components': 513}}) == {'n_components': 513}
     assert owner.SIGNAC.native_arguments({'function_name': 'RunTFIDF', 'kwargs': {'method': -7}}) == {'method': -7}
     assert owner.EPISCANPY.native_arguments({'function_name': 'pp.tfidf'}) == {}
     invalid = {'norm': ['native', {'must': 'reject'}]}

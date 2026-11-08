@@ -11,10 +11,13 @@ from .external_marker_annotation import group_rows
 
 
 def observe(path, sha256):
+    from agent.tools._native_process import call
+    return call('annotation_observe', dict(path=str(path), sha256=sha256), lambda: _observe(path, sha256))
+
+
+def _observe(path, sha256):
     path = science.checked_file(path, sha256)
-    if path.stat().st_size > peak_h5ad.MAX_BYTES:
-        raise ValueError('Peak H5AD exceeds its supported size bound')
-    peak_h5ad.inspect(path)
+    peak_h5ad.inspect(path, max_logical_bytes=None)
     a = ad.read_h5ad(path, backed='r')
     try:
         declarations = {}
@@ -121,6 +124,11 @@ def resource_specification(base, declared, members):
 
 
 def qualify_resources(spec):
+    from agent.tools._native_process import call
+    return call('annotation_resources', dict(spec=spec), lambda: _qualify_resources(spec))
+
+
+def _qualify_resources(spec):
     """Admission of user resource bytes under the existing native MAESTRO owner.
 
     This validates the supported refgenes table, signed-list inputs and their
@@ -134,8 +142,6 @@ def qualify_resources(spec):
     signature.check(spec['species'], spec['assembly'], 'candidate-gene-list.v1', 'uppercase')
     if gene.gene_namespace != signature.gene_namespace or gene.gene_namespace != 'gene_symbol' or signature.context != spec['context']:
         raise ValueError('Reference gene namespaces or signature biological context do not match.')
-    if any(Path(r.path).stat().st_size > 64 * 1024**2 for r in (gene, signature)):
-        raise ValueError('Annotation resource exceeds the 64 MiB per-component admission bound.')
     genes = set()
     transcript_count = 0
     columns = 'bin name chrom strand txStart txEnd cdsStart cdsEnd exonCount exonStarts exonEnds score name2 cdsStartStat cdsEndStat exonFrames'.split()
@@ -143,9 +149,9 @@ def qualify_resources(spec):
         rows = csv.DictReader(stream, delimiter='\t')
         if rows.fieldnames != columns:
             raise ValueError('Gene annotation requires the native MAESTRO refgenes transcript/exon columns.')
-        for count, row in enumerate(rows, 1):
-            if count > 200000 or None in row or None in row.values():
-                raise ValueError('Malformed or oversized refgenes table.')
+        for row in rows:
+            if None in row or None in row.values():
+                raise ValueError('Malformed refgenes table.')
             science.identifier(row['name']); science.identifier(row['name2'])
             start, end, coding_start, coding_end, n = (int(row[k]) for k in ('txStart', 'txEnd', 'cdsStart', 'cdsEnd', 'exonCount'))
             starts = [int(v) for v in row['exonStarts'].rstrip(',').split(',')]

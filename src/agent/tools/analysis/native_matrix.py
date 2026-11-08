@@ -95,7 +95,7 @@ def declarations(handle, args):
 
 def prepare_input(args, stage):
     """AnnData owns encoding; only task-local objects can be mutated by packages."""
-    peak_h5ad.inspect(args['input_path'], require_matrix=False)
+    peak_h5ad.inspect(args['input_path'], require_matrix=False, max_logical_bytes=None)
     with h5py.File(args['input_path'], 'r') as handle:
         effective = declarations(handle, args)
     check_declarations(args['input_path'], effective)
@@ -194,10 +194,6 @@ class MatrixPackage:
             raise ValueError('Bind a spectral feature mask through the input AnnData var field')
         if args['function_name'] == 'tl.umap' and any(isinstance(kwargs.get(k), (list, dict)) for k in ('init', 'init_pos')):
             raise ValueError('UMAP initialization arrays are scientific objects, not ordinary kwargs')
-        # Bounds govern execution cost, not the native scientific validity range.
-        for key, cap in (('n_components', 512), ('n_comps', 512), ('n', 512), ('n_iter', 1000), ('n_iterations', 1000), ('n_epochs', 10000), ('maxiter', 10000), ('n_dcs', 512), ('n_pcs', 512), ('max_iter', 10), ('n_jobs', 16), ('num_threads', 32)):
-            if type(kwargs.get(key)) in (int, float) and kwargs[key] > cap:
-                raise ValueError(f'{key} exceeds the native execution resource bound {cap}')
         for key in ('layer_tfidf_key', 'tf_idf_layer', 'features', 'use_rep', 'key_added'):
             value = kwargs.get(key)
             if isinstance(value, str) and ('/' in value or '\\' in value or value in ('.', '..')):
@@ -288,6 +284,11 @@ class MatrixPackage:
         return receipt
 
     def execute(self, values, execution_identity=None):
+        from agent.tools._native_process import call
+        return call('matrix', dict(package=self.package, values=values, execution_identity=execution_identity),
+                    lambda: self._execute(values, execution_identity))
+
+    def _execute(self, values, execution_identity=None):
         args = arguments(values)
         if self.package == 'snapatac2':
             from . import snapatac_raw as raw
@@ -318,16 +319,10 @@ class MatrixPackage:
                     **({'count_slot': args['second_count_slot']} if args.get('second_count_slot') is not None else {})), other_stage)
                 if features != other.var_names.tolist():
                     raise ValueError('Two-matrix comparison requires identical ordered feature identities; no implicit alignment')
-                if matrix.n_obs * other.n_obs > 16_000_000:
-                    raise ValueError('Native pairwise result exceeds 16000000 elements')
                 peak_h5ad.native_double_values(other.X.data if sparse.issparse(other.X) else np.asarray(other.X))
                 mmwrite(stage/'second.mtx', sparse.csc_matrix(other.X.T))
                 other.obs.to_csv(stage/'second-cells.tsv', sep='\t', columns=[], index_label='cell_id', quoting=csv.QUOTE_NONE)
                 effective['second_path'] = args['second_path']
-            if args['function_name'] == 'corSparse' and not second_source and matrix.n_obs**2 > 16_000_000:
-                raise ValueError('Native cell similarity exceeds the 16000000-element execution bound')
-            if args['function_name'] == 'tl.spectral' and kwargs.get('distance_metric', 'cosine') != 'cosine' and matrix.n_obs**2 > 16_000_000:
-                raise ValueError('Quadratic native similarity exceeds the 16000000-element execution bound')
             if args['function_name'] == 'pp.scale' and kwargs.get('zero_center', True):
                 selected = matrix.layers[kwargs['layer']] if kwargs.get('layer') else matrix.obsm[kwargs['obsm']] if kwargs.get('obsm') else matrix.X
                 if sparse.issparse(selected):
@@ -454,7 +449,7 @@ EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     ('early_exaggeration', 'tsne native early exaggeration.'),
     ('learning_rate', 'tsne native learning rate; omitted retains its installed default.'),
     ('use_fast_tsne', 'tsne native implementation choice; no adapter substitution.'),
-    ('n_jobs', 'tsne native worker count; execution cap 16.'),
+    ('n_jobs', 'tsne native worker count.'),
     ('min_dist', 'umap native min_dist; omitted uses installed default.'),
     ('spread', 'umap native spread; omitted uses installed default.'),
     ('n_components', 'Native n_components for the selected function; omitted retains its installed default.'),
@@ -528,7 +523,7 @@ SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
     ('a', 'umap.UMAP native a; omitted uses installed default.'),
     ('b', 'umap.UMAP native b; omitted uses installed default.'),
     ('verbose', 'Native progress verbosity for the selected function.'),
-    ('n_jobs', 'Native parallel jobs for the selected function; execution cap 16.'),
+    ('n_jobs', 'Native parallel jobs for the selected function.'),
     ('method', 'Native method for the selected function; omitted retains its installed default.'),
     ('resolution', 'leiden native clustering resolution.'),
     ('objective_function', 'leiden modularity or CPM objective.'),
@@ -538,14 +533,14 @@ SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
     ('n_features', 'select_features maximum selected features; no matrix subsetting.'),
     ('filter_lower_quantile', 'select_features lower count quantile exclusion.'),
     ('filter_upper_quantile', 'select_features upper count quantile exclusion.'),
-    ('max_iter', 'select_features iterations; default 1; execution cap 10.'),
+    ('max_iter', 'select_features iterations; default 1.'),
     ('features', 'Native existing mask field for spectral; explicit feature IDs/indices for diff_test.'),
     ('sample_size', 'spectral native Nystrom sample size or fraction.'),
     ('sample_method', 'spectral native sampling method.'),
     ('distance_metric', 'spectral native similarity choice.'),
     ('weighted_by_sd', 'spectral native eigenvector scaling.'),
     ('chunk_size', 'spectral native processing chunk size.'),
-    ('num_threads', 'spectral native thread count; installed default and execution cap 32.'),
+    ('num_threads', 'spectral native thread count; installed default 32.'),
     ('n_clusters', 'Native n_clusters; omitted retains the installed function default.'),
     ('eps', 'Native eps; omitted retains the installed function default.'),
     ('min_samples', 'Native min_samples; omitted retains the installed function default.'),
@@ -668,7 +663,7 @@ SCANPY = MatrixPackage('scanpy', '1.9.8', 'episcanpy-0.4.0', {
     ('early_exaggeration', 'tsne native early exaggeration.'),
     ('learning_rate', 'tsne native learning rate; omitted retains its installed default.'),
     ('use_fast_tsne', 'tsne native implementation choice; no adapter substitution.'),
-    ('n_jobs', 'tsne native worker count; execution cap 16.'),
+    ('n_jobs', 'tsne native worker count.'),
     ('groups', 'Native groups; omitted retains the installed function default.'),
     ('use_rna_velocity', 'Native use_rna_velocity; omitted retains the installed function default.'),
     ('model', 'Native model; omitted retains the installed function default.'),

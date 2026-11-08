@@ -65,7 +65,7 @@ def test_layers_keep_independent_measurement(source,tmp_path):
     ('computeExpectations',{'object':'/etc/passwd'}),('computeExpectations',{'bootstrap_error':False}),
     ('getFragmentsPerPeak',{'norm':True}),('computeVariability',{'norm':False}),
     ('computeVariability',{'bootstrap_quantiles':{'eval':'system()'}}),
-    ('computeVariability',{'bootstrap_samples':10001}),('eval',{}),
+    ('eval',{}),
     ('computeExpectations',{'norm':float('nan')}),
 ])
 def test_closed_dispatch_and_kwargs(source,function,kwargs):
@@ -74,6 +74,7 @@ def test_closed_dispatch_and_kwargs(source,function,kwargs):
 
 
 def test_no_scientific_parameter_repair(source):
+    assert owner.native_arguments(dict(source,function_name='computeVariability',kwargs={'bootstrap_samples':10001}))=={'bootstrap_samples':10001}
     assert owner.native_arguments(dict(source,kwargs={'norm':'invalid'}))=={'norm':'invalid'}
     assert owner.native_arguments(dict(source,function_name='computeVariability',kwargs={'bootstrap_samples':-1}))=={'bootstrap_samples':-1}
     assert owner.native_arguments(dict(source,kwargs={}))=={}

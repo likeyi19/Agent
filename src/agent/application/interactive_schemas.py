@@ -502,9 +502,11 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_model', 'epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
             ('scientific_model', 'epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
         }
-        from .native_delivery import definitions
+        from .native_delivery import definitions, CELL_MATRIX_LABELS
         for _, spec in definitions():
             reviewed.update((spec.artifact_type, name, value[0]) for name, value in spec.files.items())
+            if 'result.h5ad' in spec.h5ad_roles:
+                reviewed.update((spec.artifact_type, 'result.h5ad', label) for label in CELL_MATRIX_LABELS)
         from .sequence_delivery import FILES as sequence_files
         reviewed.update(('scientific_sequence', name, value[0]) for name,value in sequence_files.items())
         reviewed.update((kind, filename, prefix + ': ' + label)

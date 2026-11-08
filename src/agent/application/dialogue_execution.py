@@ -271,7 +271,9 @@ def _research_intent(interaction, decision):
             delivery.append('visualization')
         coordinate, labels = drawing['coordinates'], drawing['labels']
         if coordinate != 'new' and (coordinate not in by_handle
-                or by_handle[coordinate]['tool'] != 'compute_cell_umap'):
+                or not by_handle[coordinate].get('cell_capabilities', {
+                    'coordinates': 'X_umap' if by_handle[coordinate]['tool'] == 'compute_cell_umap' else None
+                }).get('coordinates')):
             raise IntentError('invalid_reference')
         if labels.startswith('source.'):
             from .result_reading import _captured_source_binding
@@ -1900,10 +1902,10 @@ def prepare_native_task(sessions, interaction, admitted):
     from .native_raw_handoff import bind_plan, ResourcePrerequisite
     from .shared_resources import scientific_resource_scope
     from agent.orchestration.runtime import AgentRuntime
-    from agent.orchestration.active_context import ActivePlanningContext, planning_context
+    from agent.orchestration.active_context import ActivePlanningContext, planning_context, input_preparation
     from agent.orchestration.planner import PlannerError
     from agent.schemas import ErrorCategory, RunMode
-    field = next(f for f in ('fastq','fragments','bam') if admitted.get(f + '_context',{}).get('adapter') == 'native-inputs.v1')
+    field = next((f for f in ('fastq','fragments','bam') if admitted.get(f + '_context',{}).get('adapter') == 'native-inputs.v1'), 'annotation')
     app = sessions._application
     sid = sessions._interaction_session_id
     current = replace(interaction, admitted=admitted)
@@ -1918,19 +1920,33 @@ def prepare_native_task(sessions, interaction, admitted):
     bindings = []
     def bind_native(plan):
         nonlocal question
+        if field == 'annotation':
+            return plan
         try:
             return bind_plan(plan,admitted[field + '_context'],bindings=bindings)
         except ResourcePrerequisite as exc:
             question = (plan,exc.questions)
             raise PlannerError('NATIVE_RESOURCE_REQUIRED',str(exc),category=ErrorCategory.USER_INPUT_ERROR) from exc
     reference_owner = getattr(sessions,'_reference_resources',None)
-    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context):
+    from .annotation_preparation import preparer, AnnotationPrerequisite
+    from agent.orchestration.prior_outputs import prior_output_store
+    prepare_annotation = preparer(sessions, current, admitted)
+    def prepare_inputs(tool, arguments, selected):
+        nonlocal question
+        try:
+            return prepare_annotation(tool, arguments, selected)
+        except AnnotationPrerequisite as exc:
+            question = (None, exc.questions)
+            raise PlannerError('ANNOTATION_INPUT_REQUIRED', str(exc), category=ErrorCategory.USER_INPUT_ERROR) from exc
+    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context), input_preparation(prepare_inputs), prior_output_store(app.run_store):
         planning = AgentRuntime(planner=_AdmittedPlanner(app.runtime.planner,lambda *a:None,bind_native),
             registry=app.registry,executor=app.runtime.executor).run(replace(prepared,mode=RunMode.PLAN_ONLY))
     admitted = dict(admitted,native_planning_trace=[row.to_dict() for row in planning.trace])
     if question is not None:
         plan,questions = question
-        admitted.update(native_resource_plan=plan.to_dict(),choices=list(questions))
+        admitted.update(choices=list(questions))
+        if plan is not None:
+            admitted['native_resource_plan'] = plan.to_dict()
         pending = dict(origin_turn_id=admitted.get('continuation',{}).get('origin_turn_id',interaction.turn_id),
             binding_turn_id=interaction.turn_id,field=field,tool=admitted['tool'],
             resource_context_sha256=digest(admitted['resource_catalog']))
@@ -2056,8 +2072,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             if (any(use not in purposes for s in selections for use in selection_uses(s))
                     or any(sum(purpose in selection_uses(s) for s in selections) != 1 for purpose in purposes)):
                 raise IntentError('planning_failed')
+            from agent.tools.analysis.cell_result import planned_coordinates
             if any('visualization_coordinates' in selection_uses(s)
-                    and next(o['tool'] for o in offered if o['step_id'] == s.step_id) != 'compute_cell_umap'
+                    and not any(p.step_id == s.step_id and planned_coordinates(p.tool_name, p.arguments) for p in plan.steps)
                     for s in selections):
                 raise IntentError('planning_failed')
             retained = ()
@@ -2151,7 +2168,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             def plan(self, request, registry):
                 return _decode_plan(admitted['native_plan'])
         delegate = PreparedPlanner()
-    from agent.orchestration.active_context import planning_context
+    from agent.orchestration.active_context import planning_context, input_preparation
     from agent.orchestration.executor import execution_input_guard
     grouped = (registered and interaction.submission['registered_input'].get('composition')
         == 'scientific-role-selection.v1')
@@ -2159,7 +2176,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         interaction.submission, step, arguments)) if grouped else None
     from .shared_resources import scientific_resource_scope
     reference_owner = getattr(sessions, '_reference_resources', None)
-    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), execution_input_guard(guard), planning_context(context) if context is not None else nullcontext():
+    from .annotation_preparation import preparer
+    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), execution_input_guard(guard), input_preparation(preparer(sessions, interaction, admitted)), planning_context(context) if context is not None else nullcontext():
         execution_app = ResearchAgentApplication(app.workspace_root,
             planner=_AdmittedPlanner(delegate, accept), registry=app.registry, executor=app.runtime.executor)
         result = execution_app.run(request)

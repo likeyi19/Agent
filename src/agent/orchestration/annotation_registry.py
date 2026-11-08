@@ -78,10 +78,13 @@ def annotation_tool_spec():
         ports.append(_semantic_argument_port(name,required=False))
     ports.append(SemanticConsumerPortSpec('clustering',
         (member('analysis','group_analysis_path'), member('sha256','group_analysis_sha256')), False,
-        accepted_upstream_types=('clustered_analysis.v1',)))
+        accepted_upstream_types=('clustered_analysis.v1', 'native_matrix_h5ad.v1'),
+        upstream_member_names=(('native_matrix_h5ad.v1', 'analysis', 'dataset'),)))
     ports.append(_semantic_argument_port('output_dir',required=True))
     ints = {'artifact_schema_version','n_cells','n_groups','assigned_cells','unassigned_cells','ambiguous_cells','groups_omitted'}
     return ToolSpec(name='annotate_scATAC_cell_types',function=public.annotate_scATAC_cell_types,
+        application_inputs=frozenset(('annotation_spec_path', 'annotation_spec_sha256', 'annotation_method',
+            'group_column', 'groups_path', 'groups_sha256', 'group_analysis_path', 'group_analysis_sha256')),
         required_arguments=required,optional_arguments=optional,
         result_contract=ResultContract('CellTypeAnnotationResult',
             {k:(int,) if k in ints else (list,) if k=='group_summary' else (str,) for k in public.CellTypeAnnotationResult.__annotations__},

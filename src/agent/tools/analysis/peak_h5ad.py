@@ -3,7 +3,9 @@
 The optional privacy walk belongs to delivery, not scientific admission.
 """
 import re
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
+from contextvars import ContextVar
+import math
 import h5py
 import numpy as np
 
@@ -14,8 +16,20 @@ try:
 except ImportError:
     hdf5plugin = None
 
-MAX_BYTES = 1024**3
 MAX_LOGICAL_BYTES = 2 * 1024**3
+_DEFAULT = object()
+_LIMITS = ContextVar('h5ad_inspection_limits', default=(MAX_LOGICAL_BYTES, 64 * 1024**2))
+
+
+@contextmanager
+def inspection_limits(logical_bytes, chunk_bytes):
+    if any(type(v) is not int or v <= 0 for v in (logical_bytes, chunk_bytes)):
+        raise ValueError('H5AD inspection requires finite positive limits')
+    token = _LIMITS.set((logical_bytes, chunk_bytes))
+    try:
+        yield
+    finally:
+        _LIMITS.reset(token)
 _PATH = re.compile(r'(?:^|[\s\"\'=:(])(?:/|~/|[A-Za-z]:[\\/]|\\\\)|file://')
 
 
@@ -45,8 +59,18 @@ def record_strings(item, field):
 
 
 def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True,
-            max_logical_bytes=MAX_LOGICAL_BYTES):
+            max_logical_bytes=_DEFAULT):
     """Reject indirect storage, unsafe filters and excessive allocations."""
+    logical_limit, chunk_limit = _LIMITS.get()
+    from agent.tools._native_process import _CONTROLLED
+    if _CONTROLLED.get():
+        chunk_limit = None
+    if max_logical_bytes is _DEFAULT:
+        max_logical_bytes = logical_limit
+        if _CONTROLLED.get():
+            # The kernel controls native allocations; encoded scientific size
+            # is not a numerical applicability rule. Delivery has its own scope.
+            max_logical_bytes = None
     with (nullcontext(source) if isinstance(source,h5py.File) else h5py.File(source,'r')) as f:
         # Native fragment storage may have obs/obsm and zero features, with
         # neither X nor var. Matrix consumers retain the stricter requirement.
@@ -87,6 +111,8 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
             else:
                 if item.is_virtual or item.external:
                     raise ValueError('Unsupported H5AD dataset layout')
+                if chunk_limit is not None and item.chunks and math.prod(item.chunks) * item.dtype.itemsize > chunk_limit:
+                    raise ValueError('H5AD decoded chunk exceeds configured storage bound')
                 creation = item.id.get_create_plist()
                 filters = [creation.get_filter(i)[0] for i in range(creation.get_nfilters())]
                 if {32001,32015}.intersection(filters) and hdf5plugin is None:
@@ -125,7 +151,7 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                 else:
                     raise ValueError('Unsupported H5AD value dtype')
                 if max_logical_bytes is not None and size > max_logical_bytes:
-                    raise ValueError('H5AD decoded values exceed 2 GiB limit')
+                    raise ValueError('H5AD decoded values exceed configured storage limit')
         if observation_fields is not None:
             if not isinstance(f.get('obs', getlink=True), h5py.HardLink):
                 raise ValueError('Indirect HDF5 observation storage is unsupported')
@@ -139,7 +165,7 @@ def read_native_counts(matrix, semantics):
     """Bounded dense/CSR/CSC exchange; never densify a complete sparse matrix."""
     from scipy import sparse
     from agent.tools._cancellation import cancellation_checkpoint
-    blocks=[];stored=0
+    blocks=[]
     chunk=max(1,min(256,1_000_000//max(1,matrix.shape[1]))) if not hasattr(matrix, 'format') else 256
     for start in range(0,matrix.shape[0],chunk):
         cancellation_checkpoint();block=sparse.csr_matrix(matrix[start:start+chunk])
@@ -150,8 +176,6 @@ def read_native_counts(matrix, semantics):
         if not np.isfinite(v).all() or (v<0).any() or (v!=np.floor(v)).any():
             raise ValueError('Native chromVAR requires finite nonnegative integer counts, not transformed measurements')
         if semantics=='binary_accessibility' and (v>1).any():raise ValueError('Declared binary accessibility contains values above one')
-        stored+=block.data.nbytes+block.indices.nbytes+block.indptr.nbytes
-        if stored>2*1024**3:raise ValueError('Selected sparse matrix exceeds the 2 GiB exchange allocation budget; this is a runtime limitation')
         blocks.append(block)
     if not all(matrix.shape):
         raise ValueError('Nonempty cell and peak axes are required')
@@ -162,15 +186,12 @@ def read_native_matrix(matrix):
     """Sparse R exchange with faithful double conversion, no numerical admission."""
     from scipy import sparse
     from agent.tools._cancellation import cancellation_checkpoint
-    blocks = []; stored = 0
+    blocks = []
     for start in range(0, matrix.shape[0], 256):
         cancellation_checkpoint()
         block = sparse.csr_matrix(matrix[start:start + 256])
         native_double_values(block.data)
         block = block.astype(np.float64)
-        stored += block.data.nbytes + block.indices.nbytes + block.indptr.nbytes
-        if stored > MAX_LOGICAL_BYTES:
-            raise ValueError('Selected sparse matrix exceeds the 2 GiB exchange allocation budget')
         blocks.append(block)
     return sparse.vstack(blocks, format='csr') if blocks else sparse.csr_matrix(matrix.shape, dtype=float)
 

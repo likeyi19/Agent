@@ -249,3 +249,14 @@ and historical milestone documents remain unchanged evidence of the earlier meth
 They do not define current raw execution. Biological validity, arbitrary assays,
 full PBMC10k scale and unrestricted provider reliability are not qualified by this
 bounded replacement.
+
+## Reference identity in new tasks
+
+New captured reference observations admit reviewed official 10x release aliases
+only when the exact qualified FASTA, FAI and ordered-contig identities match.
+Exact component associations can bridge differing assembly labels within that
+qualified identity. The 194-contig 10x and 455-contig general hg38 references remain
+distinct. Independently declared GTF and regions retain their applicability checks.
+Historical observations retain their versioned matching behavior and saved question
+text; a newly recognized alias does not retroactively turn a historical missing
+input into execution permission.

@@ -7,8 +7,7 @@ from agent.schemas import StepOutputRef, PriorOutputRef
 from agent.orchestration.prior_outputs import accepted_step_digest, validate_binding
 from agent.orchestration.verification_authority import _accepted_step
 
-CATEGORICAL_TOOLS = ('pca_embed_cells', 'build_cell_neighbors', 'cluster_cells',
-                     'compute_cell_umap', 'annotate_scATAC_cell_types')
+from agent.tools.analysis.cell_result import TOOLS as CATEGORICAL_TOOLS, describe, file as result_file
 
 
 def dependency(store, run_id, step_id, argument):
@@ -34,13 +33,25 @@ def analysis_lineage(store, run_id, step_id):
     """The recorded cell-analysis chain, shared by source and method readers."""
     stored, planned, _ = _accepted_step(store, run_id, step_id)
     lineage = [(run_id, stored, planned)]
-    for tool, argument in (('compute_cell_umap', 'analysis_path'), ('cluster_cells', 'analysis_path'),
-                           ('build_cell_neighbors', 'embedding_path')):
-        if stored.tool_name != tool:
-            continue
+    seen = {(run_id, step_id)}
+    while True:
+        descriptor = describe(stored.tool_name, stored.result)
+        if stored.tool_name in ('compute_cell_umap', 'cluster_cells', 'build_cell_neighbors'):
+            argument = 'embedding_path' if stored.tool_name == 'build_cell_neighbors' else 'analysis_path'
+        elif stored.tool_name == 'annotate_scATAC_cell_types':
+            argument = 'source_path'
+        elif descriptor and descriptor['preserves_counts'] and stored.tool_name != 'annotate_scATAC_cell_types':
+            argument = descriptor['input_argument']
+            if stored.result['source_identity']['sha256'] != stored.resolved_arguments.get('input_sha256', stored.result['source_identity']['sha256']):
+                raise ValueError('Accepted native input digest changed.')
+        else:
+            break
         if not isinstance(planned.arguments.get(argument), (StepOutputRef, PriorOutputRef)):
             break
         run_id, step_id = dependency(store, run_id, step_id, argument)
+        if (run_id, step_id) in seen:
+            raise ValueError('Cyclic accepted scientific lineage.')
+        seen.add((run_id, step_id))
         stored, planned, _ = _accepted_step(store, run_id, step_id)
         lineage.append((run_id, stored, planned))
     return tuple(lineage)
@@ -54,11 +65,61 @@ def original_source(store, run_id, step_id):
             return dict(path=stored.resolved_arguments['source_path'],
                         sha256=stored.resolved_arguments['source_sha256'])
         return None
+    descriptor = describe(stored.tool_name, stored.result)
+    if descriptor and stored.tool_name.startswith('run_'):
+        from agent.orchestration.verification_authority import _accepted
+        _accepted(store, run_id, stored.step_id)
+        if descriptor['preserves_counts']:
+            identity = stored.result['source_identity']
+            if identity['sha256'] != stored.resolved_arguments.get('input_sha256', identity['sha256']):
+                raise ValueError('Native source identity changed.')
+            return dict(path=stored.resolved_arguments['input_path'], sha256=identity['sha256'])
+        return result_file(stored.tool_name, stored.result)
     if stored.tool_name != 'pca_embed_cells':
+        # Raw native matrix publications are count-population roots, never
+        # coordinate/group computations inferred from their file contents.
+        if stored.result.get('matrix_path') and stored.result.get('matrix_sha256'):
+            from agent.orchestration.verification_authority import _accepted
+            _accepted(store, run_id, stored.step_id)
+            return dict(path=stored.result['matrix_path'], sha256=stored.result['matrix_sha256'])
         return None
     from agent.orchestration.verification_authority import _accepted
     _accepted(store, run_id, stored.step_id)  # Existing authority anchor; no publication reconstruction.
     return dict(path=stored.result['input_path'], sha256=stored.result['source_sha256'])
+
+
+def handoff(store, run_id, step_id):
+    """Transient accepted cell result, with produced slots and count ancestry.
+
+    Each ancestor is an accepted execution. No fields are discovered to grant
+    scientific capability, and no upstream algorithm or publication is replayed.
+    """
+    from agent.orchestration.verification_authority import _accepted
+    stored, _, _ = _accepted_step(store, run_id, step_id)
+    descriptor = describe(stored.tool_name, stored.result)
+    if descriptor is None:
+        return None
+    if stored.tool_name.startswith('run_'):
+        _, authority, _, _ = _accepted(store, run_id, step_id)
+        if authority.record['resources']['result_metadata'] != stored.result:
+            raise ValueError('Accepted native result metadata changed.')
+    grouping = None
+    for parent_run, parent, _ in analysis_lineage(store, run_id, step_id):
+        item = describe(parent.tool_name, parent.result)
+        if item and item['grouping']:
+            if parent.tool_name.startswith('run_'):
+                _accepted(store, parent_run, parent.step_id)
+            grouping = dict(run_id=parent_run, step_id=parent.step_id,
+                accepted_step_sha256=accepted_step_digest(parent), field=item['grouping'],
+                **result_file(parent.tool_name, parent.result))
+            break
+    try:
+        source = original_source(store, run_id, step_id)
+    except (ValueError, KeyError, OSError):
+        if stored.tool_name.startswith('run_'):
+            raise
+        source = None  # Dedicated historical results retain bounded standalone reads.
+    return dict(**descriptor, file=result_file(stored.tool_name, stored.result), source=source, groups=grouping)
 
 
 def _files(sessions, run, step):
@@ -67,9 +128,8 @@ def _files(sessions, run, step):
     if step.tool_name == 'annotate_scATAC_cell_types':
         files['result'] = dict(path=result['annotated_h5ad_path'], sha256=result['annotated_h5ad_sha256'],
             role='accepted_result_observation')
-    elif 'analysis_sha256' in result:
-        files['result'] = dict(path=result['analysis_path'], sha256=result['analysis_sha256'],
-            role='computational_assignment')
+    elif result_file(step.tool_name, result) is not None:
+        files['result'] = dict(**result_file(step.tool_name, result), role='computational_assignment')
     try:
         original = original_source(sessions._application.run_store, run.run_id, step.step_id)
     except (ValueError, OSError, KeyError):
@@ -83,6 +143,10 @@ def _role(step, location, name, file):
     if location == 'result' and step.tool_name == 'annotate_scATAC_cell_types':
         from agent.tools.analysis.annotation_contract import OBS_COLUMNS
         return 'computational_assignment' if name in OBS_COLUMNS else 'copied_supplied_source_observation; biological validity not assessed'
+    if location == 'result' and step.tool_name.startswith('run_'):
+        descriptor = describe(step.tool_name, step.result)
+        return ('computational_assignment' if descriptor and name == descriptor['grouping']
+                else 'retained_observation; not a newly produced assignment')
     return file['role']
 
 
@@ -171,16 +235,19 @@ def cell_overlay(sessions, coordinate, categories, field):
     if (accepted_step_digest(cs) != coordinate['accepted_step_sha256']
             or coordinate['output_key'] not in cs.result):
         raise ValueError('Changed accepted visualization input.')
-    if cs.tool_name != 'compute_cell_umap':
+    capability = handoff(store, cr.run_id, cs.step_id)
+    if capability is None or capability['coordinates'] is None:
         raise ValueError('Select an accepted UMAP coordinate result.')
     files = _files(sessions, cr, cs)
     file = files['result']
-    ids, xy = owner.coordinates(file['path'], file['sha256'])
-    identity = _identity(sessions, cr, cs, 'result', 'X_umap', file, files, associate=True)
+    slot = capability['coordinates']
+    ids, xy = owner.coordinates(file['path'], file['sha256'], slot)
+    identity = _identity(sessions, cr, cs, 'result', slot, file, files, associate=True)
     coordinate_source = dict(producing_step_id=cs.step_id, tool_name=cs.tool_name,
-        result_field='analysis_path', artifact_kind='cell_umap_h5ad',
+        result_field=capability['path_field'], artifact_kind=('native_matrix_h5ad'
+            if capability['path_field'] == 'matrix_path' else 'cell_umap_h5ad'),
         artifact_path=file['path'], integrity=dict(sha256=file['sha256']),
-        role='coordinates', accepted_output=dict(coordinate), field='obsm:X_umap',
+        role='coordinates', accepted_output=dict(coordinate), field='obsm:' + slot,
         source_sha256=identity['source_sha256'],
         **({'neighbors_identity_sha256': identity['neighbors_identity_sha256']}
            if identity.get('neighbors_identity_sha256') is not None else {}))
@@ -213,8 +280,7 @@ def cell_overlay(sessions, coordinate, categories, field):
         other_ids, labels, other_identity = _column(sessions, lr, ls, field, associate=True)
         artifact = _files(sessions, lr, ls)[field.split(':', 1)[0]]
         category_source = dict(producing_step_id=ls.step_id, tool_name=ls.tool_name,
-            **({'result_field': 'annotated_h5ad_path' if ls.tool_name == 'annotate_scATAC_cell_types'
-                 else 'analysis_path'} if field.startswith('result:') else {}),
+            **({'result_field': describe(ls.tool_name, ls.result)['path_field']} if field.startswith('result:') else {}),
             artifact_kind='categorical_observations', artifact_path=artifact['path'],
             integrity=dict(sha256=artifact['sha256']), role='categories',
             observation_role=other_identity['role'],
@@ -235,7 +301,7 @@ def captured_group(state, captured, handle):
     """Resolve a captured group or one of its exact offered output aliases."""
     from .turn_context import result_groups
     matches = [g for g in result_groups(captured, state)
-               if handle == g['handle'] or any(handle == m['handle'] for m in g['members'])]
+               if handle == g['handle'] or any(handle == m.get('handle') for m in g['members'])]
     if len(matches) != 1:
         raise ValueError('Select an explicitly captured accepted result.')
     return matches[0]

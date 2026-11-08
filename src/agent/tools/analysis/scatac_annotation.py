@@ -1,5 +1,6 @@
 """Public primary annotation: existing science, authority DAG and publication envelope."""
 from contextlib import nullcontext
+from contextvars import ContextVar
 from dataclasses import asdict
 from pathlib import Path
 import os
@@ -17,6 +18,7 @@ from agent.tools._cancellation import cancellation_checkpoint
 
 RECOVERY_POLICY = c.RECOVERY_POLICY
 ARGUMENTS = c.ARGUMENTS
+_PREPARED = ContextVar('annotation_invocation_input', default=None)
 
 
 class CellTypeAnnotationResult(TypedDict):
@@ -169,7 +171,16 @@ def _build(args, output):
     path = output/'manifest.json'
     path.write_bytes(c.matrix.canonical(value))
     sha = science.sha256(path)
-    verify_annotation(path, expected_sha256=sha)
+    # Restore the invocation-local source view after writing the derivative.
+    # Verification independently opens the published derivative; native science
+    # and source biological qualification are not repeated in this invocation.
+    a.obs.drop(columns=list(c.OBS_COLUMNS), inplace=True)
+    del a.uns['cell_type_annotation']
+    token = _PREPARED.set((str(path), sha, args, spec, a, authority, matrix, binding))
+    try:
+        verify_annotation(path, expected_sha256=sha)
+    finally:
+        _PREPARED.reset(token)
     for name in (*value['sidecars'], 'manifest.json'):
         with (output/name).open('rb') as stream:
             os.fsync(stream.fileno())
@@ -185,8 +196,9 @@ def _same_sparse(left, right):
 def _verify_derivative(path, binding, cells, args, authority, participation=None, *, version=2, original=None):
     if original is None:
         original, _ = c.load_source(binding)
+    if c.direct(binding.get('method')):
+        return _verify_direct_derivative(path, original, cells, args, authority, participation, version)
     derived = ad.read_h5ad(path)
-    direct = c.direct(binding.get('method'))
     if (not _same_array(original.X, derived.X)
             or not original.obs_names.equals(derived.obs_names) or not original.var_names.equals(derived.var_names)
             or derived.obs.columns.tolist() != [*original.obs.columns, *c.OBS_COLUMNS]):
@@ -200,19 +212,6 @@ def _verify_derivative(path, binding, cells, args, authority, participation=None
     if derived.uns.pop('cell_type_annotation', None) != _provenance(args, authority, participation, version=version):
         raise ValueError('Annotated H5AD matrix/annotation lineage mismatch')
     np.testing.assert_equal(original.uns, derived.uns)
-    if direct:
-        for key in ('obsm','varm','obsp','varp','layers'):
-            left,right=getattr(original,key),getattr(derived,key)
-            if set(left)!=set(right) or any(not _same_array(left[k],right[k]) for k in left):
-                raise ValueError('Annotated H5AD changed an ancillary scientific slot')
-        if (original.raw is None) != (derived.raw is None):
-            raise ValueError('Annotated H5AD changed raw storage')
-        if original.raw is not None:
-            if not _same_array(original.raw.X,derived.raw.X): raise ValueError('Changed raw values')
-            pd.testing.assert_frame_equal(original.raw.var,derived.raw.var)
-            if set(original.raw.varm)!=set(derived.raw.varm) or any(not _same_array(original.raw.varm[k],derived.raw.varm[k]) for k in original.raw.varm):
-                raise ValueError('Changed raw feature metadata')
-        return
     # The canonical owner publishes no alternate matrices or embeddings.
     if (original.raw is not None or derived.raw is not None or
             any(len(getattr(a,key)) for a in (original,derived)
@@ -227,6 +226,78 @@ def _same_array(left,right):
         return isinstance(left,pd.DataFrame) and isinstance(right,pd.DataFrame) and left.equals(right)
     return (left.shape == right.shape and left.dtype == right.dtype
             and np.array_equal(left, right, equal_nan=left.dtype.kind in 'fc'))
+
+
+def _stored_equal(value, node):
+    """Compare independently encoded values in bounded pieces, without X copies."""
+    import h5py
+    from anndata.io import read_elem
+    from collections.abc import Mapping
+    if sparse.issparse(value):
+        return (isinstance(node, h5py.Group)
+            and node.attrs.get('encoding-type') == value.format + '_matrix'
+            and tuple(node.attrs.get('shape', ())) == value.shape
+            and set(node) == {'data', 'indices', 'indptr'}
+            and all(_stored_equal(getattr(value, key), node[key]) for key in node))
+    if isinstance(value, Mapping):
+        return (isinstance(node, h5py.Group) and set(value) == set(node)
+                and all(_stored_equal(value[key], node[key]) for key in value))
+    if isinstance(value, np.ndarray) and value.dtype.kind in 'biufc':
+        if not isinstance(node, h5py.Dataset) or value.shape != node.shape or value.dtype != node.dtype:
+            return False
+        if not value.shape:
+            return np.array_equal(value, node[()], equal_nan=value.dtype.kind in 'fc')
+        from itertools import product
+        budget, block = max(1, 1024**2 // value.dtype.itemsize), []
+        for dimension in reversed(value.shape):
+            width = max(1, min(dimension, budget))
+            block.insert(0, width)
+            budget = max(1, budget // width)
+        for start in product(*(range(0, n, width) for n, width in zip(value.shape, block))):
+            cancellation_checkpoint()
+            selected = tuple(slice(i, min(i + width, n)) for i, width, n in zip(start, block, value.shape))
+            if not np.array_equal(value[selected], node[selected], equal_nan=value.dtype.kind in 'fc'):
+                return False
+        return True
+    try:
+        np.testing.assert_equal(value, read_elem(node))
+        return True
+    except (AssertionError, ValueError, TypeError):
+        return False
+
+
+def _verify_direct_derivative(path, original, cells, args, authority, participation, version):
+    import h5py
+    from anndata.io import read_elem
+    from .peak_h5ad import inspect
+    inspect(path)
+    with h5py.File(path, 'r') as stored:
+        obs, var = read_elem(stored['obs']), read_elem(stored['var'])
+        if (not original.obs_names.equals(obs.index) or not original.var_names.equals(var.index)
+                or obs.columns.tolist() != [*original.obs.columns, *c.OBS_COLUMNS]
+                or not _stored_equal(original.X, stored['X'])):
+            raise ValueError('Annotated H5AD changed canonical matrix values or axes')
+        pd.testing.assert_frame_equal(original.obs, obs[list(original.obs.columns)], check_categorical=False)
+        pd.testing.assert_frame_equal(original.var, var, check_categorical=False, check_column_type=False)
+        for column, key in zip(c.OBS_COLUMNS, ('group', 'primary_annotation', 'status'), strict=True):
+            if [None if pd.isna(x) else str(x) for x in obs[column]] != [r[key] for r in cells]:
+                raise ValueError('Annotated H5AD metadata differs from exact cell propagation')
+        uns = stored['uns']
+        if (set(uns) != {*original.uns, 'cell_type_annotation'}
+                or read_elem(uns['cell_type_annotation']) != _provenance(args, authority, participation, version=version)
+                or any(not _stored_equal(value, uns[key]) for key, value in original.uns.items())):
+            raise ValueError('Annotated H5AD changed source metadata or lineage')
+        for key in ('obsm', 'varm', 'obsp', 'varp', 'layers'):
+            if not _stored_equal(dict(getattr(original, key)), stored[key]):
+                raise ValueError('Annotated H5AD changed an ancillary scientific slot')
+        if (original.raw is None) != ('raw' not in stored):
+            raise ValueError('Annotated H5AD changed raw storage')
+        if original.raw is not None:
+            raw = stored['raw']
+            if (not _stored_equal(original.raw.X, raw['X'])
+                    or not _stored_equal(dict(original.raw.varm), raw['varm'])):
+                raise ValueError('Annotated H5AD changed raw values')
+            pd.testing.assert_frame_equal(original.raw.var, read_elem(raw['var']), check_column_type=False)
 
 
 def _verify_completion(root, binding, spec, cells, groups, original=None):
@@ -274,6 +345,12 @@ def _verify_completion(root, binding, spec, cells, groups, original=None):
 
 @owned_verification('annotation')
 def verify_annotation(path, *, expected_sha256):
+    from agent.tools._native_process import call
+    return call('annotation_verify', dict(path=str(path), expected_sha256=expected_sha256),
+                lambda: _verify_annotation(path, expected_sha256=expected_sha256))
+
+
+def _verify_annotation(path, *, expected_sha256):
     """Check native completion, exact propagation and pinned publication integrity.
 
     This does not rerun RP, marker testing or candidate scoring. Historical v1
@@ -283,12 +360,19 @@ def verify_annotation(path, *, expected_sha256):
     if value['schema_version'] == 1:
         raise ValueError('Historical replay authority is required; standalone legacy requalification is retired')
     args = value['arguments']; root = Path(path).parent
-    spec = c.resolved_specification(args)
+    prepared = _PREPARED.get()
     original = None
-    if spec['schema'] == c.EXTERNAL_SPEC:
+    if prepared is not None and prepared[:3] == (str(path), expected_sha256, args):
+        _, _, _, spec, original, authority, matrix, binding = prepared
+        # Source bytes remain pinned even when semantic qualification is reused.
+        if c.direct(args.get('annotation_method')):
+            science.checked_file(args['source_path'], args['source_sha256'])
+    else:
+        spec = c.resolved_specification(args)
+    if original is None and spec['schema'] == c.EXTERNAL_SPEC:
         from .external_marker_annotation import prepare
         original, (authority, matrix, binding) = prepare(args, spec)
-    else:
+    elif original is None:
         authority, matrix, binding = _canonical_source(args, spec)
     if value['inputs'] != spec or value['source_authority_sha256'] != authority or value['matrix_binding'] != binding:
         raise ValueError('Annotation source or scientific input binding mismatch')
@@ -339,6 +423,12 @@ def verify_public_result(args, result):
 
 
 def execute_annotation(arguments, execution_identity=None):
+    from agent.tools._native_process import call
+    return call('annotation', dict(arguments=arguments, execution_identity=execution_identity),
+                lambda: _execute_annotation(arguments, execution_identity))
+
+
+def _execute_annotation(arguments, execution_identity=None):
     cancellation_checkpoint()
     args,destination,token = _publication(arguments,execution_identity)
     with _operation() as context:

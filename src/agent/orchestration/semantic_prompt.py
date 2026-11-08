@@ -329,6 +329,10 @@ def build_semantic_planning_prompt(
             tool[1][name] = (*compact[:4], guidance) if port[4] is None else compact
     catalog['catalog_format']['guidance_tail'] = 'Pad to 5 with null.'
     catalog['catalog_format']['input_lineage'] = 'Five-item input ports omit null required_lineage; guidance is last.'
+    catalog['application_prepared_ports'] = {name: [port.name
+        for port in registry.get(name).semantic_planning.consumer_ports
+        if port.required and all(member.field_name in registry.get(name).application_inputs for member in port.members)]
+        for name in catalog['tools'] if registry.get(name).application_inputs}
     from ._catalog_compaction import share_catalog_values
     catalog['tools'], shared, names, marker = share_catalog_values(catalog['tools'])
     catalog['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'
@@ -350,6 +354,7 @@ def build_semantic_planning_prompt(
             'catalog.request_inputs and each port\'s available_request_sources describe the inputs supplied for this current planning attempt. On prerequisite continuation, user_request preserves the original objective and may still say that a file has not been attached. That earlier absence does not override a currently offered input. Bind the current authorized source through its offered port; input presence does not establish scientific compatibility or allow an unoffered source.',
             'Missing essential scientific capabilities or incompatible inputs remain unsupported; never silently omit science or change the objective. Missing resolvable declarations use the existing prerequisite path. task.unfulfilled records the exact independently separable requirements excluded during interpretation and disclosed to the user; do not invent replacements or claim them fulfilled. Compose the entire remaining scientific objective. Other omissions require clarification or unsupported, never a hidden partial plan.',
             'Scientific parameters with default_when_omitted use that native default when omitted. Ask only for genuinely unresolved required scientific decisions, never internal paths, digests, output directories or run identities; Agent binds engineering values from exact sources.',
+            'application_prepared_ports are materialized by Agent after selecting the scientific operation and exact sources. Omit those ports when no explicit source is offered; do not invent request inputs or ask the researcher for internal specifications. Annotation uses captured biological declarations and compatible installed reference components. Source and clustering remain explicit semantic selections.',
             'Offered tools/compatible sources; no invention; valid DAG, lineage, explicit sources.',
             'Use every supplied input whose name is an argument of a selected tool through its authorized consumer. Selecting an alternative source does not consume that input. Explicit source-qualified inputs must not be ignored.',
             'deterministic_scoped: compiler-bound from explicit scope; do not emit source. optional_explicit: per-step scope, no fanout, defaults on omission.',

@@ -92,7 +92,7 @@ def axes(path):
     # matrix consumers still require X; this is a fragment-storage boundary.
     # Walk all storage/link declarations before native code can follow them.
     # Numeric fragment arrays are bounded by shape without loading their values.
-    peak_h5ad.inspect(path, require_matrix=False, max_logical_bytes=100 * 1024**3)
+    peak_h5ad.inspect(path, require_matrix=False, max_logical_bytes=None)
     with h5py.File(path, 'r') as handle:
         obs = read_elem(handle['obs'])
         if 'X' not in handle and not {'fragment_paired', 'fragment_single'}.intersection(handle.get('obsm', {})):

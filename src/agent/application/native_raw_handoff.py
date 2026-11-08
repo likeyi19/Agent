@@ -10,6 +10,15 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from .session_state import digest
 
+# Reviewed external names for one exact qualified FASTA/FAI/ordered-axis triple.
+# This is not an hg38/GRCh38 synonym or a substitute for component qualification.
+_REFERENCE_NAMES = {
+    ('fb7421217e7058120cd60a5277445198e8deef2dff1edc46cd1e98b31fe64cbb',
+     '24bf2065650006f4d8e08897dcae433d50addcd7f342e566bbc6fd9145f64798',
+     'd525ee20551f34768f4017c7a779a3f3c7b947dacdea27838a5776508834b306'):
+        ('refdata-cellranger-arc-GRCh38-2020-A', 'refdata-cellranger-arc-GRCh38-2020-A-2.0.0'),
+}
+
 
 def _mapping_inputs(receipt):
     """Every registered Chromap function consumes a FASTA; mapping also uses
@@ -175,9 +184,14 @@ def resource_evidence(input_sets, *, field=None):
                     species, assembly = values.get('species', species), values.get('assembly', assembly)
                     components[port] = dict(path=values[port + '_path'], sha256=values[port + '_sha256'])
             if components:
+                # Qualified component provenance supplies exact external names.
+                # An assembly string or approximate label never supplies aliases.
+                genome = components.get('reference', {})
+                sizes = components.get('chrom_sizes', {})
+                aliases = _REFERENCE_NAMES.get((genome.get('sha256'), sizes.get('sha256'), sizes.get('ordered_sizes')), ())
                 result[choice.input_set_id] = dict(species=_species(species), assembly=assembly,
                     components={k:{name:v[name] for name in ('path','sha256','ordered_sizes','contig_count','fasta_sha256') if name in v} for k,v in components.items()},
-                    label=choice.label, default=(getattr(choice, field + '_default') if field is not None else choice.fragments_default or choice.bam_default))
+                    component_identity_version=2, aliases=sorted(aliases), label=choice.label, default=(getattr(choice, field + '_default') if field is not None else choice.fragments_default or choice.bam_default))
         except (ValueError, OSError, TypeError, KeyError):
             # Do not hide independently available references. Explicit selection
             # of this invalid entry remains a visible missing-resource question.
@@ -220,8 +234,9 @@ def requirements(binding, declared, choices, evidence):
         missing = _fastq_requirements(binding, declared)
     elif declared.source is None:
         missing = ['Identify the raw input attachment.']
-    context = dict(species=declared.species,assembly=getattr(declared,'assembly',None))
-    matches = preference_matches(declared.resource_preference, choices)
+    context = dict(species=declared.species,assembly=getattr(declared,'assembly',None), catalog=evidence)
+    aliases = lambda choice: (evidence.get(choice.input_set_id) or {}).get('aliases', ())
+    matches = preference_matches(declared.resource_preference, choices, aliases=aliases)
     if len(matches) > 1:
         # A user-facing genome name may identify a genome entry and a QC
         # grouping of those same bytes. Resolve their actual function ports
@@ -231,7 +246,7 @@ def requirements(binding, declared, choices, evidence):
         if any(evidence.get(c.input_set_id) is None or not _context_matches(evidence[c.input_set_id],context) for c in matches):
             questions = ['The requested reference name identifies unavailable or conflicting references. Please identify the intended reference.']
     else:
-        questions, selected = match_preference(declared.resource_preference, choices)
+        questions, selected = match_preference(declared.resource_preference, choices, aliases=aliases)
     if declared.resource is not None:
         selected = next((s for s in choices if 'resource.' + s.input_set_id == declared.resource), None)
         if selected is None: questions = ['The selected reference is unavailable in this Session. Please identify the reference you want.']
@@ -292,7 +307,8 @@ def _preferred_ids(declared, evidence, selected):
     from .resource_continuation import preference_matches
     matches = preference_matches(declared.resource_preference,
         [(key,row) for key,row in evidence.items() if row is not None],
-        label=lambda pair:pair[1]['label'], identity=lambda pair:'resource.' + pair[0])
+        label=lambda pair:pair[1]['label'], identity=lambda pair:'resource.' + pair[0],
+        aliases=lambda pair:pair[1].get('aliases', ()))
     return sorted(key for key,_ in matches) or None
 
 
@@ -417,7 +433,18 @@ def _context_matches(row, receipt):
         actual = row.get(key)
         if key == 'species' and isinstance(actual,dict) and isinstance(expected,str):
             actual = actual.get('scientific_name')
-        if actual != expected: return False
+        if actual != expected:
+            if key != 'assembly' or row.get('component_identity_version', 1) < 2:
+                return False
+            def genome_identity(candidate):
+                components = candidate.get('components', {})
+                fasta, sizes = components.get('reference', {}), components.get('chrom_sizes', {})
+                return (fasta.get('sha256'), sizes.get('sha256'), sizes.get('ordered_sizes'))
+            identity = genome_identity(row)
+            if (not all(identity) or not any(other is not None and other.get('component_identity_version', 1) >= 2 and other.get('assembly') == expected
+                    and other.get('species') == row.get('species') and genome_identity(other) == identity
+                    for other in receipt.get('catalog', {}).values())):
+                return False
     return True
 
 
@@ -445,15 +472,18 @@ def _component(receipt, port, description='The exact reference file for this nat
         recorded_sizes = {row['components'][port]['sha256']:row['components'][port]['ordered_sizes']
             for _,row in candidates if 'ordered_sizes' in row['components'][port]}
         options = distinct_choices(candidates, default=lambda pair:pair[1]['default'],
-            identity=lambda pair:digest([pair[1]['species'],pair[1]['assembly'],recorded_sizes.get(pair[1]['components'][port]['sha256'],pair[1]['components'][port]['sha256'])]),
+            identity=lambda pair:digest([pair[1]['species'],
+                receipt['assembly'] if receipt.get('assembly') is not None else pair[1]['assembly'],
+                recorded_sizes.get(pair[1]['components'][port]['sha256'],pair[1]['components'][port]['sha256'])]),
             order=lambda pair:pair[0])
         if len(options) != 1:
             label = {'chrom_sizes':'chromosome-size','gene_anno':'gene annotation','peaks':'region feature','reference':'genome FASTA','whitelist':'barcode whitelist'}[port]
+            context = ' '.join(str(receipt[key]) for key in ('species', 'assembly') if receipt.get(key) is not None) or 'the supplied source'
             if not options:
-                raise ResourcePrerequisite([f'This operation requires {description} No applicable {label} resource is available for {receipt["species"]} {receipt["assembly"]}.'])
+                raise ResourcePrerequisite([f'This operation requires {description} No applicable {label} resource is available for {context}.'])
             descriptions = [row['label'] + (f" ({row['components'][port]['contig_count']} contigs; names, lengths or ordering differ)"
                 if 'contig_count' in row['components'][port] else ' (distinct reference component)') for _,row in options]
-            raise ResourcePrerequisite([f'There are distinct {label} references for {receipt["species"]} {receipt["assembly"]}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)])
+            raise ResourcePrerequisite([f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)])
         chosen,row = options[0]
         component = row['components'][port]
         if reason != 'explicit' and sum(bool(r['default']) for _,r in candidates) == 1: reason = 'configured_default'

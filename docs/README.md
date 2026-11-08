@@ -5,6 +5,7 @@ owns the active SRV roadmap, evidence-centered result presentation and the first
 external published-study evaluation protocol.
 
 The [native scientific functions guide](guides/native-functions.md) describes package-level invocation, reviewed chromVAR functions and shared accepted-result delivery.
+The [native execution guide](guides/native-execution.md) owns operator memory budgets, kernel isolation, cancellation and execution-failure diagnostics.
 The [native research-object guide](guides/native-research-objects.md) covers focused
 ArchR projects/gene scores, monaLisa enrichment and the pycisTopic license boundary.
 

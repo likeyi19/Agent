@@ -88,6 +88,43 @@ def test_omitted_count_slot_and_no_native_recovery_replay(external_case, monkeyp
         owner.recover_annotation(args, 'default')
 
 
+def test_prepared_input_once_and_independent_derivative_conservation(external_case, monkeypatch):
+    args, calls = external_case
+    from agent.tools.analysis import external_marker_annotation as external
+    prepared = []
+    prepare = external.prepare
+    def counted(*a, **kw):
+        prepared.append(1)
+        return prepare(*a, **kw)
+    monkeypatch.setattr(external, 'prepare', counted)
+    result = owner.execute_annotation(args)
+    assert len(prepared) == len(calls) == 1
+    manifest = c.load_manifest(result['manifest_path'], result['manifest_sha256'])
+    original = ad.read_h5ad(args['source_path'])
+    path = Path(result['annotated_h5ad_path'])
+    cells = c.read_json(path.parent/'primary/cells.json')
+    # Bypass the sidecar digest deliberately: conservation must independently
+    # reject altered numeric values even if an attacker repins the derivative.
+    with h5py.File(path, 'a') as handle:
+        handle['X/data'][0] += 1
+    with pytest.raises(ValueError, match='matrix|values|scientific'):
+        owner._verify_derivative(path, manifest['matrix_binding'], cells,
+            manifest['arguments'], manifest['source_authority_sha256'],
+            manifest.get('feature_participation'), original=original)
+    assert len(calls) == 1
+
+
+def test_native_allocation_failure_publishes_no_result(external_case, monkeypatch):
+    args, calls = external_case
+    from agent.tools.analysis import external_marker_annotation as external
+    def exhausted(**kw):
+        raise MemoryError('Simulated allocation failure; no containment claim')
+    monkeypatch.setattr(external, 'annotate_cell_groups', exhausted)
+    with pytest.raises(MemoryError):
+        owner.execute_annotation(args)
+    assert not list(Path(args['output_dir']).rglob('manifest.json'))
+
+
 @pytest.mark.parametrize('different_source', [False, True])
 def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, monkeypatch, different_source):
     args, calls = external_case
@@ -136,7 +173,7 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
         if 'semantic_prompt_version' in value:
             plan = wire()
             plan['decision']['steps'][0]['sources'] = [
-                row for row in plan['decision']['steps'][0]['sources'] if row['target'] != 'count_slot']
+                row for row in plan['decision']['steps'][0]['sources'] if row['target'] == 'source']
             return json.dumps(plan)
         return super(HandoffModel, self).complete(prompt=prompt, response_schema=response_schema)
     monkeypatch.setattr(HandoffModel, 'complete', complete)
@@ -150,7 +187,7 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
                     [upload.json()['resource_id']], generation=1)
         if different_source:
             assert done['status'] == 'clarification', done
-            assert 'exact source identity' in done['response']['text']
+            assert 'exact count-source ancestry' in done['response']['text']
             assert not calls
             assert app._application.sessions.load('upload').generation == 1
             assert client.get('/api/v1/sessions/upload').status_code == 200
@@ -171,7 +208,7 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
         run = app._application.run_store.load(done['run_id'])
         assert len(calls) == 1
         bound = run.steps[0].resolved_arguments
-        assert 'annotation_groups' in bound['groups_path']
+        assert 'group_analysis_path' in bound and 'groups_path' not in bound
         assert 'count_slot' not in bound
         clustered = upstream.run_store.load('pca-first:run').steps[2].result
         expected = ad.read_h5ad(clustered['analysis_path'])
@@ -180,21 +217,3 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
         assert actual.obs['annotation_group'].astype(str).tolist() == expected.obs['leiden'].astype(str).tolist()
         assert all(p.read_bytes() == value for p, value in before.items())
         assert client.get('/api/v1/sessions/upload').status_code == 200
-        from agent.application.annotation_groups import project
-        sessions = app._application.sessions
-        sessions._interaction_session_id = 'upload'
-        interaction = sessions.load('upload').interactions[-1]
-        selected = interaction.admitted['annotation']['groups_result']
-        changed = data.copy(); changed.X.data[0] += 1
-        different = tmp_path/'same-cells-different-measurements.h5ad'; changed.write_h5ad(different)
-        with pytest.raises(ValueError, match='exact source identity'):
-            project(sessions, interaction, selected,
-                dict(source_path=str(different), source_sha256=science.sha256(different)))
-        with pytest.raises(ValueError, match='offered'):
-            project(sessions, interaction, 'groups.' + '0'*64,
-                dict(source_path=str(source), source_sha256=science.sha256(source)))
-        # Exact accepted bytes, not equal cell counts, authorize the group file.
-        path = Path(clustered['analysis_path']); path.write_bytes(path.read_bytes() + b'tampered')
-        with pytest.raises(ValueError, match='identity'):
-            project(sessions, interaction, selected,
-                dict(source_path=str(source), source_sha256=science.sha256(source)))

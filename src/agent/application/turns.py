@@ -672,7 +672,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 admitted['resource_catalog'] = catalog(input_sets)
         else:
             admitted = admit(sessions, interaction, decision)
-        if any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam')):
+        if (any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam'))
+                or admitted.get('kind') == 'execute' and admitted.get('tool') == 'annotate_scATAC_cell_types'):
             from .dialogue_execution import prepare_native_task
             admitted, pending, error = prepare_native_task(sessions, interaction, admitted)
             if pending is not None:

@@ -155,8 +155,8 @@ def native(args, stage, fasta, motif):
         seed=args.get('seed',20261030),background_iterations=args.get('background_iterations',50),p_cutoff=args.get('p_cutoff',5e-5))
     if type(request['seed']) is not int or not 0<=request['seed']<2**31:
         raise ValueError('Seed must be an R-compatible nonnegative integer')
-    if type(request['background_iterations']) is not int or not 2<=request['background_iterations']<=1000:
-        raise ValueError('Background iterations must be between 2 and the execution bound of 1000')
+    if type(request['background_iterations']) is not int or request['background_iterations'] < 2:
+        raise ValueError('Background iterations must be at least two')
     if isinstance(request['p_cutoff'],bool) or not 0<float(request['p_cutoff'])<1:
         raise ValueError('Motif scan probability cutoff must be strictly between zero and one')
     write(stage/'request.json',request)
@@ -203,6 +203,12 @@ def _summaries(z,motifs,obs,group):
 
 
 def execute(values, execution_identity=None):
+    from agent.tools._native_process import call
+    return call('chromvar', dict(values=values, execution_identity=execution_identity),
+                lambda: _execute(values, execution_identity))
+
+
+def _execute(values, execution_identity=None):
     import anndata as ad
     args=arguments(values);root=Path(args['output_dir']);root.mkdir(parents=True,exist_ok=True)
     if any(root.iterdir()):raise ValueError('Output directory is not empty; native retry requires a new execution')

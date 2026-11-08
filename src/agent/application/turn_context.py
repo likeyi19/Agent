@@ -135,10 +135,15 @@ def result_descriptions(sessions, state, captured):
                             if isinstance(ref, PriorOutputRef))
         revision = next(r for r in state.revisions if r.revision_id == item['revision_id'])
         names = {m['output_name'] for m in group['members']}
+        from .result_reading import handoff
+        capability = handoff(sessions._application.run_store, locator.run_id, locator.step_id)
         result.append(dict(handle=group['handle'], outputs=[m['handle'] for m in group['members']],
             canonical_output=item['handle'], tool=step.tool_name, version=item['version'],
             relations=list(item['relations']), uses=['reference'],
             result_contract=spec.result_contract.name,
+            cell_capabilities={} if capability is None else dict(
+                coordinates=capability['coordinates'],
+                grouping=None if capability['groups'] is None else capability['groups']['field']),
             available_outputs=sorted({o.output_key for o in revision.outputs if o.name in names}),
             parameters=values, derived_from=[g['handle'] for g in groups
                 if (locators[g['handle']].run_id, locators[g['handle']].step_id) in dependencies]))

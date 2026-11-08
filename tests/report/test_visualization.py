@@ -738,6 +738,24 @@ def test_historical_bundle_with_annotation_keeps_original_figure_set(tmp_path,mo
     assert Path(path).read_bytes()==raw
 
 
+def test_historical_native_result_does_not_acquire_new_bundle_figures(tmp_path, monkeypatch):
+    run,evidence,_,_=_source(tmp_path)
+    snapshot=visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
+    payload=dict(snapshot.payload)
+    payload['steps']=[*payload['steps'],dict(step_id='native',tool_name='run_snapatac2',facts={})]
+    payload['workflow']=dict(payload['workflow'],ordered_steps=[*payload['workflow']['ordered_steps'],
+        dict(step_id='native',tool_name='run_snapatac2')])
+    historical=replace(snapshot,payload=payload,cell_results={})
+    original=visualization_module._derive_figure_projections(historical)
+    built=visualization_module._build_bundle(tmp_path/'historical',original,lambda:original,
+        lambda projections,pngs,renderer:visualization_module._manifest_payload(historical,projections,pngs,renderer),overwrite=False)
+    current=replace(historical,cell_results={'native':dict(coordinates='X_umap',groups=None)})
+    monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',lambda *a,**k:current)
+    path=Path(built['manifest_path']);before=path.read_bytes()
+    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry()).passed
+    assert path.read_bytes()==before
+
+
 @pytest.mark.parametrize('figure_set', [None, [], 'invalid', {'annotation_projection_version': True}, {'annotation_projection_version': 3}])
 def test_invalid_projection_version_or_figure_set_fails_verification(tmp_path,figure_set):
     run,evidence,_,_,result=_build(tmp_path)

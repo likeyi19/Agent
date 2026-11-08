@@ -3,6 +3,7 @@
 Export preserves arrays and ordered axes, omits private metadata, and records the
 accepted source digest. It never issues scientific authority or reruns statistics.
 """
+from . import delivery_policy
 import os
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def create_statistical_export(source_stream, destination_stream, manifest, *, so
     from agent.tools.analysis.peak_h5ad import inspect
     from .native_delivery import definitions
     native_h5ad = any(name == manifest['tool_name'] and spec.h5ad_roles for name, spec in definitions())
-    matrix._reject(manifest['tool_name'] not in TOOLS and not native_h5ad or not 0 < max_bytes <= matrix.MAX_MATRIX_BYTES)
+    matrix._reject(manifest['tool_name'] not in TOOLS and not native_h5ad or not 0 < max_bytes <= delivery_policy.current().delivered_bytes)
     require_matrix = manifest['tool_name'] == 'build_replicate_pseudobulk'
     destination_stream.seek(0, 2)
     matrix._reject(destination_stream.tell() != 0)

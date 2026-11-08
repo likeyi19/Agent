@@ -7,6 +7,7 @@ from agent.schemas.prior_output import PriorOutputBinding
 from agent.schemas.orchestration import freeze_json_mapping, _serialize
 
 _CONTEXT = ContextVar('active_planning_context', default=None)
+_INPUT_PREPARER = ContextVar('selected_method_input_preparer', default=None)
 MAX_CONTEXT_ITEMS = 32
 
 
@@ -70,6 +71,27 @@ class ActivePlanningContext:
 
 def current_context():
     return _CONTEXT.get()
+
+
+@contextmanager
+def input_preparation(prepare):
+    """Application-owned materialization after semantic source selection."""
+    token = _INPUT_PREPARER.set(prepare)
+    try:
+        yield
+    finally:
+        _INPUT_PREPARER.reset(token)
+
+
+def prepare_selected_inputs(tool, arguments, selected):
+    prepare = _INPUT_PREPARER.get()
+    if prepare is None or not tool.application_inputs:
+        return arguments
+    result = prepare(tool, dict(arguments), selected)
+    changed = {key for key in set(arguments) | set(result) if arguments.get(key) != result.get(key)}
+    if not changed <= tool.application_inputs:
+        raise ValueError('Application preparation changed a non-owned execution argument.')
+    return result
 
 
 @contextmanager

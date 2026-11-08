@@ -191,3 +191,36 @@ def execution_authorities(function):
         with authority_operation(context):
             return function(*args, **kwargs)
     return execute
+
+
+def snapshot_worker_context(context):
+    """Private process handoff of existing invocation proofs, never new authority."""
+    if context is None:
+        return None
+    context.validate_anchors()
+    return dict(proofs=[dict(identity=p.identity, kind=p.kind,
+        description=_serialize(p.description), result_metadata=_serialize(p.result_metadata))
+        for p in context.proofs.values()],
+        locations=[[list(key), list(value)] for key, value in context.locations.items()],
+        accepted=[[list(key), _serialize(value)] for key, value in context.accepted.items()],
+        execution=None if context.execution is None else
+            [context.execution[0], str(context.execution[1]), context.execution[2]])
+
+
+def restore_worker_context(value):
+    """Only called on the supervisor's private response/request channel."""
+    context = VerificationContext()
+    if value is None:
+        return context
+    for row in value['proofs']:
+        proof = ScientificProof(row['identity'], row['kind'],
+            freeze_json_mapping(row['description'], 'worker_proof'),
+            freeze_json_mapping(row['result_metadata'], 'worker_metadata'))
+        context.proofs[proof.identity] = proof
+    context.locations = {tuple(key): tuple(item) for key, item in value['locations']}
+    context.accepted = {tuple(key): dict(record=freeze_json_mapping(item['record'], 'worker_accepted'),
+                                      identity=item['identity'])
+                        for key, item in value['accepted']}
+    if value['execution'] is not None:
+        context.register_execution(*value['execution'])
+    return context

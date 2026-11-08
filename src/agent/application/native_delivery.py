@@ -5,6 +5,9 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 
 PRIVATE_LABEL = '[private label omitted; use ordered index]'
+CELL_MATRIX_LABELS = ('UMAP coordinates and retained matrix (H5AD)',
+    'Leiden groups and retained matrix (H5AD)', 'Region fragment counts (H5AD)',
+    'Peak counts (H5AD)', 'Binary accessibility (H5AD)')
 
 
 def definitions(registry=None):
@@ -64,12 +67,29 @@ def accepted_artifacts(app, session_id, revision, origin, output, *, step_id=Non
             step_id=step_id, accepted_step_sha256=accepted_step_digest(step), authority_sha256=authority.identity_sha256,
             manifest_sha256=sha, payload=pin)
         ref = ScientificArtifactHandle(digest(identity), spec.artifact_type, pin['sha256'], revision.revision_id,
-            origin.turn_id, pin['size_bytes'], name, spec.files[name][0])
+            origin.turn_id, pin['size_bytes'], name, _label(step, name, spec.files[name][0]))
         delivery = dict(manifest, tool_name=step.tool_name, accepted_step_sha256=accepted_step_digest(step))
         items.append(_ScientificMatrixArtifact(ref, path, root, pin['sha256'], pin['size_bytes'], spec.contract, delivery, name, sha))
     if _accepted(store, run_id, step_id)[3] != anchor:
         raise ValueError('Scientific accepted anchor changed')
     return items
+
+
+def _label(step, name, default):
+    from agent.tools.analysis.cell_result import describe
+    view = describe(step.tool_name, step.result)
+    if view is None:
+        return default
+    if name == 'result.h5ad':
+        if view['coordinates']:
+            return 'UMAP coordinates and retained matrix (H5AD)'
+        if view['grouping']:
+            return 'Leiden groups and retained matrix (H5AD)'
+        measurement = step.result.get('measurement')
+        if measurement in ('fragment_counts', 'peak_counts', 'binary_accessibility'):
+            return {'fragment_counts': 'Region fragment counts', 'peak_counts': 'Peak counts',
+                    'binary_accessibility': 'Binary accessibility'}[measurement] + ' (H5AD)'
+    return default
 
 
 def prepare(stream, role):

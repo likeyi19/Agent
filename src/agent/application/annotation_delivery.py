@@ -4,6 +4,7 @@ Scientific authority belongs to the annotation owner. Export copies the exact
 sparse arrays, axes and categorical annotations into a new HDF5 file; the one
 private matrix locator is omitted. Source and delivered digests stay distinct.
 """
+from . import delivery_policy
 import h5py
 import numpy as np
 from agent.tools.analysis import annotation_contract as owner
@@ -130,7 +131,7 @@ def create_annotation_export(source_stream, destination_stream, manifest, *, sou
                              source_size_bytes, manifest_sha256, max_bytes):
     matrix._reject(manifest['contract_version'] != CONTRACT
         or manifest['sidecars']['annotated.h5ad'] != dict(sha256=source_sha256, size_bytes=source_size_bytes)
-        or not 0 < max_bytes <= matrix.MAX_MATRIX_BYTES)
+        or not 0 < max_bytes <= delivery_policy.current().delivered_bytes)
     destination_stream.seek(0, 2)
     matrix._reject(destination_stream.tell() != 0)
     metadata = dict(contract_version=EXPORT_CONTRACT, source_contract=CONTRACT,

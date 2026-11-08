@@ -498,8 +498,9 @@ def _component_methods(artifact, handle):
 def _accepted_metadata(artifact):
     """Read selected native metadata only after its exact byte pin is checked."""
     import hashlib
-    from .matrix_delivery import _open_matrix_source, _source_state, MATRIX_CHUNK_BYTES, MAX_MATRIX_BYTES
-    if not 0 < artifact.size_bytes <= MAX_MATRIX_BYTES:
+    from .matrix_delivery import _open_matrix_source, _source_state, MATRIX_CHUNK_BYTES
+    from .delivery_policy import current
+    if not 0 < artifact.size_bytes <= current().source_bytes:
         raise ValueError('Accepted export metadata exceeds the supported source size.')
     with _open_matrix_source(artifact.path, artifact.managed_root) as stream:
         before = os.fstat(stream.fileno())
@@ -550,7 +551,7 @@ def _observation_fields(artifact, handle, *, original=False):
 def _field_logical_bytes(handle, slot, field):
     """Bound each destination's selected values, including legacy categories."""
     from agent.tools.analysis.peak_h5ad import strings
-    from .matrix_delivery import MAX_MATRIX_BYTES
+    from .delivery_policy import current
     seen = set()
     def size(item):
         address = h5py.h5o.get_info(item.id).addr
@@ -571,7 +572,7 @@ def _field_logical_bytes(handle, slot, field):
             amount = 0
             for selection in selections:
                 amount += sum(len(value.encode('utf-8')) + 8 for value in strings(item, selection))
-                if amount > MAX_MATRIX_BYTES:
+                if amount > current().logical_bytes:
                     raise ValueError('Selected field exceeds the export resource limit.')
         elif item.dtype.kind in 'biuf':
             amount = int(item.size) * item.dtype.itemsize
@@ -579,7 +580,7 @@ def _field_logical_bytes(handle, slot, field):
             raise ValueError('Selected field has unsupported scientific storage.')
         if 'categories' in item.attrs:
             amount += size(handle[item.attrs['categories']])
-        if amount > MAX_MATRIX_BYTES:
+        if amount > current().logical_bytes:
             raise ValueError('Selected field exceeds the export resource limit.')
         return amount
     group = handle[slot]

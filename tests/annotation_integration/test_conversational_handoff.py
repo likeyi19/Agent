@@ -45,7 +45,10 @@ class HandoffModel(Model):
             return json.dumps(dict(turn_schema_version=1, decision=d))
         if 'semantic_prompt_version' in p:
             value = wire(); sources = value['decision']['steps'][0]['sources']
-            sources[:] = [r for r in sources if r['target'] != 'groups'] + [dict(target='group_column',source=dict(kind='input',input='group_column'))]
+            # Application-owned specification/method are prepared only after
+            # this normal semantic selection. Optional supplied groups bind
+            # through the existing compiler request inputs.
+            sources[:] = [r for r in sources if r['target'] == 'source']
             return json.dumps(value)
         return super().complete(prompt=prompt, response_schema=response_schema)
 
@@ -172,7 +175,7 @@ def test_resource_question_additive_supplement_and_explicit_selection(external_c
             if 'turn_schema_version' in p:
                 pending=p['dialogue'].get('pending_prerequisite')
                 d=(dict(kind='answer_roles',pending='@roles',roles=[],arguments=[argument('count_slot','layers/raw_counts')],
-                    annotation=asdict(handoff.AnnotationDeclaration(resource='resource.alternative'))) if pending else
+                    annotation=asdict(handoff.AnnotationDeclaration(resource='resource.alternative', measurement=c.EXTERNAL_SEMANTICS))) if pending else
                    dict(kind='request_roles',target=TOOL,required_roles=[],roles=[],annotation=asdict(declared(grouping_provenance='Independent simulated groups')),
                     arguments=[argument('count_slot','X'),argument('group_column','supplied_groups')]))
                 return json.dumps(dict(turn_schema_version=1,decision=d))
@@ -187,11 +190,11 @@ def test_resource_question_additive_supplement_and_explicit_selection(external_c
         assert ('operator must provision' if missing_catalog else 'Choose a reference') in pending['response']['text']
     app,web=setup(args,root,prompts,choices=(first,second))
     with TestClient(web) as client:
-        done=send(client,'reply','Use the alternative marker resource and "layers/raw_counts".')
+        done=send(client,'reply','Use the alternative marker resource and "layers/raw_counts", which independently contains the original raw Cell Ranger cut-site counts.')
         assert done['status']=='succeeded',done
         assert len(calls)==1
         interaction=app._application.sessions.load('upload').interactions[-1]
-        assert interaction.admitted['raw_resource_choice']=='resource.alternative'
+        assert interaction.admitted['annotation']['resource']=='resource.alternative'
         assert interaction.admitted['annotation_arguments']['count_slot']=='layers/raw_counts'
 
 
@@ -307,7 +310,10 @@ def test_group_file_supplement_uses_same_pending_task(external_case,tmp_path,mon
                 else:
                     d=dict(kind='request_roles',target=TOOL,required_roles=[],roles=[],annotation=asdict(declared()),arguments=[argument('count_slot','X')])
                 return json.dumps(dict(turn_schema_version=1,decision=d))
-            if 'semantic_prompt_version' in p:return json.dumps(wire())
+            if 'semantic_prompt_version' in p:
+                selected = wire()
+                selected['decision']['steps'][0]['sources'] = [dict(target='source', source=dict(kind='input', input='source_path'))]
+                return json.dumps(selected)
             return super().complete(prompt=prompt,response_schema=response_schema)
     monkeypatch.setitem(HandoffModel.complete.__globals__, 'HandoffModel', GroupModel)
     app,web=setup(args,tmp_path/'group-file',[])

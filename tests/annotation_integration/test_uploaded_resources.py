@@ -194,7 +194,7 @@ def test_invalid_explicit_upload_clarifies_without_catalog_fallback(resources,tm
         source=h.stage(client,args);g=attach(client,genes,'genes');s=attach(client,signatures,'signatures')
         result=h.send(client,'first',OBJECTIVE,[source,g,s])
         assert result['status']=='clarification',result
-        assert result['response']['clarification']['reason']=='missing_annotation_declarations'
+        assert result['response']['clarification']['reason']=='missing_resources'
         state=app._application.sessions.load('upload')
         assert state.interactions[-1].prerequisite is not None and not calls and not state.revisions
 

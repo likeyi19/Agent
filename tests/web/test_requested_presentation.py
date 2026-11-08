@@ -271,3 +271,20 @@ def test_mapping_gallery_uses_its_pinned_caption_and_preserves_strict_caption():
     ''')
     assert result[0]=='Harmonized-label view; original labels preserved.'
     assert 'without remapping' in result[1]
+
+
+def test_comparison_per_class_null_is_undefined_without_changing_recorded_zero():
+    values=functions('function evidenceValueNode','function renderEvidence')
+    result=run_render(values+'''
+      document.createTextNode=text=>({textContent:text});
+      document.createElementOld=document.createElement;
+      document.createElement=tag=>({...document.createElementOld(tag),setAttribute(){}});
+      state.revision.result_groups=[{handle:'a',tool:'compare_cell_annotations',label:'Comparison',outputs:[],
+        summary_fields:['per_class'],parameters:{},derived_from:[],evidence:{
+          facts:[{field:'per_class',status:'available',value:[{label:'A',precision:null,recall:0},{label:'B',precision:0,recall:null}]}],
+          field_labels:{},coverage:[],limitations:[]}}];
+      renderResultSelection();return dom['result-facts'].nodes;
+    ''')
+    text=json.dumps(result)
+    assert 'Undefined (no predicted cells)' in text and 'Undefined (no reference support)' in text
+    assert 'Recorded null' not in text and '"textContent": "0"' in text

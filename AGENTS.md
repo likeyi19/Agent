@@ -6395,3 +6395,75 @@ unaffected. Their version numbers do not denote fragments v1 support.
 See [M11.3d](docs/history/m11.3d-fragment-convergence.md) for the blast-radius audit,
 provenance mapping, common API, semantic comparison, validation and limitations.
 No M11.4 or M11.5 implementation is included.
+
+## SRV-2C Gate 2 comparison contract consolidation
+
+The user-authorized product completion builds on `13addae`, with no automatic
+commit/push or upstream scientific rerun. General `compare_cell_annotations`
+now defaults to unique exact cell-ID matching and records library provenance as
+unverified when none was supplied. Explicit shared-library or paired sample-column
+scopes remain user declarations; partial scopes and duplicate keys still fail.
+No filename, positional mapping or barcode rewriting establishes correspondence.
+The earlier mandatory-library rule is superseded for new work.
+
+Selected H5AD observations share `categorical.selected_observations`, which checks
+selected storage and legacy category-level dependencies before AnnData decoding.
+Modern and legacy encodings preserve exact names, missing codes and ordered cells
+without loading matrices. New comparison publications have a distinct profile;
+undefined class precision/recall are null, with aggregate definitions unchanged.
+Historical strict and mapped profiles, reports and displayed responses retain
+original identities and conventions; historical profiles cannot publish new science.
+
+Comparison coverage, count/reference-normalized confusion and qualified three-panel
+UMAP use existing scientific/publication/figure owners. Accepted native coordinates
+require verified written slots, exact source association and ordered cells. Missing
+and unmatched states stay distinct; original and explicitly mapped views retain
+separate captions/results. The scoped report under
+`agent-data/acceptance/scientific-results/srv-2c/gate2-product-completion-2026-11-08/`
+owns actual focused and genuine Firefox/OpenAI outcomes; implementation alone does
+not qualify live delivery. Frozen Gate 1 science and completed external Gate 2
+artifacts remain protected. Fresh end-to-end reproduction and SRV-3 are not started.
+
+The dated product-completion record ends at bounded CONDITIONAL GO. Genuine
+Firefox/official OpenAI strict comparison publishes exact 9,629 matches, the full
+null/unmatched coverage and five source-bound figures; ten actual downloads are
+verified. Its generated explanation is withheld by semantic attribution review.
+The explicit many-to-one continuation remains live-unqualified after a preserved
+mapping clarification and one bounded follow-up clarification, without a mapped
+Run. Exact identity-map target grounding is corrected in the existing locator;
+historical rejected declarations retain their original locator semantics through
+the existing repair reader, without rewriting questions or granting execution.
+334 maintained affected-domain cases pass; 18 obsolete retired-tool lookups are
+separately reproduced against the baseline locator. This does not qualify full
+conversational Gate 2 completion. All original science, prior failures and external
+evaluation remain exact; code is unstaged/uncommitted, and no next stage starts.
+
+The [Cell Ontology and explanation qualification](../agent-data/acceptance/scientific-results/cell-ontology-and-explanations-2026-11-08/REPORT.md)
+did not qualify automatic ontology replacement: pinned CL terminology lookup has
+partial coverage, while tested native scOntoMatch alignment has competing-ancestor
+and broad-collapse limitations. No ontology resource or automatic enrichment is
+installed in production; strict comparison and current explicit mapping remain.
+General R5 review wire 4 removes the redundant whole-response veto. Exact bindings,
+per-unit factual review, independent partial retention, atomic guidance and evidence
+freshness remain. Wrong attribution is an unsupported unit, never an allowed claim.
+Genuine Firefox annotation explanation passed; strict-comparison explanation is
+partial, not full acceptance. Old scientific values and displayed failures remain
+immutable. No scientific rerun, staging, commit or push is performed.
+
+The [Gate 2 final product closeout](../agent-data/acceptance/scientific-results/srv-2c/final-product-closeout-2026-11-08/REPORT.md)
+owns the final combined source review and authorized Git result. Native coordinate
+lookup matches both accepted path and checksum before checking written slots;
+another publication with identical bytes cannot hide the selected source. The
+annotation guide distinguishes the accepted MAESTRO Enhanced RP count-weighted
+fragment input and native marker-signature scoring from the paper's binary-input
+formulation. No annotation algorithm or accepted prediction changes.
+Final focused verification records 225 passes with three existing failures and
+63 post-correction passes. All 77 previously recorded failures also reproduce on
+pure pushed baseline `13addae`, without the inherited patch. Historical Session,
+RunStore, freeze, reference and acceptance evidence remain protected. Genuine
+strict comparison/figures/downloads and annotation explanation retain their bounded
+passes; strict comparison explanation remains partial, conversational mapping
+remains unqualified and automatic ontology standardization/harmonization is absent.
+The user's final closeout authorizes one coherent reviewed commit and normal push
+to `origin/main`; earlier no-commit statements describe the pre-closeout stages.
+No new scientific experiment or subsequent roadmap stage is started.

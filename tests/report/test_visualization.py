@@ -774,3 +774,17 @@ def test_reference_confusion_names_supplied_reference_without_truth_claim():
         dict(rows=['A'],columns=['A',None],counts=[[2,1]])))
     assert figure.axes[0].get_ylabel()=='Reference annotation'
     assert 'truth' not in figure.axes[0].get_title().lower()
+
+
+def test_comparison_figures_distinguish_undefined_coverage_and_source_sides():
+    from agent.report.annotation_visualization import render
+    counts=dict(rows=['A','B'],columns=['A','B',None],counts=[[1,0,1],[0,1,0]],comparison_projection_version=3)
+    figure=Figure(figsize=(12,8));render(figure,visualization_module._ScientificPanelData('reference_confusion_normalized',counts))
+    assert figure.axes[0].get_ylabel()=='Supplied reference labels'
+    np.testing.assert_array_equal(figure.axes[0].images[0].get_array(),[[.5,0,.5],[0,1,0]])
+    layout=dict(coordinates=[[0,0],[1,1],[2,2],[3,3]],predicted=['A',None,'B','A'],reference=['A','B','A',None],matched=[True,True,True,False],comparison_projection_version=3)
+    figure=Figure(figsize=(18,7));render(figure,visualization_module._ScientificPanelData('reference_umap',layout))
+    labels=[t.get_text() for t in figure.axes[2].get_legend().get_texts()]
+    assert 'Native null prediction (1)' in labels and 'Prediction only / unmatched (1)' in labels
+    assert 'Agreement (1)' in labels and 'Disagreement (1)' in labels
+    assert 'Fixed prediction labels' in figure.axes[0].get_title() and 'Supplied reference' in figure.axes[1].get_title()

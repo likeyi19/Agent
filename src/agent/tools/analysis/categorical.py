@@ -166,30 +166,64 @@ def fields(path):
 def _series(item):
     # AnnData owns the older dataframe 0.1 categorical encoding too. Use its
     # selected-column reader, not a second implementation or full obs decoding.
-    if item.parent.attrs.get('encoding-version') == '0.1.0':
+    if 'categories' in item.attrs or item.parent.attrs.get('encoding-version') == '0.1.0':
         from anndata._io.specs.methods import read_series
         return read_series(item)
     return read_elem(item)
+
+
+def selected_observations(handle, fields, *, max_logical_bytes=128 * 1024**2):
+    """AnnData selected-column decoding after bounded storage validation.
+
+    Legacy category levels are a separate referenced dataset. Validate that
+    dependency before AnnData follows it; never read X or unrelated obs fields.
+    """
+    from .peak_h5ad import inspect
+    inspect(handle, observation_fields=())
+    obs = handle['obs']; index = obs.attrs['_index']
+    requested = set(fields)
+    fields = tuple(dict.fromkeys((index, *fields)))
+    allowed = {index, *obs.attrs['column-order']}
+    if any(field not in allowed or '/' in field for field in fields):
+        raise ValueError('Selected observation column is absent or not an exact column name')
+    dependencies = list(fields)
+    for field in fields:
+        if not isinstance(obs.get(field, getlink=True), h5py.HardLink):
+            raise ValueError('Indirect observation storage is unsupported')
+        item = obs[field]
+        if 'categories' in item.attrs:
+            try:
+                target = obs[item.attrs['categories']]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError('Invalid legacy categorical reference') from exc
+            # Inspect every path component, including a referenced dataset's parents.
+            parent = handle
+            for part in target.name.strip('/').split('/'):
+                if not isinstance(parent.get(part, getlink=True), h5py.HardLink):
+                    raise ValueError('Indirect categorical levels are unsupported')
+                parent = parent[part]
+            if not isinstance(target, h5py.Dataset) or target.ndim != 1:
+                raise ValueError('Categorical levels require a vector dataset')
+            dependencies.append(target.name)
+    inspect(handle, observation_fields=tuple(dict.fromkeys(dependencies)), max_logical_bytes=max_logical_bytes)
+    values = {field: _series(obs[field]) for field in fields}
+    axis = values.pop(index)
+    if (getattr(axis, 'ndim', None) != 1 or any(
+            getattr(value, 'ndim', None) != 1 or len(value) != len(axis) for value in values.values())):
+        raise ValueError('Selected H5AD observations require one value per cell; scalar broadcasting is forbidden')
+    # Explicit index-column selection has the same original values, not a new axis.
+    if index in requested:
+        values[index] = axis
+    return pd.DataFrame(values, index=axis)
 
 
 def observations(path, sha, field):
     from .marker_annotation import checked_file
     path = checked_file(path, sha)
     with h5py.File(path, 'r') as handle:
-        from .peak_h5ad import inspect
-        inspect(handle, observation_fields=())
-        obs = handle['obs']
-        # Exact obs member lookup, never HDF5 path traversal supplied by a model.
-        if field not in obs.attrs['column-order']:
-            raise ValueError('Selected categorical field is not an observation column.')
-        selected = [obs.attrs['_index'], field]
-        # Legacy AnnData uses an HDF5 object reference for the category levels.
-        # Check that referenced dataset with the same bounded storage owner.
-        if 'categories' in obs[field].attrs:
-            selected.append(obs[obs[field].attrs['categories']].name)
-        inspect(handle, observation_fields=selected)
-        ids = ordered_ids(_series(obs[obs.attrs['_index']]), source='Accepted observation axis')
-        values = pd.Series(_series(obs[field]))
+        frame = selected_observations(handle, (field,))
+        ids = ordered_ids(frame.index, source='Accepted observation axis')
+        values = frame[field].reset_index(drop=True)
     if len(values) != len(ids):
         raise ValueError('Observation field and entity axis differ.')
     _labels(values)

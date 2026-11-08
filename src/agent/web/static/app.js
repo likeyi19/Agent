@@ -621,7 +621,7 @@ function renderResultSelection() {
   }
   const headlineFields = new Map();
   for (const group of visible) {
-    const wanted = {compare_cell_annotations: ["matched_cells", "evaluation_coverage", "accuracy", "macro_f1", "balanced_accuracy"],
+    const wanted = {compare_cell_annotations: ["n_prediction_cells", "n_reference_cells", "matched_cells", "prediction_only_cells", "reference_only_cells", "unassigned_prediction_cells", "evaluated_cells", "evaluation_coverage", "accuracy", "macro_f1", "balanced_accuracy"],
       annotate_scATAC_cell_types: ["n_cells", "n_groups", "assigned_cells", "unassigned_cells"]}[group.tool] || [];
     const facts = wanted.flatMap(field => (group.evidence?.facts || []).filter(fact =>
       fact.field === field && fact.status === "available" && (fact.value === null || typeof fact.value === "number")));
@@ -663,9 +663,14 @@ function renderResultSelection() {
         else if (["group_summary", "state_counts", "metrics", "per_class", "composition"].includes(fact.field)) {
           // Literature rows and mapping rationales remain in Methods; the
           // composition table shows the exact recorded counts and assessments.
-          const preview = fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"
+          let preview = fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"
             && Array.isArray(fact.value) ? fact.value.map(({group, candidate, n_cells, native_score, assessment}) =>
               ({group, candidate, n_cells, native_score, assessment})) : fact.value;
+          if (fact.field === "per_class" && group.tool === "compare_cell_annotations" && Array.isArray(preview)) {
+            preview = preview.map(row => ({...row,
+              ...(row.precision === null ? {precision: "Undefined (no predicted cells)"} : {}),
+              ...(row.recall === null ? {recall: "Undefined (no reference support)"} : {})}));
+          }
           value.append(evidenceValueNode(preview));
           if (fact.field === "group_summary") {
             const note = document.createElement("p"); note.className = "muted small";

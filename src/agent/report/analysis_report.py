@@ -1253,7 +1253,7 @@ def report_fact_fields(tool_name, raw_facts):
     """
     fields = _REPORT_FIELDS.get(tool_name, ())
     if tool_name == _CELL_COMPARISON.TOOL and 'vocabulary' in raw_facts:
-        fields = ('label_policy', *_CELL_COMPARISON.EXTENDED_FACT_FIELDS,
+        fields = ('label_policy', *(k for k in _CELL_COMPARISON.EXTENDED_FACT_FIELDS if k in raw_facts),
                   *(k for k in fields if k != 'label_policy'))
     if tool_name == 'run_macs3' and 'result_files' in raw_facts:
         fields = (*fields, 'result_files')

@@ -70,6 +70,25 @@ def planned_count_preservation(tool, arguments):
             and arguments.get('count_slot', 'X') == 'X')
 
 
+def native_coordinate_source(context, path, sha):
+    """Exact accepted native written-slot projection, never H5AD-name inference."""
+    if context is None:
+        return None
+    context.validate_anchors()
+    for proof in context.proofs.values():
+        for tool in NATIVE:
+            if proof.kind != 'native_' + tool.removeprefix('run_') + '_matrix':
+                continue
+            result = proof.result_metadata
+            if result.get('matrix_sha256') != sha or str(result.get('matrix_path')) != str(path):
+                continue
+            descriptor = describe(tool, result)
+            if descriptor is None or not descriptor['coordinates'] or not descriptor['preserves_counts']:
+                raise ValueError('Selected native publication has no qualified written UMAP coordinates')
+            return dict(field=descriptor['coordinates'], source_sha256=result['source_identity']['sha256'])
+    return None
+
+
 def native_group_rows(context, path, sha, source_sha, cell_ids):
     """Consume verified native groups in the existing invocation authority DAG.
 

@@ -159,3 +159,25 @@ def test_annotation_pending_context_without_files_retains_existing_capture():
     assert reference == dict(pending, predecessor_turn_id='first')
     next_turn = Interaction('next', 'The grouping is independent', None, 0, dict(prerequisite=reference))
     assert captured_input_group(next_turn, (first,)) is None
+
+
+def test_comparison_native_coordinates_require_exact_verified_written_slot(tmp_path):
+    value=result();value['source_identity']={'sha256':'b'*64}
+    context=SimpleNamespace(validate_anchors=lambda:None,proofs={'native':SimpleNamespace(kind='native_snapatac2_matrix',result_metadata=value)})
+    assert cell_result.native_coordinate_source(context,value['matrix_path'],value['matrix_sha256'])==dict(field='X_umap',source_sha256='b'*64)
+    assert cell_result.native_coordinate_source(None,value['matrix_path'],value['matrix_sha256']) is None
+    assert cell_result.native_coordinate_source(context,value['matrix_path'],'c'*64) is None
+    assert cell_result.native_coordinate_source(context,'/wrong/path',value['matrix_sha256']) is None
+    value['parameters']['kwargs']['inplace']=False
+    with pytest.raises(ValueError):cell_result.native_coordinate_source(context,value['matrix_path'],value['matrix_sha256'])
+
+
+@pytest.mark.parametrize('selected_first', [False, True])
+def test_native_coordinate_lookup_selects_exact_path_among_identical_file_hashes(selected_first):
+    selected=result();selected['source_identity']={'sha256':'b'*64}
+    other=dict(selected,matrix_path='/other-accepted/result.h5ad',source_identity={'sha256':'c'*64})
+    values=[selected,other] if selected_first else [other,selected]
+    context=SimpleNamespace(validate_anchors=lambda:None,proofs={str(i):SimpleNamespace(
+        kind='native_snapatac2_matrix',result_metadata=value) for i,value in enumerate(values)})
+    assert cell_result.native_coordinate_source(context,selected['matrix_path'],selected['matrix_sha256'])==dict(
+        field='X_umap',source_sha256='b'*64)

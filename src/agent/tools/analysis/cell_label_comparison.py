@@ -1,4 +1,4 @@
-"""Fixed cell-label comparison on explicitly declared library/cell identities.
+"""Fixed cell-label comparison on exact, optionally library-scoped identities.
 
 Feature matrices are not compared or loaded. Reference labels never train, rename
 or otherwise change predictions. Legacy transfer-confidence evaluation remains
@@ -30,12 +30,17 @@ POLICY = 'compare-cell-annotations-v1'
 HISTORICAL_PROFILE = digest(dict(contract=CONTRACT, identity='explicit_library_and_exact_cell_id',
     labels='exact_no_mapping', unassigned='included_in_accuracy_and_recall',
     macro_f1='union_of_observed_biological_labels', partitions='jointly_labeled_only'))
-PROFILE = digest(dict(contract=CONTRACT, base=HISTORICAL_PROFILE,
+MAPPING_PROFILE = digest(dict(contract=CONTRACT, base=HISTORICAL_PROFILE,
     labels='explicit_side_scoped_simultaneous_string_mapping.v1', unspecified='unchanged',
     originals='immutable_with_original_metrics', missing='never_mapped'))
+PROFILE = digest(dict(contract=CONTRACT, base=MAPPING_PROFILE,
+    identity='unique_exact_ids_optional_explicit_library_scope.v2',
+    per_class='undefined_precision_recall_null.v2', observations='anndata_selected_columns',
+    figures='comparison_coverage_confusion_native_coordinates.v3'))
 VERIFIER = dict(id='agent.cell-label-comparison', compatibility_version='1')
 LIMITATIONS = ('Reference annotations are supplied research evidence, not infallible biological truth. '
-    'Library identity is explicitly declared or supplied in selected metadata columns, not independently verified. '
+    'Exact ID matching does not independently establish biological or physical-library correspondence. '
+    'Library provenance remains unverified unless separately established; supplied library scopes are preserved. '
     'Exact cell identifiers are joined without barcode rewriting, positional matching or label mapping. '
     'Accuracy, macro-F1 and balanced accuracy use matched cells with a reference label; missing predictions count as errors. '
     'Macro-F1 averages the union of observed biological labels; balanced accuracy averages recall over supported reference classes. '
@@ -47,7 +52,7 @@ FACT_FIELDS = ('n_prediction_cells', 'n_reference_cells', 'matched_cells', 'pred
     'evaluation_coverage', 'assigned_accuracy', 'accuracy', 'macro_f1', 'balanced_accuracy',
     'ari', 'nmi', 'partition_cells', 'identity_basis', 'label_policy', 'per_class',
     'classes_omitted', 'composition', 'composition_omitted', 'umap_available', 'software_versions', 'limitations')
-EXTENDED_FACT_FIELDS = ('vocabulary', 'mapping', 'original_metrics', 'metric_denominators')
+EXTENDED_FACT_FIELDS = ('vocabulary', 'mapping', 'original_metrics', 'metric_denominators', 'classification_disagreements')
 RESULT_FIELDS = dict(status=(str,), contract_version=(str,), manifest_path=(str,), manifest_sha256=(str,),
     comparison_path=(str,), comparison_sha256=(str,), aligned_path=(str,), aligned_sha256=(str,))
 for _k in FACT_FIELDS:
@@ -107,7 +112,7 @@ def parameter_prerequisites(inputs):
         return ("reference_sample_key",)
     if inputs.get("reference_sample_key"):
         return ("prediction_sample_key",)
-    return ("shared_library_id",)
+    return ()
 
 
 def observations(path, label_key, cell_key=None, sample_key=None):
@@ -115,23 +120,9 @@ def observations(path, label_key, cell_key=None, sample_key=None):
     label_key = _text(label_key, 'Label column')
     path = Path(path)
     if h5py.is_hdf5(path):
-        from .peak_h5ad import inspect
+        from .categorical import selected_observations
         with h5py.File(path, 'r') as handle:
-            inspect(handle, observation_fields=())
-            group = handle['obs']; index_key = group.attrs['_index']
-            selected = tuple(dict.fromkeys(k for k in (index_key, label_key, cell_key, sample_key) if k is not None))
-            if any(k not in group for k in selected):
-                raise ValueError('Selected observation column is absent')
-            inspect(handle, observation_fields=selected, max_logical_bytes=128 * 1024**2)
-            index = read_elem(group[index_key])
-            if not 1 <= len(index) <= MAX_CELLS:
-                raise ValueError('Label observations exceed the 200000-cell bound')
-            columns = {k:read_elem(group[k]) for k in selected if k != index_key}
-            if (getattr(index, 'ndim', None) != 1 or any(
-                    getattr(value, 'ndim', None) != 1 or len(value) != len(index)
-                    for value in columns.values())):
-                raise ValueError('Selected H5AD observations require one value per cell; scalar broadcasting is forbidden')
-            obs = pd.DataFrame(columns, index=index)
+            obs = selected_observations(handle, tuple(k for k in (label_key, cell_key, sample_key) if k is not None))
     else:
         if path.stat().st_size > 64 * 1024**2:
             raise ValueError('Label table exceeds 64 MiB')
@@ -182,20 +173,26 @@ def _overlay(args, prediction_pin, ids, labels, reference, matched, annotation_p
         return dict(available=False), []
     pin = _pin(args['umap_path'], args.get('umap_sha256'))
     from .categorical import coordinates
-    from .embedding_analysis import PROVENANCE_KEY, _read_analysis, _validate_neighbors_artifact, _validate_umap_labels
-    coordinate_artifact = _read_analysis(Path(pin['path']))
-    _validate_neighbors_artifact(coordinate_artifact, expected_stages=frozenset({'umap'}))
-    _validate_umap_labels(coordinate_artifact)
-    cells, xy = coordinates(pin['path'], pin['sha256'])
-    with h5py.File(pin['path'], 'r') as handle:
-        provenance = read_elem(handle['uns'][PROVENANCE_KEY])
-    parent = provenance.get('embedding', {}).get('source_sha256')
+    from .cell_result import native_coordinate_source
+    native = native_coordinate_source(current(), pin['path'], pin['sha256'])
+    if native is not None:
+        cells, xy = coordinates(pin['path'], pin['sha256'], native['field'])
+        ancestors = {pin['sha256'], native['source_sha256']}
+    else:
+        from .embedding_analysis import PROVENANCE_KEY, _read_analysis, _validate_neighbors_artifact, _validate_umap_labels
+        coordinate_artifact = _read_analysis(Path(pin['path']))
+        _validate_neighbors_artifact(coordinate_artifact, expected_stages=frozenset({'umap'}))
+        _validate_umap_labels(coordinate_artifact)
+        cells, xy = coordinates(pin['path'], pin['sha256'])
+        with h5py.File(pin['path'], 'r') as handle:
+            provenance = read_elem(handle['uns'][PROVENANCE_KEY])
+        ancestors = {provenance.get('embedding', {}).get('source_sha256')}
     # Copied H5AD metadata alone is not accepted native annotation authority.
     # Authenticate the original-source relationship through its publication.
     parents = {prediction_pin['sha256']}
     if annotation_parent is not None:
         parents.add(annotation_parent)
-    if parent not in parents or tuple(cells) != tuple(ids):
+    if not ancestors.intersection(parents) or tuple(cells) != tuple(ids):
         raise ValueError('UMAP requires exact original-source ancestry and ordered prediction cells; equal counts/barcodes do not qualify')
     return dict(available=True, cell_ids=list(cells), coordinates=xy.tolist(),
         predicted=labels, reference=reference, matched=matched, category_order=category_order,
@@ -217,7 +214,9 @@ def _metric_data(predicted, truth):
     if len(y):
         precision, recall, f1, support = precision_recall_fscore_support(y, p, labels=list(range(len(classes))), zero_division=0)
         for i, c in enumerate(classes):
-            per_class.append(dict(label=c, precision=float(precision[i]), recall=float(recall[i]),
+            predicted_count = int((p==i).sum())
+            per_class.append(dict(label=c, precision=float(precision[i]) if predicted_count else None,
+                recall=float(recall[i]) if support[i] else None,
                 f1=float(f1[i]), reference_cells=int(support[i]), predicted_cells=int((p==i).sum()),
                 correct_cells=int(((p==i)&(y==i)).sum())))
         np.add.at(confusion, (y, np.where(assigned, p, len(classes))), 1)
@@ -283,8 +282,8 @@ def compare(args):
         _text(shared, 'Explicit shared library identity')
         if pk is not None or rk is not None:
             raise ValueError('Select shared_library_id OR both library columns')
-    elif pk is None or rk is None:
-        raise ValueError('Declare the same physical sample/library with shared_library_id, or select both sample/library columns; bare barcodes do not establish correspondence')
+    elif (pk is None) != (rk is None):
+        raise ValueError('Explicit library scoping requires both sample/library columns')
     left_ids, left_samples, predicted, axis = observations(sources[0]['path'], args['prediction_label_key'], args.get('prediction_cell_key'), pk)
     right_ids, right_samples, truth, _ = observations(sources[1]['path'], args['reference_label_key'], args.get('reference_cell_key'), rk)
     left = list(zip(left_samples or [shared]*len(left_ids), left_ids))
@@ -294,7 +293,7 @@ def compare(args):
     li, ri = {k:i for i,k in enumerate(left)}, {k:i for i,k in enumerate(right)}
     matches = [k for k in left if k in ri]
     if not matches:
-        raise ValueError('No cells match exact declared library/cell identities')
+        raise ValueError('No cells match exact selected cell identities and optional library scope')
     original_predicted, original_truth = predicted, truth
     vocabulary = _vocabulary(predicted, truth)
     original_metrics, original_per_class, original_confusion = _metric_data(
@@ -354,7 +353,8 @@ def compare(args):
         matched_fraction_prediction=len(matches)/len(left), matched_fraction_reference=len(matches)/len(right),
         reference_label_missing_cells=len(matches)-metrics['evaluated_cells'],
         evaluation_coverage=metrics['evaluated_cells']/len(left), **metrics,
-        identity_basis='declared_shared_library' if shared is not None else 'selected_library_columns',
+        identity_basis=('declared_shared_library' if shared is not None else
+            'selected_library_columns' if pk is not None else 'exact_cell_ids_library_provenance_unverified'),
         label_policy='explicit_harmonized_labels' if harmonized else 'exact_labels_no_mapping', per_class=per_class[:50], classes_omitted=max(0,len(per_class)-50),
         composition=composition[:50], composition_omitted=max(0,len(composition)-50), umap_available=overlay['available'],
         software_versions={'scikit_learn':sklearn_version}, limitations=(LIMITATIONS if not harmonized else
@@ -368,16 +368,25 @@ def compare(args):
             | {original_predicted[li[k]] for k in matches if original_truth[ri[k]] is not None and original_predicted[li[k]] is not None}),
         original_balanced_accuracy_reference_classes=sum(c['reference_cells']>0 for c in original_per_class),
         reference_missing_excluded_cells=summary['reference_label_missing_cells'],
-        missing_prediction_policy='included_as_errors', zero_division=0,
+        missing_prediction_policy='included_as_errors', undefined_precision_recall='null_when_denominator_zero',
+        aggregate_f1_zero_division=0,
         partition_scope='mapped_partitions' if harmonized else 'original_label_partitions')
     summary.update(vocabulary=_bounded_categories(vocabulary),
         mapping={**mapping, **{side:_bounded_categories(mapping[side]) for side in ('prediction','reference')}},
         original_metrics=dict(label_policy='exact_labels_no_mapping', **original_metrics), metric_denominators=denominators)
+    disagreements = sorted((dict(prediction_label=confusion['columns'][j],reference_label=label,cells=count)
+        for i,label in enumerate(confusion['rows']) for j,count in enumerate(confusion['counts'][i])
+        if count and confusion['columns'][j]!=label),key=lambda row:(-row['cells'],str(row['reference_label']),str(row['prediction_label'])))
+    summary['classification_disagreements'] = dict(records=disagreements[:20],total_records=len(disagreements),
+        omitted_records=max(0,len(disagreements)-20),population='matched reference-labelled cells',
+        label_policy=summary['label_policy'],null_prediction='missing evidence, not a biological class')
     report = dict(schema=CONTRACT, summary=summary, per_class=per_class, composition=composition,
         confusion=confusion, vocabulary=vocabulary, mapping=mapping,
         methods=dict(identity_basis=summary['identity_basis'], label_policy=summary['label_policy'],
             sample_declaration=shared, prediction_sample_key=pk, reference_sample_key=rk,
-            prediction_label_key=args['prediction_label_key'], reference_label_key=args['reference_label_key']),
+            prediction_label_key=args['prediction_label_key'], reference_label_key=args['reference_label_key'],
+            prediction_source_sha256=sources[0]['sha256'], reference_source_sha256=sources[1]['sha256'],
+            biological_correspondence='not_independently_verified_by_id_matching'),
         sources=sources)
     if harmonized:
         report['original_comparison'] = dict(metrics=original_metrics, per_class=original_per_class,
@@ -417,7 +426,7 @@ def compare_cell_annotations(prediction_path, reference_path, prediction_label_k
 
 publication = NativePublication(tool=TOOL, kind=KIND, contract=CONTRACT, profile=PROFILE,
     verifier=VERIFIER, files=tuple(DELIVERY_FILES), arguments=arguments,
-    outputs={'comparison':'comparison.json', 'aligned':'aligned-labels.tsv'}, historical_profiles=(HISTORICAL_PROFILE,))
+    outputs={'comparison':'comparison.json', 'aligned':'aligned-labels.tsv'}, historical_profiles=(HISTORICAL_PROFILE,MAPPING_PROFILE))
 load, result = publication.load, publication.result
 verify_publication, verify_result = publication.verify_publication, publication.verify_result
 recover = publication.recover

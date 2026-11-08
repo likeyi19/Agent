@@ -863,7 +863,8 @@ def _numeric_token_span(text, start, end, *, legacy_modifier=False):
     return True
 
 
-def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _string_literal=False):
+def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _string_literal=False,
+                        _key_span=None, _legacy_mapping_grounding=False):
     """Locate provider-selected text; persisted declarations remain strict spans.
 
     Association belongs to the interpreter. An exact context quote can distinguish
@@ -882,13 +883,15 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _s
         for member in value['members']:
             keyed = 'name_evidence' in member
             _shape(member, ('name', 'kind', 'literal', 'evidence') + (('name_evidence',) if keyed else ()))
+            key_span = (None if not keyed else _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
+                literal=member['name'], evidence=member['name_evidence']), utterance, _string_literal=True))
             span = _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
-                literal=member['literal'], evidence=member['evidence']), utterance, _string_literal=keyed)
+                literal=member['literal'], evidence=member['evidence']), utterance, _string_literal=keyed,
+                _key_span=(None if _legacy_mapping_grounding or key_span is None or member['literal'] != member['name']
+                    else (key_span['start'], key_span['end'])))
             result = dict(name=member['name'], kind=member['kind'],
                 **{k: span[k] for k in ('literal', 'start', 'end')})
             if keyed:
-                key_span = _ground_declaration(dict(tool=value['tool'], argument=value['argument'],
-                    literal=member['name'], evidence=member['name_evidence']), utterance, _string_literal=True)
                 result.update(name_start=key_span['start'], name_end=key_span['end'])
             grounded.append(result)
         return grounded
@@ -911,9 +914,11 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _s
     evidence = value['evidence'] if quoted else literal
     if type(evidence) is not str or not 0 < len(evidence) <= 4096:
         raise IntentError('invalid_decision')
-    def unique(text, token, *, numeric=False, string=False):
+    def unique(text, token, *, numeric=False, string=False, origin=None):
         matches = [m.start() for m in re.finditer('(?=' + re.escape(token) + ')', text)
-                   if not numeric or _numeric_token_span(text, m.start(), m.start() + len(token))]
+                   if (not numeric or _numeric_token_span(text, m.start(), m.start() + len(token)))
+                   and (origin is None or _key_span is None
+                        or origin+m.start()+len(token)<=_key_span[0] or origin+m.start()>=_key_span[1])]
         if string and len(matches) > 1:
             quotes = {'"':'"', "'":"'", '`':'`', '“':'”', '‘':'’', '「':'」', '『':'』'}
             quoted = [i for i in matches if i > 0 and i+len(token) < len(text)
@@ -927,8 +932,11 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _s
         return matches[0]
     numeric = (not _legacy_numeric_grounding and re.fullmatch(
         r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:/[+-]?\d+)?', literal) is not None)
-    start = unique(utterance, evidence, numeric=numeric and evidence == literal) + unique(
-        evidence, literal, numeric=numeric, string=_string_literal)
+    origin = unique(utterance, evidence, numeric=numeric and evidence == literal)
+    # A mapping key already has its own exact evidence. It cannot be mistaken
+    # for the target in an explicit identity mapping (e.g. "Plasma" to "Plasma").
+    # Two remaining target occurrences still require clarification.
+    start = origin + unique(evidence, literal, numeric=numeric, string=_string_literal, origin=origin)
     result = {key: value[key] for key in keys} | dict(start=start, end=start + len(literal))
     if 'members' in result:
         result['members'] = members()

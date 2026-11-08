@@ -977,7 +977,6 @@ def _diagnose(stage, reason, *, context=None, candidate=None, evidence=None,
         reasons = frozenset(('unclassified_failure', 'invalid_reference', 'missing_evidence',
             'missing_operand', 'provider_failure', 'malformed_provider_output',
             'invalid_review', 'unsupported_statement', 'no_independent_units',
-            'invalid_attribution', 'incoherent_response', 'dependent_content',
             'reviewed_response', 'partially_reviewed_response',
             'changed_accepted_evidence', 'incompatible_scientific_context',
             'subject_not_in_summary', 'unavailable_accepted_evidence',
@@ -1154,8 +1153,10 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
     Keys are local answer/capability identities; paragraph IDs bind each verdict
     independently of response ordering. Neither identity is scientific authority.
     This language judgement cannot repair text, change facts or authorize work.
-    Scientific answers can retain only independently supported complete units;
-    guidance retains its whole reviewed explanation or candidate set.
+    A complete supported answer may retain contextual dependencies. A partial
+    answer keeps only entailed, independent units; guidance remains atomic.
+    Attribution and necessary qualifications belong to each unit's entailment,
+    rather than a second whole-response veto.
     """
     if not 1 <= len(responses) <= 4:
         raise ValueError('Invalid review response count.')
@@ -1165,26 +1166,25 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
     verdict_fields = {p['id']: _object(dict(
         verdict={'type': 'string', 'enum': ['entailed', 'unsupported']},
         independent={'type': 'boolean'})) for p in paragraphs}
-    schema = _object(dict(integrity={'type': 'string',
-        'enum': ['intact', 'invalid_attribution', 'incoherent']}, verdicts=_object(verdict_fields)))
-    prompt = json.dumps(dict(grounding_review_version=3, evidence=public,
+    schema = _object(dict(verdicts=_object(verdict_fields)))
+    prompt = json.dumps(dict(grounding_review_version=4, evidence=public,
         retention_policy='atomic_guidance' if guidance is not None else 'independent_answer_units',
         paragraphs=paragraphs, guidance=guidance, instructions=[
             'Check factual consistency, not prose style or exhaustive citation coverage. Return a verdict '
             'for every exact paragraph ID. Guidance contracts are keyed by the paragraph candidate identity.',
-            'Return integrity=intact only when the candidate attribution and response coherence can be '
-            'established from this exact context. Use invalid_attribution if any paragraph substitutes a '
-            'source, population, subject or version; this invalidates the complete response set. Use '
-            'incoherent when essential assumptions, caveats or referents cannot be resolved safely for '
-            'the response. Ordinary unsupported claims can receive local unsupported verdicts under '
-            'intact integrity; do not mistake an unsupported biological conclusion for evidence corruption.',
+            'A paragraph is entailed only if its actual assertions, source, population, subject, version, '
+            'assumptions and necessary caveats agree with this exact evidence. A substituted attribution, '
+            'unresolved essential referent, omitted necessary caveat or unsupported biological conclusion '
+            'makes that paragraph unsupported. Assess each paragraph; an error in one paragraph does not '
+            'invalidate a different independently supported paragraph.',
             'For every unit, separately assess factual entailment and independent coherence. independent=true '
             'means the exact text is complete and scientifically meaningful if every other paragraph were '
             'removed, with explicit referents and all qualifications it needs. A plausible consequence '
             'depending on another paragraph or a rejected premise is not independent. Missing caveats or '
             'ambiguous referents cannot be repaired by deleting other text. Do not rewrite the candidate. '
-            'For scientific answers with any unsupported unit, only entailed independent units may survive; '
-            'assess their coherence as a retained set too. For atomic_guidance, every paragraph of the '
+            'For scientific answers with any unsupported unit, only entailed independent units may survive. '
+            'Mark independent=false if retaining that unit alongside the other entailed independent units '
+            'would leave an unresolved dependency or contradiction. For atomic_guidance, every paragraph of the '
             'advice or candidate set must be supported together; independence does not permit dropping its limitations.',
             'Reject unsupported empirical claims, incorrect accepted values or units, substituted methods, '
             'and wrong source, population, subject or version attribution. A valid citation alone does not '
@@ -1229,9 +1229,7 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
     raw = _language_complete(model, prompt, schema, 'semantic_review_provider')
     try:
         verdict = _json(raw)
-        _shape(verdict, ('integrity', 'verdicts'))
-        if verdict['integrity'] not in ('intact', 'invalid_attribution', 'incoherent'):
-            raise ValueError('Invalid review integrity.')
+        _shape(verdict, ('verdicts',))
         values = verdict['verdicts']
         _shape(values, verdict_fields)
         for value in values.values():
@@ -1243,14 +1241,13 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
     units = [values[p['id']] for p in paragraphs]
     if diagnostic is not None:
         diagnostic.update(units=units, retained=())
-    if verdict['integrity'] != 'intact':
-        raise _AnswerFailure('semantic_review', 'invalid_attribution'
-            if verdict['integrity'] == 'invalid_attribution' else 'incoherent_response')
     retained = tuple(index for index, value in enumerate(units) if value['verdict'] == 'entailed')
     if not retained or guidance is not None and len(retained) != len(units):
         raise _AnswerFailure('semantic_review', 'unsupported_statement')
-    if len(retained) != len(units) and any(not units[index]['independent'] for index in retained):
-        raise _AnswerFailure('semantic_review', 'dependent_content')
+    if len(retained) != len(units):
+        retained = tuple(index for index in retained if units[index]['independent'])
+        if not retained:
+            raise _AnswerFailure('semantic_review', 'no_independent_units')
     if diagnostic is not None:
         diagnostic['retained'] = retained
     return retained

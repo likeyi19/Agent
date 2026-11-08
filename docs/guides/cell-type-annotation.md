@@ -16,6 +16,17 @@ human Cell Ranger cut-site method and accepted canonical-matrix method retain
 their identities and historical readers. This extension does not reinterpret old
 publications or binarize supplied fragment counts.
 
+The accepted PBMC10k Gate 1 run used MAESTRO Enhanced RP on the original,
+non-binarized `fragment_counts` in `X` under `maestro-enhanced-region-counts.v2`,
+followed by native group-marker calculation and signed marker-signature scoring.
+This is the recorded count-weighted execution profile. The
+[original MAESTRO paper](https://link.springer.com/article/10.1186/s13059-020-02116-x)
+describes its RP formulation with a binary peak-occurrence matrix; the accepted
+count-weighted run must not be described as reproducing that binary-input method.
+Its scores and marker evidence remain computational, dependent annotation evidence.
+MAESTRO is a supported method whose suitability depends on the inputs and references,
+not an exclusive or universally preferred annotation method.
+
 The [MAESTRO implementation](https://raw.githubusercontent.com/liulab-dfci/MAESTRO/74f10babf4125b98ef005df4186b14ab02e13bfd/MAESTRO/scATAC_Genescore.py)
 weights region measurements by transcript/exon and distance relationships.
 [MAESTRO documentation](https://liulab-dfci.github.io/MAESTRO/) describes raw and

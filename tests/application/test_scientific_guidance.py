@@ -32,7 +32,7 @@ class Model:
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
         if 'grounding_review_version' in p:
-            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
+            return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
         self.requests.append((prompt, response_schema))
         if 'guidance_schema_version' in p:
             p['context'] = expand_context(p['context'])
@@ -99,7 +99,7 @@ def test_installed_model_conditions_reach_generation_and_review_without_science(
                 assert p['guidance']['advice']['sequence_models'] == self.metadata
                 if failure == 'changed_metadata':
                     entries[0]['resource']['conditions'] = ['Changed']
-                return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(
+                return json.dumps(dict(verdicts={row['id']: dict(
                     verdict='unsupported' if failure == 'unsupported' else 'entailed', independent=True)
                     for row in p['paragraphs']}))
             return super().complete(prompt=prompt, response_schema=response_schema)

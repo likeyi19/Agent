@@ -27,7 +27,7 @@ class Model:
         if 'grounding_review_version' in p:
             if self.review_callback:
                 self.review_callback()
-            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict=self.verdict, independent=True) for row in p['paragraphs']}))
+            return json.dumps(dict(verdicts={row['id']: dict(verdict=self.verdict, independent=True) for row in p['paragraphs']}))
         return json.dumps(self.author(p['evidence']))
 
 
@@ -156,7 +156,7 @@ def test_guidance_uses_shared_review_and_does_not_publish_rejected_candidates(ap
             p = json.loads(prompt)
             if 'grounding_review_version' in p:
                 seen.append(p)
-                return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='unsupported', independent=True) for row in p['paragraphs']}))
+                return json.dumps(dict(verdicts={row['id']: dict(verdict='unsupported', independent=True) for row in p['paragraphs']}))
             return super().complete(prompt=prompt, response_schema=response_schema)
     result = guide(guard(app, monkeypatch), model=Rejected())
     assert result.status == 'unavailable' and result.guidance is None
@@ -270,7 +270,7 @@ def test_guidance_one_review_exact_mapping_and_failure_preservation(app, monkeyp
             if attack == 'list': values = list(values.values())
             if attack == 'duplicate_json_key':
                 return '{"verdicts":{"cluster_cells:0":"entailed","cluster_cells:0":"unsupported"}}'
-            return json.dumps(dict(integrity='intact', verdicts=values))
+            return json.dumps(dict(verdicts=values))
     model = Reviewed(tools=('inspect_scATAC', 'cluster_cells'))
     result = guide(app, model=model)
     assert len(reviews) == 1

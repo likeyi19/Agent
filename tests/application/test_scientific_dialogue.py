@@ -27,7 +27,7 @@ class Model:
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
         if 'grounding_review_version' in value:
-            return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in value['paragraphs']}))
+            return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in value['paragraphs']}))
         self.calls.append(value)
         if 'turn_schema_version' in value:
             choice = self.decision(value) if callable(self.decision) else self.decision
@@ -220,7 +220,7 @@ class Model:
   if 'turn_schema_version' in p:
    return json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer',intent='scientific',target=dict(output='@focus',subject=None),comparison=None,focus='question')))
   if 'grounding_review_version' in p:
-   return json.dumps(dict(integrity='intact', verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
+   return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
   c=next(c['claim_id'] for c in p['evidence']['claims'] if c['field']=='primary_annotation')
   return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(text='The recorded assignment follows.', kind='finding', citations=[c], comparisons=[])]))
 app=ResearchAgentApplication(sys.argv[1])

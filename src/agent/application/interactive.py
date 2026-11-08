@@ -792,7 +792,7 @@ class InteractiveAgentApplication:
         attachments = []
         captured_attachments = (() if interaction is None or interaction.submission is None
                                 else interaction.submission.get('attachments', ()))
-        metadata = {} if interaction is None else (interaction.admitted or {}).get('registered_input', {})
+        metadata = {} if interaction is None else ((interaction.admitted or {}).get('registered_input') or {})
         raw = {} if interaction is None else (interaction.admitted or {})
         if any(f + '_sources' in raw for f in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo')):
             field = 'epizoo' if 'epizoo_sources' in raw else 'annotation' if 'annotation_sources' in raw else 'fragments' if 'fragments_sources' in raw else 'bam' if 'bam_sources' in raw else 'fastq'

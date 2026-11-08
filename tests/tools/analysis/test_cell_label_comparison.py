@@ -53,9 +53,11 @@ def test_reference_table_and_exact_case_no_mapping(tmp_path,delimiter,extension)
     assert 'a' in {r['label'] for r in json.loads(Path(result['comparison_path']).read_text())['per_class']}
 
 
-def test_identity_required_and_unrelated_libraries_do_not_match(tmp_path):
+def test_unique_exact_ids_default_and_unrelated_explicit_libraries_do_not_match(tmp_path):
     args=inputs(tmp_path);args.pop('shared_library_id')
-    with pytest.raises(ValueError,match='bare barcodes'):owner.compare(args)
+    result,*_=owner.compare(args)
+    assert result['matched_cells']==4 and result['identity_basis']=='exact_cell_ids_library_provenance_unverified'
+    assert owner.parameter_prerequisites(args)==()
     for name,library in [('prediction','unrelated-1'),('reference','unrelated-2')]:
         a=ad.read_h5ad(args[name+'_path']);a.obs['library']=library;a.write_h5ad(args[name+'_path'])
     args.update(prediction_sample_key='library',reference_sample_key='library')
@@ -166,3 +168,91 @@ def test_all_missing_predictions_are_errors_with_no_assigned_denominator(tmp_pat
     assert result['ari'] is result['nmi'] is None
     report=json.loads(Path(result['comparison_path']).read_text())
     assert report['confusion']['counts']==[[0,0,1],[0,0,2]]
+
+
+def test_undefined_precision_recall_preserves_defined_zero(tmp_path):
+    result,rows,cm=owner._metric_data(['B',None,'B'],['A','A','B'])
+    by={r['label']:r for r in rows}
+    assert by['A']['precision'] is None and by['A']['recall']==by['A']['f1']==0
+    assert by['B']['precision']==.5 and by['B']['recall']==1
+    _,rows,_=owner._metric_data(['B'],['A']);by={r['label']:r for r in rows}
+    assert by['B']['recall'] is None and by['B']['precision']==0
+    assert result['accuracy']==1/3 and result['balanced_accuracy']==.5
+
+
+def test_partial_library_scope_still_requires_its_actual_peer(tmp_path):
+    args=inputs(tmp_path);args.pop('shared_library_id');args['prediction_sample_key']='library'
+    assert owner.parameter_prerequisites(args)==('reference_sample_key',)
+    with pytest.raises(ValueError,match='both sample'):owner.compare(args)
+    args['shared_library_id']='supplied'
+    with pytest.raises(ValueError,match='OR both'):owner.compare(args)
+
+
+def test_duplicate_unscoped_ids_are_not_resolved_by_labels_or_position(tmp_path):
+    args=inputs(tmp_path);args.pop('shared_library_id')
+    data=ad.read_h5ad(args['reference_path']);data.obs_names=['a','a','b','d','only-r'];data.write_h5ad(args['reference_path'])
+    with pytest.raises(ValueError,match='Duplicate'):owner.compare(args)
+
+
+@pytest.mark.parametrize('malformed', [None,'invalid_code','indirect_levels'])
+def test_legacy_categories_use_anndata_names_missing_codes_and_order(tmp_path,malformed,monkeypatch):
+    import h5py
+    path=tmp_path/'legacy.h5ad'
+    with h5py.File(path,'w') as f:
+        obs=f.create_group('obs');obs.attrs.update({'encoding-type':'dataframe','encoding-version':'0.1.0',
+            '_index':'cells','column-order':np.array(['label'],dtype=h5py.string_dtype())})
+        obs.create_dataset('cells',data=np.array(['z','a','x'],dtype=h5py.string_dtype()))
+        levels=obs.create_dataset('__categories/label',data=np.array(['B','A','unused'],dtype=h5py.string_dtype()));levels.attrs['ordered']=True
+        col=obs.create_dataset('label',data=[1,-1,7 if malformed=='invalid_code' else 0]);col.attrs['categories']=levels.ref
+        if malformed=='indirect_levels':
+            del obs['__categories/label'];obs['__categories/label']=h5py.SoftLink('/unrelated')
+    before=path.read_bytes()
+    if malformed:
+        with pytest.raises((ValueError,KeyError)):owner.observations(path,'label')
+    else:
+        ids,samples,labels,axis=owner.observations(path,'label')
+        assert ids==list(axis)==['z','a','x'] and samples is None and labels==['A',None,'B']
+        # Selected observation reads never invoke a whole-matrix AnnData loader.
+        monkeypatch.setattr(ad,'read_h5ad',lambda *a,**k:pytest.fail('Full H5AD load'))
+        assert owner.observations(path,'label')[2]==labels
+    assert path.read_bytes()==before
+
+
+def test_new_profile_retains_historical_mapped_publications(tmp_path):
+    args=inputs(tmp_path);output=owner.execute(args,'new')
+    path=Path(output['manifest_path']);manifest=json.loads(path.read_text())
+    assert manifest['profile']==owner.PROFILE and owner.PROFILE!=owner.MAPPING_PROFILE
+    # Build a historical-shaped record, with its numeric convention and no new facts.
+    manifest['profile']=owner.MAPPING_PROFILE
+    manifest['result'].pop('classification_disagreements')
+    manifest['result']['metric_denominators'].pop('undefined_precision_recall')
+    manifest['result']['metric_denominators'].pop('aggregate_f1_zero_division')
+    manifest['result']['metric_denominators']['zero_division']=0
+    from agent.tools.analysis.sequence_prediction import write
+    path.unlink()
+    sha=write(path,manifest)
+    loaded=owner.verify_publication(path,expected_sha256=sha)
+    assert loaded['metric_denominators']['zero_division']==0 and 'classification_disagreements' not in loaded
+    from agent.report.analysis_report import report_fact_fields
+    assert 'classification_disagreements' not in report_fact_fields(owner.TOOL,loaded)
+    with pytest.raises(ValueError):
+        # A historical profile never gains new execution-publication authority.
+        from types import SimpleNamespace
+        owner.publication.publication_record(None,owner.TOOL,args,loaded,'new',loaded)
+
+
+def test_modern_categorical_missing_invalid_codes_and_unread_large_x(tmp_path):
+    import h5py
+    args=inputs(tmp_path)
+    with h5py.File(args['prediction_path'],'r+') as f:
+        del f['X'];f.create_dataset('X',shape=(10**9,10**9),dtype='i1',chunks=(1,1))
+    assert owner.observations(args['prediction_path'],'prediction')[2]==['A','B',None,'B','A']
+    with h5py.File(args['prediction_path'],'r+') as f:f['obs/prediction/codes'][0]=-2
+    with pytest.raises(ValueError):owner.observations(args['prediction_path'],'prediction')
+
+
+def test_comparison_errors_keep_reader_fault_distinct_from_bad_input():
+    from agent.orchestration.cell_comparison_registry import classify
+    from agent.schemas import ErrorCategory
+    assert classify(RuntimeError('decoder implementation failed')).category==ErrorCategory.TOOL_EXECUTION_ERROR
+    assert classify(ValueError('malformed codes')).code=='CELL_COMPARISON_INPUT_INVALID'

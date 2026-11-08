@@ -43,7 +43,7 @@ def test_maestro_comparison_figures_authority_download_and_restart(external_case
     root=app._workspace.run_paths(run.run_id)
     manifest=json.loads(next(root.visualizations.rglob('visualization_manifest.json')).read_text())
     kinds=[f['figure_kind'] for f in manifest['figures']]
-    assert kinds==['annotation_composition','marker_activity_dot','marker_activity_distribution','reference_confusion','reference_composition']
+    assert kinds==['annotation_composition','marker_activity_dot','marker_activity_distribution','reference_coverage','reference_confusion','reference_confusion_normalized','reference_composition']
     assert manifest['figure_set']['annotation_projection_version']==2
     if mapped:
         assert 'original_metrics' in result and result['mapping']['applied']

@@ -12,8 +12,8 @@ from test_scientific_explanations import paragraph
 
 
 class Reviewed:
-    def __init__(self, author, verdicts, *, integrity='intact', failure=None, after_review=None):
-        self.author, self.verdicts, self.integrity = author, verdicts, integrity
+    def __init__(self, author, verdicts, *, failure=None, after_review=None):
+        self.author, self.verdicts = author, verdicts
         self.failure, self.after_review, self.calls = failure, after_review, []
 
     def complete(self, *, prompt, response_schema):
@@ -24,12 +24,13 @@ class Reviewed:
         if 'dialogue_schema_version' in value:
             assert value['dialogue_schema_version'] == 4
             return json.dumps(self.author(value['evidence']))
-        assert value['grounding_review_version'] == 3
+        assert value['grounding_review_version'] == 4
+        assert set(response_schema['properties']) == {'verdicts'}
         if self.failure == 'provider':
             raise RuntimeError('PRIVATE_PROVIDER_RESPONSE /private/scientific-path')
         verdicts = {row['id']: dict(verdict=verdict, independent=independent)
                     for row, (verdict, independent) in zip(value['paragraphs'], self.verdicts)}
-        result = dict(integrity=self.integrity, verdicts=verdicts)
+        result = dict(verdicts=verdicts)
         if self.failure == 'missing':
             verdicts.pop(next(reversed(verdicts)))
         elif self.failure == 'extra':
@@ -38,8 +39,8 @@ class Reviewed:
             next(iter(verdicts.values())).pop('independent')
         elif self.failure == 'non_boolean_independence':
             next(iter(verdicts.values()))['independent'] = 1
-        elif self.failure == 'missing_integrity':
-            result.pop('integrity')
+        elif self.failure == 'legacy_integrity':
+            result['integrity'] = 'intact'
         if self.after_review:
             self.after_review()
         return json.dumps(result)
@@ -115,18 +116,36 @@ def test_dependencies_are_reviewed_not_inferred_from_paragraph_order(app, monkey
     assert_single_review(model)
 
 
-@pytest.mark.parametrize('integrity,reason', [
-    ('invalid_attribution', 'A statement uses another version or population.'),
-    ('incoherent', 'A required caveat is omitted.'),
-    ('incoherent', 'An ambiguous referent depends on rejected text.'),
+@pytest.mark.parametrize('false_text', [
+    'Another population contains 4 cells.',
+    'The native tool experimentally validated treatment response.',
+    'The 4 cells prove the treatment works.',
+    'The missing annotations identify a new biological cell type.',
 ])
-def test_global_integrity_prevents_partial_publication(app, monkeypatch, integrity, reason):
+def test_wrong_attribution_and_biological_claims_are_omitted_without_losing_independent_facts(
+        app, monkeypatch, false_text):
     guarded, _, _, _ = prepare(app, monkeypatch)
-    model = Reviewed(mixed, [('entailed', True), ('entailed', True), ('unsupported', True), ('entailed', True)],
-                     integrity=integrity)
-    outcome = ask(guarded, 'integrity', reason, model)
-    assert outcome.status == 'unavailable' and outcome.scientific is None
-    assert '4 cells' not in outcome.text
+    def author(evidence):
+        result = mixed(evidence)
+        result['paragraphs'][2]['text'] = false_text
+        return result
+    model = Reviewed(author, [('entailed', True), ('entailed', True), ('unsupported', False), ('entailed', True)])
+    outcome = ask(guarded, 'local-attribution', 'Explain the accepted result.', model)
+    assert outcome.status == 'answered' and false_text not in outcome.text
+    assert 'The accepted dataset contains 4 cells.' in outcome.text
+    assert outcome.scientific.support == 'insufficient_evidence'
+    assert_single_review(model)
+
+
+def test_dependent_entailed_unit_does_not_suppress_other_independent_units(app, monkeypatch):
+    guarded, _, _, _ = prepare(app, monkeypatch)
+    model = Reviewed(mixed, [('entailed', True), ('entailed', False), ('unsupported', False), ('entailed', True)])
+    outcome = ask(guarded, 'retain-independent', 'Explain the result.', model)
+    assert outcome.status == 'answered'
+    assert '4 cells' in outcome.text and '7 measured features' not in outcome.text
+    assert '12 nonzero' not in outcome.text
+    assert 'do not independently validate' in outcome.text
+    assert {c.field for c in outcome.scientific.claims} == {'n_cells'}
     assert_single_review(model)
 
 
@@ -143,7 +162,7 @@ def test_invalid_reference_in_rejected_unit_still_prevents_any_review(app, monke
 
 
 @pytest.mark.parametrize('failure', [
-    'provider', 'missing', 'extra', 'missing_independence', 'non_boolean_independence', 'missing_integrity',
+    'provider', 'missing', 'extra', 'missing_independence', 'non_boolean_independence', 'legacy_integrity',
 ])
 def test_incomplete_review_cannot_publish_apparently_positive_units(app, monkeypatch, caplog, failure):
     guarded, _, _, _ = prepare(app, monkeypatch)

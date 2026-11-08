@@ -105,10 +105,10 @@ class Model:
         if 'dialogue_schema_version' in value:
             return json.dumps(dict(support='unavailable',paragraphs=[]))
         if 'grounding_review_version' in value:
-            return json.dumps(dict(integrity='intact',verdicts={}))
+            return json.dumps(dict(verdicts={}))
         # Ordinary v4 Planner: bind each reviewed parameter through its input.
         inputs=value['catalog']['request_inputs']
-        names=['prediction_path','reference_path','prediction_label_key','reference_label_key','shared_library_id']
+        names=[k for k in ('prediction_path','reference_path','prediction_label_key','reference_label_key','shared_library_id') if k in inputs]
         names += [k for k in ('prediction_mapping','reference_mapping','prediction_sha256','reference_sha256') if k in inputs]
         return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(step_id='comparison',tool=TOOL,
             sources=[dict(target=k.replace('_path','_dataset') if k.endswith('_path') else k,
@@ -116,11 +116,13 @@ class Model:
 
 
 @pytest.mark.parametrize("registered", [False, True])
-def test_missing_mapping_continues_via_existing_parameter_owner_and_reuses_result(tmp_path,monkeypatch,registered):
+@pytest.mark.parametrize("with_library", [False, True])
+def test_missing_mapping_continues_via_existing_parameter_owner_and_reuses_result(tmp_path,monkeypatch,registered,with_library):
     p=tmp_path/'prediction.h5ad';r=tmp_path/'reference.h5ad'
     ad.AnnData(obs=pd.DataFrame({'label':pd.Categorical(['CD4 Naive T','CD4 Memory T','B',None])},index=list('abcd'))).write_h5ad(p)
     ad.AnnData(obs=pd.DataFrame({'label':['CD4 T cell','CD4 T cell','B','B']},index=list('abcd'))).write_h5ad(r)
     inputs=dict(prediction_path=str(p),reference_path=str(r),prediction_label_key='label',reference_label_key='label',shared_library_id='fixture-library')
+    if not with_library:inputs.pop('shared_library_id')
     decisions={
         'Compare the supplied fixed labels strictly.':dict(kind='execute_plan',target=TOOL),
         'Compare the same labels using a common vocabulary.':dict(kind='execute_plan',target=TOOL,
@@ -131,7 +133,7 @@ def test_missing_mapping_continues_via_existing_parameter_owner_and_reuses_resul
         for text in ('Compare the supplied fixed labels strictly.','Compare the same labels using a common vocabulary.'):
             decisions[text]['roles']=roles
         decisions['Compare the same labels using a common vocabulary.']['retain_parameters']=[
-            dict(result='g0',argument=k) for k in ('prediction_label_key','reference_label_key','shared_library_id')]
+            dict(result='g0',argument=k) for k in ('prediction_label_key','reference_label_key','shared_library_id') if k in inputs]
     model=Model(decisions)
     profile=PlanningModelProfile('test','scripted',model.model_id)
     service=InteractiveAgentApplication(tmp_path/'workspace',model_profiles=(profile,),default_profile_id='test',
@@ -200,7 +202,10 @@ def test_historical_report_order_and_new_whole_fact_order_are_version_aware():
     from agent.report.analysis_report import report_fact_fields
     assert report_fact_fields(TOOL,{})==owner.FACT_FIELDS
     order=report_fact_fields(TOOL,{'vocabulary':{}})
-    assert order[:5]==('label_policy',*owner.EXTENDED_FACT_FIELDS)
+    assert order[:2]==('label_policy','vocabulary')
+    assert 'classification_disagreements' not in order
+    order=report_fact_fields(TOOL,{k:{} for k in owner.EXTENDED_FACT_FIELDS})
+    assert order[:1+len(owner.EXTENDED_FACT_FIELDS)]==('label_policy',*owner.EXTENDED_FACT_FIELDS)
 
 
 def test_quoted_mapping_target_is_not_the_prefix_inside_another_quoted_label():
@@ -359,3 +364,29 @@ def test_accepted_column_retention_keeps_original_operands_without_repeated_role
         assert final.resolved_arguments['prediction_mapping']==step.resolved_arguments['prediction_mapping']
         assert final.result['accuracy']==final.result['original_metrics']['accuracy']==.25
         assert service._application.run_store.load(view['run_id']).to_dict()==accepted_before
+
+
+def test_identity_mapping_excludes_exact_key_span_but_retains_real_target_ambiguity():
+    from agent.application.turn_decisions import DeclarationGroundingError
+    text='In reference map "Plasma" to "Plasma".'
+    member=dict(name='Plasma',name_evidence='map "Plasma" to',kind='string',literal='Plasma',evidence='map "Plasma" to "Plasma"')
+    decision=parse_decision(wire(dict(kind='execute_plan',target=TOOL,arguments=[
+        dict(tool=TOOL,argument='reference_mapping',members=[member])])),utterance=text)
+    value=_bind_arguments(build_default_tool_registry(),text,{},decision.arguments)
+    assert value['reference_mapping']=={'Plasma':'Plasma'}
+    assert decision.arguments[0].members[0].start>decision.arguments[0].members[0].name_end
+    text='In reference map "Plasma" to "Plasma" or "Plasma".'
+    member['evidence']='map "Plasma" to "Plasma" or "Plasma"'
+    with pytest.raises(DeclarationGroundingError,match='ambiguous_parameter'):
+        parse_decision(wire(dict(kind='execute_plan',target=TOOL,arguments=[
+            dict(tool=TOOL,argument='reference_mapping',members=[member])])),utterance=text)
+
+
+def test_saved_identity_mapping_rejection_uses_original_locator_semantics():
+    from agent.application.dialogue_execution import _repair_declarations
+    text='In reference map "Plasma" to "Plasma".'
+    raw=wire(dict(kind='execute_plan',target=TOOL,arguments=[dict(tool=TOOL,argument='reference_mapping',members=[
+        dict(name='Plasma',name_evidence='map "Plasma" to',kind='string',literal='Plasma',evidence='map "Plasma" to "Plasma"')])]))
+    assert parse_decision(raw,utterance=text).arguments[0].members[0].literal=='Plasma'
+    safe,rejected=_repair_declarations(raw,text,build_default_tool_registry(),historical_missing={(TOOL,'reference_mapping')})
+    assert rejected==[(TOOL,'reference_mapping')] and not safe.arguments

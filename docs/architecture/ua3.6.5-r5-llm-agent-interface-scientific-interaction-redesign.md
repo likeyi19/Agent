@@ -6,6 +6,28 @@ review. The closing review below supersedes earlier unstaged-review dispositions
 R6 has not begun.
 Evidence directory: `/home/likeyi/agent-ua365-r5-woerjdq3` (outside Git).
 
+## Current scientific explanation follow-up — 2026-11-08
+
+Review wire version 4 replaces the version-3 whole-response attribution/coherence
+veto with one factual verdict per bound paragraph. Entailment includes exact source,
+population, version, methods and necessary qualifications. A fully supported answer
+can retain contextual connections. A mixed answer retains only entailed independent
+units, in their original order with their exact citation union; dependent units are
+omitted without suppressing other independent facts. Guidance remains atomic.
+Missing/malformed verdicts, invalid bindings and changed evidence still withhold
+prose. Scientific acceptance and saved historical display remain unchanged.
+
+The second language call remains necessary for free prose: valid citations alone
+admitted eight deliberately false assertions in a real official-OpenAI qualification;
+the shared reviewer rejected all eight and retained four correct statements. This
+bounded check does not establish universal reviewer reliability. Genuine Firefox
+annotation prose passed; the existing strict comparison received a partial answer,
+so its complete requested interpretation remains unqualified. Historical rejection
+hashes cannot establish the correctness of missing rejected prose. The
+[technical and acceptance report](../../../agent-data/acceptance/scientific-results/cell-ontology-and-explanations-2026-11-08/REPORT.md)
+records the evidence and the separate failed ontology-replacement feasibility gate.
+The earlier version-3 policy and its outcomes below are historical.
+
 ## Current OPT-3A follow-up — 2026-10-26
 
 Exact offered result aliases now resolve through the existing captured-result

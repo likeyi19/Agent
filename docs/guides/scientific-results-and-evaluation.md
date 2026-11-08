@@ -1,5 +1,22 @@
 # Scientific results and evaluation
 
+## Cell Ontology feasibility and scientific explanations
+
+The [2026-11-08 qualification](../../../agent-data/acceptance/scientific-results/cell-ontology-and-explanations-2026-11-08/REPORT.md)
+did not qualify a general automatic ontology replacement. Bionty exact terminology
+lookup provides useful partial coverage, but the tested scOntoMatch functions can
+select competing ancestors by order and collapse supplied categories to `cell`.
+Automatic post-annotation enrichment and ontology-harmonized comparison are not
+installed. Existing strict comparisons, original native labels and historical mapping
+records retain their meanings; the current explicit mapping contract is not replaced.
+
+Scientific prose keeps exact evidence binding and one semantic review. Incorrect
+source attribution and unsupported biological claims fail their paragraph's factual
+verdict. In partial answers, only complete independently supported paragraphs survive,
+with an explicit omission notice. Guidance remains atomic. A withheld explanation
+does not invalidate accepted science or its figures and downloads. Real Firefox
+annotation explanation passed; strict-comparison explanation remained partial.
+
 ## Accepted native handoff and delivery
 
 The SRV-2C replacement derives a transient cell-result view from accepted RunStore
@@ -108,15 +125,18 @@ confidence evaluation, bounded categorical reads and SRV-1B's general
 H5AD labels with an independently uploaded H5AD or headered TSV/CSV. It reads only
 selected observation fields; different feature axes and row orders are allowed.
 H5AD defaults to `obs_names` for cell identifiers; tables require an explicit cell
-column. Biological correspondence is never inferred from filenames or bare barcodes.
+column. Unique exact cell IDs suffice for a requested comparison; this does not
+independently establish biological or physical-library correspondence.
 Selected H5AD fields must contain one value per cell. Tables cannot infer an index
 from surplus fields; quoted labels and omitted trailing labels retain their ordinary
 CSV meanings, with omitted labels counted as missing.
 
-Select both sample/library identity columns, or explicitly declare that both files
-describe the same physical library with `shared_library_id`. Matching uses the
-exact `(library, cell identifier)` key; duplicate keys and absence of shared keys
-are rejected. Library declarations are not independently verified. There is no
+Optionally select both sample/library identity columns, or explicitly declare a
+shared physical library with `shared_library_id`. Supplied scopes are preserved:
+matching uses exact `(library, cell identifier)` keys. A one-sided scope requires
+its peer. Without a scope the basis is `exact_cell_ids_library_provenance_unverified`.
+Duplicate keys and absence of shared keys are rejected; declarations are not
+independently verified. There is no
 barcode rewriting, inferred label alias correction, optimal class mapping or prediction
 update. Source roles and captured H5AD observation/table header names bind fields;
 these name offers do not qualify a source scientifically.
@@ -129,6 +149,13 @@ biological classes; balanced accuracy averages recall over supported reference
 classes. Assigned accuracy uses only jointly labeled cells. Descriptive ARI/NMI
 also use jointly labeled cells and are unavailable for noninformative partitions.
 Per-class results and full-source composition remain separately downloadable.
+New publications record undefined precision (no predictions) and recall (no
+reference support) as null/unavailable; genuine zero remains zero. Aggregate
+definitions are unchanged. A distinct scientific profile preserves historical
+strict/mapped results with their original zero-division convention. Selected
+observations share the bounded AnnData reader, including legacy categorical
+codes/referenced levels and modern encodings; matrices and unrelated columns are
+not loaded just to read labels.
 Reference annotations are research evidence, not infallible biological truth.
 
 Strict original-label comparison remains the default. When vocabularies differ,
@@ -208,6 +235,13 @@ and agreement panels. Missing/unmatched reference coverage is gray. Exact
 original-source ancestry and ordered prediction cells are required. For native
 MAESTRO predictions, bind its accepted annotation publication as well as its H5AD
 to authenticate that relationship; copied `uns` metadata alone is insufficient.
+Accepted native written-slot UMAPs use their verified publication and exact source
+association; inherited slots alone do not qualify. New comparison figures include
+coverage, count/reference-normalized confusion, compositions and a three-panel
+UMAP where qualified. The agreement panel separately marks null predictions,
+missing reference and unmatched coverage. Reference-only cells acquire no invented
+coordinates. Empty marginal rows/columns and bounded legend/class omissions are
+disclosed; complete counts remain downloadable.
 The reference needs neither an embedding nor the same features. No UMAP is refit
 by comparison or rendering. Without coordinates, comparison still produces
 confusion/composition figures; overlay metadata states that coordinates are absent.

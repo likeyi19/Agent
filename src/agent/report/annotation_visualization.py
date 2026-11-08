@@ -15,6 +15,8 @@ from agent.tools.analysis import scatac_annotation as annotation
 from . import visualization as v
 
 CAPTIONS = {
+    'reference_coverage': 'Exact selected cell-ID correspondence with optional supplied library scope. All matched and unmatched populations are retained. Null predictions are not a biological category; matching IDs alone does not verify library provenance.',
+    'reference_confusion_normalized': 'Fractions within each supported supplied-reference class on matched reference-labelled cells, including null predictions as errors. Original count tables remain available. This is reference agreement, not biological truth.',
     'annotation_composition': 'Native MAESTRO group and predicted cell-type composition, including unassigned cells. Candidate labels are computational annotations, not biological validation. Display omissions are explicit.',
     'marker_activity_dot': 'Genuine per-cell MAESTRO Enhanced regulatory potential (RP): color is log1p(mean raw RP), size is fraction RP > 0 in each recorded group. Representative genes follow positive native marker order. Accessibility-derived activity is not measured RNA expression; markers are dependent annotation evidence.',
     'marker_activity_distribution': 'Per-cell log1p(raw native MAESTRO RP) distributions for a bounded subset of the displayed representative markers and groups. All cells in each displayed group are retained. RP is accessibility-derived activity, not measured RNA expression or independent validation; raw RP is sensitive to library depth.',
@@ -28,6 +30,12 @@ CAPTIONS = {
 def _projection(step_id, kind, sources, value, metadata, *, width=10, height=6):
     digest = v._domain_digest('agent.annotation-figure.'+kind+'.v1', value)
     caption = CAPTIONS[kind]
+    if metadata.get('comparison_projection_version') == 3:
+        caption = caption.replace('Exact library/cell-matched', 'Exact selected-ID (optionally library-scoped) matched')
+        if kind == 'reference_umap':
+            caption = ('Exact accepted coordinates for fixed predictions, supplied reference labels and matched-cell agreement. '
+                'Common biological labels share colors. Missing values remain gray in label panels; the agreement panel separately '
+                'identifies native null, missing reference and unmatched coverage. Reference-only cells receive no invented coordinates. No refit or biological validation.')
     if metadata.get('label_policy') == 'explicit_harmonized_labels':
         caption = caption.replace('without label mapping', 'using explicit user label mappings')
         caption += ' Harmonized-label view; original labels, exact-label metrics and side-specific rules remain in downloads. Merging categories changes the partitions; agreement is not biological validation.'
@@ -106,6 +114,12 @@ def projections(snapshot):
             overlay=comparison.read(pins['overlay.json']['path'],pins['overlay.json']['sha256'])
             mapped = report['summary']['label_policy'] == 'explicit_harmonized_labels'
             policy = dict(label_policy='explicit_harmonized_labels') if mapped else {}
+            enhanced = manifest['profile'] == comparison.PROFILE
+            if enhanced:
+                policy['comparison_projection_version'] = 3
+                coverage = {k:report['summary'][k] for k in ('n_prediction_cells','n_reference_cells','matched_cells',
+                    'prediction_only_cells','reference_only_cells','evaluated_cells','unassigned_prediction_cells','reference_label_missing_cells')}
+                result.append(_projection(sid,'reference_coverage',[source],coverage,dict(**policy),width=12,height=5))
             confusion = dict(report['confusion'], **policy)
             sources=[source]+[dict(producing_step_id=sid,tool_name=tool,artifact_kind='cell_label_comparison_data',
                 artifact_path=p['path'],integrity=dict(sha256=p['sha256'])) for p in (pins['comparison.json'],pins['overlay.json'])]
@@ -113,6 +127,16 @@ def projections(snapshot):
                 result.append(_projection(sid,'reference_confusion',sources,confusion,
                     dict(evaluated_cells=report['summary']['evaluated_cells'],raw_counts=True, **policy),
                     width=min(20,max(8,3+.4*len(report['confusion']['columns']))),height=min(20,max(7,3+.4*len(report['confusion']['rows'])))))
+                if enhanced:
+                    result.append(_projection(sid,'reference_confusion_normalized',sources,confusion,
+                        dict(evaluated_cells=report['summary']['evaluated_cells'],normalization='reference_row',**policy),
+                        width=min(22,max(10,4+.4*len(report['confusion']['columns']))),
+                        height=min(22,max(8,4+.4*len(report['confusion']['rows'])))))
+            if enhanced:
+                # Caption source roles come from the owner, not model-chosen aliases.
+                overlay = dict(overlay, comparison_projection_version=3)
+                if mapped:
+                    overlay['label_policy'] = 'explicit_harmonized_labels'
             result.append(_projection(sid,'reference_composition',sources,report['composition'],
                 dict(matched_cells=report['summary']['matched_cells'], **policy),height=min(16,max(6,.25*len(report['composition'])+2))))
             if overlay['available']:
@@ -145,7 +169,24 @@ def _scatter(ax,xy,labels,palette,title):
 
 def render(figure,data):
     kind,value=data.kind,data.value
-    if kind=='annotation_composition':
+    if kind=='reference_coverage':
+        ax=figure.add_axes((.24,.25,.69,.57))
+        n=value['matched_cells'];null=value['unassigned_prediction_cells'];missing=value['reference_label_missing_cells']
+        chunks=[('Matched, evaluated, assigned',n-null-missing,'#4477aa'),('Matched, evaluated, native null',null,'#ddaa33'),
+                ('Matched, reference label missing',missing,'#999999'),('Prediction only',value['prediction_only_cells'],'#66aa88')]
+        left=0
+        for name,count,color in chunks:
+            ax.barh(0,count,left=left,color=color,label=f'{name}: {count:,}');left+=count
+        ax.barh(1,n,color='#4477aa',label=f'Matched total: {n:,}')
+        ax.barh(1,value['reference_only_cells'],left=n,color='#aa77aa',label=f'Reference only: {value["reference_only_cells"]:,}')
+        ax.set_yticks([0,1],[f'Fixed predictions (n={value["n_prediction_cells"]:,})',f'Supplied reference (n={value["n_reference_cells"]:,})'])
+        ax.set_xlabel('Cells; population denominators differ');ax.set_title(f'Exact cell correspondence; evaluated n={value["evaluated_cells"]:,}')
+        ax.legend(loc='upper center',bbox_to_anchor=(.45,-.23),ncol=2,fontsize=8,frameon=False)
+    elif kind in ('reference_confusion','reference_confusion_normalized') and value.get('comparison_projection_version')==3:
+        _comparison_confusion(figure,value,normalized=kind=='reference_confusion_normalized')
+    elif kind=='reference_umap' and value.get('comparison_projection_version')==3:
+        _comparison_umap(figure,value)
+    elif kind=='annotation_composition':
         axes=figure.subplots(1,2);figure.subplots_adjust(left=.2,right=.94,wspace=.9,bottom=.12,top=.88)
         _bars(axes[0],value['groups'],value['counts'],'Recorded groups',['#4477aa']*len(value['groups']))
         palette=_palette([r['label'] for r in value['composition']])
@@ -215,3 +256,51 @@ def render(figure,data):
             _bars(ax,[r['label'] if r['label'] is not None else 'Missing / unassigned' for r in rows],
                 [r['n_cells'] for r in rows],source.capitalize()+' full source',[palette[r['label']] for r in rows])
     else:raise ValueError('Unknown annotation figure kind')
+
+
+def _comparison_confusion(figure,value,*,normalized):
+    import textwrap
+    counts=np.asarray(value['counts']);rows=value['rows'];columns=value['columns']
+    ri=np.flatnonzero(counts.sum(axis=1)>0);ci=np.flatnonzero(counts.sum(axis=0)>0)
+    r,c=ri[:40],ci[:40];shown=counts[np.ix_(r,c)]
+    # Normalize by full reference support, even if a bounded column preview omits counts.
+    values=shown/counts.sum(axis=1)[r,None] if normalized else shown
+    ax=figure.add_axes((.23,.29,.63,.59));image=ax.imshow(values,cmap='Blues',aspect='auto',vmin=0,vmax=1 if normalized else max(1,shown.max(initial=0)))
+    ax.set_xticks(range(len(c)),[textwrap.fill(columns[i] if columns[i] is not None else 'Native null (missing)',20) for i in c],rotation=55,ha='right',fontsize=8)
+    ax.set_yticks(range(len(r)),[textwrap.fill(rows[i],24) for i in r],fontsize=8)
+    ax.set_ylabel('Supplied reference labels');ax.set_xlabel('Fixed prediction labels')
+    policy='Comparison-only mapped labels' if value.get('label_policy')=='explicit_harmonized_labels' else 'Original exact labels'
+    ax.set_title(policy+(' — reference-row fractions' if normalized else ' — cell counts'))
+    if shown.size<=600:
+        for i,j in zip(*np.nonzero(shown)):
+            z=values[i,j];label=('<.01' if z<.005 else f'{z:.2f}') if normalized else str(shown[i,j])
+            ax.text(j,i,label,ha='center',va='center',fontsize=7,color='white' if z>image.norm.vmax*.55 else 'black')
+    figure.colorbar(image,ax=ax,label='Fraction of reference class' if normalized else 'Cells',fraction=.04)
+    figure.text(.03,.025,f'Displayed {len(r)}/{len(ri)} supported reference and {len(c)}/{len(ci)} nonempty prediction states; '
+        f'{len(rows)-len(ri)} zero-support rows / {len(columns)-len(ci)} zero-count columns omitted. '
+        f'Preview counts {shown.sum():,}/{counts.sum():,}; complete union and counts in downloads.',fontsize=8,wrap=True)
+
+
+def _comparison_umap(figure,value):
+    import textwrap
+    xy=np.asarray(value['coordinates']);p=value['predicted'];r=value['reference'];matched=value['matched']
+    palette=_palette(value.get('category_order',p+r));mapped=value.get('label_policy')=='explicit_harmonized_labels'
+    axes=figure.subplots(1,3);figure.subplots_adjust(left=.04,right=.99,bottom=.37,top=.86,wspace=.22)
+    _scatter(axes[0],xy,p,palette,'Fixed prediction labels'+(' (comparison-only mapped)' if mapped else ' (original labels)'))
+    _scatter(axes[1],xy,r,palette,'Supplied reference'+(' (comparison-only mapped)' if mapped else ' (original labels)'))
+    states=[('Prediction only / unmatched' if not m else 'Reference label missing' if b is None else
+             'Native null prediction' if a is None else 'Agreement' if a==b else 'Disagreement')
+            for a,b,m in zip(p,r,matched,strict=True)]
+    state_colors={'Agreement':'#228833','Disagreement':'#cc6677','Prediction only / unmatched':'#bdbdbd',
+                  'Reference label missing':'#777777','Native null prediction':'#ddaa33'}
+    _scatter(axes[2],xy,states,state_colors,'Matched-cell agreement and coverage')
+    axes[2].legend(handles=[Line2D([],[],marker='o',linestyle='',color=color,
+        label=f'{name} ({states.count(name):,})') for name,color in state_colors.items()],
+        loc='upper center',bbox_to_anchor=(.5,-.12),fontsize=7,frameon=False)
+    categories=[(k,c) for k,c in palette.items() if k is not None];shown=categories[:30]
+    handles=[Line2D([],[],marker='o',linestyle='',color=color,label=textwrap.fill(name,25)) for name,color in shown]
+    handles.append(Line2D([],[],marker='o',linestyle='',color=palette[None],label='Missing / unmatched'))
+    figure.legend(handles=handles,loc='lower left',bbox_to_anchor=(.02,.07,.64,.23),ncol=min(4,max(1,len(handles))),
+                  fontsize=7,frameon=False,mode='expand')
+    figure.text(.03,.025,f'Exact accepted coordinates; no refit. {sum(matched):,}/{len(xy):,} matched. '
+        f'Legend {len(shown)}/{len(categories)} biological labels; complete labels in downloads. Reference-only cells have no invented coordinates.',fontsize=8)

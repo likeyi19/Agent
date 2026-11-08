@@ -718,7 +718,11 @@ def _repair_declarations(raw, utterance, registry, *, historical_missing=()):
         _parameter_input(registry, item['tool'], item['argument'])
         try:
             grounded = _ground_declaration(item, utterance,
-                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing)
+                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing,
+                # A saved rejection remains a rejection under its original
+                # locator semantics. Newly valid identity mappings do not rewrite
+                # historical questions or grant them execution authority.
+                _legacy_mapping_grounding=(item['tool'], item['argument']) in historical_missing)
             if (item['tool'], item['argument']) in historical_missing:
                 # Saved rejections used the original numeric boundary. Keep
                 # their meaning without imposing it on newly admitted values.

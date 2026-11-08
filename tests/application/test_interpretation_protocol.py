@@ -61,7 +61,7 @@ def accepts(schema, value, root=None):
 
 def execute(arguments, **changes):
     return dict(kind='execute_plan', target='run_scanpy', arguments=arguments, context='none',
-        roles=[dict(tool='run_scanpy', port='dataset', source='source.0')], references=[], delivery=[],
+        roles=[dict(tool='run_scanpy', port='dataset', source='source.0')], input_results=[], references=[], delivery=[],
         unfulfilled=[], visualization=None, comparison=None, retain_parameters=[], missing_parameters=[]) | changes
 
 

@@ -52,6 +52,7 @@ class ActivePlanningContext:
 
     def public_research_context(self):
         selected = set(self.task.get('references', ()))
+        selected.update(self.task.get('input_results', ()))
         selected.update(row['result'] for row in self.task.get('retained_parameters', ()))
         selected.update(row['handle'] for row in self.results if 'current' in row['relations'])
         while True:

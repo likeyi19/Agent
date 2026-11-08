@@ -154,7 +154,8 @@ def request(sessions, interaction, decision, input_sets):
     if source_kind(interaction.submission) is None:
         raise IntentError('invalid_prerequisite')
     admitted = admit(sessions, interaction, Execute('current', 'plan', decision.target, None,
-        arguments=decision.arguments, roles=decision.roles, context=decision.context), interaction.submission['execution_inputs'])
+        arguments=decision.arguments, roles=decision.roles, context=decision.context,
+        input_results=decision.input_results), interaction.submission['execution_inputs'])
     rows = catalog(input_sets)
     admitted.update(kind='request_resources', resource_catalog=rows)
     if decision.reference_category is not None:

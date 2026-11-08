@@ -1,5 +1,5 @@
 """Bounded turn interpretation and exact, utterance-grounded scalar admission."""
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .raw_handoff import FastqDeclaration, BamDeclaration, FragmentsDeclaration, AnnotationDeclaration
@@ -362,6 +362,13 @@ def _validate_export(value):
         raise ValueError('Select between one and 32 accepted export fields.')
 
 
+def _validate_input_results(values):
+    if (type(values) is not tuple or len(values) > 32
+            or any(type(h) is not str or re.fullmatch(r'g[0-9]+', h) is None for h in values)
+            or len(set(values)) != len(values)):
+        raise ValueError('Invalid accepted scientific input selection.')
+
+
 def _normalize_research_intent(decision):
     """The same bounded downstream intent survives execution prerequisites."""
     if (type(decision.references) is not tuple or len(decision.references) > 32
@@ -376,6 +383,7 @@ def _normalize_research_intent(decision):
             or any(not isinstance(p, RetainedParameter) for p in decision.retain_parameters)
             or len(set(decision.retain_parameters)) != len(decision.retain_parameters)):
         raise ValueError('Invalid bounded research intention.')
+    _validate_input_results(decision.input_results)
     requested = list(decision.delivery)
     if decision.comparison is not None:
         _validate_comparison(decision.comparison)
@@ -405,6 +413,7 @@ class RequestRoles:
     fragments: 'FragmentsDeclaration | None' = None
     annotation: 'AnnotationDeclaration | None' = None
     epizoo: 'EpiZooDeclaration | None' = None
+    input_results: tuple[str, ...] = field(default=(), kw_only=True)
     references: tuple[str, ...] = ()
     delivery: tuple[str, ...] = ()
     unfulfilled: tuple[str, ...] = ()
@@ -544,6 +553,7 @@ class Execute:
     arguments: tuple[ScopedArgument, ...] = ()
     context: str = 'none'
     roles: tuple[InputRole, ...] = ()
+    input_results: tuple[str, ...] = field(default=(), kw_only=True)
     references: tuple[str, ...] = ()
     delivery: tuple[str, ...] = ()
     retain_parameters: tuple[RetainedParameter, ...] = ()
@@ -565,7 +575,7 @@ class Execute:
         _validate_roles(self.roles)
         if self.roles and self.operation != 'plan':
             raise ValueError('Scientific input roles require ordinary planning.')
-        if self.operation != 'plan' and (self.references or self.delivery or self.retain_parameters or self.unfulfilled):
+        if self.operation != 'plan' and (self.input_results or self.references or self.delivery or self.retain_parameters or self.unfulfilled):
             raise ValueError('Invalid bounded research intention.')
 
 
@@ -619,6 +629,7 @@ class RequestResources:
     roles: tuple[InputRole, ...] = ()
     reference_category: str | None = None
     context: str = 'none'
+    input_results: tuple[str, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self):
         if type(self.target) is not str or not self.target:
@@ -627,6 +638,7 @@ class RequestResources:
             raise ValueError('Invalid reference category.')
         if self.context not in ('none', 'current'):
             raise ValueError('Invalid resource request context.')
+        _validate_input_results(self.input_results)
         _validate_arguments(self.arguments)
 
 
@@ -998,9 +1010,12 @@ def parse_decision(raw, *, utterance=None):
                                  _leiden_argument(value.get('argument')),
                                  _scientific_arguments(value.get('arguments', [])))
         if kind == 'request_resources':
-            _shape(value, ('kind', 'target', 'arguments') + tuple(k for k in ('roles', 'reference_category', 'context') if k in value))
+            _shape(value, ('kind', 'target', 'arguments') + tuple(k for k in ('roles', 'reference_category', 'context', 'input_results') if k in value))
+            if 'input_results' in value and type(value['input_results']) is not list:
+                raise IntentError('invalid_decision')
             return RequestResources(value['target'], _scientific_arguments(value['arguments']),
-                                    _input_roles(value.get('roles', [])), value.get('reference_category'), value.get('context', 'none'))
+                                    _input_roles(value.get('roles', [])), value.get('reference_category'), value.get('context', 'none'),
+                                    input_results=tuple(value.get('input_results', ())))
         if kind == 'answer_resources':
             _shape(value, ('kind', 'pending', 'choice', 'arguments'))
             return ResourceAnswer(value['pending'], value['choice'], _scientific_arguments(value['arguments']))
@@ -1010,8 +1025,8 @@ def parse_decision(raw, *, utterance=None):
         if kind == 'request_roles':
             _shape(value, ('kind', 'target', 'required_roles', 'roles') + tuple(
                 key for key in ('argument', 'arguments', 'context', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo',
-                                'references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters') if key in value))
-            if any(type(value[k]) is not list for k in ('references', 'delivery', 'unfulfilled', 'retain_parameters') if k in value):
+                                'input_results', 'references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters') if key in value))
+            if any(type(value[k]) is not list for k in ('input_results', 'references', 'delivery', 'unfulfilled', 'retain_parameters') if k in value):
                 raise IntentError('invalid_decision')
             from .raw_handoff import declaration
             return RequestRoles(value['target'], (() if (value.get('fastq') is not None or value.get('bam') is not None or value.get('fragments') is not None or value.get('annotation') is not None or value.get('epizoo') is not None) and value['required_roles'] == []
@@ -1023,7 +1038,7 @@ def parse_decision(raw, *, utterance=None):
                                 declaration(value['fragments'], 'fragments') if 'fragments' in value else None,
                                 declaration(value['annotation'], 'annotation') if 'annotation' in value else None,
                                 declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None,
-                                references=tuple(value.get('references', [])), delivery=tuple(value.get('delivery', [])),
+                                input_results=tuple(value.get('input_results', [])), references=tuple(value.get('references', [])), delivery=tuple(value.get('delivery', [])),
                                 unfulfilled=tuple(value.get('unfulfilled', [])), visualization=value.get('visualization'),
                                 comparison=value.get('comparison'),
                                 retain_parameters=tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])))
@@ -1058,10 +1073,10 @@ def parse_decision(raw, *, utterance=None):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison', 'missing_parameters'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'input_results', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison', 'missing_parameters'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
-                if any(type(value[k]) is not list for k in ('references', 'delivery', 'retain_parameters', 'unfulfilled', 'missing_parameters') if k in value):
+                if any(type(value[k]) is not list for k in ('input_results', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'missing_parameters') if k in value):
                     raise IntentError('invalid_decision')
                 return Execute('current', 'plan', value['target'], None,
                                _leiden_argument(value.get('argument')),
@@ -1070,7 +1085,7 @@ def parse_decision(raw, *, utterance=None):
                                tuple(value.get('references', [])), tuple(value.get('delivery', [])),
                                tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])),
                                tuple(value.get('unfulfilled', [])), value.get('visualization'), value.get('comparison'),
-                               tuple(value.get('missing_parameters', [])))
+                               tuple(value.get('missing_parameters', [])), input_results=tuple(value.get('input_results', [])))
             else:
                 _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
                 if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
@@ -1167,7 +1182,7 @@ def decision_schema():
                                         representations=array(ref('export_field'), 32)))
     definitions['retained'] = _object(dict(result=text(), argument=text()))
     definitions['delta'] = _object(dict(parameter=text(), operation=enum(('set', 'add', 'subtract')), **quote))
-    delivery = dict(references=array(text(), 32),
+    delivery = dict(input_results=array(text(), 32), references=array(text(), 32),
         delivery=array(enum(('explanation', 'comparison', 'visualization')), 3),
         unfulfilled=array(text(512), 8), visualization=optional(ref('visualization')),
         comparison=optional(ref('comparison')), retain_parameters=array(ref('retained'), 8))
@@ -1190,6 +1205,7 @@ def decision_schema():
         _object(dict(kind=enum(('execute_candidate',)), candidate=text(), evidence=text(4096))),
         _object(dict(kind=enum(('request_resources',)), target=text(), arguments=declarations,
                      roles=array(ref('role'), 8), context=enum(('none', 'current')),
+                     input_results=array(text(), 32),
                      reference_category=optional(enum(('peak_set', 'regulatory_regions'))))),
         _object(dict(kind=enum(('answer_resources',)), pending=text(), choice=text(), arguments=declarations)),
         _object(dict(kind=enum(('answer_prerequisite',)), pending=text(), species=enum(('human', 'mouse')), arguments=declarations)),
@@ -1200,7 +1216,7 @@ def decision_schema():
         definitions[field] = raw_schema(field)
         roles = array(ref('role'), 0)
         variants.append(_object(dict(kind=enum(('request_roles',)), target=text(), roles=roles,
-            required_roles=array(ref('requirement'), 0), arguments=declarations, **{field: ref(field)}, **delivery)))
+            required_roles=array(ref('requirement'), 0), arguments=declarations, **{field: ref(field)}, **(dict(context=enum(('none', 'current'))) if field == 'annotation' else {}), **delivery)))
         variants.append(_object(dict(kind=enum(('answer_roles',)), pending=text(), roles=roles,
             arguments=declarations, **{field: ref(field)},
             unknown_fields=array(enum(scientific_metadata_fields(empty(field))), 16))))
@@ -1290,7 +1306,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Pending scientific declarations are user intent, not accepted evidence. In answer_roles, explicitly stated corrections may update scientific metadata while preserving captured files, source roles, namespace and operation. A null declaration field means no addition. If the user explicitly says a previously recorded scientific claim is unknown or cannot be confirmed, name that offered metadata field in unknown_fields and leave its addition null; do not silently retain it as known. Never retract sources, roles, operation or resource identities through unknown_fields. When the user asks which prerequisites or evidence are needed rather than supplying declarations, choose answer_guidance; the captured pending task can inform conditional advice without scientific execution.',
             'For scientific tasks starting with external fragments use request_roles with target run_snapatac2, fragments and empty required_roles/roles. Bind source and optional feature_source only to explicitly selected attachments; source assembly/species are declarations. Namespace and source_profile may remain null: native import does not require internal profiles or certified barcode-correction history. Index is optional and is not used by native import. Existing fragments_resources supply chromosome sizes, exact regions and available GTF/GFF annotation. Missing biological history stays unknown. For uploaded custom BED preserve its source coordinates and feature_category; it directly supplies the requested regions without a reference-bundle qualification. genome_index_source supplies chromosome sizes; an explicitly supplied genome_source pins the exact FASTA association. Agent resolves the actual native inputs after function selection. resource_preference quotes only an explicitly requested reference name with literal/evidence; otherwise use null, never an internal resource handle. A broad request may compose native import, QC, filtering, a feature matrix and downstream analysis through ordinary planning. Do not ask the researcher to split internal steps or know Registry IDs. Pending fragments use answer_roles and explicit additions. Explicit native-function requests use ordinary execute_plan with the offered native source ports and unchanged native function/kwargs, without task-mode prerequisites.',
             'For EpiZoo target-species inference or native post-training with uploaded H5AD, use request_roles with epizoo and empty roles/required_roles. Set operation initialization with target adapt_epizoo_species for transfer without training, inference with target epizoo_embed_cells, or posttraining_initialized with target posttrain_epizoo_model to train the accepted initialized model; never train merely to obtain embeddings. Bind source from selected_sources. Declare scientific_name, taxonomy_id, assembly and fragment_counts/binary_accessibility only from explicit processing context; unknown fields remain null. For initialization leave strategy null for automatic qualified mapping assessment unless the user explicitly chooses de_novo or mapped_reference. Declare peak_set/regulatory_regions feature_category from the data context. Initialization has zero optimizer updates. For posttraining_initialized reuse the exact initialized model; no new genome or strategy is needed. Inference needs the exact accepted model vocabulary, not a new genome. Initialization may bind genome_source and optional genome_index_source attachments, or a qualified genome_resource. epizoo_resources are scientific models/references, distinct from the conversational LLM. resource and genome_resource express explicit preferences only; otherwise leave null for compatible unique selection. checkpoint_source may identify an uploaded exact qualified checkpoint; weights alone do not establish vocabulary or provenance. Missing mapping/resources must clarify, never invent coordinate correspondence. Use offered scientific arguments for explicit native settings; omit absent settings for owner defaults. Pending epizoo uses answer_roles, @roles and only additions; preserve the original inputs, operation and explicit settings. Never ask the researcher to build manifests, hashes, InputSets or authority records.',
-            'For region-count H5AD cell-type annotation use request_roles with annotation and empty roles/required_roles. For an uploaded source, bind source and optional exact ordered groups TSV from selected_sources. For accepted results, set context=current, select references, leave attachment source null and let the normal Planner select its exact accepted count and clustering ports. Both routes prepare internal specifications only after operation/source selection; never request specification filenames or digests from the researcher. To reuse accepted Leiden groups, select the exact annotation_group_results handle in groups_result; Agent projects the ordered groups after checking the original count-source identity. Do not ask for download/re-upload or grouping provenance for that accepted result. Declare species, assembly, raw measurement history, tissue context and grouping provenance only when supported by the user; missing fields stay null. Agent checks source-bound metadata and resolves compatible annotation_resources. Set grouping_strategy=reuse_only when the user requires existing groups or prohibits recomputing them; otherwise use compute_if_needed or null. If no qualified grouping exists, preserve the annotation goal: the Planner can compute scientifically appropriate grouping prerequisites using existing tools. Do not ask the user to create clusters or specify preprocessing enums. Reuse qualified supplied or accepted groups when available; ask only about genuinely missing biological declarations. Match a supported tissue meaning to an offered exact resource context; do not infer tissue from resource availability. resource is an explicit preference only; otherwise leave null. Use existing scientific arguments for explicit count_slot and group_column; do not invent defaults. Pending annotation requests use answer_roles with annotation and explicit additions or corrections to species, assembly, measurement or tissue context. Use the measurement identifier described in the annotation schema when the declared counting history supports it. Match user-supported tissue meaning to an offered exact resource context, including when a resource becomes available later. Corrections create a new declaration record; they cannot replace captured source files or override conflicting source metadata. A categorical obs column alone does not establish a clustering result. Never invent cell groups, count history or biological context.',
+            'For region-count H5AD cell-type annotation use request_roles with annotation and empty roles/required_roles. For an uploaded source, bind source and optional exact ordered groups TSV from selected_sources. For accepted scientific inputs, select input_results; context=current permits broad reuse only when no exact scientific input is selected. Keep explanation/figure references in references, leave attachment source null and let the normal Planner select its exact accepted count and clustering ports. Both routes prepare internal specifications only after operation/source selection; never request specification filenames or digests from the researcher. To reuse accepted Leiden groups, select the exact annotation_group_results handle in groups_result; Agent projects the ordered groups after checking the original count-source identity. Do not ask for download/re-upload or grouping provenance for that accepted result. Declare species, assembly, raw measurement history, tissue context and grouping provenance only when supported by the user; missing fields stay null. Agent checks source-bound metadata and resolves compatible annotation_resources. Set grouping_strategy=reuse_only when the user requires existing groups or prohibits recomputing them; otherwise use compute_if_needed or null. If no qualified grouping exists, preserve the annotation goal: the Planner can compute scientifically appropriate grouping prerequisites using existing tools. Do not ask the user to create clusters or specify preprocessing enums. Reuse qualified supplied or accepted groups when available; ask only about genuinely missing biological declarations. Match a supported tissue meaning to an offered exact resource context; do not infer tissue from resource availability. resource is an explicit preference only; otherwise leave null. Use existing scientific arguments for explicit count_slot and group_column; do not invent defaults. Pending annotation requests use answer_roles with annotation and explicit additions or corrections to species, assembly, measurement or tissue context. Use the measurement identifier described in the annotation schema when the declared counting history supports it. Match user-supported tissue meaning to an offered exact resource context, including when a resource becomes available later. Corrections create a new declaration record; they cannot replace captured source files or override conflicting source metadata. A categorical obs column alone does not establish a clustering result. Never invent cell groups, count history or biological context.',
             'For requested database corroboration use the registered corroborate_cell_type_annotation capability. Combined annotation and reference requests retain both objectives through annotation prerequisites. Later database review consumes an exact accepted annotation through ordinary planning_context, without annotation recomputation. Existing reference-evidence questions use answer_scientific and the offered reference_associations detail. Database associations do not replace native labels or validate fine subtypes.',
             'For user-supplied MAESTRO references, annotation.uploaded binds gene_source to a native MAESTRO refgenes transcript/exon table and signature_source to a candidate/gene TSV, using only captured source handles. Record explicit reference species, assembly, biological context, gene_namespace, publisher/derivation provenance and release for each supplied component; unknown fields stay null. These are declarations of origin and applicability, never proof of biological validation. Uploaded roles take precedence over catalog components; never fall back from an invalid explicit upload. A marker table alone cannot replace gene annotations or the qualified genome chromosome scope. Available annotation_resources may supply those remaining dependencies, including a genome-scope-only entry. Ask for missing scientific files or declarations, not InputSet IDs, paths, digests or manifests. A pending annotation may receive uploaded resources through answer_roles without losing the source H5AD or original request.',
             'For scientific BAM preprocessing use request_roles with target run_snapatac2, bam and empty required_roles/roles. Preserve the selected file, source assembly, assay and known barcode history. source_profile and namespace can stay null; the native BAM method owns filtering, duplicate flags, endpoints and shifts. It differs from historical Agent policies. Existing bam_resources supply compatible reference files. Ask intelligible questions only about actual missing scientific inputs; do not request FASTQs, sorting, a BAI, an internal profile or retained duplicate pairs merely for native BAM admission. For pending bam use answer_roles with @roles and explicit additions. For raw tasks, resource_preference quotes only an explicitly requested reference name with literal/evidence; omit it otherwise. Agent resolves concrete components after native function selection. Never emit a resource handle. A named native-function request uses execute_plan and native file ports directly, without substituting task defaults.',
@@ -1310,7 +1326,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Operational comparison needs parent, previous_active, or previous. Scientific comparison selects exact offered result handles, including explicitly identified historical versions or branches. history_complete=false means older results may be omitted from this bounded inventory; ask for navigation to an unavailable version, never substitute another result. Other answers normally use current.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
             'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=one requested registered tool; the Planner composes the entire supported task across multiple operations, including repeated package tools. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
-            *(['For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. Only planning_context handles with qualified semantic ports may supply executable inputs, with context=current. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.'] if groups else []),
+            *(['For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. input_results separately selects exact captured result_groups for new scientific computation. Its qualified planning_context ports may supply executable inputs independently of context. context=current supplies broad captured-current reuse only when no exact scientific inputs are selected. A presentation reference alone grants no scientific input selection. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.'] if groups else []),
             'execute_plan and request_roles retain requested downstream outcomes alongside scientific computation. Use delivery=explanation for requested scientific interpretation. An exact comparison selects comparison.left and comparison.right from captured g handles or new for one explicitly selected planned result. Selecting the same result twice, including new/new, requires two distinct exact fields such as result:leiden and source:cell_type. detail=null requests recorded summary/method comparison of distinct results; category_counts requests independent distributions with exact field and other_field, while category_association requests a source-qualified contingency table. Use existing detail offset/limit bounds. Missing correspondence limits association, not independent facts. Precise comparison and visualization operands already declare those delivery intentions; redundant flags or references are unnecessary. Coarse flags without exact operands do not establish completed outcomes. Original-versus-candidate comparisons that are intrinsic outputs of a scientific tool are its result facts: request explanation for their interpretation, not a separate comparison with missing operands. Native tool figures may use delivery visualization with visualization=null. Do not invent Registry tools or promise fulfillment. A visualization requiring new scientific calculation must still be planned as science. Preserve the same precise operands in request_roles when files or declarations are missing.',
             'For a specific categorical figure, visualization selects coordinates from an explicit captured UMAP g handle or new for an explicitly selected planned UMAP result, labels from an accepted g handle, new for an explicitly selected planned label result, or an offered source.N attachment, and field as an exact result: or source: column. Source attachments require source: fields. The existing output selector identifies each planned-new purpose; never choose a step by name, order or tool guess. Reusing accepted coordinates does not require another UMAP fit. Never choose by latest/last/first, equal cell counts or filenames; clarify ambiguous sources or fields. Without new computation choose answer_scientific with accepted-only visualization operands (no new), preserving the exact requested figure even when its publication is unavailable. Do not fabricate a scientific plan for a presentation-only request. The existence of a different or uniformly colored PNG does not satisfy exact requested coloring.',
             'Preserve the whole scientific objective. Missing essential capabilities, ambiguous associations or incompatible scientific inputs cannot be silently omitted: clarify instead. Missing resolvable files/declarations use existing prerequisites. execute_plan.unfulfilled quotes exact clauses from this utterance for unsupported, independently separable requirements only when the user permits their omission without materially changing the objective. Agent records and discloses them; use [] otherwise. Never use this to skip essential science or resolvable prerequisites. If separability is unclear, clarify. Never add hidden fallback plans or retry a semantic refusal until success.',

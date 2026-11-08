@@ -10,6 +10,16 @@ and inherited fields are not newly computed slots. A loose H5AD with similarly
 named fields has no accepted computational authority. Dedicated analysis and
 historical figure identities retain their meanings.
 
+Scientific execution intent distinguishes exact `input_results` from descriptive
+`references` and requested presentation. Exact scientific selections use only the
+selected captured-current results' existing qualified prior-output bindings.
+They take precedence over the optional broad `context=current` offer; a coarse
+`context=none` does not erase an explicit scientific selection. Presentation alone
+never enables execution. The same selection/authority owner serves plan-only
+input preparation and execution-time revalidation. Historical descriptions cannot
+alias same-named current files; select the intended scientific base through the
+existing navigation before reusing it. Saved historical responses remain exact.
+
 The existing renderer can display native Leiden UMAP and later compatible
 annotation colors using the same exact coordinates. Source ancestry and ordered
 cells must agree. Composition and marker/RP panels use actual annotation evidence;

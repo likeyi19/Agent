@@ -259,6 +259,11 @@ def _research_intent(interaction, decision):
     rows = interaction.snapshot.get('dialogue', {}).get('results', ())
     by_handle = {row['handle']: row for row in rows}
     references = list(get('references', ()))
+    input_results = list(get('input_results', ()))
+    from .turn_decisions import _validate_input_results
+    _validate_input_results(tuple(input_results))
+    if any(handle not in by_handle for handle in input_results):
+        raise IntentError('invalid_reference')
     drawing, comparison = get('visualization'), get('comparison')
     # ScientificQuestion.comparison is an accepted answer target, not a request
     # to bind one of the outputs of a newly planned calculation.
@@ -325,7 +330,7 @@ def _research_intent(interaction, decision):
         if (row['tool'], reference.argument) in explicit:
             raise IntentError('ambiguous_parameter')
         retained.append(dict(result=reference.result, tool=row['tool'], **_serialize(candidates[0])))
-    return {k:v for k,v in dict(references=references, delivery=delivery,
+    return {k:v for k,v in dict(input_results=input_results, references=references, delivery=delivery,
                                unfulfilled=list(unfulfilled), retained_parameters=retained,
                                visualization=drawing, comparison=comparison, export=export).items() if v}
 
@@ -411,7 +416,7 @@ def _retained_field_roles(sessions, interaction, retained, roles):
 def _validate_research_intent(interaction):
     from .turn_decisions import Execute, RetainedParameter
     admitted = interaction.admitted or {}
-    keys = ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'export')
+    keys = ('input_results', 'references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'export')
     if not any(k in admitted for k in keys) and not ('left' in (admitted.get('comparison') or {})):
         return
     if admitted.get('intent') == 'scientific':
@@ -423,6 +428,7 @@ def _validate_research_intent(interaction):
     decision = Execute('current', 'plan', admitted['tool'], None,
         arguments=_scientific_arguments(_serialize(admitted.get('arguments', ()))),
         references=tuple(admitted.get('references', ())), delivery=tuple(admitted.get('delivery', ())),
+        input_results=tuple(admitted.get('input_results', ())),
         retain_parameters=tuple(RetainedParameter(row['result'], row['argument']) for row in retained),
         unfulfilled=tuple(admitted.get('unfulfilled', ())), visualization=admitted.get('visualization'),
         comparison=admitted.get('comparison'))
@@ -1281,7 +1287,7 @@ def missing_file_request(registry, interaction, decision, execution_inputs=None)
     """
     from .local_resources import available_input_view, LocalResourceAdmission, group_choices
     from .turn_decisions import RequestRoles, RoleRequirement
-    if (decision.target not in registry.names() or decision.context == 'current'
+    if (decision.target not in registry.names() or decision.context == 'current' or decision.input_results
             or decision.roles or interaction.submission is None or execution_inputs
             or interaction.submission.get('execution_inputs')):
         return None
@@ -1329,11 +1335,12 @@ def admit_role_request(sessions, interaction, decision, resources):
     if decision.arguments:
         admitted['arguments'] = [asdict(d) for d in decision.arguments]
     if decision.context == 'current':
-        context, _ = sessions.planning_context_for_interaction(sessions._interaction_session_id,
-            interaction.turn_id, integrity=False)
-        if context is None or not context.items:
-            raise IntentError('unavailable_context')
         admitted['context'] = 'current'
+        if not decision.input_results:
+            context, _ = sessions.planning_context_for_interaction(sessions._interaction_session_id,
+                interaction.turn_id, integrity=False)
+            if context is None or not context.items:
+                raise IntentError('unavailable_context')
     pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
         field='roles', tool=decision.target, required_roles=admitted['required_roles'],
         resource_context_sha256=resource_context_digest(resources))
@@ -1753,7 +1760,7 @@ def planning_task(interaction, state):
     """Keep the original task through prerequisites; rebind only exact groups."""
     origin = _received_origin(interaction, state.interactions)
     admitted = origin.admitted or {}
-    task = {k:_serialize(admitted[k]) for k in ('references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
+    task = {k:_serialize(admitted[k]) for k in ('input_results', 'references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
     current = interaction.admitted or {}
     for field in ('fastq', 'fragments', 'bam'):
         receipt = current.get(field + '_context', {})
@@ -1782,6 +1789,8 @@ def planning_task(interaction, state):
         return matches[0]
     if 'references' in task:
         task['references'] = [rebind(h) for h in task['references']]
+    if 'input_results' in task:
+        task['input_results'] = [rebind(h) for h in task['input_results']]
     if 'visualization' in task:
         drawing = task['visualization']
         if drawing['coordinates'] != 'new':
@@ -1836,11 +1845,12 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     values = _with_retained(sessions._application.registry, values, admitted.get('retained_parameters', ()))
     admitted['inputs'] = values
     if decision.context == 'current':
-        context, _ = sessions.planning_context_for_interaction(
-            sessions._interaction_session_id, interaction.turn_id, integrity=False)
-        if context is None or not context.items:
-            raise IntentError('unavailable_context')
         admitted['context'] = 'current'
+        if not decision.input_results:
+            context, _ = sessions.planning_context_for_interaction(
+                sessions._interaction_session_id, interaction.turn_id, integrity=False)
+            if context is None or not context.items:
+                raise IntentError('unavailable_context')
     if decision.arguments or admitted.get('retained_parameters'):
         values = _bind_arguments(sessions._application.registry, interaction.utterance, values, decision.arguments,
             field_choices=_argument_fields(sessions._application.registry, replace(interaction, admitted=admitted),
@@ -1911,8 +1921,8 @@ def prepare_native_task(sessions, interaction, admitted):
     current = replace(interaction, admitted=admitted)
     state = sessions.load(sid)
     task = planning_task(current, state)
-    context,_ = sessions.planning_context_for_interaction(sid, interaction.turn_id, reuse=admitted.get('context') == 'current')
-    context = (replace(context, task=task) if context is not None else
+    context,_ = sessions.execution_context_for_interaction(sid, interaction.turn_id, admitted=admitted)
+    context = (context if context is not None else
         ActivePlanningContext(sid,interaction.base_revision_id,interaction.base_generation,(),task=task))
     request = AgentRequest(admitted['request_id'], _execution_objective(current,state.interactions), admitted['inputs'])
     prepared,_ = app._prepare_request(request)
@@ -1978,10 +1988,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         context = execution_context(sessions, interaction, admitted)
         intent = planning_intent(sessions, interaction, admitted, context)
     else:
-        context, context_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id,
-            reuse=admitted.get('context') == 'current')
-        if admitted.get('context') == 'current' and (context is None or not context.items):
-            raise IntentError('unavailable_context')
+        context, context_locators = sessions.execution_context_for_interaction(sid, interaction.turn_id,
+            admitted=admitted)
     request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
     registered = interaction.submission is not None and 'registered_input' in interaction.submission
     resources = LocalResourceAdmission(app._workspace, registry=app.registry) if registered else None
@@ -2119,8 +2127,8 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         if selected:
             execution_context(sessions, interaction, admitted)
         elif context is not None:
-            checked_context, checked_locators = sessions.planning_context_for_interaction(sid, interaction.turn_id,
-                reuse=admitted.get('context') == 'current')
+            checked_context, checked_locators = sessions.execution_context_for_interaction(sid, interaction.turn_id,
+                admitted=admitted)
             if checked_context != context or checked_locators != context_locators:
                 raise IntentError('unavailable_context')
         if registered:
@@ -2147,7 +2155,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             if selected and (state.active_revision_id != interaction.base_revision_id
                              or state.generation != interaction.base_generation):
                 raise SessionConflictError('Selected candidate state changed before submission.')
-            if admitted.get('context') == 'current' and not selected and (
+            if context is not None and context.items and not selected and (
                     state.active_revision_id != interaction.base_revision_id
                     or state.generation != interaction.base_generation):
                 raise SessionConflictError('Captured planning state changed before submission.')

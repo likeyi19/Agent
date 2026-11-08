@@ -8,9 +8,9 @@ from .session_state import digest
 from .result_reading import handoff
 
 
-def choices(sessions, interaction):
+def choices(sessions, interaction, *, state=None):
     """Offer only clusters on explicit captured-result ancestry, without file IO."""
-    state = sessions.load(sessions._interaction_session_id)
+    state = state if state is not None else sessions.load(sessions._interaction_session_id)
     if interaction.base_revision_id is None:
         return []
     revision = next(r for r in state.revisions if r.revision_id == interaction.base_revision_id)
@@ -37,3 +37,35 @@ def choices(sessions, interaction):
 def public_choices(sessions, interaction):
     return [{k: row[k] for k in ('handle', 'n_cells', 'n_groups', 'resolution')}
             for row in choices(sessions, interaction)]
+
+
+def selected_results(sessions, interaction, handle, *, state=None):
+    """Lower a typed grouping selection to its captured accepted result operands.
+
+    Only actual accepted grouping ancestry can make an operand a scientific
+    input. Presentation references and similarly named observation fields cannot.
+    """
+    from .turn_context import result_groups
+    from .turn_decisions import IntentError
+    state = state if state is not None else sessions.load(sessions._interaction_session_id)
+    offered = [row for row in choices(sessions, interaction, state=state) if row['handle'] == handle]
+    if len(offered) != 1:
+        raise IntentError('unavailable_context')
+    selected = offered[0]
+    result = []
+    for group in result_groups(interaction.snapshot, state):
+        source = group['canonical']
+        if source['revision_id'] != interaction.base_revision_id:
+            continue
+        revision = next(r for r in state.revisions if r.revision_id == source['revision_id'])
+        output = next(o for o in revision.outputs if o.name == source['output_name'])
+        if output.accepted_step_sha256 != source['accepted_step_sha256']:
+            raise IntentError('unavailable_context')
+        view = handoff(sessions._application.run_store, output.run_id, output.step_id)
+        lineage = None if view is None else view['groups']
+        if lineage is not None and all(lineage[k] == selected[k]
+                for k in ('run_id', 'step_id', 'accepted_step_sha256')):
+            result.append(group['handle'])
+    if not result:
+        raise IntentError('unavailable_context')
+    return tuple(result)

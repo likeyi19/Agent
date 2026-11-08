@@ -75,6 +75,15 @@ source, count slot, method, grouping and reference choices retain precedence.
 Missing biology or ambiguous references require clarification. Internal spec paths
 and checksums are application products, not researcher prerequisites.
 
+An explicit accepted grouping is a scientific input selection, independently of
+the Interpreter's coarse `context` field. Its exact accepted ancestry is lowered
+to the shared captured-result input selection. The existing planning projection
+exposes qualified prior-output ports only for those selected results; unrelated
+current outputs and figure references grant no additional scientific inputs.
+Preparation and execution use the same selection owner and captured Revision.
+An already planned grouping binding is accepted when its authenticated grouping
+identity agrees with the explicit selection; a conflicting grouping still fails.
+
 Uploads and accepted sources use this same owner. Private task specifications are
 immutable adapter bytes, never registered as fake uploads. The existing scientific
 grouping owner consumes exact accepted analysis files and any required ordered TSV

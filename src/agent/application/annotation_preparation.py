@@ -252,9 +252,20 @@ def preparer(sessions, interaction, admitted):
         if declared.groups_result is not None:
             from .annotation_groups import choices
             matches = [row for row in choices(sessions, interaction) if row['handle'] == declared.groups_result]
-            if len(matches) != 1 or groups is not None or 'group_column' in arguments or 'groups_path' in arguments:
+            if len(matches) != 1 or 'group_column' in arguments or 'groups_path' in arguments:
                 raise ValueError('Accepted grouping selection conflicts with the planned grouping source.')
             grouping_locator = matches[0]
+            if groups is not None:
+                if not isinstance(groups, PriorOutputRef):
+                    raise ValueError('Selected accepted grouping requires its qualified prior-output binding.')
+                planned_view = handoff(store, groups.binding.run_id, groups.binding.step_id)
+                planned_groups = None if planned_view is None else planned_view['groups']
+                if planned_groups is None or any(planned_groups[k] != grouping_locator[k]
+                        for k in ('run_id', 'step_id', 'accepted_step_sha256')):
+                    raise ValueError('Accepted grouping selection conflicts with the planned grouping source.')
+                if (exact(groups) != planned_view['file']['path']
+                        or exact(arguments['group_analysis_sha256']) != planned_view['file']['sha256']):
+                    raise ValueError('Accepted grouping input members changed.')
         elif isinstance(groups, PriorOutputRef):
             grouping_locator = dict(run_id=groups.binding.run_id, step_id=groups.binding.step_id)
         if grouping_locator is not None:
@@ -270,7 +281,7 @@ def preparer(sessions, interaction, admitted):
             require_same_cells(ids, axis(source, sha))
             if labels.isna().any():
                 raise ValueError('Accepted grouping contains missing labels.')
-            if declared.groups_result is not None:
+            if declared.groups_result is not None and groups is None:
                 # Keep grouping in the existing scientific input owner. Native
                 # groups carry their accepted proof DAG; dedicated groups retain
                 # the existing exact-source analysis-file contract.

@@ -536,7 +536,59 @@ class AnalysisSessions:
                 bindings.add(binding)
         return ActivePlanningContext(session_id, revision.revision_id, turn.base_generation, tuple(items))
 
-    def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True, reuse=True):
+    def execution_context_for_interaction(self, session_id, turn_id, *, admitted=None):
+        """One scientific input-selection policy for preparation and execution.
+
+        Exact scientific operands override broad current-context visibility.
+        Explanation/figure references never select inputs. The existing projector
+        and PriorOutputBinding owner still authenticate every offered source.
+        """
+        from .dialogue_execution import planning_task
+        from .turn_context import result_groups
+        from .turn_decisions import IntentError, _validate_input_results
+        state = self.load(session_id)
+        matches = [i for i in state.interactions if i.turn_id == turn_id]
+        if len(matches) != 1:
+            raise SessionError('Unknown captured interaction for scientific input selection.')
+        interaction = matches[0]
+        if admitted is not None:
+            interaction = replace(interaction, admitted=admitted)
+        value = interaction.admitted or {}
+        task = planning_task(interaction, state)
+        selected = tuple(task.get('input_results', ()))
+        _validate_input_results(selected)
+        # Typed scientific owners lower their existing explicit selections into
+        # the same captured-result operands; no second binding protocol exists.
+        if value.get('annotation', {}).get('groups_result') is not None:
+            from .annotation_groups import selected_results
+            selected = tuple(dict.fromkeys((*selected, *selected_results(
+                self, interaction, value['annotation']['groups_result'], state=state))))
+        groups = {g['handle']: g for g in result_groups(interaction.snapshot, state)}
+        if any(handle not in groups for handle in selected):
+            raise IntentError('unavailable_context')
+        if any(groups[handle]['canonical']['revision_id'] != interaction.base_revision_id
+               for handle in selected):
+            # Existing execution offers belong to the captured current Revision.
+            # A historical presentation operand must never alias a same-named
+            # current output; ordinary navigation can change the scientific base.
+            raise IntentError('unavailable_context')
+        outputs = None
+        if selected:
+            names = {member['output_name'] for handle in selected for member in groups[handle]['members']}
+            revision = next(r for r in state.revisions if r.revision_id == interaction.base_revision_id)
+            outputs = tuple(o for o in revision.outputs if o.name in names)
+            if not outputs:
+                raise IntentError('unavailable_context')
+            task = dict(task, input_results=list(selected))
+        reuse = bool(selected) or value.get('context') == 'current'
+        context, locators = self.planning_context_for_interaction(session_id, turn_id,
+            reuse=reuse, selected_outputs=outputs)
+        if reuse and (context is None or not context.items):
+            raise IntentError('unavailable_context')
+        return (replace(context, task=task) if context is not None else None), locators
+
+    def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True, reuse=True,
+                                         selected_outputs=None):
         """Project captured descriptions and, when requested, executable outputs.
 
         Metadata projection grants no scientific readiness. Execution requests
@@ -549,6 +601,9 @@ class AnalysisSessions:
         from agent.schemas.orchestration import _serialize
         if type(integrity) is not bool or type(reuse) is not bool:
             raise TypeError('Planning context policies must be boolean.')
+        if selected_outputs is not None and (not reuse or type(selected_outputs) is not tuple
+                or not selected_outputs):
+            raise SessionError('Scientific selection requires exact reusable outputs.')
         state = self.load(session_id)
         matches = [item for item in state.interactions if item.turn_id == turn_id]
         if len(matches) != 1:
@@ -557,6 +612,8 @@ class AnalysisSessions:
         from .dialogue_execution import planning_task
         task = planning_task(interaction, state)
         if interaction.base_revision_id is None:
+            if selected_outputs is not None:
+                raise SessionError('Scientific selection requires a captured accepted Revision.')
             return (ActivePlanningContext(session_id, None, interaction.base_generation, (), task=task)
                     if task else None), MappingProxyType({})
         revision = next((item for item in state.revisions
@@ -568,9 +625,13 @@ class AnalysisSessions:
                 or base is None or base.get('revision_id') != revision.revision_id
                 or base.get('outputs') != [asdict(output) for output in revision.outputs]):
             raise SessionError('Planning context differs from its captured Session revision.')
+        if selected_outputs is not None and (type(selected_outputs) is not tuple
+                or not selected_outputs or len(set(selected_outputs)) != len(selected_outputs)
+                or any(output not in revision.outputs for output in selected_outputs)):
+            raise SessionError('Scientific inputs differ from captured accepted outputs.')
         bindings, sources = {}, {}
         if reuse:
-            for output in revision.outputs:
+            for output in revision.outputs if selected_outputs is None else selected_outputs:
                 binding = optional_binding_for_locator(output, self._application.run_store,
                                                        self._application.registry)
                 sources[output] = ((binding,) if binding is not None else qualified_dependencies_for_locator(

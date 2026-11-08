@@ -222,8 +222,6 @@ def scientific_parameters(registry):
                 item['choices'] = [value for value in spec.choices if value is not None]
             elif is_json_object_argument(spec):
                 item['json_object'] = True
-                if spec.planning.conversational_string_mapping:
-                    item['string_mapping'] = True
                 if spec.planning.conversational_members:
                     item['members'] = dict(spec.planning.conversational_members)
             elif is_exact_string_argument(spec):
@@ -718,11 +716,7 @@ def _repair_declarations(raw, utterance, registry, *, historical_missing=()):
         _parameter_input(registry, item['tool'], item['argument'])
         try:
             grounded = _ground_declaration(item, utterance,
-                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing,
-                # A saved rejection remains a rejection under its original
-                # locator semantics. Newly valid identity mappings do not rewrite
-                # historical questions or grant them execution authority.
-                _legacy_mapping_grounding=(item['tool'], item['argument']) in historical_missing)
+                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing)
             if (item['tool'], item['argument']) in historical_missing:
                 # Saved rejections used the original numeric boundary. Keep
                 # their meaning without imposing it on newly admitted values.

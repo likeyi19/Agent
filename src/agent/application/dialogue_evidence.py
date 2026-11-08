@@ -59,7 +59,6 @@ RESULT_LIMITATIONS = {
     'optimize_regulatory_sequences': 'DeepPBMC predicts human PBMC peak accessibility, not enhancer activity or gene expression. Native weighted difference is target minus the weighted comparison sum divided by seven, even with a single comparison condition. It penalizes comparison score increases and rewards decreases; it does not bound absolute changes. Use recorded comparison_scores directly when available, never mistake the scaled penalty for the comparison score. Actual changed bases differ from iterations. Improved model objective is not biological validation. Exact candidate examples contain original and candidate scores, actual substitutions, protected-region satisfaction and non-improving steps. Never compare these scores numerically to DHS64 scores.',
     'predict_regulatory_sequences': 'DHS64 predicts human DNase accessibility. Continuous scores are transformed signal and may be negative; sigmoid scores predict peak calls, not enhancer functionality. Fold spread is disagreement, not calibrated uncertainty. Sequences are not cells. Scores are not measured biology or gene expression. All values and examples retain exact sequence/condition identity.',
     'evaluate_regulatory_predictions': 'Metrics compare only exact matched supplied observations in the native DNase measurement and transform. No inferred assay equivalence, training independence or experimental validation.',
-    'corroborate_cell_type_annotation': 'Reference evidence consists of local pinned literature marker associations. Labels remain native candidates; broad lineage is not subtype validation, missing evidence is not contradiction, and mixed associations are not calibrated confidence.',
     'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
     'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
@@ -584,7 +583,7 @@ def _project(sessions, state, revision, output, fields, detail):
     selected = tuple(sorted(set(facts) | set(parameters))) if fields is None else fields
     # Preserve the existing annotation coverage counter even for field-selected
     # access. No group lookup or annotation semantics are implemented here.
-    coverage = (fact('groups_omitted'),) if step.tool_name in ('annotate_scATAC_cell_types', 'corroborate_cell_type_annotation') else ()
+    coverage = (fact('groups_omitted'),) if step.tool_name == 'annotate_scATAC_cell_types' else ()
     result = DialogueEvidence(state.session_id, revision.revision_id, output.name, 'available',
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
@@ -626,7 +625,6 @@ def detail_sections(tool):
     """One section inventory for application answering and interactive clients."""
     from .result_reading import CATEGORICAL_TOOLS
     return ({'annotate_scATAC_cell_types': ('annotation_rationale',),
-             'corroborate_cell_type_annotation': ('reference_associations',),
              'compute_scATAC_qc': ('length_histogram',)}.get(tool, ())
             + (('categorical_fields', 'category_counts', 'category_association')
                if tool in CATEGORICAL_TOOLS else ()))
@@ -634,11 +632,6 @@ def detail_sections(tool):
 
 def detail_request(view, subject):
     """Reviewed result shapes only; no language/intent routing or scientific work."""
-    if view.source.tool_name == 'corroborate_cell_type_annotation':
-        # The accepted summary already contains per-group associations and cited
-        # record examples. Read full rows for an explicit group/detail request;
-        # duplicating them in every whole-result answer crowds out other science.
-        return None if subject is None else DetailRequest('reference_associations', subject)
     if view.source.tool_name == 'annotate_scATAC_cell_types':
         if subject is None:
             return DetailRequest('annotation_rationale')
@@ -651,8 +644,6 @@ def detail_request(view, subject):
 
 
 def _detail(sessions, step, request):
-    if request.section == 'reference_associations' and step.tool_name == 'corroborate_cell_type_annotation':
-        return _reference_detail(step, request)
     if request.section not in detail_sections(step.tool_name):
         raise _Unsupported('unsupported_detail_section')
     if request.section != 'annotation_rationale' and request.subject is not None:
@@ -785,30 +776,6 @@ def _detail(sessions, step, request):
     return tuple(facts)
 
 
-def _reference_detail(step, request):
-    """Read only accepted reference records; never query or repeat annotation."""
-    from agent.tools.analysis import annotation_corroboration as owner
-    if request.candidate is not None:
-        raise _Unsupported('unsupported_detail_candidate')
-    result=step.result
-    record=VerifiedArtifactAuthority(step.verification.artifact_authority).to_dict()
-    path=Path(result['manifest_path'])
-    manifest,sha=owner.load(path,result['manifest_sha256'])
-    if (record['artifact_contract']!=owner.CONTRACT or record['publication_path']!=str(path)
-            or record['manifest_sha256']!=sha or record['resources']['manifest_identity']!=manifest):
-        raise _Unavailable('detail_authority_binding_mismatch')
-    evidence_path=path.parent/'reference-evidence.json'
-    pin=_one([f for f in record['files'] if f['path']==str(evidence_path)])
-    evidence=owner.read(evidence_path,pin['sha256'],limit=MAX_DETAIL_BYTES)
-    if request.subject is not None and request.subject not in {g['group'] for g in evidence['groups']}:
-        raise _Unavailable('unknown_or_ambiguous_detail_subject')
-    selected=[(i,r) for i,r in enumerate(evidence['records']) if request.subject is None or r['group']==request.subject]
-    facts=[EvidenceFact('reference_association.'+str(n),'available',row,'/records/'+str(i),
-        artifact_name='reference-evidence.json',artifact_sha256=pin['sha256'])
-        for n,(i,row) in enumerate(selected[:request.limit])]
-    facts.append(EvidenceFact('reference_association.records_omitted','available',max(0,len(selected)-request.limit),
-        reason='presentation_coverage_count',artifact_name='reference-evidence.json',artifact_sha256=pin['sha256']))
-    return tuple(facts)
 
 
 def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None, detail=None):
@@ -928,33 +895,10 @@ def field_semantics(registry, tool, field):
     if description is not None:
         semantics['description'] = description.description
         semantics['description_source'] = 'registry_result_contract'
-    if tool == 'compare_cell_annotations':
-        meanings = {
-            'vocabulary': 'Original prediction/reference category names and side-specific differences, with omission counts. Different names may limit exact-name biological interpretation, but establish no equivalence. Offer explicit mapping only for vocabulary differences, never merely cell-level disagreement within the same vocabulary.',
-            'mapping': 'Explicit side-specific user rules and full-source coverage: rule-covered, changed, missing and unmapped cells/categories; unspecified labels stay unchanged. Rules apply simultaneously once. No inferred equivalence, cell dropping, missing-value promotion or prediction modification.',
-            'original_metrics': 'Original exact-label metrics before any user mapping. These retain the original classification and partition meanings, with the same matched/reference-labeled and jointly labeled cell denominators. They are distinct from harmonized-label metrics.',
-            'metric_denominators': 'Actual evaluated and jointly labeled cell counts, macro-F1 union-class counts and supported-reference class counts, including original class denominators. Missing predictions count as errors; missing references are excluded. New undefined_precision_recall=null_when_denominator_zero means unavailable class precision/recall, not measured zero. Historical zero_division=0 records retain their original zero convention; aggregate definitions are unchanged.',
-            'label_policy': 'exact_labels_no_mapping is strict original-label agreement. explicit_harmonized_labels uses only recorded user mappings, preserves original metrics and does not validate biological equivalence.',
-            'accuracy': 'Fraction correct among matched cells with a reference label; missing predictions count as errors.',
-            'assigned_accuracy': 'Fraction correct among jointly labeled matched cells only; excludes missing predictions. Null means no assigned denominator.',
-            'macro_f1': 'Mean F1 across the union of observed biological labels in evaluated cells, including prediction-only classes. Missing predictions count as errors. User category merging changes this class denominator.',
-            'balanced_accuracy': 'Mean recall over supported reference classes in evaluated cells; missing predictions count as errors. User category merging changes this class denominator.',
-            'ari': 'ARI on jointly labeled matched cells. After category merging this describes mapped partitions, not original clustering. It is not biological label correctness; null means partitions are not identifiable.',
-            'nmi': 'Arithmetic-normalized NMI on jointly labeled matched cells. After category merging this describes mapped partitions, not original clustering. It is not biological label correctness; null means partitions are not identifiable.',
-            'per_class': 'Per-class precision, recall, F1, reference/predicted/correct cells under the recorded label_policy and metric_denominators convention. Null precision or recall means its denominator is zero; genuine zero remains zero. Historical numeric zeros are not retroactively changed. Omissions are explicit and full rows remain in downloads.',
-            'composition': 'Full-source category counts/fractions under the recorded label_policy, separately for each source. Populations may differ; this is not matched-cell coverage. Omissions are explicit.',
-            'classification_disagreements': 'Largest observed disagreement pairs in matched reference-labelled cells under the recorded label_policy, with exact prediction/reference sides, counts and omitted-pair count. Null prediction means missing evidence. These are observed discrepancies, not biological adjudication or permission to relabel predictions.',
-        }
-        semantics.update(kind='scientific_result', description_source='reviewed_fixed_label_comparison',
-            description=meanings.get(field, 'Exact cell-ID join with optional supplied library scope and label coverage; ID matching alone leaves biological and library provenance unverified. No feature comparison or cell-identifier rewriting.')
-                + ' Main metrics follow label_policy; original_metrics retains original exact labels. Supplied reference labels are not biological truth; declared library identity is not independently verified.')
     if tool == 'annotate_scATAC_cell_types':
         reviewed = annotation_field_semantics(field)
         if reviewed is not None:
             semantics.update(reviewed, description_source='reviewed_native_annotation_summary')
-    if tool == 'corroborate_cell_type_annotation' and (field == 'group_summary' or field.startswith('detail.reference_association.')):
-        semantics.update(kind='scientific_result', description_source='reviewed_reference_corroboration',
-            description='Exact native annotation linked to a qualified local CellMarker snapshot. group_summary separates candidate/native_score from mapped reference associations. corroborating means positive equivalent/broader associations; mixed means nonexclusive competing positive associations, not established contradiction. insufficient_evidence means no positive compatible mapped marker; unmapped means no qualified terminology correspondence. lower_rp_markers have negative native avg_logFC (lower regulatory potential), not lower rank, and provide no positive corroboration. Native scores are not probabilities; broad lineage does not validate subtype. Record examples and omitted counts describe bounded presentation, not all database evidence.')
     semantics.setdefault('kind', 'execution_parameter' if field in spec.optional_arguments
                          else 'unclassified_accepted_field')
     return semantics
@@ -984,10 +928,6 @@ def public_citation_source(source):
 # Researcher-facing selection of existing facts, not a second fact projection.
 # Unlisted tools continue to use their existing reviewed report fields.
 RESULT_SUMMARY_FIELDS = {
-    'compare_cell_annotations': ('matched_cells', 'prediction_only_cells', 'reference_only_cells',
-        'evaluated_cells', 'evaluation_coverage', 'unassigned_prediction_cells', 'accuracy',
-        'macro_f1', 'balanced_accuracy', 'ari', 'nmi', 'per_class', 'classes_omitted',
-        'composition', 'composition_omitted', 'vocabulary', 'mapping', 'original_metrics', 'metric_denominators', 'label_policy', 'limitations'),
     'inspect_scATAC': ('n_cells', 'n_features', 'x_storage_type', 'nnz', 'density'),
     'pca_embed_cells': ('n_cells', 'n_features', 'embedding_dim', 'representation'),
     'epizoo_embed_cells': ('n_cells', 'embedding_dim', 'species'),
@@ -996,8 +936,6 @@ RESULT_SUMMARY_FIELDS = {
     'compute_cell_umap': ('n_cells', 'n_components'),
     'annotate_scATAC_cell_types': ('n_cells', 'n_groups', 'assigned_cells',
         'unassigned_cells', 'ambiguous_cells', 'group_summary', 'groups_omitted', 'validation_state'),
-    'corroborate_cell_type_annotation': ('database', 'database_release', 'n_groups',
-        'n_records', 'state_counts', 'group_summary', 'groups_omitted', 'limitations'),
 }
 
 
@@ -1034,8 +972,6 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         step_ids=record['source_step_ids'], output_names=names, sources=sources)
     if run_id is not None:
         public['run_id'] = run_id
-    if record.get('presentation', {}).get('label_policy') == 'explicit_harmonized_labels':
-        public.update(label_policy='explicit_harmonized_labels', caption=record['presentation']['caption'])
     if publisher is not None:
         public['publisher'] = {k:publisher[k] for k in ('kind', 'session_id', 'turn_id')}
     if composite:

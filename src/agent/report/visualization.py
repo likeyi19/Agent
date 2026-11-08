@@ -31,9 +31,6 @@ from agent.schemas import (
     VerificationCheck,
     VerificationResult,
 )
-from agent.tools.analysis.annotation_evaluation import (
-    _load_annotation_evaluation_report,
-)
 
 from .evidence import (
     ANALYSIS_EVIDENCE_ARTIFACT_TYPE,
@@ -56,7 +53,6 @@ _FONT_FAMILY = "DejaVu Sans"
 _UMAP_ALPHA = 0.8
 _MAX_FIGURE_PIXELS = 40_000_000
 _MAX_PNG_BYTES = 16 * 1024 * 1024
-_CONFUSION_TEXT_CELL_LIMIT = 400
 _PRIMARY_PALETTE = (
     "#1f77b4",
     "#aec7e8",
@@ -85,9 +81,7 @@ _METRIC_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#b279a2")
 _FIGURE_KIND_BY_TOOL: Mapping[str, str] = {
     "compute_cell_umap": "umap_leiden",
     "evaluate_cell_clustering": "clustering_metrics",
-    "evaluate_cell_annotation": "annotation_confusion",
     "annotate_scATAC_cell_types": "annotation_composition",
-    "compare_cell_annotations": "reference_confusion",
 }
 _RC_PARAMS: Mapping[str, object] = {
     "font.family": _FONT_FAMILY,
@@ -167,12 +161,6 @@ class _MetricData:
     values: tuple[float, ...]
 
 
-@dataclass(frozen=True)
-class _ConfusionData:
-    row_labels: tuple[str, ...]
-    column_labels: tuple[str, ...]
-    counts: np.ndarray
-    annotate_cells: bool
 
 
 @dataclass(frozen=True)
@@ -193,7 +181,7 @@ class _FigureProjection:
     height_px: int
     dpi: int
     presentation: Mapping[str, JsonValue]
-    data: _UmapData | _MetricData | _ConfusionData | _ScientificPanelData
+    data: _UmapData | _MetricData | _ScientificPanelData
 
 
 class _DuplicateJsonKey(ValueError):
@@ -600,44 +588,6 @@ def _metric_data(facts: Mapping[str, object]) -> _MetricData:
     return _MetricData(_METRIC_ORDER, tuple(values))
 
 
-def _read_confusion_presentation(path: Path) -> _ConfusionData:
-    try:
-        report = _load_annotation_evaluation_report(path)
-        confusion = report["confusion"]
-        assert isinstance(confusion, Mapping)
-        rows = confusion["rows"]
-        columns = confusion["columns"]
-        matrix = confusion["counts"]
-        assert isinstance(rows, Mapping) and isinstance(columns, list)
-        row_labels = tuple(str(value) for value in rows["labels"])
-        column_labels: list[str] = []
-        for descriptor in columns:
-            assert isinstance(descriptor, Mapping)
-            if descriptor.get("kind") == "structural_unassigned":
-                column_labels.append("Unassigned (structural)")
-            else:
-                label = descriptor.get("label")
-                if not isinstance(label, str):
-                    raise ValueError("Invalid confusion column label.")
-                column_labels.append(label)
-        counts = np.asarray(matrix, dtype=np.int64)
-        if (
-            counts.shape != (len(row_labels), len(column_labels))
-            or np.any(counts < 0)
-        ):
-            raise ValueError("Invalid confusion matrix.")
-        counts = np.array(counts, copy=True, order="C")
-    except Exception as exc:
-        raise AnalysisVisualizationError(
-            "VISUALIZATION_SOURCE_INVALID",
-            "The verified annotation-evaluation report lacks valid confusion data.",
-        ) from exc
-    return _ConfusionData(
-        row_labels=row_labels,
-        column_labels=tuple(column_labels),
-        counts=counts,
-        annotate_cells=counts.size <= _CONFUSION_TEXT_CELL_LIMIT,
-    )
 
 
 def _figure_identity(ordinal: int, kind: str, step_id: str) -> tuple[str, str]:
@@ -723,7 +673,7 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
 
     projections: list[_FigureProjection] = []
     for step_id, tool_name, kind, step in _supported_figure_sources(snapshot):
-        if tool_name in ("annotate_scATAC_cell_types", "compare_cell_annotations"):
+        if tool_name == "annotate_scATAC_cell_types":
             continue
         facts = step["facts"]
         assert isinstance(facts, Mapping)
@@ -818,39 +768,6 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                 "zero_line": True,
                 "ranking": False,
                 "selection": False,
-            }
-        else:
-            source = _source_artifact(
-                artifacts,
-                step_id=step_id,
-                kind="annotation_evaluation_json",
-                tool_name=tool_name,
-            )
-            path = Path(str(source["artifact_path"])).expanduser().resolve()
-            data = _read_confusion_presentation(path)
-            digest = _domain_digest(
-                "agent.visualization.annotation-confusion-data.v1",
-                {
-                    "rows": data.row_labels,
-                    "columns": data.column_labels,
-                    "counts": data.counts.tolist(),
-                },
-            )
-            width_inches = min(20.0, max(8.0, 3.0 + 0.45 * len(data.column_labels)))
-            height_inches = min(20.0, max(7.0, 3.0 + 0.4 * len(data.row_labels)))
-            width_px = int(width_inches * _DPI)
-            height_px = int(height_inches * _DPI)
-            presentation = {
-                "row_order": data.row_labels,
-                "column_order": data.column_labels,
-                "matrix_shape": tuple(int(v) for v in data.counts.shape),
-                "raw_count_total": int(data.counts.sum()),
-                "raw_counts": True,
-                "normalization": False,
-                "structural_unassigned_last": True,
-                "cell_text_annotation_limit": _CONFUSION_TEXT_CELL_LIMIT,
-                "cell_text_annotations_drawn": data.annotate_cells,
-                "colormap": "Blues",
             }
         figure_id, filename = _figure_identity(ordinal, kind, step_id)
         projections.append(
@@ -1046,41 +963,6 @@ def _render_metrics(figure: Figure, data: _MetricData) -> None:
         )
 
 
-def _render_confusion(figure: Figure, data: _ConfusionData, *,
-                      row_axis="Ground-truth label", title="Annotation evaluation confusion matrix (raw counts)") -> None:
-    axes = figure.add_axes((0.18, 0.22, 0.68, 0.68))
-    maximum = max(1, int(data.counts.max(initial=0)))
-    image = axes.imshow(
-        data.counts,
-        cmap="Blues",
-        interpolation="nearest",
-        aspect="auto",
-        vmin=0,
-        vmax=maximum,
-    )
-    axes.set_xticks(np.arange(len(data.column_labels)), data.column_labels)
-    axes.set_yticks(np.arange(len(data.row_labels)), data.row_labels)
-    axes.tick_params(axis="x", labelrotation=90, labelsize=7.0)
-    axes.tick_params(axis="y", labelsize=7.0)
-    axes.set_xlabel("Predicted label")
-    axes.set_ylabel(row_axis)
-    axes.set_title(title)
-    if data.annotate_cells:
-        threshold = maximum / 2.0
-        for row in range(data.counts.shape[0]):
-            for column in range(data.counts.shape[1]):
-                count = int(data.counts[row, column])
-                axes.text(
-                    column,
-                    row,
-                    str(count),
-                    ha="center",
-                    va="center",
-                    fontsize=6.0,
-                    color="white" if count > threshold else "black",
-                )
-    colorbar_axes = figure.add_axes((0.88, 0.22, 0.025, 0.68))
-    figure.colorbar(image, cax=colorbar_axes, label="Cell count")
 
 
 def _render_figure(projection: _FigureProjection, path: Path) -> None:
@@ -1101,7 +983,7 @@ def _render_figure(projection: _FigureProjection, path: Path) -> None:
             from .annotation_visualization import render
             render(figure, projection.data)
         else:
-            _render_confusion(figure, projection.data)
+            raise ValueError("Unknown scientific figure data")
         try:
             figure.savefig(
                 path,

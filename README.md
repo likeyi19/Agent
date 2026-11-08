@@ -24,26 +24,18 @@ scientific inputs, accepted-object reuse and deployment, and the
 for exact qualification status. pycisTopic is not exposed under its restrictive
 license; regulatory topic modeling remains an explicit capability gap.
 The centralized STE-NFI integration phase is **CLOSED**: 1H is **COMPLETE within
-bounded scope / CONDITIONAL GO for controlled researcher use**, with 45 Registry
+bounded scope / CONDITIONAL GO for controlled researcher use**, with a then-current 45 Registry
 tools, 74 reviewed native functions and 10 scientific packages. This is partial
 upstream API coverage. Future integrations remain demand-driven.
 
-The [SRV results and evaluation guide](docs/guides/scientific-results-and-evaluation.md)
-starts the next research phase: source-bound figure previews, concise quantitative
-result tables and external end-to-end evaluation against published reference results.
-Existing algorithms and accepted historical results retain their identities.
-SRV-1B adds native MAESTRO activity/composition figures and general fixed-label
-comparison against later H5AD/TSV/CSV references, with explicit library/cell
-matching, coverage, metrics and reusable UMAP overlays (46 Registry tools).
-See the [SRV-1B report](../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
-for bounded official OpenAI Firefox acceptance, genuine native figures, simulated
-reference scope and remaining explanatory-prose/visualization limitations.
-Explicit user label mappings can now extend this same comparison operation through
-ordinary conversation. Original labels and exact-label metrics remain separate
-from harmonized-label metrics; unknown correspondences are not inferred. See the
-[SRV guide](docs/guides/scientific-results-and-evaluation.md) and
-[SRV-2C Phase 0 checkpoint](../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md).
-The full published-data evaluation has not started.
+The [scientific results guide](docs/guides/scientific-results-and-evaluation.md)
+describes native analysis/annotation, source-bound figures, readable accepted
+facts and downloads. The current product has 37 registered tools. Cell-type label
+renaming, ontology enrichment and post-annotation reference-label benchmarks are
+retired; independent research evaluation remains outside Agent. See the
+[retirement closeout](../agent-data/acceptance/scientific-results/cell-type-comparison-retirement-2026-11-08/REPORT.md)
+for exact cleanup and smoke qualification. Historical SRV and CWC acceptance
+reports describe their original scopes and do not restore retired operations.
 
 Scientific explanations prioritize the newly accepted analysis while keeping
 earlier results available for explicit reading or comparison. The separate
@@ -55,8 +47,9 @@ records its then-current 27-tool inventory, genuine replicated differential-acce
 and clustering-evaluation journeys, statistical downloads and long-session follow-up.
 The [blocker closeout](../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
 updates the recommendation to **CONDITIONAL GO** for controlled research use:
-source-qualified repeated EpiZoo operations, fixed held-out annotation evaluation,
-downloads and later evidence answers now pass genuine browser/native acceptance.
+source-qualified repeated EpiZoo operations, downloads and later evidence answers
+passed genuine browser/native acceptance within that historical review. Its
+fixed-label evaluation experiment is now retired from the product.
 Biological validity and universal input/provider qualification remain outside that conclusion.
 
 The [raw scATAC guide](docs/guides/raw-scatac-processing.md) describes the current
@@ -329,17 +322,7 @@ region counts/binary accessibility, exact independent groups, and pinned
 tissue/context resources. It publishes primary labels in a new annotated H5AD
 while preserving source values and axes. Unresolved cells remain present.
 Groups may be supplied in `obs`, an ordered TSV, or an explicitly selected
-compatible accepted Leiden result. Optional `corroborate_cell_type_annotation`
-uses qualified local CellMarker records through the same Registry, result and
-download owners, both after annotation and later without native recomputation.
-When qualified groups are absent, the Planner can compose the existing inspection,
-TF-IDF/PCA, neighbors and Leiden capabilities, then bind exact-source groups to
-annotation. Operator-deployed references are shared by discovery and execution.
-The [SWC-2 finalization](../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
-records the genuine unclustered PBMC browser journey, downloads and evidence reuse.
-See the [annotation guide](docs/guides/cell-type-annotation.md) for method-specific
-input support, reference deployment and evidence limits. EpiAgent-NT retains
-private scripts and native results, with no registered execution tool.
+compatible accepted Leiden result.
 
 ## Historical Milestone 11 status
 
@@ -850,12 +833,10 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
-| Reference corroboration | `corroborate_cell_type_annotation`: exact accepted annotation and qualified CellMarker records; separate literature associations and downloadable evidence TSV |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
 | Fragment-derived region matrix | `run_snapatac2` → `pp.make_peak_matrix`, actual native counting unit and exact regions |
 | Target EpiZoo lifecycle | `adapt_epizoo_species`: automatic or explicit transfer with zero-update initialization; `posttrain_epizoo_model`: native training from that accepted parent; exact target inference through `epizoo_embed_cells` |
 | Reference label transfer | `transfer_cell_labels`: exact deterministic CPU kNN transfer directly between within-species reference/query EpiZoo embeddings using the same canonical checkpoint |
-| Annotation evaluation | `evaluate_cell_annotation`: fixed-prediction assignment rate, overall/assigned accuracy, macro-F1, per-class diagnostics, rectangular confusion counts, and descriptive confidence medians |
 | Regulatory feature foundation | `validate_scATAC_feature_space`, `build_replicate_pseudobulk`: explicit raw sparse feature provenance and exact SUM by `(group, replicate, condition)` |
 | Differential accessibility | `run_replicate_differential_accessibility`: biological-replicate DA with pinned edgeR v4 quasi-likelihood fitting/testing and independent verification |
 
@@ -884,12 +865,10 @@ votes remain structurally unassigned with confidence retained. No approximate
 neighbors, automatic k reduction, batch correction, clustering, or UMAP enters
 transfer. Query ground truth is unavailable to the production transfer path.
 
-Evaluation ground truth is used only after clustering or annotation is fixed;
-it never tunes parameters, selects a workflow, or triggers upstream reruns.
-Exact cell identity and order are required without intersection/reordering.
-Annotation evaluation counts unassigned cells as incorrect for overall accuracy,
-uses ground-truth classes for macro-F1, and preserves undefined assigned accuracy
-or confidence summaries as `null`. It does not optimize confidence thresholds.
+Clustering evaluation consumes fixed clusters and exact ordered reference data;
+it never tunes upstream parameters or triggers reruns. Evaluation of assigned
+cell-type labels, label alignment and accuracy/F1 benchmarks are independent
+research tasks outside Agent.
 
 Regulatory analysis returns to raw sparse `X` or an explicitly named sparse
 layer. Feature validation requires declared fragment/insertion counts or binary
@@ -972,7 +951,7 @@ provider safety tests are preserved. See [benchmark documentation](benchmarks/pl
 Post-run schema-v1 evidence contains whitelisted verified facts and an
 authoritative evidence-file SHA, explicitly distinguishing source digest
 protection from structural/provenance/content verification. Supported PNGs are
-Leiden UMAP, the four clustering metrics, and raw annotation confusion counts.
+Leiden UMAP, clustering metrics, native annotation composition/UMAP and marker/RP activity.
 Deterministic Markdown reports use attributed frozen facts, preserve exact and
 nullable values, and optionally copy verified PNG bytes unchanged. No LLM
 narrative, invented analysis stage, visual interpretation, or qualitative
@@ -1535,9 +1514,9 @@ selections still supply scientific declarations and thresholds. See the
 
 Real Fang2021 acceptance established exact manual EpiZoo parity for 2,000 cells,
 `(2000, 512)` embeddings, fixed-seed reproducibility, batch size 4, and about
-10.9 GiB peak GPU allocation on an RTX 4090. Downstream analysis and held-out
-annotation/evaluation were validated with unchanged sources and isolated
-evaluation-only labels. Development assumes at most 24 GB GPU memory and never
+10.9 GiB peak GPU allocation on an RTX 4090. Historical downstream analysis and held-out
+annotation/evaluation evidence used unchanged sources and isolated evaluation-only
+labels. The latter benchmark operation is retired; native annotation remains. Development assumes at most 24 GB GPU memory and never
 densifies a complete raw scATAC matrix.
 
 Feature-space semantic-v4 parity completed six optional mappings: `layer_key`,

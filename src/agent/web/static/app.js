@@ -552,27 +552,21 @@ function resultFigureGallery(artifacts) {
     marker_activity_dot: "Native MAESTRO Enhanced RP: color = log1p(mean raw RP), size = fraction RP > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
     marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
     annotation_umap: "Accepted UMAP colored by MAESTRO predictions using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
-    reference_confusion: "Exact library/cell-matched fixed labels, without remapping. Missing predictions count as errors; missing reference labels are excluded with explicit coverage. Reference labels are not biological truth.",
-    reference_composition: "Predicted and reference full-source compositions. Populations may differ; matched/unmatched coverage is reported separately. Gray = missing labels.",
-    reference_umap: "The same accepted UMAP coordinates show predictions, uploaded reference labels and agreement. Shared label colors; gray = missing/unmatched coverage. No refit or biological validation.",
     umap_leiden: "UMAP colored by accepted Leiden groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
     umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
     clustering_metrics: "Clustering agreement with the recorded reference labels. Interpretation depends on the reference's provenance and independence.",
-    annotation_confusion: "Recorded annotation comparison counts. Reference labels and unassigned coverage determine the scope of this comparison.",
   };
   // Bound image loading, not scientific availability. Every figure and full-size
   // PNG remains in the source-bound inventory below.
-  for (const artifact of artifacts.slice(0, 6)) {
+  for (const artifact of artifacts) {
     const card = document.createElement("figure");
     const title = document.createElement("h4"); title.textContent = readableLabel(artifact.figure.kind);
     const image = document.createElement("img"); image.className = "analysis-figure";
     image.loading = "lazy"; image.alt = title.textContent;
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
-    caption.textContent = artifact.figure.label_policy === "explicit_harmonized_labels" && artifact.figure.caption
-      ? artifact.figure.caption
-      : captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
+    caption.textContent = captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
     const sources = document.createElement("p"); sources.className = "muted small";
     const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
     sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
@@ -584,11 +578,6 @@ function resultFigureGallery(artifacts) {
       caption.textContent = "Figure preview unavailable. Open the figure to check its saved artifact; no analysis was rerun.";
     });
     card.append(title, image, caption, sources, open); section.append(card);
-  }
-  if (artifacts.length > 6) {
-    const note = document.createElement("p"); note.className = "partial-coverage";
-    note.textContent = `Showing 6 of ${artifacts.length} published figures. All figures remain in Downloads & reports.`;
-    section.append(note);
   }
   return section;
 }
@@ -621,8 +610,7 @@ function renderResultSelection() {
   }
   const headlineFields = new Map();
   for (const group of visible) {
-    const wanted = {compare_cell_annotations: ["n_prediction_cells", "n_reference_cells", "matched_cells", "prediction_only_cells", "reference_only_cells", "unassigned_prediction_cells", "evaluated_cells", "evaluation_coverage", "accuracy", "macro_f1", "balanced_accuracy"],
-      annotate_scATAC_cell_types: ["n_cells", "n_groups", "assigned_cells", "unassigned_cells"]}[group.tool] || [];
+    const wanted = {annotate_scATAC_cell_types: ["n_cells", "n_groups", "assigned_cells", "unassigned_cells"]}[group.tool] || [];
     const facts = wanted.flatMap(field => (group.evidence?.facts || []).filter(fact =>
       fact.field === field && fact.status === "available" && (fact.value === null || typeof fact.value === "number")));
     headlineFields.set(group.handle, new Set(facts.map(fact => fact.field)));
@@ -651,26 +639,20 @@ function renderResultSelection() {
     section.className = "scientific-result";
     const heading = document.createElement("h3"); heading.textContent = group.label;
     section.append(heading);
+    if (group.factual_report) {
+      section.append(scientificReportNode(group.factual_report));
+    }
     if (group.evidence) {
       const view = group.evidence;
-      const facts = group.summary_fields.filter(field => !headlineFields.get(group.handle)?.has(field))
+      const facts = (group.factual_report ? [] : group.summary_fields).filter(field => !headlineFields.get(group.handle)?.has(field))
         .flatMap((field) => view.facts.filter((fact) => fact.field === field));
       const values = document.createElement("dl"); values.className = "result-values";
       for (const fact of facts) {
         const label = document.createElement("dt"); label.textContent = view.field_labels[fact.field] || readableLabel(fact.field);
         const value = document.createElement("dd");
         if (fact.status !== "available") value.textContent = `${fact.status}: ${fact.reason || "No accepted value"}`;
-        else if (["group_summary", "state_counts", "metrics", "per_class", "composition"].includes(fact.field)) {
-          // Literature rows and mapping rationales remain in Methods; the
-          // composition table shows the exact recorded counts and assessments.
-          let preview = fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"
-            && Array.isArray(fact.value) ? fact.value.map(({group, candidate, n_cells, native_score, assessment}) =>
-              ({group, candidate, n_cells, native_score, assessment})) : fact.value;
-          if (fact.field === "per_class" && group.tool === "compare_cell_annotations" && Array.isArray(preview)) {
-            preview = preview.map(row => ({...row,
-              ...(row.precision === null ? {precision: "Undefined (no predicted cells)"} : {}),
-              ...(row.recall === null ? {recall: "Undefined (no reference support)"} : {})}));
-          }
+        else if (["group_summary", "metrics"].includes(fact.field)) {
+          const preview = fact.value;
           value.append(evidenceValueNode(preview));
           if (fact.field === "group_summary") {
             const note = document.createElement("p"); note.className = "muted small";
@@ -689,7 +671,7 @@ function renderResultSelection() {
         values.append(label, value);
       }
       section.append(values);
-      if (!facts.length && !headlineFields.get(group.handle)?.size) {
+      if (!group.factual_report && !facts.length && !headlineFields.get(group.handle)?.size) {
         const empty = document.createElement("p");
         empty.textContent = `Summary: ${view.reason || view.status}. Accepted fields remain in details.`;
         section.append(empty);
@@ -706,8 +688,7 @@ function renderResultSelection() {
     methods.append(title, evidenceValueNode({parameters: group.parameters, derived_from: group.derived_from,
       source: group.evidence?.source || "Unavailable", limitations: group.evidence?.limitations || []}));
     if (group.evidence) methods.append(...evidenceFactNodes(group.evidence.facts.filter((fact) =>
-      !group.summary_fields.includes(fact.field)
-        || fact.field === "group_summary" && group.tool === "corroborate_cell_type_annotation"), group.evidence.field_labels || {}));
+      !group.summary_fields.includes(fact.field)), group.evidence.field_labels || {}));
     section.append(methods); nodes.push(section);
   }
   element("result-facts").replaceChildren(...nodes);
@@ -738,7 +719,7 @@ function scientificArtifactPath(sessionId, revisionId, handle, turnId = null) {
 function supportedScientificFile(artifact) {
   // The application validates the closed descriptors. Wording and file-purpose
   // policies belong there, shared by the conversation and result inventory.
-  return ["scientific_native_result", "scientific_motif_matches", "scientific_peaks", "scientific_motifs", "scientific_sequence", "scientific_matrix", "scientific_qc_table", "scientific_selection_table", "scientific_reference_evidence",
+  return ["scientific_native_result", "scientific_motif_matches", "scientific_peaks", "scientific_motifs", "scientific_sequence", "scientific_matrix", "scientific_qc_table", "scientific_selection_table",
     "scientific_analysis", "scientific_integrated", "scientific_annotation", "scientific_model", "scientific_composition", "scientific_statistics"]
     .includes(artifact.artifact_type) && typeof artifact.filename === "string";
 }
@@ -1008,6 +989,7 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       element("report-content").hidden = false;
       element("report-description").hidden = false;
       element("technical-report-record").hidden = false;
+      element("technical-report-record").open = true;
     } else if (artifact.artifact_type === "analysis_figure") {
       if (!contentType.startsWith("image/png")) throw new ApiError("ARTIFACT_TYPE_UNSUPPORTED", "This artifact is not a supported PNG figure.");
       const blob = await response.blob();
@@ -1057,6 +1039,36 @@ function statusLabel(status, responseKind = null, revisionId = null, runId = und
     planned: "Plan prepared", interrupted: "Interrupted",
   };
   return labels[status] || readableLabel(status || "Unavailable");
+}
+
+function scientificReportNode(text) {
+  // Format only the deterministic report owner's headings/tables. Every value
+  // uses textContent; this does not interpret model prose or execute raw HTML.
+  const report = document.createElement("div"); report.className = "factual-report";
+  const lines = text.split("\n");
+  const cells = line => line.split(/(?<!\\)\s*\|\s*/).map(value => value.replace(/\\\|/g, "|"));
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].trim()) continue;
+    if (lines[i + 1] && cells(lines[i + 1]).every(value => value.trim() === "---")) {
+      const wrapper = document.createElement("div"); wrapper.className = "scientific-table";
+      const table = document.createElement("table"); const head = document.createElement("thead");
+      const header = document.createElement("tr");
+      for (const value of cells(lines[i])) { const th = document.createElement("th"); th.textContent = value; header.append(th); }
+      head.append(header); table.append(head); i += 2;
+      const body = document.createElement("tbody");
+      while (i < lines.length && lines[i].trim()) {
+        const row = document.createElement("tr");
+        for (const value of cells(lines[i])) { const td = document.createElement("td"); td.textContent = value; row.append(td); }
+        body.append(row); i += 1;
+      }
+      table.append(body); wrapper.append(table); report.append(wrapper);
+    } else {
+      const heading = lines[i].match(/^(#{3,4}) (.*)$/);
+      const node = document.createElement(heading ? (heading[1].length === 3 ? "h3" : "h4") : "p");
+      node.textContent = heading ? heading[2] : lines[i]; report.append(node);
+    }
+  }
+  return report;
 }
 
 function evidenceValueNode(value) {

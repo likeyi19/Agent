@@ -369,6 +369,10 @@ class InteractiveAgentApplication:
                         if limit not in EVIDENCE_SCOPE_LIMITATIONS]
                         if included else [],
                     evidence=evidence if included else None))
+                if included and group['tool'] == 'annotate_scATAC_cell_types':
+                    from agent.report.analysis_report import render_annotation_facts
+                    groups[-1]['factual_report'] = render_annotation_facts({f['field']:f['value']
+                        for f in evidence['facts'] if f['status'] == 'available'})
             # The accepted scientific Revision remains successful independently
             # of its originating conversation's response publication status.
             return RevisionView(revision.revision_id, revision.parent_revision_id, revision.turn_id,
@@ -1024,10 +1028,6 @@ class InteractiveAgentApplication:
                     from .sequence_delivery import accepted_sequences
                     items.extend(accepted_sequences(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
-                elif step.tool_name == 'corroborate_cell_type_annotation':
-                    from .corroboration_delivery import accepted_corroboration
-                    items.append(accepted_corroboration(self, session_id, revision, origin,
-                        None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'annotate_scATAC_cell_types':
                     from .annotation_delivery import accepted_annotation
                     items.append(accepted_annotation(self, session_id, revision, origin,
@@ -1077,10 +1077,6 @@ class InteractiveAgentApplication:
                 elif planned.tool_name in ('predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
                     from .sequence_delivery import accepted_sequences
                     items.extend(accepted_sequences(self, session_id, revision, origin, None, step_id=planned.step_id))
-                elif planned.tool_name == 'corroborate_cell_type_annotation':
-                    from .corroboration_delivery import accepted_corroboration
-                    items.append(accepted_corroboration(self, session_id, revision, origin, None,
-                        step_id=planned.step_id))
                 elif planned.tool_name == 'annotate_scATAC_cell_types':
                     from .annotation_delivery import accepted_annotation
                     items.append(accepted_annotation(self, session_id, revision, origin, None,
@@ -1449,6 +1445,10 @@ class InteractiveAgentApplication:
                     lines.extend([f"Tool: {source['tool_name']}", f"Result contract: {source['result_contract']}",
                         f"Evidence SHA-256: {source['evidence_sha256']}",
                         'Accepted verification checks: ' + ', '.join(source['verification_checks'])])
+                if source is not None and source['tool_name'] == 'annotate_scATAC_cell_types':
+                    from agent.report.analysis_report import render_annotation_facts
+                    lines.extend(['', render_annotation_facts({f['field']:f['value'] for f in view['facts']
+                        if f['status'] == 'available'}), ''])
                 for fact in view['facts']:
                     rendered = (json.dumps(_serialize(fact['value']), ensure_ascii=False, allow_nan=False)
                                 if fact['status'] == 'available' else fact['reason'] or fact['status'])

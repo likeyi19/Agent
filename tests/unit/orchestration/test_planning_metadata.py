@@ -154,12 +154,6 @@ def test_producer_and_consumer_artifact_kinds_compose(registry) -> None:
         (
             "transfer_cell_labels",
             "annotation_path",
-            "evaluate_cell_annotation",
-            "annotation_path",
-        ),
-        (
-            "transfer_cell_labels",
-            "annotation_path",
             "build_replicate_pseudobulk",
             "group_annotation_path",
         ),

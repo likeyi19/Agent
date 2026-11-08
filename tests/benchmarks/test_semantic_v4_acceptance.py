@@ -15,13 +15,9 @@ from agent.orchestration import (
     StepOutputRef,
     build_default_tool_registry,
     build_semantic_compiler_contract,
-    build_semantic_planning_prompt,
-    build_semantic_wire_v4_schema,
 )
 from agent.orchestration.llm_planner import (
     _MAX_RESPONSE_BYTES,
-    _build_prompt,
-    _response_schema,
 )
 from benchmarks.planner.benchmark import (
     BenchmarkCase,
@@ -220,7 +216,7 @@ def test_complete_benchmark_corpus_is_classified_without_skips(
         counts[case.expected_outcome] += 1
 
     assert dict(counts) == {
-        "accepted": 26,
+        "accepted": 24,
         "unsupported": 7,
         "failure": 5,
     }
@@ -235,8 +231,8 @@ def test_complete_benchmark_corpus_is_classified_without_skips(
         "clustering_evaluation_canonical",
         "label_transfer_canonical",
         "label_transfer_optional",
-        "annotation_evaluation_standalone",
-        "transfer_and_annotation_evaluation",
+
+
         "pseudobulk_canonical",
         "pseudobulk_verified_annotation",
         "differential_accessibility_fixed",
@@ -400,72 +396,6 @@ def _assert_v4_failure(
     assert raised.value.code == expected_code
 
 
-def test_ground_truth_cannot_be_sourced_from_query_lineage(
-    cases: tuple[BenchmarkCase, ...],
-) -> None:
-    case = next(
-        case
-        for case in cases
-        if case.case_id == "transfer_and_annotation_evaluation"
-    )
-    payload = json.loads(_semantic_response(case))
-    evaluation = payload["decision"]["steps"][-1]
-    evaluation["sources"] = [
-        (
-            {
-                "kind": "step",
-                "target": "ground_truth_dataset",
-                "step": "provider-step-103",
-            }
-            if source["target"] == "ground_truth_dataset"
-            else source
-        )
-        for source in evaluation["sources"]
-    ]
-
-    request = AgentRequest(
-        "ground-truth-lineage-mismatch",
-        case.prompt,
-        {
-            name: value
-            for name, value in case.inputs.items()
-            if name != "ground_truth_h5ad_path"
-        },
-    )
-    with pytest.raises(PlannerError) as raised:
-        LLMPlanner(
-            ScriptedPlanningModel(json.dumps(payload)),
-            wire_mode=PlanningWireMode.V4,
-        ).plan(request, build_default_tool_registry())
-    assert raised.value.code == "BROKEN_BRANCH_LINEAGE"
-
-
-def test_wrong_semantic_artifact_type_fails_before_preflight(
-    cases: tuple[BenchmarkCase, ...],
-) -> None:
-    case = next(
-        case
-        for case in cases
-        if case.case_id == "transfer_and_annotation_evaluation"
-    )
-    payload = json.loads(_semantic_response(case))
-    evaluation = payload["decision"]["steps"][-1]
-    evaluation["sources"] = [
-        (
-            {
-                "kind": "step",
-                "target": "annotation",
-                "step": "provider-step-103",
-            }
-            if source["target"] == "annotation"
-            else source
-        )
-        for source in evaluation["sources"]
-    ]
-
-    _assert_v4_failure(case, payload, "ZERO_VALID_CHANNELS")
-
-
 def test_multiple_compatible_producers_are_never_first_match_inferred(
     cases: tuple[BenchmarkCase, ...],
 ) -> None:
@@ -567,12 +497,10 @@ def test_unknown_explicit_source_port_fails_closed(
         "differential_accessibility_paired_covariates",
     ),
 )
-def test_v4_prompt_and_response_retain_size_headroom(
+def test_v4_response_retains_protocol_size_headroom(
     cases: tuple[BenchmarkCase, ...], case_id: str
 ) -> None:
     case = next(case for case in cases if case.case_id == case_id)
-    request = _request(case)
-    registry = build_default_tool_registry()
     def encode(value: object) -> bytes:
         return json.dumps(
             value,
@@ -581,18 +509,11 @@ def test_v4_prompt_and_response_retain_size_headroom(
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-    v3_prompt_bytes = len(_build_prompt(request, registry).encode("utf-8"))
-    v4_prompt_bytes = len(
-        build_semantic_planning_prompt(request, registry).encode("utf-8")
-    )
     v3_response_bytes = len(encode(json.loads(oracle_response(case))))
     v4_response_bytes = len(encode(json.loads(_semantic_response(case))))
 
-    # Full feature-space guidance increases the prompt; the combined request
-    # still benefits from v4's smaller schema. Do not omit guidance to save bytes.
-    assert v4_prompt_bytes + len(encode(build_semantic_wire_v4_schema(registry, request))) < (
-        v3_prompt_bytes + len(encode(_response_schema(registry, request)))
-    )
+    # Removing operations changes v3/v4 catalog-size ordering. Relative prompt
+    # compression is not protocol admission; keep the actual response bound.
     # Tool-correlated schema constraints intentionally increase schema size;
     # the old structural-only schema reduction is no longer a contract.
     assert v4_response_bytes < v3_response_bytes

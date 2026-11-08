@@ -68,19 +68,6 @@ def _write_umap(path: Path, *, labels: tuple[str, ...] = ("2", "1", "2")) -> Non
     artifact.write_h5ad(path)
 
 
-def _write_confusion(path: Path, *, count: int = 3) -> None:
-    payload = {
-        "confusion": {
-            "rows": {"labels": ["B", "A"]},
-            "columns": [
-                {"kind": "biological_label", "label": "A"},
-                {"kind": "biological_label", "label": "external"},
-                {"kind": "structural_unassigned", "label": None},
-            ],
-            "counts": [[count, 1, 0], [0, 2, 1]],
-        }
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _artifact(step_id: str, tool_name: str, kind: str, path: Path) -> dict[str, object]:
@@ -100,16 +87,15 @@ def _source(
     tools: tuple[str, ...] = (
         "compute_cell_umap",
         "evaluate_cell_clustering",
-        "evaluate_cell_annotation",
+
     ),
     duplicate_umap: bool = False,
 ) -> tuple[AgentRunResult, dict[str, object], Path, Path]:
     umap_path = tmp_path / "source.umap.h5ad"
     metrics_path = tmp_path / "source.clustering_metrics.json"
-    confusion_path = tmp_path / "source.annotation_evaluation.json"
+    metrics_path = metrics_path
     _write_umap(umap_path)
     metrics_path.write_text("{}", encoding="utf-8")
-    _write_confusion(confusion_path)
 
     definitions: list[tuple[str, str, dict[str, object], dict[str, object] | None]] = []
     counters: dict[str, int] = {}
@@ -124,11 +110,7 @@ def _source(
             metrics_path,
             {"nmi": 0.7, "ari": -0.2, "ami": -0.1, "homogeneity": 0.8},
         ),
-        "evaluate_cell_annotation": (
-            "annotation_evaluation_json",
-            confusion_path,
-            {},
-        ),
+
         "inspect_scATAC": ("", tmp_path / "input.h5ad", {}),
     }
     selected = tools + (("compute_cell_umap",) if duplicate_umap else ())
@@ -196,28 +178,24 @@ def _source(
         "tool_names": [tool_name for _, tool_name, _, _ in definitions],
         "all_steps_verified": True,
     }
-    return run, evidence_result, umap_path, confusion_path
+    return run, evidence_result, umap_path, metrics_path
 
 
 @pytest.fixture(autouse=True)
 def _verified_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(visualization_module, "verify_analysis_evidence", lambda *a, **k: _passed())
-    monkeypatch.setattr(
-        visualization_module,
-        "_load_annotation_evaluation_report",
-        lambda path: json.loads(Path(path).read_text(encoding="utf-8")),
-    )
+
 
 
 def _build(tmp_path: Path, **source_options: object) -> tuple[object, ...]:
-    run, evidence, umap_path, confusion_path = _source(tmp_path, **source_options)
+    run, evidence, umap_path, metrics_path = _source(tmp_path, **source_options)
     result = build_analysis_visualizations(
         run,
         evidence,
         tmp_path / "output",
         registry=_guarded_registry(),
     )
-    return run, evidence, umap_path, confusion_path, result
+    return run, evidence, umap_path, metrics_path, result
 
 
 def _overlay_source():
@@ -299,7 +277,7 @@ def test_supported_visualization_kinds_are_ordered_and_do_not_render(
         tmp_path,
         tools=(
             "inspect_scATAC",
-            "evaluate_cell_annotation",
+
             "compute_cell_umap",
             "evaluate_cell_clustering",
         ),
@@ -314,7 +292,7 @@ def test_supported_visualization_kinds_are_ordered_and_do_not_render(
 
     assert get_supported_visualization_kinds(
         run, evidence, registry=_guarded_registry()
-    ) == ("annotation_confusion", "umap_leiden", "clustering_metrics")
+    ) == ( "umap_leiden", "clustering_metrics")
 
 
 def test_supported_visualization_kinds_returns_empty_for_figureless_evidence(
@@ -333,11 +311,11 @@ def test_builds_exact_v1_bundle_and_verifies_without_tool_execution(tmp_path: Pa
     assert result["status"] == "success"
     assert result["artifact_type"] == ANALYSIS_VISUALIZATION_ARTIFACT_TYPE
     assert result["schema_version"] == ANALYSIS_VISUALIZATION_SCHEMA_VERSION
-    assert result["n_figures"] == 3
+    assert result["n_figures"] == 2
     assert [value["figure_kind"] for value in result["figures"]] == [
         "umap_leiden",
         "clustering_metrics",
-        "annotation_confusion",
+
     ]
     assert json.loads(json.dumps(result)) == result
     manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
@@ -360,7 +338,7 @@ def test_projection_preserves_umap_values_order_and_fixed_presentations(tmp_path
     snapshot = visualization_module._verified_evidence_snapshot(
         run, evidence, _guarded_registry()
     )
-    umap, metrics, confusion = visualization_module._derive_figure_projections(snapshot)
+    umap, metrics = visualization_module._derive_figure_projections(snapshot)
 
     assert umap.data.cell_ids == ("cell-0", "cell-1", "cell-2")
     np.testing.assert_array_equal(
@@ -376,10 +354,6 @@ def test_projection_preserves_umap_values_order_and_fixed_presentations(tmp_path
     assert metrics.data.values == (0.7, -0.2, -0.1, 0.8)
     assert metrics.presentation["y_axis"] == (-1.0, 1.0)
     assert metrics.presentation["ranking"] is False
-    assert confusion.data.row_labels == ("B", "A")
-    assert confusion.data.column_labels == ("A", "external", "Unassigned (structural)")
-    np.testing.assert_array_equal(confusion.data.counts, [[3, 1, 0], [0, 2, 1]])
-    assert confusion.presentation["normalization"] is False
 
 
 def test_metric_renderer_uses_fixed_axis_and_zero_line() -> None:
@@ -403,31 +377,6 @@ def test_palette_extension_is_fixed_and_deterministic() -> None:
     assert len(first) == len(set(first)) == 27
 
 
-def test_confusion_cell_annotation_threshold_is_fixed(tmp_path: Path) -> None:
-    report = tmp_path / "small.json"
-    _write_confusion(report)
-    small = visualization_module._read_confusion_presentation(report)
-    assert small.annotate_cells
-    large_report = tmp_path / "large.json"
-    large_report.write_text(
-        json.dumps(
-            {
-                "confusion": {
-                    "rows": {"labels": [f"row-{index}" for index in range(21)]},
-                    "columns": [
-                        {"kind": "biological_label", "label": f"column-{index}"}
-                        for index in range(19)
-                    ]
-                    + [{"kind": "structural_unassigned", "label": None}],
-                    "counts": np.zeros((21, 20), dtype=int).tolist(),
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert not visualization_module._read_confusion_presentation(
-        large_report
-    ).annotate_cells
 
 
 def test_umap_presentation_reader_does_not_access_scientific_fields(
@@ -470,7 +419,7 @@ def test_multiple_supported_steps_have_stable_order_and_safe_names(tmp_path: Pat
     assert [value["figure_kind"] for value in result["figures"]] == [
         "umap_leiden",
         "clustering_metrics",
-        "annotation_confusion",
+
         "umap_leiden",
     ]
     for index, figure in enumerate(result["figures"], start=1):
@@ -501,15 +450,15 @@ def test_missing_expected_umap_source_fails_entire_build(tmp_path: Path) -> None
 
 
 def test_only_explicit_evidence_artifacts_are_considered(tmp_path: Path) -> None:
-    run, evidence, umap_path, confusion_path = _source(tmp_path)
+    run, evidence, umap_path, metrics_path = _source(tmp_path)
     _write_umap(umap_path.parent / "plausible-extra.umap.h5ad")
-    (confusion_path.parent / "plausible-extra.json").write_text(
-        '{"confusion":"not-authoritative"}', encoding="utf-8"
+    (metrics_path.parent / "plausible-extra.json").write_text(
+        '{"unrelated":"not-authoritative"}', encoding="utf-8"
     )
     result = build_analysis_visualizations(
         run, evidence, tmp_path / "out", registry=_guarded_registry()
     )
-    assert result["n_figures"] == 3
+    assert result["n_figures"] == 2
 
 
 def test_repeated_same_environment_render_has_identical_pngs(tmp_path: Path) -> None:
@@ -537,16 +486,12 @@ def test_evidence_result_digest_is_authoritative(tmp_path: Path) -> None:
 
 
 def test_source_change_is_detected_by_visualization_verification(tmp_path: Path) -> None:
-    run, evidence, umap_path, confusion_path, result = _build(tmp_path)
+    run, evidence, umap_path, metrics_path, result = _build(tmp_path)
     _write_umap(umap_path, labels=("9", "9", "8"))
     assert not verify_analysis_visualizations(
         run, evidence, result["manifest_path"], registry=_guarded_registry()
     ).passed
     _write_umap(umap_path)
-    _write_confusion(confusion_path, count=99)
-    assert not verify_analysis_visualizations(
-        run, evidence, result["manifest_path"], registry=_guarded_registry()
-    ).passed
 
 
 def test_source_verification_failure_before_publication_leaves_no_bundle(
@@ -729,7 +674,7 @@ def test_historical_bundle_with_annotation_keeps_original_figure_set(tmp_path,mo
     snapshot=replace(snapshot,payload=payload)
     monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',lambda *a,**k:snapshot)
     original=visualization_module._derive_figure_projections(snapshot,annotation_figures=False)
-    assert len(original)==3
+    assert len(original)==2
     built=visualization_module._build_bundle(tmp_path/'historical',original,lambda:original,
         lambda projections,pngs,renderer:visualization_module._manifest_payload(snapshot,projections,pngs,renderer),overwrite=False)
     path=built['manifest_path'];raw=Path(path).read_bytes()
@@ -764,27 +709,3 @@ def test_invalid_projection_version_or_figure_set_fails_verification(tmp_path,fi
     path.write_bytes(visualization_module._canonical_json_bytes(manifest))
     checked=verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry())
     assert not checked.passed and checked.error is not None
-
-
-
-def test_reference_confusion_names_supplied_reference_without_truth_claim():
-    from agent.report.annotation_visualization import render
-    figure=Figure()
-    render(figure,visualization_module._ScientificPanelData('reference_confusion',
-        dict(rows=['A'],columns=['A',None],counts=[[2,1]])))
-    assert figure.axes[0].get_ylabel()=='Reference annotation'
-    assert 'truth' not in figure.axes[0].get_title().lower()
-
-
-def test_comparison_figures_distinguish_undefined_coverage_and_source_sides():
-    from agent.report.annotation_visualization import render
-    counts=dict(rows=['A','B'],columns=['A','B',None],counts=[[1,0,1],[0,1,0]],comparison_projection_version=3)
-    figure=Figure(figsize=(12,8));render(figure,visualization_module._ScientificPanelData('reference_confusion_normalized',counts))
-    assert figure.axes[0].get_ylabel()=='Supplied reference labels'
-    np.testing.assert_array_equal(figure.axes[0].images[0].get_array(),[[.5,0,.5],[0,1,0]])
-    layout=dict(coordinates=[[0,0],[1,1],[2,2],[3,3]],predicted=['A',None,'B','A'],reference=['A','B','A',None],matched=[True,True,True,False],comparison_projection_version=3)
-    figure=Figure(figsize=(18,7));render(figure,visualization_module._ScientificPanelData('reference_umap',layout))
-    labels=[t.get_text() for t in figure.axes[2].get_legend().get_texts()]
-    assert 'Native null prediction (1)' in labels and 'Prediction only / unmatched (1)' in labels
-    assert 'Agreement (1)' in labels and 'Disagreement (1)' in labels
-    assert 'Fixed prediction labels' in figure.axes[0].get_title() and 'Supplied reference' in figure.axes[1].get_title()

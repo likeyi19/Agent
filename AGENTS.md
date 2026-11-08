@@ -1,5 +1,17 @@
 # Agent
 
+The user's cell-type mapping/comparison retirement decision supersedes the ALO-1
+and earlier product-comparison contracts below for current production behavior.
+Agent retains native annotation, native reference-to-query label transfer,
+clustering evaluation and other scientific analysis. Cell-type label renaming,
+ontology enrichment, fixed prediction/reference label evaluation and post-annotation
+CellMarker corroboration are retired. Original research inputs and independent
+external benchmark evidence remain outside the product. The authorized disposable
+development Sessions need no compatibility readers. See the
+[retirement closeout](../agent-data/acceptance/scientific-results/cell-type-comparison-retirement-2026-11-08/REPORT.md)
+for exact code/data ownership, cleanup, verification and limitations. No automatic
+staging, commit or push is authorized by this task.
+
 Agent is an autonomous AI agent for single-cell epigenomic / scATAC-seq
 analysis. Existing EpiZoo and EpiAgent foundation models are scientific
 backends to reuse, not models to reimplement inside the Agent. EpiZoo is the
@@ -6467,3 +6479,42 @@ remains unqualified and automatic ontology standardization/harmonization is abse
 The user's final closeout authorizes one coherent reviewed commit and normal push
 to `origin/main`; earlier no-commit statements describe the pre-closeout stages.
 No new scientific experiment or subsequent roadmap stage is started.
+
+## ALO-1 — Automatic Cell Ontology terminology and comparison
+
+ALO-1 builds on `9e9fe6f7663771c3a0a934cdf71426d794f38d3c` without staging,
+commit or push. The [ALO-1 report](../agent-data/acceptance/scientific-results/alo-1-2026-11-08/REPORT.md)
+owns the bounded implementation, native qualification, genuine Firefox/official
+OpenAI results, preserved failures and limitations. This supersedes the preceding
+current manual-mapping and absent-ontology statements for new executions only.
+
+One `standardize_cell_types` interface uses locally installed, checksum-pinned
+Cell Ontology through ScientificResourceLibrary. Pronto owns parsing and asserted
+`is_a` traversal; text2term supplies lexical candidates. Unique current canonical
+names, EXACT synonyms and explicit CL IDs establish terminology identity; ranking
+scores never do. Partial/unavailable resolution and missing labels remain explicit.
+Optional annotation sidecars preserve native H5AD, scoring and assignment states.
+Comparison keeps original strict metrics primary, with separate canonical and
+hierarchy metrics over explicitly recorded resolved-pair populations. A unique
+observed-ancestor frontier may coarsen terms; CL upper-level abstract terms cannot
+coarsen descendants and incomparable ancestors abstain. No common ancestor, user
+mapping dictionary, reference-driven optimization or UMAP fitting is introduced.
+
+Current manual mapping parameters, extraction, offers, transformations and dedicated
+clarifications are retired. Small scoped readers retain immutable old declarations
+and accepted publications; historical profiles cannot publish new science. Exact
+already accepted native authorities may be reconstructed only when their complete
+record and identity match. Existing deterministic report and figure owners expose
+readable terminology/metric tables independently of optional reviewed model prose.
+Historical reports and displayed text retain their original meanings.
+
+Genuine PBMC comparison retains 9,629 exact matches and original metrics. Its
+prediction terminology resolves zero nonmissing cells; reference terminology
+resolves 435. No qualified pair population exists, so ontology accuracy is undefined.
+Six source-bound figures, factual tables, actual downloads and restart reads pass.
+Model explanation remains partial. Native/software positive hierarchy cases pass;
+the separate simulated positive Firefox request fails before a Run at Interpreter
+clarification validation. Full live positive hierarchy composition remains unqualified.
+Original science, all 500 missing predictions, historical Session prefixes and
+protected files remain exact. Fresh PBMC reproduction and later roadmap stages
+are not started; stop for final review before Git publication.

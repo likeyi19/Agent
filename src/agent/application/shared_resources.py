@@ -315,7 +315,7 @@ class ScientificResourceLibrary:
         identities = set()
         for row in value['resources']:
             if (not isinstance(row, dict) or set(row) != {'id', 'kind', 'label', 'version', 'provenance', 'usage', 'resource', 'files'}
-                    or row['kind'] not in ('annotation', 'genome', 'qc', 'regions', 'gene_annotation', 'epizoo', 'marker_reference', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator', 'motif_collection')
+                    or row['kind'] not in ('annotation', 'genome', 'qc', 'regions', 'gene_annotation', 'epizoo', 'liftover_chain', 'epizoo_transfer', 'sequence_predictor', 'sequence_generator', 'motif_collection')
                     or row['id'] != digest({k: v for k, v in row.items() if k != 'id'})[:56]
                     or row['id'] in identities):
                 _fail('Scientific resource identity is corrupt.')
@@ -385,11 +385,6 @@ class ScientificResourceLibrary:
             qualify_resource = (sequence_optimization.qualify_resource if resource.get('schema') == sequence_optimization.RESOURCE else sequence_prediction.qualify_resource)
             pins = {r['path']: r['sha256'] for r in [*resource['checkpoints'], resource['metadata']]}
             qualifier = lambda: qualify_resource(resource)
-        elif kind == 'marker_reference':
-            from agent.tools.analysis.annotation_corroboration import reference
-            knowledge = resource['knowledge']
-            pins = {knowledge[k + '_path']: knowledge[k + '_sha256'] for k in ('snapshot', 'table')}
-            qualifier = lambda: reference(resource)
         elif kind in ('regions', 'gene_annotation'):
             # Exact operator-declared components. Native packages parse their
             # scientific content; installation does not qualify a whole bundle.
@@ -643,7 +638,7 @@ class ScientificResourceLibrary:
     def choices(self):
         result = []
         for row in self.entries():
-            if row['kind'] in ('epizoo', 'marker_reference', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection'): continue
+            if row['kind'] in ('epizoo', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection'): continue
             result.append(self.input_set(row))
         return tuple(result)
 

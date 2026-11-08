@@ -18,7 +18,7 @@ from agent.orchestration.registry import (
 STRING_DECLARATIONS = (
     ('evaluate_cell_clustering', 'label_key', PlanningProvenanceRole.GROUND_TRUTH),
     ('transfer_cell_labels', 'reference_label_key', PlanningProvenanceRole.REFERENCE),
-    ('evaluate_cell_annotation', 'ground_truth_label_key', PlanningProvenanceRole.GROUND_TRUTH),
+
 )
 
 

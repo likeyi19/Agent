@@ -146,13 +146,6 @@ def test_source_qualified_wire_requires_value_and_mode_and_retains_old_readers()
 
 
 
-def test_annotation_evaluation_offers_its_registered_ground_truth_port(tmp_path):
-    app, _, _, _, _ = case(tmp_path)
-    parameters = scientific_parameters(app._application.registry)
-    assert all('choices' not in row for row in parameters if row.get('observation_source'))
-    annotation, = [row for row in parameters if (row['tool'],row['argument']) ==
-                   ('evaluate_cell_annotation','ground_truth_label_key')]
-    assert annotation['observation_source'] == 'ground_truth_dataset' and annotation['exact_string']
 
 
 @pytest.mark.parametrize('mode', ['offered', 'literal'])

@@ -398,10 +398,6 @@ _FIGURE_CAPTIONS: Mapping[str, str] = {
     "clustering_metrics": (
         "Verified NMI, ARI, AMI, and Homogeneity values in fixed metric order."
     ),
-    "annotation_confusion": (
-        "Verified annotation-evaluation confusion matrix using persisted raw "
-        "counts and class order."
-    ),
 }
 
 
@@ -558,8 +554,7 @@ def _verified_visualization_snapshot(
                 width_px=width,
                 height_px=height,
                 dpi=dpi,
-                caption=(raw['presentation']['caption'] if raw.get('presentation', {}).get('label_policy') == 'explicit_harmonized_labels'
-                         else _FIGURE_CAPTIONS[str(figure_kind)]),
+                caption=_FIGURE_CAPTIONS[str(figure_kind)],
             )
         )
     return _VisualizationSnapshot(
@@ -574,7 +569,6 @@ from .bam_fragments import REPORT_FIELDS as _BAM_FRAGMENT_REPORT_FIELDS
 from .barcode_qc import REPORT_FIELDS as _BARCODE_QC_REPORT_FIELDS
 from .cell_selection import REPORT_FIELDS as _CELL_SELECTION_REPORT_FIELDS
 from .matrix import REPORT_FIELDS as _MATRIX_REPORT_FIELDS
-from agent.tools.analysis import cell_label_comparison as _CELL_COMPARISON
 from .annotation import REPORT_FIELDS as _ANNOTATION_REPORT_FIELDS
 from .matrix_adoption import REPORT_FIELDS as _ADOPTED_MATRIX_REPORT_FIELDS
 from .external_fragments import REPORT_FIELDS as _EXTERNAL_FRAGMENT_REPORT_FIELDS
@@ -585,7 +579,6 @@ _ADAPTATION_REPORT_FIELDS = (*_ADAPTATION_REPORT_FACTS, "completed_step", "purpo
 from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
-    _CELL_COMPARISON.TOOL: _CELL_COMPARISON.FACT_FIELDS,
     'inspect_scATAC_fragments': _FRAGMENT_INSPECTION_FIELDS,
     'pca_embed_cells': ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
                        'parameters','software_versions','finite','cell_order_preserved','backend'),
@@ -603,7 +596,6 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "optimize_regulatory_sequences": ("n_sequences", "target_condition", "comparison_conditions", "measurement", "iterations", "max_changes", "edit_region", "protected_ranges", "comparison_weight", "candidate_examples", "examples_omitted", "improved_candidates", "constraints_satisfied", "model_release", "limitations"),
     "predict_regulatory_sequences": ("n_sequences", "n_conditions", "conditions", "head", "measurement", "folds", "score_min", "score_max", "score_examples", "examples_omitted", "model_release", "normalization", "limitations"),
     "evaluate_regulatory_predictions": ("n_observations", "measurement", "metrics", "limitations"),
-    "corroborate_cell_type_annotation": ("database", "database_release", "species", "context", "tissues", "n_groups", "n_records", "state_counts", "group_summary", "groups_omitted", "limitations"),
     "annotate_scATAC_cell_types": _ANNOTATION_REPORT_FIELDS,
     "compute_scATAC_qc": _BARCODE_QC_REPORT_FIELDS,
     "build_scATAC_cell_by_ccre": _MATRIX_REPORT_FIELDS,
@@ -708,28 +700,6 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
         "checkpoint_compatible",
         "backend",
     ),
-    "evaluate_cell_annotation": (
-        "annotation_sha256",
-        "ground_truth_label_key",
-        "n_cells",
-        "n_ground_truth_classes",
-        "n_assigned_predicted_classes",
-        "assigned_count",
-        "unassigned_count",
-        "assignment_rate",
-        "correct_assigned_count",
-        "incorrect_assigned_count",
-        "overall_accuracy",
-        "assigned_accuracy",
-        "macro_f1",
-        "median_confidence",
-        "median_assigned_confidence",
-        "median_correct_assigned_confidence",
-        "median_incorrect_assigned_confidence",
-        "metric_backend",
-        "macro_average",
-        "zero_division",
-    ),
     "validate_scATAC_feature_space": (
         "input_path",
         "n_cells",
@@ -811,7 +781,6 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 _TOOL_TITLES: Mapping[str, str] = {
-    _CELL_COMPARISON.TOOL: "Fixed cell-label reference comparison",
     "call_scATAC_peaks": "Experimental accessible peaks",
     "run_motifmatchr": "Native sequence motif matches",
     **{p.TOOL: "Native " + p.package + " function results" for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
@@ -831,7 +800,6 @@ _TOOL_TITLES: Mapping[str, str] = {
     "build_scATAC_cell_by_features": "Fragment-derived regulatory-feature matrix",
     "adopt_scATAC_cell_by_features": "Neutral regulatory-feature matrix adoption",
     "adapt_epizoo_species": "EpiZoo species adaptation",
-    "corroborate_cell_type_annotation": "Qualified cell-type reference evidence",
     "annotate_scATAC_cell_types": "Primary cell-type annotation",
     "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
@@ -845,7 +813,6 @@ _TOOL_TITLES: Mapping[str, str] = {
     "compute_cell_umap": "UMAP",
     "evaluate_cell_clustering": "Clustering evaluation",
     "transfer_cell_labels": "Cell-label transfer",
-    "evaluate_cell_annotation": "Annotation evaluation",
     "validate_scATAC_feature_space": "Regulatory feature space",
     "build_replicate_pseudobulk": "Replicate-aware pseudobulk",
     "run_replicate_differential_accessibility": (
@@ -854,11 +821,7 @@ _TOOL_TITLES: Mapping[str, str] = {
 }
 
 _FIELD_LABELS: Mapping[str, str] = {
-    **{k:k.replace("_", " ").capitalize() for k in (*_CELL_COMPARISON.FACT_FIELDS, *_CELL_COMPARISON.EXTENDED_FACT_FIELDS)},
     "function_name": "Native function",
-    "unassigned_prediction_cells": "Missing predictions among evaluated cells",
-    "reference_label_missing_cells": "Matched cells missing reference labels",
-    "evaluation_coverage": "Evaluated fraction of prediction population",
     "population": "Selected fragment population",
     "window_policy": "Genomic extraction window policy",
     "n_sequences": "Sequence records",
@@ -872,8 +835,6 @@ _FIELD_LABELS: Mapping[str, str] = {
     "transfer_assessment": "Native mapping assessment and transfer decision",
     "parent_model_manifest_sha256": "Initialized parent model manifest",
     "parent_initialized_manifest_sha256": "Initialized parent model manifest",
-    "database_release": "Reference database release",
-    "database_table_sha256": "Reference table SHA-256",
     "annotation_manifest_sha256": "Native annotation SHA-256",
     **{k: k.replace('_', ' ').capitalize() for k in _FRAGMENT_INSPECTION_FIELDS},
     'software_versions': 'Scientific software versions',
@@ -1013,20 +974,6 @@ _FIELD_LABELS: Mapping[str, str] = {
     "species_compatible": "Species compatibility verified",
     "checkpoint_compatible": "Checkpoint compatibility verified",
     "annotation_sha256": "Annotation SHA-256",
-    "ground_truth_label_key": "Ground-truth label key",
-    "n_ground_truth_classes": "Ground-truth classes",
-    "n_assigned_predicted_classes": "Assigned predicted classes",
-    "correct_assigned_count": "Correct assigned cells",
-    "incorrect_assigned_count": "Incorrect assigned cells",
-    "overall_accuracy": "Overall accuracy",
-    "assigned_accuracy": "Assigned-only accuracy",
-    "macro_f1": "Macro-F1",
-    "median_confidence": "Median confidence",
-    "median_assigned_confidence": "Median assigned confidence",
-    "median_correct_assigned_confidence": "Median correct-assigned confidence",
-    "median_incorrect_assigned_confidence": "Median incorrect-assigned confidence",
-    "macro_average": "Macro averaging",
-    "zero_division": "Zero-division policy",
     "matrix_source": "Regulatory matrix source",
     "layer_key": "Regulatory matrix layer",
     "matrix_semantics": "Regulatory matrix semantics",
@@ -1100,7 +1047,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("regulatory_sequence", "Regulatory sequence analysis and design", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences", "generate_regulatory_sequences", "prepare_scatac_regulatory_sequences"})),
     ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
-    ("cell_type_reference_evidence", "Qualified reference corroboration", frozenset({"corroborate_cell_type_annotation"})),
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
@@ -1134,11 +1080,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
         frozenset({"transfer_cell_labels"}),
     ),
     (
-        "annotation_evaluation",
-        "Annotation Evaluation",
-        frozenset({"evaluate_cell_annotation", "compare_cell_annotations"}),
-    ),
-    (
         "regulatory_feature_space",
         "Regulatory Feature Space",
         frozenset({"validate_scATAC_feature_space"}),
@@ -1156,7 +1097,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
-    "compare_cell_annotations": ("identity_basis", "label_policy", "software_versions", "limitations"),
     "call_scATAC_peaks": ("population", "limitations"),
     **{p.TOOL: ("function_name", "measurement", "limitations") for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     "run_chromvar": ("function_name", "measurement", "limitations"),
@@ -1169,7 +1109,6 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "evaluate_regulatory_predictions": ("measurement", "limitations"),
     'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
     'pca_embed_cells': ('method','representation','parameters','software_versions'),
-    "corroborate_cell_type_annotation": ("database_release", "database_table_sha256", "annotation_manifest_sha256"),
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "posttrain_epizoo_model": ("strategy", "profile_sha256", "parent_model_manifest_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
@@ -1201,7 +1140,6 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
         "voting_method",
         "min_confidence",
     ),
-    "evaluate_cell_annotation": ("metric_backend", "macro_average", "zero_division"),
     "validate_scATAC_feature_space": (
         "matrix_source",
         "layer_key",
@@ -1252,9 +1190,6 @@ def report_fact_fields(tool_name, raw_facts):
     gain no new meaning; optional extensions are selected by their recorded keys.
     """
     fields = _REPORT_FIELDS.get(tool_name, ())
-    if tool_name == _CELL_COMPARISON.TOOL and 'vocabulary' in raw_facts:
-        fields = ('label_policy', *(k for k in _CELL_COMPARISON.EXTENDED_FACT_FIELDS if k in raw_facts),
-                  *(k for k in fields if k != 'label_policy'))
     if tool_name == 'run_macs3' and 'result_files' in raw_facts:
         fields = (*fields, 'result_files')
     if tool_name == 'run_motifmatchr' and 'n_positions' in raw_facts:
@@ -1526,6 +1461,53 @@ def _fact_ids_line(facts: Sequence[_Fact]) -> str:
     return "Evidence facts: " + ", ".join(_inline_code(fact.fact_id) for fact in facts) + "."
 
 
+def _annotation_table(headers, rows):
+    def cell(value):
+        if value is None:
+            return 'Undefined / unavailable'
+        if isinstance(value, float):
+            return f'{value:.6g}'
+        return str(value).replace('|', '\\|').replace('\n', ' ')
+    return [' | '.join(headers), ' | '.join('---' for _ in headers),
+        *[' | '.join(cell(v) for v in row) for row in rows], '']
+
+
+def render_annotation_facts(facts):
+    """Researcher-facing native annotation facts, independent of model prose.
+
+    No lookup, label substitution or new measurement occurs during rendering.
+    Matrix/analysis sections own their feature counts and upstream parameters.
+    """
+    lines = ['### Native cell-type annotation', '',
+        'The selected native method assigns computational candidate labels from recorded groups. '
+        'Original labels, scores and missing assignments remain in the annotated H5AD.', '',
+        'Data: ' + str(facts.get('species', 'unavailable')) + '; assembly ' + str(facts.get('assembly', 'unavailable'))
+        + '; context ' + str(facts.get('context', 'unavailable')) + '.',
+        'Method: ' + str(facts.get('annotation_profile', 'not recorded')) + '.', '',
+        'Input feature counts, preprocessing and clustering are reported with their source matrix and analysis results; '
+        'no omitted upstream method is inferred here.', '']
+    lines += _annotation_table(['Population', 'Cells / groups'], [
+        ('Analyzed cells', facts.get('n_cells')), ('Input groups', facts.get('n_groups')),
+        ('Assigned cells', facts.get('assigned_cells')), ('Unassigned cells', facts.get('unassigned_cells')),
+        ('Ambiguous cells (within unassigned)', facts.get('ambiguous_cells'))])
+    lines += ['#### Native candidate distribution', '']
+    rows = facts.get('group_summary', [])
+    lines += _annotation_table(['Group', 'Native label', 'Assignment status', 'Cells'], [
+        (r['group'], r['primary_annotation'] if r['primary_annotation'] is not None else '(unassigned)',
+         r['status'], r['n_cells']) for r in rows])
+    if facts.get('groups_omitted'):
+        lines.append(str(facts['groups_omitted']) + ' further groups remain in the full native output; omitted groups are not absent.')
+    lines += ['', '#### Supporting evidence and outputs', '',
+        'Native candidate scores, marker/signature support and regulatory potential (RP) are available in annotation evidence. '
+        'Composition and group distributions, marker-activity dot plots and RP distributions show the recorded native output. '
+        'An annotation-colored UMAP is available when exact accepted coordinates and ordered source cells are present; no coordinates are refitted.',
+        'RP is accessibility-derived activity, not measured RNA expression. Native markers and signatures are dependent annotation evidence; '
+        'candidate scores are not calibrated probabilities. Unassigned and ambiguous cells are retained. '
+        'Independent biological validation: ' + str(facts.get('validation_state', 'not recorded')) + '.',
+        'Download the annotated H5AD and scientific figures. Detailed parameters, exact source identities and native evidence remain in the methods and evidence views.']
+    return '\n'.join(lines)
+
+
 def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
     if step.tool_name in tuple(p.TOOL for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)) + ('run_chromvar', 'run_motifmatchr', 'call_scATAC_peaks', 'compute_motif_accessibility', 'predict_regulatory_sequences', 'evaluate_regulatory_predictions', 'optimize_regulatory_sequences', 'generate_regulatory_sequences', 'prepare_scatac_regulatory_sequences'):
         lines = [f'### {_TOOL_TITLES[step.tool_name]} {occurrence}', '']
@@ -1568,25 +1550,8 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
             "Trainer attempts and applied optimizer steps are distinct. Biological performance, convergence, cross-species accuracy and downstream embedding quality were not assessed.",
             "", _fact_ids_line(step.facts), ""))
         return lines
-    if step.tool_name == "corroborate_cell_type_annotation":
-        return ["### Qualified cell-type reference evidence", "", *[f"- {fact.field.replace('_', ' ')}: {_inline_code(fact.value)}" for fact in step.facts], "", _fact_ids_line(step.facts), ""]
     if step.tool_name == "annotate_scATAC_cell_types":
-        lines=[f"### Primary cell-type annotation {occurrence}", "",
-            "Primary marker-based annotation was propagated from exact groups to every canonical cell. "
-            "The derived annotated H5AD preserves the source matrix and ordered axes.", ""]
-        for fact in step.facts:
-            label = "Annotation contract" if fact.field == "contract_version" else _FIELD_LABELS[fact.field]
-            lines.append(f"- {label}: {_inline_code(fact.value)}")
-        lines.extend(("", "Unassigned and ambiguous cells remain present with missing primary labels. "
-            "Validation was not assessed. CellMarker and EpiAgent are optional, non-gating validators; "
-            "neither changes or rescues primary labels. No accuracy or probability calibration is established.",
-            "", _fact_ids_line(step.facts), ""))
-        if any(f.field == 'annotation_profile' and f.value == 'maestro-enhanced-count-weighted-peaks.v1' for f in step.facts):
-            lines.extend(("Native MAESTRO matches supplied contig names exactly, without alias correction. "
-                "Unmatched names and peaks with zero transcript weight do not contribute to RP; "
-                "this is not evidence of biological absence. The full supplied matrix is preserved. "
-                "Annotation details expose native feature participation when recorded.", ""))
-        return lines
+        return [render_annotation_facts({f.field:f.value for f in step.facts}), '', _fact_ids_line(step.facts), '']
     if step.tool_name == "adopt_scATAC_cell_by_ccre":
         lines=[f"### External cell-by-cCRE adoption {occurrence}", "",
             "Adopted an external matrix with the exact complete canonical cCRE vocabulary. "
@@ -1812,7 +1777,6 @@ def _render_summary(
         "optimize_regulatory_sequences": "Native constrained DeepPBMC editing completed; inspect actual objective improvement and constraints",
         "predict_regulatory_sequences": "Native DHS64 DNase predictions completed; no biological validation implied",
         "evaluate_regulatory_predictions": "Matched supplied DNase observation metrics completed",
-        "corroborate_cell_type_annotation": "Qualified local reference evidence published separately from native candidate annotations",
         "annotate_scATAC_cell_types": "Primary marker-based cell-type annotation and annotated H5AD published",
         "prepare_scATAC_bam_fragments": "BAM fragment preparation succeeded; source, Agent transformation and output were independently verified",
         "compute_scATAC_qc": "Observed-barcode QC succeeded; no calling or selection was applied",
@@ -1833,8 +1797,6 @@ def _render_summary(
         "compute_cell_umap": "UMAP coordinates produced",
         "evaluate_cell_clustering": "Clustering evaluation available",
         "transfer_cell_labels": "Cell-label transfer performed",
-        "evaluate_cell_annotation": "Annotation evaluation available",
-        "compare_cell_annotations": "Fixed cell-label comparison available",
         "validate_scATAC_feature_space": "Regulatory feature space validated",
         "build_replicate_pseudobulk": "Replicate-aware pseudobulk produced",
         "run_replicate_differential_accessibility": (

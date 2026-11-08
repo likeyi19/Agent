@@ -36,7 +36,6 @@ from agent.tools import (
     build_cell_neighbors,
     cluster_cells,
     compute_cell_umap,
-    evaluate_cell_annotation,
     evaluate_cell_clustering,
     transfer_cell_labels,
 )
@@ -159,21 +158,6 @@ def _scientific_source_run(
         "n_neighbors": 1,
     }
     transfer = transfer_cell_labels(**transfer_arguments)
-    truth_path = tmp_path / "truth.h5ad"
-    ad.AnnData(
-        obs=pd.DataFrame(
-            {"truth": pd.Categorical(["A", "A", "B", "B", "A"])},
-            index=pd.Index(query_ids, dtype="object"),
-        )
-    ).write_h5ad(truth_path)
-    annotation_eval_arguments = {
-        "annotation_path": transfer["annotation_path"],
-        "ground_truth_h5ad_path": str(truth_path),
-        "ground_truth_label_key": "truth",
-        "output_dir": str(tmp_path / "annotation-evaluation"),
-    }
-    annotation_evaluation = evaluate_cell_annotation(**annotation_eval_arguments)
-
     plan = AgentPlan(
         "milestone7-visualization-plan",
         "milestone7-visualization",
@@ -210,17 +194,7 @@ def _scientific_source_run(
                 ("cluster",),
             ),
             PlanStep("transfer", "transfer_cell_labels", transfer_arguments),
-            PlanStep(
-                "annotation-evaluation",
-                "evaluate_cell_annotation",
-                {
-                    "annotation_path": StepOutputRef("transfer", "annotation_path"),
-                    "ground_truth_h5ad_path": str(truth_path),
-                    "ground_truth_label_key": "truth",
-                    "output_dir": str(tmp_path / "annotation-evaluation"),
-                },
-                ("transfer",),
-            ),
+
         ),
     )
     values = (
@@ -234,12 +208,7 @@ def _scientific_source_run(
             {"cluster": clustered},
         ),
         (plan.steps[4], transfer_arguments, transfer, {}),
-        (
-            plan.steps[5],
-            annotation_eval_arguments,
-            annotation_evaluation,
-            {"transfer": transfer},
-        ),
+
     )
     step_results: list[StepExecutionResult] = []
     for step, arguments, result, dependencies in values:
@@ -285,7 +254,7 @@ def _scientific_source_run(
         reference_h5ad_path,
         query_h5ad_path,
         Path(transfer["annotation_path"]),
-        Path(annotation_evaluation["report_path"]),
+
     )
     return run, registry, sources
 
@@ -313,7 +282,7 @@ def test_offline_verified_evidence_to_verified_visualizations(tmp_path: Path) ->
     assert calls == []
     assert visualization["n_figures"] == 3
     assert [value["figure_kind"] for value in visualization["figures"]] == [
-        "annotation_confusion",
+
         "umap_leiden",
         "clustering_metrics",
     ]

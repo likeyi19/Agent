@@ -1,21 +1,8 @@
-# Scientific results and evaluation
+# Scientific results, reporting and external evaluation
 
-## Cell Ontology feasibility and scientific explanations
+Agent delivers native scientific analysis, cell-type annotation, source-bound figures, readable factual reports and downloads. Cell-type label mapping, automatic ontology enrichment and comparison of predicted labels against reference labels have been retired. External benchmark metrics, mapping policies and the independent Gate 2 scientific evidence remain outside Agent.
 
-The [2026-11-08 qualification](../../../agent-data/acceptance/scientific-results/cell-ontology-and-explanations-2026-11-08/REPORT.md)
-did not qualify a general automatic ontology replacement. Bionty exact terminology
-lookup provides useful partial coverage, but the tested scOntoMatch functions can
-select competing ancestors by order and collapse supplied categories to `cell`.
-Automatic post-annotation enrichment and ontology-harmonized comparison are not
-installed. Existing strict comparisons, original native labels and historical mapping
-records retain their meanings; the current explicit mapping contract is not replaced.
-
-Scientific prose keeps exact evidence binding and one semantic review. Incorrect
-source attribution and unsupported biological claims fail their paragraph's factual
-verdict. In partial answers, only complete independently supported paragraphs survive,
-with an explicit omission notice. Guidance remains atomic. A withheld explanation
-does not invalidate accepted science or its figures and downloads. Real Firefox
-annotation explanation passed; strict-comparison explanation remained partial.
+Scientific prose retains exact evidence binding and paragraph-level factual review. Incorrect attribution or unsupported claims are withheld at that paragraph. Complete supported paragraphs may survive in a partial answer. Accepted facts, figures and downloads remain available independently of optional model-authored explanations. No additional reviewer or prompt-repair workflow is introduced.
 
 ## Accepted native handoff and delivery
 
@@ -95,125 +82,11 @@ scientifically appropriate methods without privileged architectural status.
 
 ## Active roadmap
 
-| Phase | Scope and exit criteria |
-| --- | --- |
-| SRV-1 — Normal scientific results | Improve necessary visualizations, evidence, readability, general scientific comparisons, reporting, methods and downloads within the Agent product. Exit each bounded increment with exact source/figure binding, focused tests and a genuine Web result review. Figureless results remain valid. |
-| SRV-2 — External end-to-end evaluation | The research team evaluates complete ordinary Agent workflows against real published original data, processed matrices and reference annotations. Report scientific agreement, execution outcomes and limitations. No benchmark execution mode or production subsystem; a successful tool call alone does not pass. |
-| SRV-3 — Advanced research | Future, demand-driven representative experiments: EpiAgent cCRE knockout, perturbation or mapping; EpiZoo-Cancer variant/LoA, sequence attribution or cross-species regulation. Require native scientific parity before exposing a coherent workflow; no blanket paper-experiment integration. |
-| SRV-4 — Independent datasets | Evaluate and support independent compatible datasets beyond original examples, retaining model/assay/reference restrictions. Exclude paper/filename/path/dataset special cases. |
-| SRV-5 — Paper evidence | Future consolidation of reproducible results, fair baselines, biological metrics, effort/cost, negative outcomes, limitations and publication figures. Accumulate evidence throughout earlier work. |
+After cleanup review and commit, run a fresh PBMC10k workflow in a new Session from original fragments through QC, matrices, analysis/clustering, UMAP and native annotation. The acceptance ends with Agent's scientific evidence, figures, reports and downloads. Reference-label mapping and accuracy/F1 benchmarks belong to independent external scripts. The fresh experiment and later EpiZoo/EpiAgent research have not started in this cleanup.
 
-SRV-1 and SRV-2 can proceed concurrently. SRV-1A is the first bounded presentation
-increment; it does not complete all necessary marker, QC, comparison or advanced
-figures. SRV-2A prepares the first practical published-study evaluation;
-SRV-3/4/5 implementation is not started. The [SRV-1A closeout](../../../agent-data/acceptance/scientific-results/srv-1a/REPORT.md)
-and [SRV-2A specification](../../../agent-data/acceptance/scientific-results/srv-1a/EVALUATION.md)
-own actual evidence, readiness and remaining blockers.
+## Independent research evaluation
 
-## Product comparisons and external evaluation
-
-Normal research conversations may start with FASTQ/BAM/fragments preprocessing or
-an existing matrix, continue through supported QC, representations, clustering and
-annotation, and modify parameters or reuse accepted results in later turns.
-Researchers may then upload a reference H5AD or labels and request a scientifically
-compatible comparison, metrics, figures, interpretation and downloads. Such
-source-aware comparison operations and their presentation belong to SRV-1.
-
-Current support includes compatible clustering evaluation, legacy label-transfer
-confidence evaluation, bounded categorical reads and SRV-1B's general
-`compare_cell_annotations`. The latter compares fixed native MAESTRO or supplied
-H5AD labels with an independently uploaded H5AD or headered TSV/CSV. It reads only
-selected observation fields; different feature axes and row orders are allowed.
-H5AD defaults to `obs_names` for cell identifiers; tables require an explicit cell
-column. Unique exact cell IDs suffice for a requested comparison; this does not
-independently establish biological or physical-library correspondence.
-Selected H5AD fields must contain one value per cell. Tables cannot infer an index
-from surplus fields; quoted labels and omitted trailing labels retain their ordinary
-CSV meanings, with omitted labels counted as missing.
-
-Optionally select both sample/library identity columns, or explicitly declare a
-shared physical library with `shared_library_id`. Supplied scopes are preserved:
-matching uses exact `(library, cell identifier)` keys. A one-sided scope requires
-its peer. Without a scope the basis is `exact_cell_ids_library_provenance_unverified`.
-Duplicate keys and absence of shared keys are rejected; declarations are not
-independently verified. There is no
-barcode rewriting, inferred label alias correction, optimal class mapping or prediction
-update. Source roles and captured H5AD observation/table header names bind fields;
-these name offers do not qualify a source scientifically.
-
-The result reports matched/unmatched counts, both matching fractions, missing
-reference coverage and the evaluated fraction of the prediction population.
-Accuracy, macro-F1 and balanced accuracy include missing predictions as errors on
-matched cells with a reference label. Macro-F1 averages the union of observed
-biological classes; balanced accuracy averages recall over supported reference
-classes. Assigned accuracy uses only jointly labeled cells. Descriptive ARI/NMI
-also use jointly labeled cells and are unavailable for noninformative partitions.
-Per-class results and full-source composition remain separately downloadable.
-New publications record undefined precision (no predictions) and recall (no
-reference support) as null/unavailable; genuine zero remains zero. Aggregate
-definitions are unchanged. A distinct scientific profile preserves historical
-strict/mapped results with their original zero-division convention. Selected
-observations share the bounded AnnData reader, including legacy categorical
-codes/referenced levels and modern encodings; matrices and unrelated columns are
-not loaded just to read labels.
-Reference annotations are research evidence, not infallible biological truth.
-
-Strict original-label comparison remains the default. When vocabularies differ,
-the Agent can explain the actual categories and name differences, then ask for
-explicit correspondences. Disagreement between individual cells within the same
-vocabulary is not a reason to request a mapping. Researchers can reply naturally:
-
-> Map CD4 Naive T and CD4 Memory T in my predictions to CD4 T, and map CD4 T cell
-> in the reference to CD4 T. Leave the other labels unchanged.
-
-The existing operation accepts optional `prediction_mapping` and
-`reference_mapping` dictionaries internally; researchers need not write JSON.
-Both original and replacement strings are grounded in the user's words. Rules
-must name actual categories on the selected side. A missing correspondence uses
-the ordinary parameter clarification; ambiguous or conflicting instructions need
-clarification. Unknown original categories and invalid rules cannot execute.
-Simple renaming and many-to-one merging are supported, with at most 32 rules per
-side. Rules apply simultaneously once: targets do not trigger another rule.
-Unspecified labels and all cells remain present. Missing labels and the explicit
-unassigned/unknown/unlabeled/unlabelled sentinels cannot become biological classes.
-Category splitting, synonym inference, ontology matching and agreement-optimized
-mapping are not provided.
-
-Recomparison reads the original prediction/reference label datasets through their
-existing upload roles or accepted label artifacts, preserving columns and physical
-library declarations. The comparison report itself is not a label dataset. No
-re-upload is needed when those exact files remain available in the Session.
-
-A mapped comparison is a new accepted publication. Source files, original labels,
-the earlier strict comparison and its displayed response remain unchanged. The
-comparison JSON includes explicit side-specific rules and their request-parameter
-origin, full-source mapped/unmapped categories and coverage, original exact-label
-metrics, harmonized metrics and actual cell/class denominators. Bounded evidence
-names omitted categories; full vocabularies remain in the JSON. Original label
-columns in the aligned TSV retain their meanings; mapped labels and agreement are
-additional columns. Existing tables, confusion plots, coordinate overlays and
-downloads describe the recorded label policy, with mapped figures identified as
-harmonized views. Mapped ARI/NMI describe the merged partitions, not the original
-clustering. A researcher-specified equivalence is a comparison convention, not
-independent biological validation.
-
-This bounded extension is recorded under
-[SRV-2C Phase 0](../../../agent-data/acceptance/scientific-results/srv-2c/phase-0/REPORT.md).
-The dated multi-turn addendum and final architecture review qualify genuine
-strict-result and reference-side to two-sided many-to-one continuation with the original files. Retained observation columns
-keep their exact accepted registered sources when those sources remain offered;
-explicit current source selections take precedence, including distinct sources for
-repeated operations. The decision is bounded CONDITIONAL GO for controlled use.
-A historical strict-result request was refused despite complete inputs; a later
-single confirmation with the same wording succeeded. This is not universal
-first-attempt reliability. Scientific factual review is unchanged.
-It does not start the full published-data SRV-2C evaluation or close SRV-1.
-
-Scientific explanations summarize newly executed accepted results by default;
-retained results remain available for explicit historical reading or comparison.
-Their facts are kept separately attributed even when values or field definitions
-are equal. A mapped publication already records its original metrics, so an
-ordinary completion does not need to repeat an entire retained strict result.
+Original datasets, frozen scientific predictions and independent benchmark scripts/reports are preserved outside active Sessions. Product cleanup does not change their mapping policy, metrics or figures. No benchmark workflow is registered in Agent.
 
 The separate [SRV-1/R5 context report](../../../agent-data/acceptance/scientific-results/srv-1-r5-context/REPORT.md)
 records removal of the former hard 32 KiB evidence rejection. That size is now a
@@ -230,58 +103,12 @@ ratios are not invented; actual provider limits use ordinary request/error handl
 Provider rejection, resource-budget refusal and factual-review withholding remain
 distinct, while accepted science and saved historical responses are preserved.
 
-An optional accepted UMAP supplies the same coordinates for prediction, reference
-and agreement panels. Missing/unmatched reference coverage is gray. Exact
-original-source ancestry and ordered prediction cells are required. For native
-MAESTRO predictions, bind its accepted annotation publication as well as its H5AD
-to authenticate that relationship; copied `uns` metadata alone is insufficient.
-Accepted native written-slot UMAPs use their verified publication and exact source
-association; inherited slots alone do not qualify. New comparison figures include
-coverage, count/reference-normalized confusion, compositions and a three-panel
-UMAP where qualified. The agreement panel separately marks null predictions,
-missing reference and unmatched coverage. Reference-only cells acquire no invented
-coordinates. Empty marginal rows/columns and bounded legend/class omissions are
-disclosed; complete counts remain downloadable.
-The reference needs neither an embedding nor the same features. No UMAP is refit
-by comparison or rendering. Without coordinates, comparison still produces
-confusion/composition figures; overlay metadata states that coordinates are absent.
-
-The existing Registry, native publication, scientific authority, evidence, figure,
-privacy and download owners deliver these results. Tables are limited to 64 MiB,
-selected H5AD observations to 128 MiB, sources to 200,000 cells and the full label
-union to 256 classes. Preview tables/legends/confusion are bounded with explicit
-omission/coverage; complete comparison files retain their labels and counts.
-Legacy evaluation/confidence artifacts keep their original contracts.
-
-SRV-2 is organized outside the Agent: select a published study with original
-sequencing inputs and a corresponding processed peak matrix with published
-cell-type annotations, run the ordinary Agent without reference answers or a
-benchmark prompt, preserve its outputs, then evaluate them externally. Published
-annotations are reference annotations, not infallible truth. No Multiome,
-RNA-only label set, compulsory native-script baseline or dedicated blinded
-infrastructure is required for the first experiment.
-
-Keep reference labels out of the initial analysis and parameter selection. A later
-reference upload is a separate normal comparison request, never permission to
-retroactively change the preserved predictions. External scripts may use the same
-valid metric computations without creating another accepted Agent result or
-sharing evaluation authority. SRV-2 adds no Planner, Registry, Executor, workflow
-template, storage or scientific-result schema. More elaborate baselines,
-generalization and efficiency studies remain optional later SRV-5 work.
-
 ## Result experience
 
-The existing Web result selector shows the exact saved response, applicable
-scientific limitations, published figures, concise operation summaries and
-quantitative tables. Annotation tables expose native group names, cell counts,
-candidate labels and assignment status. Literature corroboration shows native
-scores and recorded assessment categories; expanded methods retain marker records
-and mapping rationale. These scores are not probabilities or independent proof
-of cell identity. Group omission counters remain visible. Full scientific files
-remain downloadable even when a preview is bounded.
+The existing result selector shows exact saved responses, native annotation distributions and assignment states, and source-bound figures. A readable deterministic annotation report shows accepted counts, data context, actual native method and limitations; source matrix/analysis sections retain feature counts, preprocessing and clustering parameters. Candidate scores, RP/marker support and provenance remain accessible in evidence and methods. Missing/ambiguous assignments remain missing, and scores are not calibrated biological probabilities.
 
-The gallery displays up to six distinct, source-bound figures from the selected
-result or requested presentation. Further figures remain in Downloads & reports.
+The gallery displays distinct, source-bound figures from the selected
+result or requested presentation; full files also remain in Downloads & reports.
 Showing multiple figures does not select a new scientific result. Duplicate report
 copies use their manifest and figure identities. Historical previews and requested
 output choices retain their existing associations. An unavailable PNG is reported
@@ -318,17 +145,7 @@ measured RNA expression. These markers are dependent annotation evidence.
 A source-compatible accepted UMAP in the same Run also receives native cell-type
 colors automatically. Explicit later accepted-result overlays retain the existing
 Interaction composer. A missing UMAP never causes hidden fitting. New annotation
-figure projections have an explicit version marker; saved historical bundles keep
-their original figure sets and displayed prose.
-
-Key annotation/comparison counts and metrics precede the gallery; supporting
-composition/per-class tables and methods follow it. Downloads remain in their
-existing disclosure. The [SRV-1B report](../../../agent-data/acceptance/scientific-results/srv-1b/REPORT.md)
-separates native data/UMAP evidence, simulated references, focused tests and official
-OpenAI Firefox acceptance. Generated explanatory prose remains bounded: the primary
-comparison's explanation was withheld by the existing semantic review, while its
-accepted tables, figures and downloads remained available. No paid prose retry was
-made. Production's official OpenAI default is unchanged.
+figure projections have an explicit version marker; retained scientific bundles keep their recorded figure sets and displayed prose.
 
 SRV-1 remains open. Barcode QC already publishes length histograms and per-barcode
 metrics, but automatic QC distributions/scatter and selection-retention figures

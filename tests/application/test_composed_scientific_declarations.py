@@ -135,7 +135,7 @@ def test_statistical_source_and_annotation_ground_truth_are_offered_roles():
     from agent.application.local_resources import _group_port
     registry = build_default_tool_registry()
     for tool, name in (('validate_scATAC_feature_space', 'input_path'),
-                       ('evaluate_cell_annotation', 'ground_truth_dataset')):
+                       ):
         port, source, argument = _group_port(registry, tool, name)
         assert port.name == name and len(source.members) == 1
         assert argument.planning.accepted_artifact_kinds

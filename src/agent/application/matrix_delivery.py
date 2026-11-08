@@ -641,15 +641,13 @@ class MatrixDownloadPreparer:
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import neighbors_delivery, neighbors_publication
-        from . import annotation_delivery, analysis_delivery, model_delivery, corroboration_delivery, statistical_delivery
+        from . import annotation_delivery, analysis_delivery, model_delivery, statistical_delivery
         from . import sequence_delivery, native_delivery
         native = native_delivery.for_artifact(artifact)
         native_h5ad = native is not None and artifact.role in native.h5ad_roles
         native_projection = native is not None and artifact.role in native.projected_roles
         sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
-        reference_evidence = (artifact.contract == corroboration_delivery.owner.CONTRACT
-            and getattr(artifact, 'role', None) == corroboration_delivery.ROLE)
         model_role = getattr(artifact, 'role', None)
         model = artifact.contract == model_delivery.CONTRACT and model_role in model_delivery.FILES
         model_metadata = model and model_role == model_delivery.METADATA
@@ -674,8 +672,6 @@ class MatrixDownloadPreparer:
             filename, content_type = artifact.role, native.files[artifact.role][1]
         elif sequence:
             filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
-        elif reference_evidence:
-            filename, content_type = corroboration_delivery.FILENAME, 'text/tab-separated-values; charset=utf-8'
         elif model:
             filename = model_delivery.FILES[model_role][0]
             content_type = 'application/json' if model_metadata else 'application/octet-stream'
@@ -817,8 +813,6 @@ class MatrixDownloadPreparer:
                 delivered_size = len(data); checksum = hashlib.sha256(data)
             elif native is not None:
                 pass  # Exact accepted binary bytes already pinned in the private snapshot.
-            elif reference_evidence:
-                corroboration_delivery.validate_table(snapshot, artifact.manifest)
             else:
                 from .table_delivery import validate_scientific_table
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)

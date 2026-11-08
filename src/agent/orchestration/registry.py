@@ -20,7 +20,6 @@ from agent.tools import (
     cluster_cells,
     compute_cell_umap,
     epizoo_embed_cells,
-    evaluate_cell_annotation,
     evaluate_cell_clustering,
     inspect_scATAC,
     inspect_raw_scATAC,
@@ -120,7 +119,6 @@ class ArtifactSemanticKind(str, Enum):
     EPIZOO_TARGET_MODEL = "epizoo_target_model"
     SCATAC_CELL_BY_CCRE = "scatac_cell_by_ccre"
     SCATAC_CELL_TYPE_ANNOTATION = "scatac_cell_type_annotation"
-    SCATAC_CELL_TYPE_CORROBORATION = "scatac_cell_type_corroboration"
     SCATAC_LIBRARY_CONTEXT = "scatac_library_context"
     SCATAC_REFERENCE_BUNDLE = "scatac_reference_bundle"
     EPIZOO_CHECKPOINT = "epizoo_checkpoint"
@@ -132,7 +130,6 @@ class ArtifactSemanticKind(str, Enum):
     UMAP_ANALYSIS = "umap_analysis"
     CLUSTERING_EVALUATION_REPORT = "clustering_evaluation_report"
     CELL_ANNOTATION = "cell_annotation"
-    ANNOTATION_EVALUATION_REPORT = "annotation_evaluation_report"
     FEATURE_SPACE_MANIFEST = "feature_space_manifest"
     REPLICATE_PSEUDOBULK = "replicate_pseudobulk"
     DIFFERENTIAL_ACCESSIBILITY_RESULT = "differential_accessibility_result"
@@ -179,7 +176,6 @@ class ArgumentPlanningSemantics:
     conversational_exact_string: bool = False
     conversational_json_object: bool = False
     conversational_members: tuple[tuple[str, str], ...] = ()
-    conversational_string_mapping: bool = False
     observation_source: str | None = None
 
     def __post_init__(self) -> None:
@@ -218,10 +214,6 @@ class ArgumentPlanningSemantics:
                 or self.conversational_choice or self.conversational_exact_string or self.planner_choice
                 or self.observation_source or self.source_eligibility != PlanningSourceEligibility.REQUEST_INPUT_ONLY):
             raise ValueError('JSON objects require a direct scientific declaration.')
-        if (type(self.conversational_string_mapping) is not bool
-                or self.conversational_string_mapping and (
-                    not self.conversational_json_object or self.conversational_members)):
-            raise ValueError('String mappings require a JSON argument without fixed members.')
         # Catalog members are the union across a package's functions, not the
         # number of assignments authorized in one conversational declaration.
         if (type(self.conversational_members) is not tuple or len(self.conversational_members) > 128
@@ -1578,118 +1570,6 @@ def _validate_label_transfer_result(result: Mapping[str, object]) -> None:
         )
 
 
-def _validate_annotation_evaluation_result(result: Mapping[str, object]) -> None:
-    if result["status"] != "success":
-        raise ToolResultContractError(
-            "evaluate_cell_annotation field 'status' must equal 'success'."
-        )
-    if result["finite"] is not True or result["cell_order_preserved"] is not True:
-        raise ToolResultContractError(
-            "evaluate_cell_annotation must report finite output and preserved order."
-        )
-    if (
-        result["metric_backend"] != "scikit-learn"
-        or result["macro_average"] != "macro"
-        or result["zero_division"] != 0
-        or result["report_schema_version"] != 1
-    ):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation has invalid metric or schema identity."
-        )
-    n_cells = result["n_cells"]
-    assigned = result["assigned_count"]
-    unassigned = result["unassigned_count"]
-    correct = result["correct_assigned_count"]
-    incorrect = result["incorrect_assigned_count"]
-    if (
-        n_cells <= 0
-        or result["n_ground_truth_classes"] < 1
-        or result["n_assigned_predicted_classes"] < 0
-        or min(assigned, unassigned, correct, incorrect) < 0
-        or assigned + unassigned != n_cells
-        or correct + incorrect != assigned
-    ):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation has inconsistent scientific counts."
-        )
-    required_scores = (
-        "assignment_rate",
-        "overall_accuracy",
-        "macro_f1",
-        "median_confidence",
-    )
-    nullable_scores = (
-        "assigned_accuracy",
-        "median_assigned_confidence",
-        "median_correct_assigned_confidence",
-        "median_incorrect_assigned_confidence",
-    )
-    for name in required_scores:
-        value = result[name]
-        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-            raise ToolResultContractError(
-                f"evaluate_cell_annotation field {name!r} is outside [0, 1]."
-            )
-    for name in nullable_scores:
-        value = result[name]
-        if value is not None and (
-            not math.isfinite(value) or not 0.0 <= value <= 1.0
-        ):
-            raise ToolResultContractError(
-                f"evaluate_cell_annotation field {name!r} is outside [0, 1]."
-            )
-    expected_nullable = {
-        "assigned_accuracy": assigned == 0,
-        "median_assigned_confidence": assigned == 0,
-        "median_correct_assigned_confidence": correct == 0,
-        "median_incorrect_assigned_confidence": incorrect == 0,
-    }
-    if any((result[name] is None) != expected for name, expected in expected_nullable.items()):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation has invalid nullable-field semantics."
-        )
-    if not math.isclose(
-        result["assignment_rate"], assigned / n_cells, rel_tol=0.0, abs_tol=1e-15
-    ) or not math.isclose(
-        result["overall_accuracy"], correct / n_cells, rel_tol=0.0, abs_tol=1e-15
-    ):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation rates are inconsistent with its counts."
-        )
-    expected_assigned_accuracy = correct / assigned if assigned else None
-    if expected_assigned_accuracy is not None and not math.isclose(
-        result["assigned_accuracy"],
-        expected_assigned_accuracy,
-        rel_tol=0.0,
-        abs_tol=1e-15,
-    ):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation assigned accuracy is inconsistent."
-        )
-    digest = result["annotation_sha256"]
-    if not isinstance(digest, str) or len(digest) != 64:
-        raise ToolResultContractError(
-            "evaluate_cell_annotation annotation digest is invalid."
-        )
-    try:
-        int(digest, 16)
-    except ValueError as exc:
-        raise ToolResultContractError(
-            "evaluate_cell_annotation annotation digest is invalid."
-        ) from exc
-    forbidden = {
-        "ground_truth_labels",
-        "predicted_labels",
-        "prediction_status",
-        "prediction_confidence",
-        "cell_ids",
-        "confusion",
-        "per_class",
-    }
-    if forbidden.intersection(result):
-        raise ToolResultContractError(
-            "evaluate_cell_annotation must not return per-cell diagnostics."
-        )
 
 
 def _valid_sha256(value: object) -> bool:
@@ -1886,7 +1766,6 @@ def _planning_argument(
     conversational_exact_string: bool = False,
     conversational_json_object: bool = False,
     conversational_members: tuple[tuple[str, str], ...] = (),
-    conversational_string_mapping: bool = False,
     observation_source: str | None = None,
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
@@ -1904,7 +1783,6 @@ def _planning_argument(
             conversational_exact_string=conversational_exact_string,
             conversational_json_object=conversational_json_object,
             conversational_members=conversational_members,
-            conversational_string_mapping=conversational_string_mapping,
             observation_source=observation_source,
             provenance_role=provenance,
             conditional_note=conditional_note,
@@ -3137,145 +3015,6 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
         ),
     )
-    annotation_evaluation_spec = ToolSpec(
-        name="evaluate_cell_annotation",
-        function=evaluate_cell_annotation,
-        required_arguments={
-            "annotation_path": _planning_argument(
-                path_types,
-                "Fixed transferred cell-annotation artifact to evaluate.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.CELL_ANNOTATION,),
-                provenance=PlanningProvenanceRole.QUERY,
-            ),
-            "ground_truth_h5ad_path": _planning_argument(
-                path_types,
-                "Raw query scATAC dataset containing ordered ground-truth labels.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.RAW_SCATAC,),
-                provenance=PlanningProvenanceRole.GROUND_TRUTH,
-            ),
-            "ground_truth_label_key": _planning_argument(
-                (str,),
-                "Ground-truth biological label column used only for evaluation.",
-                source=direct,
-                scientific_parameter=True,
-                observation_source="ground_truth_dataset",
-                provenance=PlanningProvenanceRole.GROUND_TRUTH,
-            ),
-            "output_dir": _planning_argument(
-                path_types,
-                "Destination directory for the annotation-evaluation report.",
-                source=direct,
-            ),
-        },
-        optional_arguments={
-            "overwrite": _planning_argument(
-                (bool,),
-                "Whether an existing identical report may be replaced.",
-                source=direct,
-            )
-        },
-        result_contract=ResultContract(
-            name="CellAnnotationEvaluationToolResult",
-            required_fields={
-                "status": (str,),
-                "annotation_path": (str,),
-                "annotation_sha256": (str,),
-                "ground_truth_h5ad_path": (str,),
-                "report_path": (str,),
-                "ground_truth_label_key": (str,),
-                "n_cells": (int,),
-                "n_ground_truth_classes": (int,),
-                "n_assigned_predicted_classes": (int,),
-                "assigned_count": (int,),
-                "unassigned_count": (int,),
-                "assignment_rate": (float,),
-                "correct_assigned_count": (int,),
-                "incorrect_assigned_count": (int,),
-                "overall_accuracy": (float,),
-                "assigned_accuracy": (float, type(None)),
-                "macro_f1": (float,),
-                "median_confidence": (float,),
-                "median_assigned_confidence": (float, type(None)),
-                "median_correct_assigned_confidence": (float, type(None)),
-                "median_incorrect_assigned_confidence": (float, type(None)),
-                "finite": (bool,),
-                "cell_order_preserved": (bool,),
-                "metric_backend": (str,),
-                "macro_average": (str,),
-                "zero_division": (int,),
-                "report_schema_version": (int,),
-                "software_versions": (dict,),
-            },
-            validator=_validate_annotation_evaluation_result,
-            planning_fields={
-                "report_path": _planning_result(
-                    "Persisted annotation-evaluation and confidence report.",
-                    bindable=True,
-                    artifact=ArtifactSemanticKind.ANNOTATION_EVALUATION_REPORT,
-                )
-            },
-        ),
-        exception_classifier=_classify_analysis_exception,
-        recovery_policy_version="evaluate-cell-annotation-v1",
-        planning=_tool_planning(
-            PlanningToolRole.EVALUATION,
-            "Evaluate a fixed query annotation against ordered ground-truth labels.",
-            "Ground truth is evaluation-only and must not influence label transfer.",
-            capability_ids=('reference_annotation',),
-        ),
-        semantic_planning=SemanticToolSpec(
-            consumer_ports=(
-                SemanticConsumerPortSpec(
-                    "annotation",
-                    (_semantic_member("annotation", "annotation_path"),),
-                    True,
-                    request_sources=(
-                        _semantic_request(
-                            "annotation_path",
-                            _semantic_request_member("annotation", "annotation_path"),
-                            lineage=SemanticLineage.QUERY,
-                        ),
-                    ),
-                    accepted_upstream_types=("cell_annotation.v1",),
-                    required_lineage=SemanticLineage.QUERY,
-                ),
-                SemanticConsumerPortSpec(
-                    "ground_truth_dataset",
-                    (
-                        _semantic_member(
-                            "dataset", "ground_truth_h5ad_path"
-                        ),
-                    ),
-                    True,
-                    request_sources=(
-                        _semantic_request(
-                            "ground_truth_h5ad_path",
-                            _semantic_request_member(
-                                "dataset", "ground_truth_h5ad_path"
-                            ),
-                            lineage=SemanticLineage.GROUND_TRUTH,
-                        ),
-                    ),
-                    accepted_upstream_types=("raw_scatac_dataset.v1", "native_matrix_h5ad.v1"),
-                    required_lineage=SemanticLineage.GROUND_TRUTH,
-                ),
-                _semantic_argument_port(
-                    "ground_truth_label_key", required=True
-                ),
-                _semantic_argument_port("output_dir", required=True),
-                _semantic_argument_port("overwrite", required=False),
-            ),
-            producer_ports=(
-                SemanticProducerPortSpec(
-                    "annotation_evaluation",
-                    "annotation_evaluation.v1",
-                    (_semantic_member("report", "report_path"),),
-                ),
-            ),
-        ),
-    )
     feature_space_spec = ToolSpec(
         name="validate_scATAC_feature_space",
         function=validate_scATAC_feature_space,
@@ -3849,9 +3588,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     from .matrix_adoption_registry import matrix_adoption_tool_spec
-    from .cell_comparison_registry import tool_spec as cell_comparison_tool_spec
     from .annotation_registry import annotation_tool_spec
-    from .corroboration_registry import tool_spec as corroboration_tool_spec
     from .species_adaptation_registry import tool_specs as species_tool_specs
     from .fragment_inspection_registry import tool_spec as fragment_inspection_tool_spec
     from .macs3_registry import tool_spec as macs3_tool_spec
@@ -3884,7 +3621,6 @@ def build_default_tool_registry() -> ToolRegistry:
         umap_spec,
         evaluation_spec,
         label_transfer_spec,
-        annotation_evaluation_spec,
         feature_space_spec,
         pseudobulk_spec,
         differential_accessibility_spec,
@@ -3892,8 +3628,6 @@ def build_default_tool_registry() -> ToolRegistry:
         fragment_inspection_tool_spec(),
         matrix_adoption_tool_spec(),
         annotation_tool_spec(),
-        cell_comparison_tool_spec(),
-        corroboration_tool_spec(),
         *species_tool_specs(),
         *sequence_tool_specs(),
     )

@@ -878,7 +878,6 @@ def test_schema_correlates_every_source_kind_with_selected_tool_ports(registry) 
     for name, target in targets.items():
         assert set(target['enum']) <= expected[name]
         assert not _accepts_target(target, 'invented')
-    assert 'reference_spec_path' not in targets['corroborate_cell_type_annotation']['enum']
     assert 'preprocessing' in targets['pca_embed_cells']['enum']
 
 
@@ -995,7 +994,6 @@ def test_source_schema_excludes_unrelated_resources_and_illegal_handoffs(registr
     def ports(tool):
         return {s['properties']['target']['enum'][0]: s['properties']['source']['anyOf']
             for s in by_tool[tool]['properties']['sources']['items']['anyOf']}
-    assert 'reference_spec_path' not in ports('corroborate_cell_type_annotation')
     source = ports('annotate_scATAC_cell_types')['source']
     assert len(source) == 1 and source[0]['properties']['kind']['enum'] == ('input',)
     assert source[0]['properties']['input']['enum'] == ('source_path',)

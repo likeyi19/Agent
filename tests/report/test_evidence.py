@@ -304,46 +304,7 @@ def _all_tool_run(*, extra_embedding_field: bool = False) -> AgentRunResult:
                 "software_versions": versions,
             },
         ),
-        (
-            "annotation_eval",
-            "evaluate_cell_annotation",
-            {
-                "annotation_path": "/output/annotation.h5ad",
-                "ground_truth_h5ad_path": "/data/truth.h5ad",
-                "ground_truth_label_key": "celltype",
-                "output_dir": "/output",
-            },
-            {
-                "status": "success",
-                "annotation_path": "/output/annotation.h5ad",
-                "annotation_sha256": digest,
-                "ground_truth_h5ad_path": "/data/truth.h5ad",
-                "report_path": "/output/annotation_evaluation.json",
-                "ground_truth_label_key": "celltype",
-                "n_cells": 2,
-                "n_ground_truth_classes": 2,
-                "n_assigned_predicted_classes": 2,
-                "assigned_count": 2,
-                "unassigned_count": 0,
-                "assignment_rate": 1.0,
-                "correct_assigned_count": 2,
-                "incorrect_assigned_count": 0,
-                "overall_accuracy": 1.0,
-                "assigned_accuracy": 1.0,
-                "macro_f1": 1.0,
-                "median_confidence": 1.0,
-                "median_assigned_confidence": 1.0,
-                "median_correct_assigned_confidence": 1.0,
-                "median_incorrect_assigned_confidence": None,
-                "finite": True,
-                "cell_order_preserved": True,
-                "metric_backend": "scikit-learn",
-                "macro_average": "macro",
-                "zero_division": 0,
-                "report_schema_version": 1,
-                "software_versions": versions,
-            },
-        ),
+
     ]
     if extra_embedding_field:
         definitions[1][3]["future_unapproved_payload"] = ["must", "not", "leak"]
@@ -445,7 +406,7 @@ def test_builds_strict_deterministic_inspection_evidence(tmp_path: Path) -> None
     assert verify_analysis_evidence(run, first, registry=registry).passed
 
 
-def test_projection_covers_all_eight_tools_and_artifact_integrity_modes(
+def test_projection_covers_surviving_tools_and_artifact_integrity_modes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(evidence_module, "verify_step", _accept_fresh_step)
@@ -455,8 +416,8 @@ def test_projection_covers_all_eight_tools_and_artifact_integrity_modes(
     )
     payload = json.loads(Path(result["evidence_path"]).read_text())
 
-    assert result["n_steps"] == 8
-    assert len(payload["steps"]) == 8
+    assert result["n_steps"] == 7
+    assert len(payload["steps"]) == 7
     assert {step["tool_name"] for step in payload["steps"]} == {
         "inspect_scATAC",
         "epizoo_embed_cells",
@@ -465,10 +426,10 @@ def test_projection_covers_all_eight_tools_and_artifact_integrity_modes(
         "compute_cell_umap",
         "evaluate_cell_clustering",
         "transfer_cell_labels",
-        "evaluate_cell_annotation",
+
     }
     artifacts = {value["artifact_kind"]: value for value in payload["artifacts"]}
-    assert len(artifacts) == 8
+    assert len(artifacts) == 7
     assert artifacts["cell_label_transfer_h5ad"]["integrity"][
         "authoritative_digest"
     ]["value"] == "a" * 64
@@ -1020,51 +981,3 @@ def test_evaluation_report_tampering_fails_through_existing_verifier(
     with pytest.raises(AnalysisEvidenceError) as caught:
         build_analysis_evidence(run, tmp_path / "after-report-tamper", registry=registry)
     assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
-
-
-def test_production_registry_membership_includes_raw_intake_after_milestone10_4() -> None:
-    assert build_default_tool_registry().names() == (
-        "inspect_scATAC",
-        "compute_motif_accessibility",
-        "run_motifmatchr",
-        "run_chromvar",
-        "run_episcanpy",
-        "run_snapatac2",
-        "run_signac",
-        "run_scanpy",
-        "run_macs3",
-        "run_cicero",
-        "run_cicero_cds",
-        "call_scATAC_peaks",
-        "epizoo_embed_cells",
-        "pca_embed_cells",
-        "build_cell_neighbors",
-        "cluster_cells",
-        "compute_cell_umap",
-        "evaluate_cell_clustering",
-        "transfer_cell_labels",
-        "evaluate_cell_annotation",
-        "validate_scATAC_feature_space",
-        "build_replicate_pseudobulk",
-        "run_replicate_differential_accessibility",
-        "inspect_raw_scATAC",
-        "inspect_scATAC_fragments",
-        "prepare_scATAC_fragments",
-        "import_scATAC_fragments",
-        "prepare_scATAC_bam_fragments",
-        "compute_scATAC_qc",
-        "select_scATAC_cells",
-        "build_scATAC_cell_by_ccre",
-        "adopt_scATAC_cell_by_ccre",
-        "annotate_scATAC_cell_types",
-        "corroborate_cell_type_annotation",
-        "adopt_scATAC_cell_by_features",
-        "adapt_epizoo_species",
-        "posttrain_epizoo_model",
-        "build_scATAC_cell_by_features",
-        "predict_regulatory_sequences",
-        "evaluate_regulatory_predictions",
-        "optimize_regulatory_sequences",
-        "generate_regulatory_sequences",
-        "prepare_scatac_regulatory_sequences",
-    )

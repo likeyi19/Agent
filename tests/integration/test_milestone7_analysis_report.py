@@ -166,13 +166,12 @@ def test_offline_full_evidence_visualization_report_chain(tmp_path: Path) -> Non
         "clustering_umap",
         "clustering_evaluation",
         "cell_annotation",
-        "annotation_evaluation",
         "figures",
         "methods",
         "provenance",
     ]
     assert [figure["figure_kind"] for figure in first["figures"]] == [
-        "annotation_confusion",
+
         "umap_leiden",
         "clustering_metrics",
     ]

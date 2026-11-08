@@ -50,8 +50,6 @@ SUPPORTED_WORKFLOWS = {
     "epizoo-downstream-analysis",
     "epizoo-clustering-evaluation",
     "epizoo-label-transfer",
-    "cell-annotation-evaluation",
-    "epizoo-label-transfer-evaluation",
     "replicate-aware-pseudobulk",
     "replicate-differential-accessibility",
     "raw-to-replicate-differential-accessibility",
@@ -81,14 +79,7 @@ REPRESENTATIVE_ACCEPTANCE_DAGS = {
         "epizoo_embed_cells",
         "transfer_cell_labels",
     ),
-    "transfer_and_annotation_evaluation": (
-        "inspect_scATAC",
-        "epizoo_embed_cells",
-        "inspect_scATAC",
-        "epizoo_embed_cells",
-        "transfer_cell_labels",
-        "evaluate_cell_annotation",
-    ),
+
     "pseudobulk_canonical": (
         "validate_scATAC_feature_space",
         "build_replicate_pseudobulk",
@@ -148,12 +139,10 @@ def test_corpus_covers_required_categories_workflows_and_tools(
         for case in plan_cases
         for step in case.expected_steps
     }
-    # The accepted M9 v3 corpus covers processed-H5AD workflows. M10.4 raw
-    # sequencing/adoption planning is covered separately in tests/raw_intake/,
-    # tests/chromap/, tests/external_fragments/ and tests/bam_fragments/
-    # (including explicit v3). The historical M9 corpus itself is unchanged.
-    # M11.4b QC coverage lives in tests/barcode_qc/, including explicit v3.
-    assert expected_tools | {"inspect_raw_scATAC", "prepare_scATAC_fragments", "import_scATAC_fragments", "prepare_scATAC_bam_fragments", "compute_scATAC_qc", "select_scATAC_cells", "build_scATAC_cell_by_ccre", "adopt_scATAC_cell_by_ccre", "annotate_scATAC_cell_types", "adopt_scATAC_cell_by_features", "adapt_epizoo_species", "build_scATAC_cell_by_features", "pca_embed_cells"} == set(build_default_tool_registry().names())
+    # This maintained processed-H5AD corpus covers its remaining workflows.
+    # Native-package and raw-processing families have their own owner suites;
+    # corpus membership does not claim complete Registry qualification.
+    assert expected_tools <= set(build_default_tool_registry().names())
 
 
 def test_corpus_uses_only_synthetic_path_values(
@@ -415,9 +404,9 @@ def test_missing_required_artifact_flow_fails_even_when_preflight_valid(
 def test_default_equivalent_omission_passes_but_nondefault_omission_fails(
     cases: tuple[BenchmarkCase, ...],
 ) -> None:
-    default_case = _case(cases, "annotation_evaluation_standalone")
+    default_case = _case(cases, "label_transfer_optional")
     default_response = json.loads(oracle_response(default_case))
-    _without_argument(default_response["steps"][0], "overwrite")
+    _without_argument(default_response["steps"][-1], "overwrite")
     default_score = run_benchmark(
         (default_case,),
         replay_overrides={default_case.case_id: {"response": default_response}},

@@ -738,3 +738,318 @@ def transfer_cell_labels(
 
 
 __all__ = ["CellLabelTransferToolResult", "transfer_cell_labels"]
+
+
+@dataclass(frozen=True)
+class _AnnotationPredictions:
+    """Validated native transfer groups consumed by replicate pseudobulk."""
+    path: Path
+    annotation_sha256: str
+    cell_ids: tuple[str, ...]
+    predicted_labels: tuple[str | None, ...]
+
+
+def _json_compatible(value: object, *, path: str = "value") -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite value.")
+        return value
+    if isinstance(value, np.generic):
+        return _json_compatible(value.item(), path=path)
+    if isinstance(value, Mapping):
+        converted: dict[str, object] = {}
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} contains a non-string key.")
+            converted[key] = _json_compatible(nested, path=f"{path}.{key}")
+        return converted
+    if isinstance(value, np.ndarray):
+        return [
+            _json_compatible(nested, path=f"{path}[{index}]")
+            for index, nested in enumerate(value.tolist())
+        ]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _json_compatible(nested, path=f"{path}[{index}]")
+            for index, nested in enumerate(value)
+        ]
+    raise ValueError(f"{path} contains unsupported value type {type(value).__name__}.")
+
+
+def _is_sha256(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _ordered_ids(index: pd.Index, *, source: str) -> tuple[str, ...]:
+    values = tuple(str(value) for value in index)
+    if not values:
+        raise ValueError(f"{source} must contain at least one cell.")
+    if any(not value for value in values):
+        raise ValueError(f"{source} cell identifiers must be nonempty.")
+    if len(set(values)) != len(values):
+        raise ValueError(f"{source} cell identifiers must be unique.")
+    return values
+
+
+def _strict_provenance(
+    value: object,
+    *,
+    n_cells: int,
+    n_reference_classes: int,
+    assigned_count: int,
+    unassigned_count: int,
+) -> dict[str, object]:
+    provenance = _json_compatible(value, path="label_transfer_provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("Annotation artifact has invalid label-transfer provenance.")
+    expected_root = {
+        "schema_version",
+        "artifact_type",
+        "stage",
+        "inputs",
+        "compatibility",
+        "digests",
+        "parameters",
+        "backend",
+        "counts",
+        "software_versions",
+    }
+    if set(provenance) != expected_root:
+        raise ValueError("Annotation artifact has invalid provenance fields.")
+    if (
+        provenance["schema_version"] != LABEL_TRANSFER_ARTIFACT_SCHEMA_VERSION
+        or provenance["artifact_type"] != LABEL_TRANSFER_ARTIFACT_TYPE
+        or provenance["stage"] != LABEL_TRANSFER_STAGE
+    ):
+        raise ValueError("Annotation artifact has invalid schema, type, or stage.")
+
+    inputs = provenance["inputs"]
+    compatibility = provenance["compatibility"]
+    digests = provenance["digests"]
+    parameters = provenance["parameters"]
+    backend = provenance["backend"]
+    counts = provenance["counts"]
+    software = provenance["software_versions"]
+    expected_nested = {
+        "inputs": {
+            "reference_embedding_path",
+            "reference_cell_ids_path",
+            "reference_h5ad_path",
+            "query_embedding_path",
+            "query_cell_ids_path",
+            "query_h5ad_path",
+            "checkpoint_path",
+            "reference_label_key",
+        },
+        "compatibility": {
+            "species",
+            "species_compatible",
+            "checkpoint_compatible",
+            "model_config_sha256",
+        },
+        "digests": {
+            "reference_embedding_sha256",
+            "query_embedding_sha256",
+            "reference_cell_ids_sha256",
+            "query_cell_ids_sha256",
+            "reference_labels_sha256",
+        },
+        "parameters": {
+            "embedding_dim",
+            "embedding_dtype",
+            "n_neighbors",
+            "metric",
+            "voting_method",
+            "min_confidence",
+            "working_memory_mib",
+        },
+        "backend": {"name", "version", "n_jobs", "exact"},
+        "counts": {
+            "n_reference_cells",
+            "n_query_cells",
+            "n_reference_classes",
+            "assigned_count",
+            "unassigned_count",
+        },
+    }
+    nested_values = {
+        "inputs": inputs,
+        "compatibility": compatibility,
+        "digests": digests,
+        "parameters": parameters,
+        "backend": backend,
+        "counts": counts,
+    }
+    for name, expected in expected_nested.items():
+        nested = nested_values[name]
+        if not isinstance(nested, dict) or set(nested) != expected:
+            raise ValueError(f"Annotation provenance section {name!r} is invalid.")
+    assert isinstance(inputs, dict)
+    assert isinstance(compatibility, dict)
+    assert isinstance(digests, dict)
+    assert isinstance(parameters, dict)
+    assert isinstance(backend, dict)
+    assert isinstance(counts, dict)
+    if not all(isinstance(item, str) and item for item in inputs.values()):
+        raise ValueError("Annotation provenance input paths or keys are invalid.")
+    if (
+        compatibility.get("species") not in {"human", "mouse"}
+        or compatibility.get("species_compatible") is not True
+        or compatibility.get("checkpoint_compatible") is not True
+        or not _is_sha256(compatibility.get("model_config_sha256"))
+    ):
+        raise ValueError("Annotation compatibility provenance is invalid.")
+    if not all(_is_sha256(digests.get(name)) for name in expected_nested["digests"]):
+        raise ValueError("Annotation source digests are invalid.")
+    n_neighbors = parameters.get("n_neighbors")
+    min_confidence = parameters.get("min_confidence")
+    working_memory = parameters.get("working_memory_mib")
+    if (
+        parameters.get("embedding_dim") != EPIZOO_EMBEDDING_DIM
+        or parameters.get("embedding_dtype") != "float32"
+        or isinstance(n_neighbors, bool)
+        or not isinstance(n_neighbors, int)
+        or n_neighbors < 1
+        or parameters.get("metric") not in {"euclidean", "cosine"}
+        or parameters.get("voting_method") != LABEL_TRANSFER_VOTING_METHOD
+        or isinstance(min_confidence, bool)
+        or not isinstance(min_confidence, (int, float))
+        or not math.isfinite(float(min_confidence))
+        or not 0.0 <= float(min_confidence) <= 1.0
+        or isinstance(working_memory, bool)
+        or not isinstance(working_memory, int)
+        or working_memory <= 0
+    ):
+        raise ValueError("Annotation scientific parameter provenance is invalid.")
+    if (
+        backend.get("name") != LABEL_TRANSFER_BACKEND
+        or not isinstance(backend.get("version"), str)
+        or not backend["version"]
+        or backend.get("n_jobs") != 1
+        or backend.get("exact") is not True
+    ):
+        raise ValueError("Annotation backend provenance is invalid.")
+    if not all(
+        not isinstance(counts.get(name), bool) and isinstance(counts.get(name), int)
+        for name in expected_nested["counts"]
+    ):
+        raise ValueError("Annotation provenance counts are invalid.")
+    if (
+        counts["n_reference_cells"] <= 0
+        or counts["n_query_cells"] != n_cells
+        or counts["n_reference_classes"] != n_reference_classes
+        or counts["n_reference_classes"] < 2
+        or counts["assigned_count"] != assigned_count
+        or counts["unassigned_count"] != unassigned_count
+        or counts["assigned_count"] + counts["unassigned_count"] != n_cells
+        or n_neighbors > counts["n_reference_cells"]
+    ):
+        raise ValueError("Annotation provenance counts are inconsistent.")
+    if not isinstance(software, dict) or not software or not all(
+        isinstance(key, str)
+        and key
+        and isinstance(item, str)
+        and item
+        for key, item in software.items()
+    ):
+        raise ValueError("Annotation software provenance is invalid.")
+    return provenance
+
+
+def _read_annotation_predictions(path: Path) -> _AnnotationPredictions:
+    try:
+        # Milestone 6.3 annotations are deliberately compact (zero variables and
+        # only three obs columns). Reading them in memory lets AnnData represent
+        # the required absent X matrix as ``None``; backed AnnData raises a
+        # KeyError when an H5AD intentionally has no X dataset.
+        annotation = ad.read_h5ad(path)
+    except Exception as exc:
+        raise ValueError(f"Unable to read label-transfer annotation: {path}") from exc
+    try:
+        if annotation.n_obs <= 0 or annotation.n_vars != 0 or annotation.X is not None:
+            raise ValueError("Annotation artifact must have cells, zero variables, and X=None.")
+        if tuple(annotation.obs.columns) != (
+            "predicted_label",
+            "prediction_confidence",
+            "prediction_status",
+        ):
+            raise ValueError("Annotation artifact has invalid observation columns.")
+        if set(annotation.uns) != {LABEL_TRANSFER_PROVENANCE_KEY}:
+            raise ValueError("Annotation artifact has unexpected unstructured data.")
+        if any(
+            len(container) != 0
+            for container in (
+                annotation.obsm,
+                annotation.obsp,
+                annotation.layers,
+                annotation.varm,
+                annotation.varp,
+            )
+        ) or len(annotation.var.columns) != 0:
+            raise ValueError("Annotation artifact contains unexpected scientific arrays.")
+        cell_ids = _ordered_ids(annotation.obs_names, source="Annotation artifact")
+        labels = annotation.obs["predicted_label"]
+        statuses_series = annotation.obs["prediction_status"]
+        if not isinstance(labels.dtype, pd.CategoricalDtype):
+            raise ValueError("Annotation predicted labels must be categorical.")
+        if not isinstance(statuses_series.dtype, pd.CategoricalDtype):
+            raise ValueError("Annotation prediction status must be categorical.")
+        vocabulary = tuple(labels.cat.categories.tolist())
+        if len(vocabulary) < 2 or any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            for value in vocabulary
+        ):
+            raise ValueError("Annotation reference-label vocabulary is invalid.")
+        if tuple(statuses_series.cat.categories.tolist()) != (
+            "assigned",
+            "unassigned",
+        ):
+            raise ValueError("Annotation prediction-status categories are invalid.")
+        statuses = tuple(str(value) for value in statuses_series.tolist())
+        if any(value not in {"assigned", "unassigned"} for value in statuses):
+            raise ValueError("Annotation prediction status is invalid.")
+        confidences = np.asarray(
+            annotation.obs["prediction_confidence"], dtype=np.float64
+        )
+        if confidences.shape != (annotation.n_obs,) or not np.isfinite(confidences).all():
+            raise ValueError("Annotation prediction confidences must be finite.")
+        if np.any((confidences < 0.0) | (confidences > 1.0)):
+            raise ValueError("Annotation prediction confidences must lie in [0, 1].")
+        predicted: list[str | None] = []
+        assigned_count = 0
+        for index, status in enumerate(statuses):
+            value = labels.iloc[index]
+            if status == "assigned":
+                if pd.isna(value) or not isinstance(value, str) or value not in vocabulary:
+                    raise ValueError("Assigned annotation cells require a biological label.")
+                predicted.append(value)
+                assigned_count += 1
+            else:
+                if not pd.isna(value):
+                    raise ValueError("Unassigned annotation cells require a missing label.")
+                predicted.append(None)
+        provenance = _strict_provenance(
+            annotation.uns[LABEL_TRANSFER_PROVENANCE_KEY],
+            n_cells=annotation.n_obs,
+            n_reference_classes=len(vocabulary),
+            assigned_count=assigned_count,
+            unassigned_count=annotation.n_obs - assigned_count,
+        )
+    finally:
+        _close_adata(annotation)
+    return _AnnotationPredictions(
+        path=path,
+        annotation_sha256=_file_sha256(path),
+        cell_ids=cell_ids,
+        predicted_labels=tuple(predicted),
+    )

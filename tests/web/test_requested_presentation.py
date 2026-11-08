@@ -178,7 +178,7 @@ def test_summary_and_inline_figures_precede_download_details():
     assert html.index('id="result-facts"') < html.index('id="artifact-viewer"') < html.index('id="artifact-panel"')
 
 
-def test_gallery_bound_deduplication_errors_and_exact_group_association():
+def test_gallery_preserves_all_distinct_figures_and_exact_group_association():
     result = run_render('''
       const native=(name,output,handle=name)=>({handle,revision_id:'r',turn_id:'science',
         artifact_type:'analysis_figure',figure:{kind:'umap_leiden',sources:[],
@@ -193,13 +193,13 @@ def test_gallery_bound_deduplication_errors_and_exact_group_association():
       first.nodes.find(n=>n.tag==='button').events.click();
       return {selected:selected.map(a=>a.handle),cards:cards.length,src,hidden:image.hidden,
         error:first.nodes.find(n=>n.tag==='figcaption').textContent,
-        note:gallery.nodes.at(-1).textContent,views,empty:resultFigureGallery([])};
+        notes:gallery.nodes.filter(n=>n.tag==='p').map(n=>n.textContent),views,empty:resultFigureGallery([])};
     ''')
     assert result['selected'] == ['same'] + [f'f{i}' for i in range(7)]
-    assert result['cards'] == 6 and result['empty'] is None
+    assert result['cards'] == 8 and result['empty'] is None
     assert result['src'] == '/api/v1/session/r/same'
     assert result['hidden'] and 'unavailable' in result['error']
-    assert result['note'].startswith('Showing 6 of 8')
+    assert result['notes'] == []
     assert result['views'] == [dict(session='session', revision='r', handle='same')]
 
 
@@ -212,13 +212,11 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
       const facts=[
         {field:'n_cells',status:'available',value:569},
         {field:'group_summary',status:'available',value:[{group:'0',n_cells:203,primary_annotation:'B cells',status:'assigned'}]},
-        {field:'metrics',status:'available',value:{macro_f1:0.1234567890123456}},
-        {field:'per_class',status:'available',value:[{label:'B cells',recall:0.5,reference_cells:20}]},
-        {field:'composition',status:'available',value:[{label:null,n_cells:3,source:'prediction'}]},
+        {field:'metrics',status:'available',value:{nmi:0.1234567890123456}},
         {field:'unavailable_metric',status:'unavailable',value:0.99,reason:'No independent reference'},
         {field:'source_sha256',status:'available',value:'exact-sha'}];
       state.revision.result={text:'Saved scientific response'};
-      state.revision.result_groups=[{handle:'a',label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','per_class','composition','unavailable_metric'],
+      state.revision.result_groups=[{handle:'a',label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','unavailable_metric'],
         parameters:{},derived_from:[],
         evidence:{facts,field_labels:{},coverage:[],limitations:['Predictions are not validated identities.']}}];
       renderResultSelection();
@@ -237,54 +235,3 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
     assert not any(n.get('tag') == 'details' for n in values['nodes'])
     assert result['nodes'][0]['textContent'] == 'Saved scientific response'
     assert 'not validated' in result['nodes'][1]['textContent']
-
-
-def test_comparison_quantitative_headline_precedes_figures_without_duplicating_facts():
-    values = functions('function evidenceValueNode', 'function renderEvidence')
-    result=run_render(values+'''
-      document.createTextNode=text=>({textContent:text});
-      state.session.turns=[];
-      state.revision.artifacts=[{handle:'figure',artifact_type:'analysis_figure',revision_id:'r',turn_id:'science',
-        figure:{kind:'reference_confusion',sources:[],manifest_sha256:'pin',figure_id:'figure',output_names:['comparison']}}];
-      state.revision.result_groups=[{handle:'a',tool:'compare_cell_annotations',label:'Fixed comparison',outputs:[{name:'comparison'}],
-        summary_fields:['matched_cells','accuracy'],parameters:{},derived_from:[],
-        evidence:{facts:[{field:'matched_cells',status:'available',value:540},{field:'accuracy',status:'available',value:0.1234567890123456}],field_labels:{},coverage:[],limitations:[]}}];
-      renderResultSelection();
-      return {nodes:dom['result-facts'].nodes};
-    ''')
-    nodes=result['nodes']
-    assert nodes[0]['className']=='result-headline' and nodes[1]['className']=='result-figures'
-    text=json.dumps(nodes)
-    assert text.count('0.1234567890123456')==1
-    assert '540' in json.dumps(nodes[0])
-
-
-def test_mapping_gallery_uses_its_pinned_caption_and_preserves_strict_caption():
-    result=run_render('''
-      const comparisonFigure={kind:'reference_confusion',sources:[],output_names:['comparison']};
-      const mapped={handle:'mapped',revision_id:'r',artifact_type:'analysis_figure',
-        figure:{...comparisonFigure,label_policy:'explicit_harmonized_labels',caption:'Harmonized-label view; original labels preserved.'}};
-      const strict={handle:'strict',revision_id:'r',artifact_type:'analysis_figure',figure:comparisonFigure};
-      const captions=resultFigureGallery([mapped,strict]).nodes.filter(n=>n.tag==='figure')
-        .map(n=>n.nodes.find(x=>x.tag==='figcaption').textContent);
-      return captions;
-    ''')
-    assert result[0]=='Harmonized-label view; original labels preserved.'
-    assert 'without remapping' in result[1]
-
-
-def test_comparison_per_class_null_is_undefined_without_changing_recorded_zero():
-    values=functions('function evidenceValueNode','function renderEvidence')
-    result=run_render(values+'''
-      document.createTextNode=text=>({textContent:text});
-      document.createElementOld=document.createElement;
-      document.createElement=tag=>({...document.createElementOld(tag),setAttribute(){}});
-      state.revision.result_groups=[{handle:'a',tool:'compare_cell_annotations',label:'Comparison',outputs:[],
-        summary_fields:['per_class'],parameters:{},derived_from:[],evidence:{
-          facts:[{field:'per_class',status:'available',value:[{label:'A',precision:null,recall:0},{label:'B',precision:0,recall:null}]}],
-          field_labels:{},coverage:[],limitations:[]}}];
-      renderResultSelection();return dom['result-facts'].nodes;
-    ''')
-    text=json.dumps(result)
-    assert 'Undefined (no predicted cells)' in text and 'Undefined (no reference support)' in text
-    assert 'Recorded null' not in text and '"textContent": "0"' in text

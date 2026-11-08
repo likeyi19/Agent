@@ -23,7 +23,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "EpiZoo and centered PCA cell embeddings, shared neighbor graphs, clustering, UMAP and fixed clustering evaluation. For generic clustering prefer qualified vocabulary-compatible EpiZoo; otherwise suitable X measurements can use PCA. Explicit EpiZoo requests never switch to PCA after failure."
     ),
     "reference_annotation": (
-        "EpiZoo embeddings, reference-to-query cell label transfer and fixed annotation evaluation."
+        "EpiZoo embeddings and native reference-to-query cell label transfer."
     ),
     "differential_accessibility": (
         "Declared regulatory feature/count validation, replicate pseudobulk and replicate-aware differential accessibility."
@@ -35,7 +35,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "Adopt an external exact canonical cell-by-cCRE matrix; ordinary cell-by-peak projection is unsupported."
     ),
     "marker_annotation": (
-        "MAESTRO cell-type annotation of independent supplied or Agent-computed groups from human hg38 or mouse mm10 raw genomic-region counts or binary-accessibility H5AD, using compatible gene and marker-signature references and explicit tissue context. Accepts an obs grouping column or exact ordered groups TSV. Historical accepted canonical matrices remain supported. The annotation owner does not cluster; the Planner may compose existing representation, neighbors and clustering tools when groups are absent, or reuse compatible accepted prerequisites. No labelled reference-cell dataset is required. Qualified CellMarker reference corroboration is a separate registered operation over exact native annotations, supporting combined requests and later reuse."
+        "MAESTRO cell-type annotation of independent supplied or Agent-computed groups from human hg38 or mouse mm10 raw genomic-region counts or binary-accessibility H5AD, using compatible gene and marker-signature references and explicit tissue context. Accepts an obs grouping column or exact ordered groups TSV. Historical accepted canonical matrices remain supported. The annotation owner does not cluster; the Planner may compose existing representation, neighbors and clustering tools when groups are absent, or reuse compatible accepted prerequisites. No labelled reference-cell dataset is required."
     ),
 })
 

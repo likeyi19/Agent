@@ -21,27 +21,6 @@ def target(app, revision_id):
         accepted_step_sha256=output.accepted_step_sha256, subject=None)
 
 
-def test_related_results_keep_original_and_mapped_facts_with_exact_attribution(app,monkeypatch):
-    strict = accepted(app,'compare_cell_annotations',overrides=dict(accuracy=1/3),
-        extra_facts=dict(original_metrics=dict(accuracy=1/3),metric_denominators=dict(accuracy_cells=6)))[0]
-    mapped = accepted(app,'compare_cell_annotations',name='mapped',overrides=dict(accuracy=5/6),
-        extra_facts=dict(original_metrics=dict(accuracy=1/3),metric_denominators=dict(accuracy_cells=6),
-            mapping=dict(prediction=dict(rules=[dict(original_label='A',common_label='T')]))))[0]
-    guarded=forbid_work(app,monkeypatch);before=files(guarded)
-    public,claims=sd.context(guarded.sessions,'session',dict(target=target(app,mapped),comparison=target(app,strict)))
-    values={(c.target,c.field):c for c in claims}
-    assert values['t0','accuracy'].value==5/6 and values['t1','accuracy'].value==1/3
-    assert values['t0','original_metrics'].value['accuracy']==1/3
-    assert values['t0','metric_denominators'].value['accuracy_cells']==6
-    assert values['t0','mapping'].source['revision_id']==mapped
-    assert values['t1','accuracy'].source['revision_id']==strict
-    assert public['targets'][0]['is_active'] and not public['targets'][1]['is_active']
-    # Equal values and shared definitions never erase a separately accepted source.
-    for entry in public['claims']:
-        definition=entry['semantics'].get('description_ref')
-        if definition:
-            assert public['meanings'][definition]==field_semantics(app.registry,'compare_cell_annotations',entry['field'])['description']
-    assert files(guarded)==before
 
 
 def test_distinct_method_results_share_definitions_without_merging_facts(app,monkeypatch):

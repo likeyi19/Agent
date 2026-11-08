@@ -11,15 +11,6 @@ import anndata as ad
 import numpy as np
 from scipy import sparse
 
-from agent.tools.analysis.annotation_evaluation import (
-    ANNOTATION_EVALUATION_REPORT_SCHEMA_VERSION,
-    ANNOTATION_MACRO_AVERAGE,
-    ANNOTATION_METRIC_BACKEND,
-    ANNOTATION_ZERO_DIVISION,
-    _evaluate_annotation_sources,
-    _load_annotation_evaluation_report,
-    _report_from_snapshot as _annotation_report_from_snapshot,
-)
 from agent.tools.analysis.clustering_evaluation import (
     AVERAGE_METHOD,
     EVALUATION_REPORT_SCHEMA_VERSION,
@@ -1335,171 +1326,6 @@ def _verify_label_transfer(
     )
 
 
-def _verify_annotation_evaluation(
-    step: PlanStep,
-    resolved_arguments: Mapping[str, object],
-    result: Mapping[str, object],
-    dependency_results: Mapping[str, Mapping[str, object]],
-    checks: _VerificationChecks,
-) -> None:
-    annotation_value = resolved_arguments.get("annotation_path")
-    ground_truth_value = resolved_arguments.get("ground_truth_h5ad_path")
-    label_key = resolved_arguments.get("ground_truth_label_key")
-    output_value = resolved_arguments.get("output_dir")
-    identity_valid = (
-        result.get("status") == "success"
-        and _path_corresponds(result.get("annotation_path"), annotation_value)
-        and _path_corresponds(
-            result.get("ground_truth_h5ad_path"), ground_truth_value
-        )
-        and result.get("ground_truth_label_key") == label_key
-        and result.get("metric_backend") == ANNOTATION_METRIC_BACKEND
-        and result.get("macro_average") == ANNOTATION_MACRO_AVERAGE
-        and result.get("zero_division") == ANNOTATION_ZERO_DIVISION
-        and result.get("report_schema_version")
-        == ANNOTATION_EVALUATION_REPORT_SCHEMA_VERSION
-        and result.get("finite") is True
-        and result.get("cell_order_preserved") is True
-    )
-    checks.add(
-        "annotation_evaluation_result_identity",
-        identity_valid,
-        "Annotation-evaluation result matches resolved inputs and metric identity.",
-        "Annotation-evaluation result does not match its resolved inputs or identity.",
-        "RESULT_IDENTITY_MISMATCH",
-    )
-
-    report_path: Path | None = None
-    report_exists = False
-    try:
-        if not isinstance(annotation_value, (str, Path)) or not isinstance(
-            output_value, (str, Path)
-        ):
-            raise ValueError("Invalid annotation-evaluation output arguments.")
-        expected_report_path = (
-            Path(output_value).expanduser().resolve(strict=False)
-            / f"{Path(annotation_value).expanduser().resolve(strict=False).stem}.annotation_evaluation.json"
-        )
-        if not _path_corresponds(result.get("report_path"), expected_report_path):
-            raise ValueError("Annotation-evaluation report path mismatch.")
-        report_path = Path(str(result["report_path"])).expanduser().resolve()
-        report_exists = report_path.is_file() and report_path.stat().st_size > 0
-    except (OSError, RuntimeError, TypeError, ValueError):
-        report_exists = False
-    checks.add(
-        "annotation_evaluation_report_exists",
-        report_exists,
-        "Annotation-evaluation report exists at its deterministic output path.",
-        "Annotation-evaluation report is missing or has an inconsistent path.",
-        "ARTIFACT_MISSING",
-    )
-
-    report_valid = False
-    source_valid = False
-    metrics_valid = False
-    provenance_valid = False
-    if report_exists and report_path is not None:
-        try:
-            if (
-                not isinstance(annotation_value, (str, Path))
-                or not isinstance(ground_truth_value, (str, Path))
-                or not isinstance(label_key, str)
-            ):
-                raise ValueError("Invalid resolved annotation-evaluation arguments.")
-            report = _load_annotation_evaluation_report(report_path)
-            snapshot = _evaluate_annotation_sources(
-                annotation_value, ground_truth_value, label_key
-            )
-            expected_report = _annotation_report_from_snapshot(snapshot)
-            report_valid = _scientific_values_equal(report, expected_report)
-            exact_fields = {
-                "annotation_sha256": snapshot.annotation_sha256,
-                "n_cells": snapshot.n_cells,
-                "n_ground_truth_classes": snapshot.n_ground_truth_classes,
-                "n_assigned_predicted_classes": snapshot.n_assigned_predicted_classes,
-                "assigned_count": snapshot.assigned_count,
-                "unassigned_count": snapshot.unassigned_count,
-                "correct_assigned_count": snapshot.correct_assigned_count,
-                "incorrect_assigned_count": snapshot.incorrect_assigned_count,
-            }
-            source_valid = all(
-                result.get(name) == expected for name, expected in exact_fields.items()
-            ) and result.get("software_versions") == snapshot.software_versions
-            float_fields = (
-                "assignment_rate",
-                "overall_accuracy",
-                "assigned_accuracy",
-                "macro_f1",
-                "median_confidence",
-                "median_assigned_confidence",
-                "median_correct_assigned_confidence",
-                "median_incorrect_assigned_confidence",
-            )
-            metrics_valid = all(
-                _scientific_values_equal(result.get(name), getattr(snapshot, name))
-                for name in float_fields
-            )
-            provenance = report["provenance"]
-            assert isinstance(provenance, Mapping)
-            expected_provenance = expected_report["provenance"]
-            provenance_valid = provenance == expected_provenance
-        except Exception:
-            report_valid = False
-            source_valid = False
-            metrics_valid = False
-            provenance_valid = False
-    checks.add(
-        "annotation_evaluation_report_schema",
-        report_valid,
-        "Annotation report strictly matches full independent recomputation.",
-        "Annotation report is corrupt, stale, or inconsistent with recomputation.",
-        "RESULT_METADATA_INCONSISTENT",
-    )
-    checks.add(
-        "annotation_evaluation_sources",
-        source_valid,
-        "Annotation evaluation source identity and counts are unchanged.",
-        "Annotation evaluation source identity or counts are inconsistent.",
-        "RESULT_IDENTITY_MISMATCH",
-    )
-    checks.add(
-        "annotation_evaluation_metrics",
-        metrics_valid,
-        "Annotation metrics and confidence diagnostics match recomputation.",
-        "Annotation metrics or confidence diagnostics differ from recomputation.",
-        "RESULT_VALUE_INVALID",
-    )
-    checks.add(
-        "annotation_evaluation_provenance",
-        provenance_valid,
-        "Annotation evaluation provenance digests match current sources.",
-        "Annotation evaluation provenance digests are inconsistent.",
-        "RESULT_METADATA_INCONSISTENT",
-    )
-
-    annotation_reference = step.arguments.get("annotation_path")
-    if not (
-        isinstance(annotation_reference, StepOutputRef)
-        and annotation_reference.output_key == "annotation_path"
-        and annotation_reference.step_id in step.depends_on
-    ):
-        return
-    transfer_result = dependency_results.get(annotation_reference.step_id)
-    dependency_valid = (
-        isinstance(transfer_result, Mapping)
-        and _path_corresponds(
-            result.get("annotation_path"), transfer_result.get("annotation_path")
-        )
-        and result.get("annotation_sha256")
-        == transfer_result.get("annotation_sha256")
-    )
-    checks.add(
-        "annotation_evaluation_transfer_dependency",
-        dependency_valid,
-        "Annotation path and digest match the verified transfer dependency.",
-        "Annotation path or digest does not match the verified transfer dependency.",
-        "RESULT_IDENTITY_MISMATCH",
-    )
 
 
 def _m81_json_value(value: object) -> object:
@@ -2100,26 +1926,6 @@ def verify_step(
                 checks.add('sequence_publication_integrity', True,
                     'Native completion, exact sequences, conditions, measurements and artifact integrity.',
                     'Sequence verification failed.', 'SEQUENCE_VERIFICATION_FAILED')
-        elif step.tool_name == "compare_cell_annotations":
-            try:
-                from agent.tools.analysis.cell_label_comparison import verify_result
-                verify_result(resolved_arguments, plain_result)
-            except (ValueError, OSError, TypeError, KeyError):
-                checks.add("cell_label_comparison_integrity", False, "Fixed labels, exact cell correspondence and native metric publication.",
-                    "Comparison verification failed.", "CELL_LABEL_COMPARISON_INVALID", ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add("cell_label_comparison_integrity", True, "Fixed labels, exact cell correspondence and native metric publication.",
-                    "Comparison verification failed.", "CELL_LABEL_COMPARISON_INVALID")
-        elif step.tool_name == "corroborate_cell_type_annotation":
-            try:
-                from agent.tools.analysis.annotation_corroboration import verify_result
-                verify_result(resolved_arguments, plain_result)
-            except (ValueError, OSError, TypeError, KeyError) as exc:
-                checks.add('marker_reference_integrity', False,
-                    'Exact native annotation and qualified database associations.', 'Reference verification failed.', 'MARKER_REFERENCE_VERIFICATION_FAILED', ErrorCategory.VERIFICATION_ERROR)
-            else:
-                checks.add('marker_reference_integrity', True,
-                    'Exact native annotation and qualified database associations.', 'Invalid reference evidence.', 'MARKER_REFERENCE_VERIFICATION_FAILED')
         elif step.tool_name == "annotate_scATAC_cell_types":
             try:
                 from agent.tools.analysis.scatac_annotation import verify_public_result
@@ -2206,14 +2012,6 @@ def verify_step(
             )
         elif step.tool_name == "transfer_cell_labels":
             _verify_label_transfer(resolved_arguments, plain_result, checks)
-        elif step.tool_name == "evaluate_cell_annotation":
-            _verify_annotation_evaluation(
-                step,
-                resolved_arguments,
-                plain_result,
-                dependency_results,
-                checks,
-            )
         elif step.tool_name == "validate_scATAC_feature_space":
             _verify_feature_space(resolved_arguments, plain_result, checks)
         elif step.tool_name == "build_replicate_pseudobulk":

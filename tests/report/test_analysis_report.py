@@ -116,28 +116,7 @@ _FACT_VALUES: dict[str, dict[str, object]] = {
         "checkpoint_compatible": True,
         "backend": "sklearn",
     },
-    "evaluate_cell_annotation": {
-        "annotation_sha256": "a" * 64,
-        "ground_truth_label_key": "celltype",
-        "n_cells": 600,
-        "n_ground_truth_classes": 20,
-        "n_assigned_predicted_classes": 19,
-        "assigned_count": 596,
-        "unassigned_count": 4,
-        "assignment_rate": 0.9933333333,
-        "correct_assigned_count": 543,
-        "incorrect_assigned_count": 53,
-        "overall_accuracy": 0.905,
-        "assigned_accuracy": None,
-        "macro_f1": 0.861567991,
-        "median_confidence": 1.0,
-        "median_assigned_confidence": 1.0,
-        "median_correct_assigned_confidence": 1.0,
-        "median_incorrect_assigned_confidence": 0.6,
-        "metric_backend": "sklearn",
-        "macro_average": "ground_truth_classes",
-        "zero_division": 0,
-    },
+
 }
 
 _ALL_TOOLS = tuple(_FACT_VALUES)
@@ -248,7 +227,7 @@ def _visualization(
     kinds: tuple[str, ...] = (
         "umap_leiden",
         "clustering_metrics",
-        "annotation_confusion",
+
     ),
 ) -> tuple[Path, tuple[bytes, ...]]:
     bundle = tmp_path / "analysis_visualizations"
@@ -257,7 +236,7 @@ def _visualization(
     step_by_kind = {
         "umap_leiden": "step-4",
         "clustering_metrics": "step-5",
-        "annotation_confusion": "step-7",
+
     }
     figures = []
     payloads = []
@@ -347,7 +326,6 @@ def test_inspection_only_report_is_strict_and_verifiable(tmp_path: Path) -> None
         (("cluster_cells", "compute_cell_umap"), "Clustering and UMAP", "Clustering Evaluation"),
         (("evaluate_cell_clustering",), "Clustering Evaluation", "Cell Annotation"),
         (("transfer_cell_labels",), "Cell Annotation", "Annotation Evaluation"),
-        (("evaluate_cell_annotation",), "Annotation Evaluation", "Cell Annotation"),
     ],
 )
 def test_conditional_sections_are_exact(
@@ -380,7 +358,6 @@ def test_full_report_has_fixed_sections_facts_and_exact_values(tmp_path: Path) -
         "clustering_umap",
         "clustering_evaluation",
         "cell_annotation",
-        "annotation_evaluation",
         "figures",
         "methods",
         "provenance",

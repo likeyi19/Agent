@@ -33,7 +33,7 @@ STRING_PROFILE = PlanningModelProfile('string-scripted', 'scripted', 'scripted/s
 STRING_ARGUMENTS = {
     CLUSTER_TOOL: CLUSTER_KEY,
     'transfer_cell_labels': 'reference_label_key',
-    'evaluate_cell_annotation': 'ground_truth_label_key',
+
 }
 SOURCE_PORTS = {
     CLUSTER_TOOL: [('analysis', 'analysis_path'),
@@ -42,8 +42,7 @@ SOURCE_PORTS = {
                              ('query_dataset', 'query_input_path'),
                              ('reference_embedding', 'reference_embedding_path'),
                              ('query_embedding', 'query_embedding_path')],
-    'evaluate_cell_annotation': [('annotation', 'annotation_path'),
-                                 ('ground_truth_dataset', 'ground_truth_h5ad_path')],
+
 }
 
 
@@ -131,9 +130,6 @@ def semantic_string_inputs(tool):
     These paths never resolve to files or load a checkpoint. They are used only
     to test compiler-owned missing-key admission and rejected partial answers.
     """
-    if tool == 'evaluate_cell_annotation':
-        return dict(annotation_path='/unqualified/annotation.h5ad',
-            ground_truth_h5ad_path='/unqualified/truth.h5ad')
     if tool == 'transfer_cell_labels':
         return {f'{role}_{name}': value for role in ('reference', 'query')
                 for name, value in [('input_path', f'/unqualified/{role}.h5ad'),
@@ -239,7 +235,7 @@ def test_existing_owner_rejects_missing_column_and_interchanged_data_roles(tmp_p
 
 @pytest.mark.parametrize('tool,variant', [(CLUSTER_TOOL, 'wrong_ground_truth'),
     ('transfer_cell_labels', 'wrong_reference'),
-    ('evaluate_cell_annotation', 'wrong_annotation_truth')])
+    ])
 def test_canonical_column_declaration_cannot_authorize_a_different_source_role(tmp_path, string_inputs, tool, variant):
     utterance = f'Use the declared column "{STRING_LITERAL}" for this scientific operation.'
     inputs = string_inputs if tool == CLUSTER_TOOL else semantic_string_inputs(tool)

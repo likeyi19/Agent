@@ -112,7 +112,7 @@ def test_registry_records_source_ownership_without_expanding_registered_ports():
     for tool, argument, port in [
         ('evaluate_cell_clustering', 'label_key', 'ground_truth_dataset'),
         ('transfer_cell_labels', 'reference_label_key', 'reference_dataset'),
-        ('evaluate_cell_annotation', 'ground_truth_label_key', 'ground_truth_dataset')]:
+        ]:
         assert registry.get(tool).required_arguments[argument].planning.observation_source == port
 
 

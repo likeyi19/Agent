@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from .annotation_evaluation import _read_annotation_predictions
+from .label_transfer import _read_annotation_predictions
 
 
 FEATURE_SPACE_ARTIFACT_TYPE = "agent.regulatory-feature-space"

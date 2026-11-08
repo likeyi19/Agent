@@ -272,7 +272,7 @@ def string_public(*, pending=False):
     from agent.application.dialogue_execution import scientific_parameters
 
     value = dict(bases={}, relations=[], dialogue=dict(outputs=[],
-        tools=['evaluate_cell_clustering', 'transfer_cell_labels', 'evaluate_cell_annotation'],
+        tools=['evaluate_cell_clustering', 'transfer_cell_labels', ],
         scientific_parameters=scientific_parameters(build_default_tool_registry())))
     if pending:
         value['dialogue']['pending_prerequisite'] = dict(handle='@parameters', field='parameters',
@@ -286,8 +286,7 @@ def string_public(*, pending=False):
      'Evaluate the clustering using the ground-truth column "cell_type".', 'cell_type'),
     ('transfer_cell_labels', 'reference_label_key', 'reference',
      'Transfer labels from the reference dataset using the column "major_type".', 'major_type'),
-    ('evaluate_cell_annotation', 'ground_truth_label_key', 'ground_truth',
-     'Evaluate annotations using the ground-truth column "manual_annotation".', 'manual_annotation'),
+
 ])
 def test_interpreter_owns_operation_and_source_role_association_for_exact_strings(tool, name, role, utterance, literal):
     start = utterance.index(literal)

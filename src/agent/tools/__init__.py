@@ -1,7 +1,6 @@
 """Structured scientific tools."""
 
 from .analysis import (
-    CellAnnotationEvaluationToolResult,
     CellClusteringEvaluationToolResult,
     CellClusteringToolResult,
     CellNeighborsToolResult,
@@ -16,8 +15,6 @@ from .analysis import (
     compute_cell_umap,
     epizoo_embed_cells,
     pca_embed_cells,
-    evaluate_cell_annotation,
-    compare_cell_annotations,
     evaluate_cell_clustering,
     transfer_cell_labels,
     build_replicate_pseudobulk,
@@ -27,7 +24,6 @@ from .analysis import (
 from .data import RawScATACInspection, ScATACInspection, inspect_raw_scATAC, inspect_scATAC
 
 __all__ = [
-    "CellAnnotationEvaluationToolResult",
     "CellClusteringEvaluationToolResult",
     "CellClusteringToolResult",
     "CellNeighborsToolResult",
@@ -45,8 +41,6 @@ __all__ = [
     "compute_cell_umap",
     "epizoo_embed_cells",
     "pca_embed_cells",
-    "evaluate_cell_annotation",
-    "compare_cell_annotations",
     "evaluate_cell_clustering",
     "inspect_scATAC",
     "transfer_cell_labels",

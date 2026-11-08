@@ -1,9 +1,6 @@
-# Cell-type annotation and reference evidence
+# Cell-type annotation
 
-Researchers can upload scATAC H5AD or select accepted count results and request cell-type annotation, optionally
-with database corroboration, through the ordinary conversation. MAESTRO produces
-candidate annotations; CellMarker supplies separate literature associations.
-Neither native scores nor reference matches are calibrated biological confidence.
+Researchers can upload scATAC H5AD or select accepted count results and request native cell-type annotation through the ordinary conversation. MAESTRO Enhanced RP is one supported method; native reference-to-query label transfer remains available separately. The Registry and scientific owners select appropriate supported operations. Native scores are computational evidence, not calibrated biological confidence.
 
 ## Inputs and native method
 
@@ -119,76 +116,9 @@ publication checks. Independent derivative checks compare exact arrays in bounde
 chunks and preserve axes, metadata, layers and ancillary scientific slots. Recovery
 may qualify the source again, but never reruns native RP, markers or scoring.
 
-## Optional CellMarker corroboration
-
-`corroborate_cell_type_annotation` is the 26th registered tool. It consumes an exact
-accepted annotation manifest and checksum, reading native groups, genes and marker
-sidecars through existing authority. It never reruns MAESTRO, rewrites candidate
-labels, or changes annotation acceptance. Annotation-only requests remain separate.
-Combined requests can connect the annotation output directly to corroboration;
-later requests select the accepted annotation through ordinary planning context.
-
-The tool uses a pinned local CellMarker snapshot, not a live online query. Its
-existing comparison owner checks exact species/tissue/cancer context and
-unambiguous gene symbols. Signature-bound, explicitly curated terminology links
-record reference terms, broad/equivalent/narrower or competing relationships and
-mapping rationale. Otherwise only exact case/whitespace-normalized term equality
-is used; there is no fuzzy alias or cross-species mapping. Unmapped terms remain
-unmapped. The SWC-2 deployed mapping covers the entire pinned 28-category immune
-signature vocabulary, not just the six observed PBMC predictions; it is an explicit
-curated resource mapping, not an independently expert-validated ontology.
-
-- `corroborating`: positive markers associated with a mapped equivalent/broader term.
-- `mixed`: positive nonexclusive associations with a mapped competing lineage;
-  this does not establish a contradiction or exclusive lineage membership.
-- `insufficient_evidence`: no positive equivalent/broader mapped association.
-- `unmapped`: no qualified terminology correspondence.
-- `not_applicable`: the native group has no assigned candidate.
-
-Broad CD8-lineage associations do not prove exhaustion. RNA/protein literature
-markers do not directly validate scATAC accessibility or provide matched ground
-truth. No evidence is not disproof. The exact native score remains a native score.
-
-The accepted publication includes per-group summaries and complete source-bound
-JSON/TSV evidence with source row, gene/effect, term, mapping, tissue, PMID, title,
-release and table checksum. Normal result views offer the annotated original H5AD
-and reference TSV. Privacy checks belong to delivery; source artifacts remain
-unchanged. Whole-result answers use bounded summary examples; group-specific
-questions can read published rows. Omission counts do not imply evidence absence.
-
-## Operator deployment
-
-Install a `marker_reference` in the existing `ScientificResourceLibrary`, using
-schema `cell-marker-reference.v1`, a pinned `KnowledgeResource`, exact context and
-signature-bound alignment. Existing owners check source/table closure and all
-mapped terms. The tool can also receive an explicit reference specification path
-and SHA-256. An omitted specification resolves only a unique matching library
-entry; missing or ambiguous references fail closed with an actionable error.
-There is no automatic online resource acquisition or typed upload continuation
-for missing CellMarker resources yet.
-
-The Web operator's `scientific_resource_root` is also the scientific execution
-library. It is scoped to each operation, so separate deployments do not share a
-process-global reference selection. Standalone tool/CLI callers may continue to
-set `AGENT_SCIENTIFIC_RESOURCE_ROOT`. The historical qualified SWC-2 deployment uses
-`resources/library-swc2`; its index remains reproducibility evidence. The same
-CellMarker 2.0 entry is now registered in the active shared `resources/library`,
-with identical files, hashes, context, signature-bound mappings and provenance.
-Ordinary discovery uses that active library; tasks need no separate common-reference
-library. Existing
-`AGENT_ANNOTATION_MAESTRO_ROOT`, `AGENT_ANNOTATION_RSCRIPT` and
-`AGENT_ANNOTATION_R_LIBRARY` native runtime requirements remain.
-
-CellMarker 2.0 snapshot dates, hashes, use restrictions and the 28-label mapping
-are recorded in the [SWC-2 evidence](../../../agent-data/acceptance/scientific-workflow-completion/swc-2/REPORT.md).
-No database redistribution license is inferred from public availability; downloads
-contain selected evidence records, not the complete database. Human PBMC is the
-genuine deployed/tested reference context; other species/tissues require their
-own qualified resources and are not biologically qualified by this acceptance.
-
 ## Completing grouping prerequisites
 
-A researcher may request annotation and reference evidence without naming tools,
+A researcher may request cell-type annotation without naming tools,
 parameters, grouping columns or reference IDs. New source observations (interface
 version 4) distinguish a missing computed grouping from missing biological
 information. Species, assembly, actual measurement history and tissue context
@@ -219,15 +149,7 @@ identity cannot establish this correspondence. The existing annotation publicati
 and native completion verification remain authoritative; no new grouping tool,
 workflow engine or scientific result catalog is added.
 
-The [SWC-2 finalization report](../../../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
-records genuine Firefox/OpenRouter processing of an unclustered 569-cell human
-PBMC fragment-count H5AD: one native six-operation analysis, 13 groups, 553 assigned
-cells, 16 unassigned cells and 233 CellMarker records. Actual downloads preserve
-counts and axes; later evidence answers reuse acceptance without scientific reruns.
-Development-time planning and presentation failures remain recorded, so this is
-bounded workflow qualification, not a guarantee of first-attempt provider success.
-
-## Native activity figures and independent reference labels
+## Native activity figures and reporting
 
 SRV-1B adds automatic composition, positive-native-marker RP dot plots and genuine
 per-cell RP distributions through the existing verified visualization owner.
@@ -236,10 +158,6 @@ markers used in annotation are dependent evidence. Accepted compatible UMAP
 coordinates can be recolored without refitting. Omitted groups/genes are explicit;
 no additional annotation or marker test runs in the renderer.
 
-`compare_cell_annotations` accepts the native annotated H5AD and later independent
-H5AD/TSV/CSV labels using exact declared library/cell keys, without feature-axis
-equality or label mapping. It supplies coverage, classification/partition metrics,
-confusion/composition and aligned-label downloads. An accepted native manifest can
-authenticate the original-source relationship for an optional UMAP comparison.
-See the [results and evaluation guide](scientific-results-and-evaluation.md) for
-metric denominators, identity requirements, bounds, figures and limitations.
+The accepted factual report displays data context, method, group/label counts and assigned/unresolved populations independently of optional generated prose. Native RP, marker and signature details, effective parameters and source identities remain available in evidence and methods; source matrix and analysis sections own their feature counts and preprocessing/clustering facts. Download the annotated H5AD and useful scientific figures.
+
+Agent ends this workflow at its own native annotations and supporting evidence. Label renaming, ontology alignment and predicted-versus-reference label benchmarks are external research tasks. They are not Agent execution modes or resource requirements. The independent Gate 2 evidence remains outside the product.

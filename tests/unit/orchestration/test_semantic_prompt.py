@@ -460,34 +460,6 @@ def test_paired_da_catalog_exposes_artifact_flow_parameters_and_rules(
     assert "pseudobulk_path" not in json.dumps(catalog)
 
 
-def test_evaluation_catalog_keeps_ground_truth_evaluation_only(
-    registry: ToolRegistry,
-) -> None:
-    request = AgentRequest(
-        "annotation-evaluation",
-        "Evaluate the fixed annotation.",
-        {
-            "annotation_path": "/private/annotation.h5ad",
-            "ground_truth_h5ad_path": "/private/truth.h5ad",
-            "ground_truth_label_key": "secret-label-column",
-            "output_dir": "/private/output",
-        },
-    )
-    catalog = build_semantic_planning_catalog(request, registry)
-    evaluation = _tool(catalog, "evaluate_cell_annotation")
-    inputs = evaluation[TOOL_INPUTS]
-
-    assert inputs["annotation"][PORT_REQUIRED_LINEAGE] == "query"
-    assert inputs["ground_truth_dataset"][PORT_REQUIRED_LINEAGE] == (
-        "ground_truth"
-    )
-    assert inputs["ground_truth_dataset"][PORT_REQUEST_SOURCES] == (
-        ("ground_truth_h5ad_path", "ground_truth"),
-    )
-    assert any(
-        "evaluation-only" in constraint
-        for constraint in evaluation[TOOL_CONSTRAINTS]
-    )
 
 
 def test_catalog_exposes_feature_space_parameters_and_conditional_guidance(

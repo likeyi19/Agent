@@ -19,10 +19,11 @@ consolidated deployment and fresh UAT environment.
 The [Alibaba Qwen provider guide](guides/alibaba-qwen-provider.md) covers ordinary
 Web selection and secure persistent credentials for the existing local launcher.
 The [CWC-1 readiness report](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/REPORT.md)
-assesses every current scientific capability, records new statistical/evaluation
+records its then-current scientific inventory, statistical/evaluation
 acceptance and shared corrections. Its [blocker closeout](../../agent-data/acceptance/cross-capability-workflow-completeness/cwc-1/blocker-closeout/REPORT.md)
-resolves repeated source-scoped operations and fixed annotation evaluation, with a
-CONDITIONAL GO recommendation for the documented controlled research scopes.
+records repeated source-scoped operations and then-current evaluation evidence,
+with a CONDITIONAL GO recommendation for those historical scopes. Current cell-type
+benchmark operations are retired; see the [current results guide](guides/scientific-results-and-evaluation.md).
 The [backend installation guide](guides/backends.md) covers the managed EpiZoo and
 EpiAgent source snapshots, optional dependencies and exact import origins.
 The [PCA representation guide](guides/pca-analysis.md) explains explicit count
@@ -31,8 +32,8 @@ The [raw scATAC guide](guides/raw-scatac-processing.md) covers FASTQ/BAM prerequ
 large-file deployment, matrix semantics, downstream handoff and the separately
 recorded genuine FASTQ and BAM acceptance scopes.
 The [cell-type annotation guide](guides/cell-type-annotation.md) covers native
-MAESTRO region inputs, independent groups, optional CellMarker corroboration and
-the distinction between candidate predictions and reference evidence. The
+MAESTRO region inputs, independent groups, native supporting evidence and
+the limits of computational candidate labels. The
 [SWC-2 finalization](../../agent-data/acceptance/scientific-workflow-completion/swc-2/FINALIZATION-REPORT.md)
 records automatic grouping prerequisites and genuine unclustered-H5AD acceptance.
 

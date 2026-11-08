@@ -33,8 +33,6 @@ from agent.tools.data.fragment_inspection import RESULT_FIELDS as _FRAGMENT_INSP
 from agent.tools.analysis.epizoo_embedding import validate_resource_provenance
 from .fragments import CONTRACT_FIELDS as _FRAGMENTS_FIELDS, FACT_FIELDS as _FRAGMENTS_FACT_FIELDS
 from .bam_fragments import CONTRACT_FIELDS as _BAM_FRAGMENTS_FIELDS, FACT_FIELDS as _BAM_FRAGMENTS_FACT_FIELDS
-from agent.tools.analysis.annotation_corroboration import RESULT_FIELDS as _CORROBORATION_FIELDS
-from agent.tools.analysis import cell_label_comparison as _CELL_COMPARISON
 from .annotation import CONTRACT_FIELDS as _ANNOTATION_FIELDS, FACT_FIELDS as _ANNOTATION_FACT_FIELDS
 from .matrix_adoption import CONTRACT_FIELDS as _ADOPTED_MATRIX_FIELDS, FACT_FIELDS as _ADOPTED_MATRIX_FACT_FIELDS
 from .matrix import CONTRACT_FIELDS as _MATRIX_FIELDS, FACT_FIELDS as _MATRIX_FACT_FIELDS
@@ -258,38 +256,6 @@ _LABEL_TRANSFER_FIELDS = frozenset(
         "software_versions",
     }
 )
-_ANNOTATION_EVALUATION_FIELDS = frozenset(
-    {
-        "status",
-        "annotation_path",
-        "annotation_sha256",
-        "ground_truth_h5ad_path",
-        "report_path",
-        "ground_truth_label_key",
-        "n_cells",
-        "n_ground_truth_classes",
-        "n_assigned_predicted_classes",
-        "assigned_count",
-        "unassigned_count",
-        "assignment_rate",
-        "correct_assigned_count",
-        "incorrect_assigned_count",
-        "overall_accuracy",
-        "assigned_accuracy",
-        "macro_f1",
-        "median_confidence",
-        "median_assigned_confidence",
-        "median_correct_assigned_confidence",
-        "median_incorrect_assigned_confidence",
-        "finite",
-        "cell_order_preserved",
-        "metric_backend",
-        "macro_average",
-        "zero_division",
-        "report_schema_version",
-        "software_versions",
-    }
-)
 _FEATURE_SPACE_FIELDS = frozenset(
     {
         "status",
@@ -415,9 +381,6 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
         _ArtifactProjection('manifest_path', 'native_chromap_manifest', ('native_completion', 'artifact_integrity'), digest_field='manifest_sha256'),
         _ArtifactProjection('fragments_path', 'native_fragments_file', ('native_output_semantics',), digest_field='fragments_sha256'),
         _ArtifactProjection('index_path', 'native_chromap_index', ('native_reference_index',), digest_field='index_sha256'))),
-    _CELL_COMPARISON.TOOL: _ToolProjection(frozenset(_CELL_COMPARISON.RESULT_FIELDS), _CELL_COMPARISON.FACT_FIELDS, _CELL_COMPARISON.POLICY, (
-        _ArtifactProjection("manifest_path", "cell_label_comparison_manifest", ("native_metric_completion", "exact_cell_library_join", "artifact_integrity"), digest_field="manifest_sha256"),
-        _ArtifactProjection("comparison_path", "cell_label_comparison_json", ("fixed_label_comparison",), digest_field="comparison_sha256"))),
     _CICERO_CDS.TOOL: _ToolProjection(frozenset(_CICERO_CDS.RESULT_FIELDS), _CICERO_CDS.FACT_FIELDS, _CICERO_CDS.POLICY, (
         _ArtifactProjection('manifest_path', 'native_scientific_publication', ('native_completion',), digest_field='manifest_sha256'),
         _ArtifactProjection('cds_path', 'cicero_cds_exchange', ('native_object_axes',), digest_field='cds_sha256'),
@@ -496,15 +459,6 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
         "regulatory-sequence-native-v1", (
             _ArtifactProjection("manifest_path", "sequence_evaluation_manifest_json", ("matched_observation_identity", "full_artifact_sha256"), digest_field="manifest_sha256"),
             _ArtifactProjection("metrics_path", "sequence_evaluation_metrics_json", ("compatible_measurement_metrics", "full_artifact_sha256"), digest_field="metrics_sha256"))),
-    "corroborate_cell_type_annotation": _ToolProjection(
-        frozenset(_CORROBORATION_FIELDS),
-        tuple(k for k in _CORROBORATION_FIELDS
-              if k not in ('manifest_path', 'evidence_path')),
-        "corroborate-cell-type-annotation-v1",
-        (_ArtifactProjection("manifest_path", "cell_type_corroboration_manifest_json",
-            ("exact_native_annotation_binding", "qualified_reference_associations"), digest_field="manifest_sha256"),
-         _ArtifactProjection("evidence_path", "cell_type_reference_evidence_tsv",
-            ("exact_reference_records", "full_artifact_sha256"), digest_field="evidence_sha256"))),
     "annotate_scATAC_cell_types": _ToolProjection(
         _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "annotate-scatac-cell-types-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_type_annotation_manifest_json",
@@ -780,48 +734,6 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
                     "cell_order_and_source_digest_validation",
                 ),
                 digest_field="annotation_sha256",
-            ),
-        ),
-    ),
-    "evaluate_cell_annotation": _ToolProjection(
-        _ANNOTATION_EVALUATION_FIELDS,
-        (
-            "annotation_sha256",
-            "ground_truth_label_key",
-            "n_cells",
-            "n_ground_truth_classes",
-            "n_assigned_predicted_classes",
-            "assigned_count",
-            "unassigned_count",
-            "assignment_rate",
-            "correct_assigned_count",
-            "incorrect_assigned_count",
-            "overall_accuracy",
-            "assigned_accuracy",
-            "macro_f1",
-            "median_confidence",
-            "median_assigned_confidence",
-            "median_correct_assigned_confidence",
-            "median_incorrect_assigned_confidence",
-            "finite",
-            "cell_order_preserved",
-            "metric_backend",
-            "macro_average",
-            "zero_division",
-            "report_schema_version",
-            "software_versions",
-        ),
-        "evaluate-cell-annotation-v1",
-        (
-            _ArtifactProjection(
-                "report_path",
-                "annotation_evaluation_json",
-                (
-                    "fresh_existing_verifier",
-                    "strict_json_schema",
-                    "independent_metric_recomputation",
-                    "source_prediction_and_label_digests",
-                ),
             ),
         ),
     ),
@@ -1393,9 +1305,6 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
-        if step.tool_name == _CELL_COMPARISON.TOOL:
-            facts.update({field: _plain_json(step_result.result[field], f'{step.step_id}.{field}')
-                          for field in _CELL_COMPARISON.EXTENDED_FACT_FIELDS if field in step_result.result})
         if step.tool_name == 'run_macs3' and 'result_files' in step_result.result:
             facts['result_files'] = _plain_json(step_result.result['result_files'], f'{step.step_id}.result_files')
         if step.tool_name == 'run_motifmatchr' and 'n_positions' in step_result.result:

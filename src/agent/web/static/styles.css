@@ -117,6 +117,8 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .accepted-operation, .accepted-reuse { font-size: 13px; color: #36576a; }
 .report-content, .evidence-value { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; max-height: 420px; overflow: auto; }
 .report-content { padding: 16px; background: #f6f8f8; border-radius: 6px; line-height: 1.85; color: #586b79; max-width: 80ch; }
+.factual-report { overflow-wrap: anywhere; font: inherit; line-height: 1.65; padding: 16px; background: #f6f8f8; border-radius: 6px; }
+.factual-report .scientific-table { margin: 12px 0; }
 .analysis-figure { display: block; max-width: 100%; max-height: min(560px, 48vh); width: auto; height: auto; margin: 12px auto 20px; object-fit: contain; }
 .revision-history li { padding: 10px 0; border-top: 1px solid #edf0f2; }
 .revision-history button { text-align: left; white-space: normal; overflow-wrap: anywhere; background: #fff; color: #36576a; border-color: #bdcbd5; width: 100%; font-size: 12px; }

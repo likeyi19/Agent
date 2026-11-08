@@ -523,6 +523,15 @@ class RegisteredInputGroup:
             result['resource_choice'] = _serialize(self.resource_choice)
         return result
 
+    def execution_attribution(self):
+        """Project selected upload roles, keeping candidate capture separate.
+
+        None explicitly means no uploaded dataset is selected. Complete selected
+        groups retain the existing strict consumption checks, including groups
+        without the attachment-candidate designation.
+        """
+        return None if self.attachment_candidates and not self.roles else self.attribution()
+
 
 def _group_roles(values, member_count):
     if not isinstance(values, (tuple, list)) or len(values) > MAX_GROUP_MEMBERS:
@@ -1679,31 +1688,24 @@ class LocalResourceAdmission:
         return group_choices(binding, self._group_registry())
 
     def bind_group(self, binding, roles, *, verify_source=False):
-        self.validate_binding(binding, verify_source=verify_source)
+        self.validate_binding(binding, verify_source=False)
         values = group_role_inputs(binding, roles, self._group_registry())
         result = RegisteredInputGroup(binding.members, values, roles, resource_choice=binding.resource_choice,
                                       attachment_candidates=binding.attachment_candidates)
-        self.validate_binding(result, verify_source=False)
+        self.validate_binding(result, verify_source=verify_source)
         return result
 
     def validate_binding(self, binding, *, verify_source=True):
         if type(binding) not in (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup) or type(verify_source) is not bool:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         if type(binding) is RegisteredInputGroup:
-            records = [self.load(member['resource_id']) for member in binding.members]
-            expected = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
-                source_path=r.source_path, input_type=r.input_type, label=r.label,
-                **({'source_sha256': r.source_sha256} if 'source_sha256' in member else {}))
-                for r, member in zip(records, binding.members, strict=True)]
-            if expected != _serialize(binding.members):
-                raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
             values = group_role_inputs(binding, binding.roles, self._group_registry())
             if values != _serialize(binding.execution_inputs):
                 raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-            if verify_source:
-                selected = {r['source'] for r in binding.roles}
-                self._verify_records([record for i, record in enumerate(records)
-                    if not binding.attachment_candidates or f'source.{i}' in selected])
+            selected = {r['source'] for r in binding.roles}
+            self.validate_members([member for i, member in enumerate(binding.members)
+                if not binding.attachment_candidates or f'source.{i}' in selected],
+                verify_source=verify_source)
             return values
         if type(binding) is RegisteredInputCollection:
             return self._validate_collection(binding, verify_source=verify_source)
@@ -1741,6 +1743,22 @@ class LocalResourceAdmission:
         if verify_source:
             self._verify_records([record])
         return values
+
+    def validate_members(self, members, *, verify_source=True):
+        """Verify exact selected file records, shared by dataset and reference roles.
+
+        Candidate membership is immutable conversation capture. Only consumed
+        members require current registration and byte checks for this operation.
+        """
+        records = [self.load(member['resource_id']) for member in members]
+        expected = [dict(resource_id=r.resource_id, record_sha256=r.record_sha256,
+            source_path=r.source_path, input_type=r.input_type, label=r.label,
+            **({'source_sha256': r.source_sha256} if 'source_sha256' in member else {}))
+            for r, member in zip(records, members, strict=True)]
+        if expected != _serialize(members):
+            raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
+        if verify_source:
+            self._verify_records(records)
 
     @staticmethod
     def _submission_binding(submission):
@@ -1865,8 +1883,7 @@ class LocalResourceAdmission:
         tool_name = step.tool_name
         if type(binding) is not RegisteredInputGroup:
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
-        self.validate_binding(binding, verify_source=False)
-        records = []
+        members = {}
         ports = {r['port'] for r in binding.roles if r['tool'] == tool_name}
         for port_name in ports:
             port, _, _ = _group_port(self._group_registry(), tool_name, port_name)
@@ -1887,9 +1904,9 @@ class LocalResourceAdmission:
             member = matches[0]
             if any(arguments.get(m.field_name) != member['source_sha256'] for m in port.members[1:]):
                 raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
-            records.append(self.load(member['resource_id']))
-        if records:
-            self._verify_records(records)
+            members[member['resource_id']] = member
+        if members:
+            self.validate_members(list(members.values()))
 
     def _validate_resource_choice_consumption(self, binding, steps, *, resolved=False):
         """Check selected request-resource identities through existing Registry ports.

@@ -626,7 +626,7 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
 def source_binding(origin, source, interaction, field=None):
     field = field or (_field(source) if source is not None else _field(interaction))
     if (field == 'annotation' and source is not None
-            and source.admitted.get('annotation_preparation') == 'selected-method.v2'):
+            and source.admitted.get('annotation_preparation') in ('selected-method.v2', 'selected-method.v3')):
         from .annotation_preparation import capture_sources
         return capture_sources(origin, source, interaction)
     return attachment_binding(origin, source, interaction, field)
@@ -1075,7 +1075,7 @@ def validate(interaction, preceding):
     from .input_sets import ScientificInputSet
     from agent.orchestration.registry import build_default_tool_registry
     field = _field(interaction)
-    if (interaction.admitted or {}).get('annotation_preparation') in ('selected-method.v1', 'selected-method.v2'):
+    if (interaction.admitted or {}).get('annotation_preparation') in ('selected-method.v1', 'selected-method.v2', 'selected-method.v3'):
         from .annotation_preparation import validate as validate_annotation
         return validate_annotation(interaction, preceding)
     try:

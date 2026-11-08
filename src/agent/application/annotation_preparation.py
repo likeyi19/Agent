@@ -99,17 +99,18 @@ def admit(sessions, interaction, decision, input_sets):
         # Reference attachments are not dataset roles. Their exact registered
         # bytes still must survive continuation before resource interpretation.
         dataset_sources = {role['source'] for role in bound.roles}
-        owner._verify_records([owner.load(candidates.members[int(handle.split('.')[1])]['resource_id'])
+        owner.validate_members([candidates.members[int(handle.split('.')[1])]
             for handle in source_handles(declared) if handle not in dataset_sources])
     result = dict(kind='execute', operation='plan', tool='annotate_scATAC_cell_types',
         revision_id=interaction.base_revision_id, resource_catalog=rows,
         annotation=declaration_dict(declared), annotation_addition=declaration_dict(addition),
-        annotation_arguments=values, annotation_preparation='selected-method.v2',
+        annotation_arguments=values, annotation_preparation='selected-method.v3',
         inputs=values if bound is None else _serialize(bound.execution_inputs), roles=[],
+        registered_input=None if bound is None else bound.execution_attribution(),
         arguments=[_serialize(vars(argument)) for argument in decision.arguments],
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)))
     if candidates is not None:
-        result.update(annotation_sources=candidates.attribution(), registered_input=bound.attribution())
+        result['annotation_sources'] = candidates.attribution()
         if declared.source is not None:
             from agent.tools.analysis.annotation_input import observe
             member = candidates.members[int(declared.source.split('.')[1])]
@@ -132,6 +133,8 @@ def validate(interaction, preceding):
     from .turn_decisions import _scientific_arguments
     from agent.orchestration.registry import build_default_tool_registry
     value = _serialize(interaction.admitted)
+    if value['annotation_preparation'] == 'selected-method.v3' and 'registered_input' not in value:
+        raise ValueError('Annotation upload selection is missing.')
     from .dialogue_execution import capture_prerequisite
     from .resource_continuation import catalog
     from .input_sets import ScientificInputSet
@@ -156,9 +159,13 @@ def validate(interaction, preceding):
         declaration(value['annotation_addition'], 'annotation'), pending=True, unknown_fields=value.get('unknown_fields', ()))
     arguments, candidates, bound = _capture(interaction, origin, previous, declared,
         _scientific_arguments(value['arguments']), build_default_tool_registry())
+    # Older publications captured even unselected candidates as registered input.
+    # Replay their exact attribution; they acquire no new execution authority.
+    attribution = (None if bound is None else bound.execution_attribution()
+        if value['annotation_preparation'] == 'selected-method.v3' else bound.attribution())
     if (value['annotation'] != declaration_dict(declared) or value['annotation_arguments'] != arguments
             or value['inputs'] != (arguments if bound is None else _serialize(bound.execution_inputs))
-            or value.get('registered_input') != (None if bound is None else bound.attribution())
+            or value.get('registered_input') != attribution
             or value.get('annotation_sources') != (None if candidates is None else candidates.attribution())
             or value['tool'] != 'annotate_scATAC_cell_types' or value.get('operation') != 'plan'
             or value['revision_id'] != interaction.base_revision_id or value['roles']):

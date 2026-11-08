@@ -528,8 +528,10 @@ def _replay_initial_inputs(registry, interaction, declarations):
             values, error = _select_declared_resource(values, resources)
             if error is not None:
                 raise ValueError('Captured embedding resource is unavailable.')
-        expected = RegisteredInputGroup(binding.members, values, roles=roles,
-            resource_choice=binding.resource_choice, attachment_candidates=binding.attachment_candidates).attribution()
+        completed = RegisteredInputGroup(binding.members, values, roles=roles,
+            resource_choice=binding.resource_choice, attachment_candidates=binding.attachment_candidates)
+        expected = (completed.execution_attribution() if admitted.get('registered_input') is None
+                    else completed.attribution())
         if _serialize(admitted.get('registered_input')) != expected:
             raise ValueError('Scientific input role attribution changed.')
         return values
@@ -605,7 +607,7 @@ def _validate_argument_record(interaction):
                 received = _serialize(interaction.submission)['execution_inputs']
                 if _replay_initial_inputs(registry, interaction, declarations) != values:
                     raise ValueError('Arguments changed unrelated received inputs.')
-                if ('registered_input' in admitted and admitted['registered_input'] != interaction.submission.get('registered_input')):
+                if (admitted.get('registered_input') is not None and admitted['registered_input'] != interaction.submission.get('registered_input')):
                     # H5AD composition changes its binding digest, never source identities.
                     before = interaction.submission.get('registered_input', {})
                     after = admitted['registered_input']
@@ -959,22 +961,20 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     admitted = dict(kind='execute', operation='plan', tool=origin.admitted['tool'],
         revision_id=interaction.base_revision_id,
         request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
-        inputs=values, arguments=[asdict(d) for d in decision.arguments], continuation=continuation)
+        inputs=values, arguments=[asdict(d) for d in decision.arguments], continuation=continuation,
+        registered_input=_serialize(original_submission.get('registered_input')))
     if origin.admitted.get('context') == 'current':
         admitted['context'] = 'current'
-    if 'registered_input' in original_submission:
-        admitted['registered_input'] = _serialize(original_submission['registered_input'])
     if origin.admitted.get('roles'):
         admitted['roles'] = _serialize(origin.admitted['roles'])
     if missing:
         admitted = dict(kind='clarify', reason='missing_parameter_value', choices=missing, value_required=True,
-            inputs=values, arguments=admitted['arguments'], parameter_continuation=continuation)
+            inputs=values, arguments=admitted['arguments'], parameter_continuation=continuation,
+            registered_input=admitted['registered_input'])
         if origin.admitted.get('context') == 'current':
             admitted['context'] = 'current'
         if origin.admitted.get('roles'):
             admitted['roles'] = _serialize(origin.admitted['roles'])
-        if 'registered_input' in original_submission:
-            admitted['registered_input'] = _serialize(original_submission['registered_input'])
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
     return admitted
@@ -1026,7 +1026,7 @@ def _check_parameter_plan(registry, plan, admitted, interactions):
     from .local_resources import _group_port, plan_source_path
     identities = _parameter_identities(admitted, interactions)
     records = _parameter_records(admitted, interactions)
-    members = admitted.get('registered_input', {}).get('members', ())
+    members = (admitted.get('registered_input') or {}).get('members', ())
     roles = admitted.get('roles', ())
     authorized = set()
     names = set()
@@ -1570,7 +1570,7 @@ def validate_prerequisite(interaction, preceding):
             raise SessionError('Invalid scientific clarification continuation.')
         origin = next(i for i in preceding if i.turn_id == continuation['origin_turn_id'])
         original = execution_submission(origin)
-        metadata = admitted.get('registered_input', {})
+        metadata = admitted.get('registered_input') or {}
         original_choice = original['registered_input'].get('resource_choice')
         received_choice = (interaction.submission or {}).get('registered_input', {}).get('resource_choice')
         expected_choice = received_choice if received_choice is not None else original_choice
@@ -1726,7 +1726,10 @@ def execution_submission(interaction):
         return interaction.submission
     submission = dict(_serialize(interaction.submission) or {}, execution_inputs=_serialize(admitted['inputs']))
     if 'registered_input' in admitted:
-        submission['registered_input'] = _serialize(admitted['registered_input'])
+        if admitted['registered_input'] is None:
+            submission.pop('registered_input', None)
+        else:
+            submission['registered_input'] = _serialize(admitted['registered_input'])
     return submission
 
 
@@ -1830,16 +1833,16 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
         and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
     if grouped:
         from .local_resources import LocalResourceAdmission, ResourceAdmissionError
-        if not roles:
-            raise IntentError('ambiguous_subject')
         owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
         original = owner._submission_binding(interaction.submission)
+        if not roles and not original.attachment_candidates:
+            raise IntentError('ambiguous_subject')
         if _serialize(original.execution_inputs) != values:
             raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
         roles = [asdict(item) for item in roles]
         completed = owner.bind_group(original, roles, verify_source=True)
         values = _serialize(completed.execution_inputs)
-        admitted.update(inputs=values, roles=roles, registered_input=completed.attribution())
+        admitted.update(inputs=values, roles=roles, registered_input=completed.execution_attribution())
     elif roles:
         raise IntentError('unsupported_intent')
     values = _with_retained(sessions._application.registry, values, admitted.get('retained_parameters', ()))

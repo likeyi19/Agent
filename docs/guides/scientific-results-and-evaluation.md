@@ -20,6 +20,13 @@ input preparation and execution-time revalidation. Historical descriptions canno
 alias same-named current files; select the intended scientific base through the
 existing navigation before reusing it. Saved historical responses remain exact.
 
+Historical uploads remain candidates until this task assigns their consumer roles.
+Executable admission records the selected upload attribution explicitly, including
+its absence; execution does not fall back to a candidate group. Accepted inputs
+keep their PriorOutputBinding ancestry without inheriting old raw-upload roles.
+Only consumed files require current registration/byte checks. Newly assigned roles
+are checked after binding, again after planning, and at actual source consumption.
+
 The existing renderer can display native Leiden UMAP and later compatible
 annotation colors using the same exact coordinates. Source ancestry and ordered
 cells must agree. Composition and marker/RP panels use actual annotation evidence;

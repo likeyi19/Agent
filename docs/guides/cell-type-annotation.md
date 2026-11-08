@@ -84,6 +84,15 @@ Preparation and execution use the same selection owner and captured Revision.
 An already planned grouping binding is accepted when its authenticated grouping
 identity agrees with the explicit selection; a conflicting grouping still fails.
 
+Selected-method admission v3 retains attachment candidates separately from the
+uploaded datasets this task consumes. An accepted-result-only task has no upload
+consumption guard. Selecting a previous upload establishes its new consumer role
+without another upload; a pending task retains its exact selected sources/roles.
+Uploaded reference-only files retain their exact registration and byte checks,
+and the existing scientific resource owner checks their pinned method inputs.
+Unselected historical files impose no current consumption requirement. Older
+admissions remain readable with their original attribution and saved responses.
+
 Uploads and accepted sources use this same owner. Private task specifications are
 immutable adapter bytes, never registered as fake uploads. The existing scientific
 grouping owner consumes exact accepted analysis files and any required ordered TSV

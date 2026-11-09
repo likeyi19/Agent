@@ -278,7 +278,8 @@ def _research_intent(interaction, decision):
             if drawing['source'] not in references:
                 references.append(drawing['source'])
         else:
-            coordinate, labels = drawing['coordinates'], drawing['labels']
+            coordinate = drawing['coordinates']
+            labels = drawing['activity'] if drawing.get('kind') == 'marker_activity_umap' else drawing['labels']
             if coordinate != 'new' and (coordinate not in by_handle
                     or not by_handle[coordinate].get('cell_capabilities', {
                         'coordinates': 'X_umap' if by_handle[coordinate]['tool'] == 'compute_cell_umap' else None
@@ -1802,6 +1803,9 @@ def planning_task(interaction, state):
         drawing = task['visualization']
         if drawing.get('kind') == 'qc':
             drawing['source'] = rebind(drawing['source'])
+        elif drawing.get('kind') == 'marker_activity_umap':
+            for role in ('coordinates', 'activity'):
+                drawing[role] = rebind(drawing[role])
         else:
             if drawing['coordinates'] != 'new':
                 drawing['coordinates'] = rebind(drawing['coordinates'])

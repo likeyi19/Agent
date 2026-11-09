@@ -65,7 +65,7 @@ def test_native_annotation_figures_factual_report_download_and_restart(external_
     assert result['assigned_cells']>0 and result['unassigned_cells']>0 and None in expected
     root=app._workspace.run_paths(run.run_id);figure_manifest=next(root.visualizations.rglob('visualization_manifest.json'))
     figures=json.loads(figure_manifest.read_text())['figures']
-    assert {f['figure_kind'] for f in figures}=={'umap_leiden','annotation_composition','annotation_umap','marker_activity_dot','marker_activity_distribution'}
+    assert {f['figure_kind'] for f in figures}=={'umap_leiden','annotation_composition','annotation_umap','marker_activity_dot','marker_activity_distribution','marker_activity_umap'}
     report=next(root.report.rglob('*.md')).read_text()
     assert 'Native candidate distribution' in report and 'n_features' not in result
     artifact=accepted_annotation(SimpleNamespace(_application=app),sid,state.revisions[-1],state.turn('retained-native'),None,step_id='annotation')

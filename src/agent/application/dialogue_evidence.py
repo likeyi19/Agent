@@ -942,7 +942,7 @@ RESULT_SUMMARY_FIELDS = {
 def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publisher=None):
     """One safe projection for historical Run and Interaction figure owners."""
     sources = []
-    composite = (record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
+    composite = (record.get('presentation', {}).get('delivery') in ('accepted_cell_overlay', 'accepted_marker_activity_umap')
         or any(item.get('role') == 'qc' and 'accepted_output' in item for item in record['source_artifacts']))
     for item in record['source_artifacts']:
         source = {k:item[k] for k in ('tool_name', 'artifact_kind', 'result_field', 'field', 'role',
@@ -963,7 +963,7 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         sources.append(source)
     outputs = () if revision is None else revision.outputs
     if composite:
-        label = next((s.get('output') for s in sources if s.get('role') in ('categories', 'qc')), None)
+        label = next((s.get('output') for s in sources if s.get('role') in ('categories', 'qc', 'activity') and s.get('output')), None)
         names = [] if label is None else [o.name for o in outputs if all(getattr(o, k) == label[k]
             for k in ('run_id', 'step_id', 'accepted_step_sha256'))]
     else:
@@ -975,10 +975,13 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         public['run_id'] = run_id
     if publisher is not None:
         public['publisher'] = {k:publisher[k] for k in ('kind', 'session_id', 'turn_id')}
-    if record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay':
+    if record.get('presentation', {}).get('delivery') in ('accepted_cell_overlay', 'accepted_marker_activity_umap'):
         public['coordinate_reused'] = True
         public['correspondence'] = {k:record['presentation']['correspondence'][k]
             for k in ('basis', 'n_cells', 'cell_order_sha256')}
+    if record['figure_kind'] == 'marker_activity_umap':
+        public['activity'] = {k:record['presentation'][k] for k in
+            ('measurement', 'transformation', 'normalization', 'genes', 'marker_selection', 'dependent_evidence', 'n_cells')}
     if record.get('presentation', {}).get('delivery') == 'accepted_native_qc':
         public['qc'] = {k:record['presentation'][k] for k in ('n_cells', 'selected_cells', 'thresholds')}
     return public

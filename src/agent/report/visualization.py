@@ -665,7 +665,7 @@ def _supported_figure_sources(
     return tuple(supported)
 
 
-def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figures=True, qc_figures=True) -> tuple[_FigureProjection, ...]:
+def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figures=True, qc_figures=True, marker_activity_figures=True) -> tuple[_FigureProjection, ...]:
     artifacts = snapshot.payload.get("artifacts")
     if not isinstance(artifacts, list):
         raise AnalysisVisualizationError(
@@ -790,7 +790,7 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
     if annotation_figures:
         from .annotation_visualization import projections as annotation_projections
         try:
-            projections.extend(annotation_projections(snapshot))
+            projections.extend(annotation_projections(snapshot, marker_activity=marker_activity_figures))
         except (ValueError, OSError, KeyError, TypeError) as exc:
             raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Pinned annotation/comparison figure data are invalid.") from exc
         order = {s["step_id"]:i for i,s in enumerate(snapshot.payload["workflow"]["ordered_steps"])}
@@ -1201,6 +1201,7 @@ def _bundle_payload(
             "n_figures": len(projections),
             **({"annotation_projection_version": 2} if any(isinstance(p.data, _ScientificPanelData) and p.figure_kind != 'qc_metrics' for p in projections) else {}),
             **({"numeric_qc_projection_version": 1} if any(p.figure_kind == 'qc_metrics' for p in projections) else {}),
+            **({"marker_activity_projection_version": 1} if any(p.figure_kind == 'marker_activity_umap' for p in projections) else {}),
             "expected_figure_ids": tuple(value.figure_id for value in projections),
             "figure_order": "explicit_accepted_sources" if overlay else "verified_workflow_topological_order",
         },
@@ -1635,7 +1636,7 @@ def build_analysis_visualizations(
                 run_id=first.run_id, request_id=first.request_id, plan_id=first.plan_id)
 
 
-def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher, qc=False):
+def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher, kind='cell_overlay'):
     """Publish an Interaction's figure from existing qualified scientific inputs.
 
     The application reader owns source selection and correspondence. This uses
@@ -1648,7 +1649,9 @@ def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher, qc
                    for value in publisher.values())):
         raise ValueError('An exact Interaction publisher is required.')
     publisher = dict(publisher)
-    project = _qc_projection if qc else _cell_overlay_projection
+    from .annotation_visualization import marker_activity_projection
+    project = {'qc': _qc_projection, 'cell_overlay': _cell_overlay_projection,
+               'marker_activity_umap': marker_activity_projection}[kind]
     result = _build_bundle(output_dir, project(read_sources),
         lambda: project(read_sources),
         lambda projections, pngs, renderer: _interaction_manifest_payload(publisher, projections, pngs, renderer))
@@ -1689,10 +1692,11 @@ def verify_analysis_visualizations(
         # figureless/native and dedicated-only historical bundle meanings.
         if not any(isinstance(row, Mapping) and isinstance(row.get('presentation'), Mapping)
                    and row['presentation'].get('projection_version') == 3
-                   for row in source_manifest.get('figures', ())):
+                   for row in source_manifest.get('figures', ())) and figure_set.get('marker_activity_projection_version') != 1:
             snapshot = replace(snapshot, cell_results={})
         projections = _derive_figure_projections(snapshot, annotation_figures=version == 2,
-            qc_figures=source_manifest.get('figure_set', {}).get('numeric_qc_projection_version') == 1) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
+            qc_figures=figure_set.get('numeric_qc_projection_version') == 1,
+            marker_activity_figures=figure_set.get('marker_activity_projection_version') == 1) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         renderer = _renderer_contract()
     except (AnalysisVisualizationError, TypeError) as exc:
         code = getattr(exc, "code", "VISUALIZATION_SOURCE_INVALID")

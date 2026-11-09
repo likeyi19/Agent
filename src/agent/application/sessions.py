@@ -91,7 +91,7 @@ class AnalysisSessions:
         This is called only for a live interpreted response. Existing bundles
         without a committed response are conflicts, never recovery candidates.
         """
-        from .result_reading import visualization_inputs, cell_overlay, qc_plot
+        from .result_reading import visualization_inputs, cell_overlay, qc_plot, marker_activity_overlay
         from agent.report.visualization import build_cell_overlay_visualizations
         current = next((i for i in self.load(session_id).interactions
                         if i.turn_id == interaction.turn_id), None)
@@ -103,9 +103,10 @@ class AnalysisSessions:
             return (), ()
         root = self._application._workspace.interaction_presentation_root(
             session_id, interaction.turn_id, create=True)
-        qc = len(inputs) == 1
-        result = build_cell_overlay_visualizations(lambda: qc_plot(self, *inputs) if qc else cell_overlay(self, *inputs), root,
-            publisher=dict(session_id=session_id, turn_id=interaction.turn_id), qc=qc)
+        readers = {1: ('qc', qc_plot), 2: ('marker_activity_umap', marker_activity_overlay), 3: ('cell_overlay', cell_overlay)}
+        kind, read = readers[len(inputs)]
+        result = build_cell_overlay_visualizations(lambda: read(self, *inputs), root,
+            publisher=dict(session_id=session_id, turn_id=interaction.turn_id), kind=kind)
         pins = []
         for figure in result['figures']:
             pin = dict(manifest_sha256=result['manifest_sha256'],

@@ -8,6 +8,7 @@ from pathlib import Path
 import h5py
 from anndata.io import read_elem
 import numpy as np
+import pandas as pd
 from matplotlib.lines import Line2D
 
 from agent.tools.analysis import scatac_annotation as annotation
@@ -18,6 +19,7 @@ CAPTIONS = {
     'marker_activity_dot': 'Genuine per-cell MAESTRO Enhanced regulatory potential (RP): color is log1p(mean raw RP), size is fraction RP > 0 in each recorded group. Representative genes follow positive native marker order. Accessibility-derived activity is not measured RNA expression; markers are dependent annotation evidence.',
     'marker_activity_distribution': 'Per-cell log1p(raw native MAESTRO RP) distributions for a bounded subset of the displayed representative markers and groups. All cells in each displayed group are retained. RP is accessibility-derived activity, not measured RNA expression or independent validation; raw RP is sensitive to library depth.',
     'annotation_umap': 'Exact accepted UMAP coordinates colored by native MAESTRO predictions, joined through exact original-source ancestry and ordered cells. Gray denotes unassigned cells. No UMAP refit or biological validation.',
+    'marker_activity_umap': 'Exact accepted UMAP colored by log1p(raw native MAESTRO Enhanced RP), without additional normalization. All cells, including zero activity, are retained. Accessibility-derived activity is not measured RNA expression. Patterns may help inspect candidate annotations and within-cluster heterogeneity; markers used in annotation are dependent evidence, not independent biological validation. Raw RP is sensitive to library depth.',
 }
 
 
@@ -40,7 +42,48 @@ def _pin(source):
     return path
 
 
-def projections(snapshot):
+def marker_activity_input(data, ids, xy, sources, *, basis):
+    """Align the bounded native marker columns by exact, unique cell identity."""
+    from agent.tools.analysis.categorical import ordered_ids, require_same_cells
+    from agent.tools.analysis.embedding_analysis import _cell_order_digest
+    activity_ids = ordered_ids(data['cells'], source='Native RP')
+    require_same_cells(tuple(sorted(ids)), tuple(sorted(activity_ids)))
+    order = pd.Index(activity_ids).get_indexer(ids)
+    # Prefer one already selected positive marker per recorded group, then fill
+    # from the same published native selection. Never inspect UMAP agreement.
+    genes, groups = [], set()
+    for row in data['selected_marker_sources']:
+        if row['group'] not in groups:
+            genes.append(row['gene']); groups.add(row['group'])
+    genes = list(dict.fromkeys([*genes, *data['genes']]))[:6]
+    if not genes:
+        raise ValueError('Accepted annotation has no representative native RP markers.')
+    columns = [data['genes'].index(gene) for gene in genes]
+    values = np.asarray(data['per_cell_rp'])[order][:, columns]
+    return dict(cell_ids=list(ids), coordinates=np.asarray(xy).tolist(), genes=genes, values=values.tolist(),
+        sources=sources, measurement=data['measurement'],
+        marker_selection='one positive marker per recorded group from the existing native representative selection, then remaining selected markers in published order; deduplicated; at most six genes; no UMAP-based ranking',
+        selected_marker_sources=[row for row in data['selected_marker_sources'] if row['gene'] in genes],
+        correspondence=dict(basis=basis, n_cells=len(ids), cell_order_sha256=_cell_order_digest(ids)))
+
+
+def marker_activity_projection(read_sources):
+    value = read_sources()
+    data = {k:value[k] for k in ('cell_ids', 'coordinates', 'genes', 'values')}
+    digest = v._domain_digest('agent.marker-activity-umap.v1', dict(data, sources=value['sources']))
+    return (v._FigureProjection('marker-activity-'+digest[:16], 'marker_activity_umap',
+        'marker-activity-'+digest[:16]+'.png',
+        tuple(dict.fromkeys(s['producing_step_id'] for s in value['sources'])), tuple(value['sources']),
+        digest, 12*v._DPI, 8*v._DPI, v._DPI,
+        dict(caption=CAPTIONS['marker_activity_umap'], projection_version=1,
+            delivery='accepted_marker_activity_umap', coordinate_reused=True, correspondence=value['correspondence'],
+            marker_selection=value['marker_selection'], selected_marker_sources=value['selected_marker_sources'],
+            measurement=value['measurement'], transformation='log1p(raw native RP)', normalization='none added',
+            n_cells=len(value['cell_ids']), genes=value['genes'], dependent_evidence=True),
+        v._ScientificPanelData('marker_activity_umap', data)),)
+
+
+def projections(snapshot, *, marker_activity=True):
     artifacts = snapshot.payload['artifacts'];result=[]
     for step in snapshot.payload['steps']:
         tool, sid = step['tool_name'],step['step_id']
@@ -80,8 +123,13 @@ def projections(snapshot):
                 from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY
                 with h5py.File(cp,'r') as handle:metadata=read_elem(handle['uns'][PROVENANCE_KEY])
                 source_identity = metadata.get('embedding',{}).get('source_sha256')
-            if source_identity!=data['source_sha256'] or list(ids)!=data['cells']:
+            if source_identity!=data['source_sha256']:
                 continue  # No relationship: do not assume it or refit.
+            if marker_activity and source_identity is not None and data['genes'] and set(ids)==set(data['cells']):
+                inputs=marker_activity_input(data,ids,xy,sources+[coordinate],basis='exact_original_source')
+                result.extend(marker_activity_projection(lambda:inputs))
+            if list(ids)!=data['cells']:
+                continue  # Existing categorical figures retain their ordered-axis contract.
             value=dict(cell_ids=list(ids),coordinates=xy.tolist(),labels=data['labels'])
             suffix=coordinate['producing_step_id']
             from dataclasses import replace
@@ -146,6 +194,18 @@ def render(figure,data):
                 else:ax.scatter([i]*len(chunk),chunk,s=8,color='#4477aa')
             ax.set_xticks(range(len(chunks)),value['group_order'],rotation=60,fontsize=6)
             ax.set_ylabel('log1p(raw native RP)');ax.set_title(value['genes'][j])
+    elif kind=='marker_activity_umap':
+        xy=np.asarray(value['coordinates']); activity=np.log1p(np.asarray(value['values']))
+        axes=figure.subplots(2,3,squeeze=False)
+        figure.subplots_adjust(left=.06,right=.95,bottom=.12,top=.88,hspace=.45,wspace=.55)
+        figure.suptitle('Marker activity on accepted UMAP — accessibility-derived native RP',fontsize=12)
+        figure.text(.5,.03,'log1p(raw native RP); no additional normalization. Not measured RNA expression or independent validation.',ha='center',fontsize=9)
+        for j,ax in enumerate(axes.flat):
+            if j>=len(value['genes']):ax.set_visible(False);continue
+            dots=ax.scatter(xy[:,0],xy[:,1],c=activity[:,j],cmap='viridis',vmin=0,
+                s=max(.5,min(12,20000/len(xy))),alpha=.8,linewidths=0)
+            ax.set(title=value['genes'][j],xlabel='UMAP 1',ylabel='UMAP 2',xticks=[],yticks=[])
+            figure.colorbar(dots,ax=ax,label='log1p(raw RP)',fraction=.05,pad=.03)
     elif kind=='annotation_umap':
         xy=np.asarray(value['coordinates']);palette=_palette(value['labels'])
         ax=figure.add_axes((.08,.12,.6,.78));_scatter(ax,xy,value['labels'],palette,'MAESTRO predicted cell types')

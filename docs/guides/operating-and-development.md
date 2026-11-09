@@ -66,8 +66,8 @@ the browser's own download interface when local delivery matters.
 
 Scientific results show a workflow overview with repeated counts combined; exact
 per-output records, original explanations and evidence qualifications remain in
-collapsed native details. Figure previews open the existing full-size viewer;
-each preview has its own download. Primary scientific data and the report appear
+collapsed native details. Figure previews are noninteractive;
+each preview has its own explicit PNG download. Primary scientific data and the report appear
 together. Supporting evidence and all native/intermediate artifacts remain
 expandable. The conversation shows dialogue and existing result-navigation buttons,
 without a second artifact inventory. Distinct annotation, compact analysis and

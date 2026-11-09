@@ -74,6 +74,15 @@ def test_read_only_qc_selection_uses_an_exact_accepted_output():
             ScientificQuestion(ScientificTarget('g3'), visualization=dict(kind='qc', source=source))
 
 
+def test_marker_activity_visualization_selects_two_exact_accepted_results():
+    from agent.application.turn_decisions import ScientificQuestion, ScientificTarget
+    drawing=dict(kind='marker_activity_umap',coordinates='g1',activity='g2')
+    assert dict(ScientificQuestion(ScientificTarget('g2'),visualization=drawing).visualization)==drawing
+    for role in ('coordinates','activity'):
+        with pytest.raises(ValueError,match='exact accepted'):
+            ScientificQuestion(ScientificTarget('g2'),visualization=dict(drawing,**{role:'new'}))
+
+
 def interpret_value(value, utterance, public):
     class Model:
         calls = 0

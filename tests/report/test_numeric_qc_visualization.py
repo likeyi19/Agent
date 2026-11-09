@@ -36,7 +36,7 @@ def test_native_qc_plots_use_saved_values_and_own_profile_populations(tmp_path):
     assert projection.data.value['selected_cells'] == 1
     assert [(p['slot'],p['n_cells']) for p in projection.data.value['profiles']] == [('TSS_profile',4),('frag_size_distr',6)]
     bundle = v.build_cell_overlay_visualizations(lambda:inputs,tmp_path/'presentation',
-        publisher=dict(session_id='session',turn_id='question'),qc=True)
+        publisher=dict(session_id='session',turn_id='question'),kind='qc')
     manifest = json.loads(Path(bundle['manifest_path']).read_text())
     assert manifest['publisher']['kind']=='interaction'
     assert manifest['figures'][0]['presentation']['thresholds']==dict(min_counts=1000,min_tsse=4)

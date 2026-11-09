@@ -620,12 +620,24 @@ def test_gallery_downloads_and_conversation_use_the_existing_result_owners():
     gallery=code[code.index('function resultFigureGallery'):code.index('function workflowSummaryFacts')]
     assert 'Open figure & provenance' not in gallery
     assert 'download.href = image.src + "?download=true"' in gallery
-    assert 'viewArtifact(state.session.session_id, artifact.revision_id, artifact)' in gallery
+    assert 'viewArtifact(' not in gallery
+    assert 'figure-preview' not in gallery
+    assert 'card.append(title, image, caption, download, provenance)' in gallery
     conversation=code[code.index('function loadRequestedArtifacts'):code.index('function renderArtifacts')]
     assert 'message-artifacts' not in conversation and 'scientificFileGroups(' not in conversation
     history=code[code.index('function renderHistory'):code.index('function updateControls')]
     assert 'metadata.append(note)' in history and '(response || article).append(note)' not in history
     assert 'loadRevision(resultRevision)' in history
+
+
+def test_report_uses_a_primary_file_row_without_nested_list_or_preview_action():
+    code=(STATIC/'app.js').read_text()
+    renderer=code[code.index('function renderArtifacts'):code.index('async function viewArtifact')]
+    assert 'Read technical report' not in renderer
+    assert 'for (const report of reports) primary.append(artifactNode(report))' in renderer
+    assert 'item.className = "scientific-file"' in renderer
+    assert 'kind === "analysis_figure"' in renderer
+    assert 'File provenance' in renderer and 'guardDownload(download)' in renderer
 
 
 def test_finite_choice_buttons_submit_question_and_option_identity_directly():

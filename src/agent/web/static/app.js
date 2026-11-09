@@ -548,6 +548,7 @@ function resultFigureGallery(artifacts) {
     annotation_composition: "Native groups and predicted cell-type composition, including unassigned coverage. Candidate labels are computational annotations.",
     marker_activity_dot: "Native MAESTRO Enhanced RP: color = log1p(mean raw RP), size = fraction RP > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
     marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
+    marker_activity_umap: "Color = log1p(raw native MAESTRO RP), without additional normalization. All cells use the same accepted UMAP. Accessibility-derived activity is not measured RNA expression. Native markers can help inspect candidate annotations and within-cluster heterogeneity; they are dependent evidence, not independent biological validation.",
     annotation_umap: "Accepted UMAP colored by MAESTRO predictions using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
     umap_leiden: "UMAP colored by accepted Leiden groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
@@ -567,10 +568,6 @@ function resultFigureGallery(artifacts) {
     const sources = document.createElement("p"); sources.className = "muted small";
     const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
     sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
-    const open = document.createElement("button"); open.type = "button"; open.className = "figure-preview";
-    open.setAttribute("aria-label", `View full-size ${title.textContent}`);
-    open.append(image);
-    open.addEventListener("click", () => viewArtifact(state.session.session_id, artifact.revision_id, artifact));
     const download = document.createElement("a"); download.className = "figure-download";
     download.textContent = "Download PNG";
     download.href = image.src + "?download=true"; download.target = "_blank"; download.rel = "noopener";
@@ -580,9 +577,9 @@ function resultFigureGallery(artifacts) {
     provenance.append(sourceTitle, sources, evidenceValueNode(artifact.figure));
     image.addEventListener("error", () => {
       image.hidden = true;
-      caption.textContent = "Figure preview unavailable. Open the figure to check its saved artifact; no analysis was rerun.";
+      caption.textContent = "Figure preview unavailable. Download the saved PNG to inspect it; no analysis was rerun.";
     });
-    card.append(title, open, caption, download, provenance); section.append(card);
+    card.append(title, image, caption, download, provenance); section.append(card);
   }
   return section;
 }
@@ -921,7 +918,7 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
   const sessionId = state.session.session_id;
   const artifacts = distinctFigureArtifacts(revision.artifacts);
   const artifactNode = (artifact) => {
-    const item = document.createElement("li");
+    const item = document.createElement("div"); item.className = "scientific-file";
     const supported = ["analysis_report", "analysis_figure"].includes(artifact.artifact_type);
     const title = document.createElement("span");
     const kind = artifact.artifact_type;
@@ -929,8 +926,8 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
     const number = siblings.length > 1 ? ` ${siblings.indexOf(artifact) + 1}` : "";
     const name = kind === "analysis_report" ? `Technical report${number} (TXT)`
       : kind === "analysis_figure" ? `${artifact.figure ? readableLabel(artifact.figure.kind) : "Analysis figure"}${number} (PNG)` : "Accepted artifact";
-    title.className = "artifact-name";
-    title.textContent = name;
+    const heading = document.createElement("strong"); heading.textContent = name;
+    title.append(heading);
     if (kind === "analysis_report") {
       const description = document.createElement("span"); description.className = "file-description";
       description.textContent = "Accepted methods, parameters and execution/provenance record; this report is not independent biological validation.";
@@ -950,14 +947,15 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
     if (supported) {
       const actions = document.createElement("div");
       actions.className = "artifact-actions";
-      const view = document.createElement("button");
-      view.type = "button";
-      view.className = "secondary";
-      view.textContent = artifact.artifact_type === "analysis_report" ? "Read technical report" : "View figure";
-      view.setAttribute("aria-label", `${view.textContent}: ${name}`);
-      view.dataset.artifactHandle = artifact.handle;
-      view.dataset.actionKey = `artifact-view:${artifact.handle}`;
-      view.addEventListener("click", () => viewArtifact(sessionId, artifact.revision_id, artifact));
+      if (kind === "analysis_figure") {
+        const view = document.createElement("button");
+        view.type = "button"; view.className = "secondary"; view.textContent = "View figure";
+        view.setAttribute("aria-label", `${view.textContent}: ${name}`);
+        view.dataset.artifactHandle = artifact.handle;
+        view.dataset.actionKey = `artifact-view:${artifact.handle}`;
+        view.addEventListener("click", () => viewArtifact(sessionId, artifact.revision_id, artifact));
+        actions.append(view);
+      }
       const download = document.createElement("a");
       download.textContent = "Download";
       download.setAttribute("aria-label", `Download ${name}`);
@@ -966,10 +964,10 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
       download.target = "_blank";
       download.rel = "noopener";
       guardDownload(download);
-      actions.append(view, download);
+      actions.append(download);
       item.append(actions);
     }
-    item.append(metadata);
+    title.append(metadata);
     return item;
   };
   const selected = state.revision?.result_groups?.find((g) => g.handle === element("result-selection").value);
@@ -982,7 +980,7 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
       const heading = document.createElement("h4"); heading.textContent = "Primary scientific results";
       primary.append(heading); nodes.unshift(primary);
     }
-    for (const report of reports) { const list = document.createElement("ul"); list.append(artifactNode(report)); primary.append(list); }
+    for (const report of reports) primary.append(artifactNode(report));
   }
   if (artifacts.length) {
     let advanced = nodes.flatMap((node) => [...node.querySelectorAll(".advanced-downloads")])[0];
@@ -991,7 +989,11 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
       const heading = document.createElement("summary"); heading.textContent = "All files & provenance";
       advanced.append(heading); item.append(advanced); nodes.push(item);
     }
-    const complete = document.createElement("ul"); complete.append(...artifacts.map(artifactNode)); advanced.append(complete);
+    const complete = document.createElement("ul");
+    for (const artifact of artifacts) {
+      const item = document.createElement("li"); item.append(artifactNode(artifact)); complete.append(item);
+    }
+    advanced.append(complete);
   }
   if (!nodes.length) {
     const empty = document.createElement("li"); empty.textContent = "No accepted scientific downloads are available."; nodes.push(empty);

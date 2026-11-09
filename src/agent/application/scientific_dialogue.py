@@ -848,7 +848,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         public['delivery'] = delivery
     elif admitted.get('visualization') is not None:
         public['delivery'] = dict(requested=['visualization'], visualization='unavailable',
-            requested_field=admitted['visualization'].get('field', 'numeric_qc'))
+            requested_field=admitted['visualization'].get('field', admitted['visualization'].get('kind', 'numeric_qc')))
     figures, matching = _presentation_context(sessions, session_id, admitted, views, public['limitations'])
     if figures or admitted.get('presentation_artifacts'):
         delivery = public.setdefault('delivery', {})
@@ -1524,6 +1524,8 @@ def _figure_relationships(state, figures, matching=()):
             value['correspondence'] = {k:metadata['correspondence'][k] for k in ('basis', 'n_cells')}
         if 'qc' in metadata:
             value['qc'] = _serialize(metadata['qc'])
+        if 'activity' in metadata:
+            value['activity'] = _serialize(metadata['activity'])
         result.append(value)
     return result
 

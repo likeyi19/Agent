@@ -46,7 +46,7 @@ def preference_schema():
     from .turn_decisions import _object
     text = dict(type='string', minLength=1, maxLength=512)
     return {'anyOf': [_object(dict(literal=text, evidence=text)), {'type': 'null'}],
-        'description': 'Quote the explicit reference selection; otherwise null. With an offered resource handle, supply its verbatim supporting evidence.'}
+        'description': 'Explicit reference choice and verbatim evidence; otherwise null.'}
 
 
 def validate_preference(value):

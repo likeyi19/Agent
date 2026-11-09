@@ -158,6 +158,28 @@ markers used in annotation are dependent evidence. Accepted compatible UMAP
 coordinates can be recolored without refitting. Omitted groups/genes are explicit;
 no additional annotation or marker test runs in the renderer.
 
+Marker Activity UMAP adds up to six panels of `log1p(raw native MAESTRO RP)` on
+the exact accepted UMAP, without additional normalization or removal of low/zero
+activity cells. It first takes one gene per recorded group from the existing
+positive native representative-marker selection, then fills from that selection
+in published order, deduplicating genes. Selection never uses visual agreement
+with UMAP or predictions. The existing selection prefers positive markers in the
+assigned candidate signature, then positive group markers; these are dependent
+annotation evidence. Raw RP remains sensitive to library depth.
+
+The saved native RP matrix stays sparse; only the bounded selected marker columns
+are decoded to dense values. Exact original-source qualification permits separate
+accepted branches; unique cell IDs align those columns to the unchanged coordinate
+order. Different populations or unrelated sources cannot provide this plot. A
+read-only request can select accepted UMAP and annotation results through the
+existing Interaction figure publication, without changing their Run or Revision.
+Historical figure bundles retain their exact inventories; new eligible workflows
+also publish this complementary figure automatically. The figure can help inspect
+candidate annotations and within-cluster heterogeneity, and provides no measured
+RNA, calibrated identity probability or independent biological validation.
+The [bounded visualization closeout](../../../agent-data/acceptance/scientific-results/visualization-refinement-2026-11-09/REPORT.md)
+records source, browser and preservation verification; PBMC10k remains CONDITIONAL GO.
+
 The accepted factual report displays data context, method, group/label counts and assigned/unresolved populations independently of optional generated prose. Native RP, marker and signature details, effective parameters and source identities remain available in evidence and methods; source matrix and analysis sections own their feature counts and preprocessing/clustering facts. Download the annotated H5AD and useful scientific figures.
 
 `Downloads & reports` also offers accepted native annotation evidence: per-cell

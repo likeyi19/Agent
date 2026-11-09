@@ -226,10 +226,9 @@ def qualified_sources(left, right):
     raise ValueError('Accepted sources have no qualified scientific population relationship.')
 
 
-def cell_overlay(sessions, coordinate, categories, field):
-    """Read exact accepted coordinates and explicitly qualified categories."""
+def _coordinate_input(sessions, coordinate):
+    """Read the exact accepted UMAP and its existing source qualification."""
     from agent.tools.analysis import categorical as owner
-    from agent.tools.analysis.embedding_analysis import _cell_order_digest
     store = sessions._application.run_store
     cs, _, cr = _accepted_step(store, coordinate['run_id'], coordinate['step_id'])
     if (accepted_step_digest(cs) != coordinate['accepted_step_sha256']
@@ -251,6 +250,15 @@ def cell_overlay(sessions, coordinate, categories, field):
         source_sha256=identity['source_sha256'],
         **({'neighbors_identity_sha256': identity['neighbors_identity_sha256']}
            if identity.get('neighbors_identity_sha256') is not None else {}))
+    return ids, xy, identity, coordinate_source
+
+
+def cell_overlay(sessions, coordinate, categories, field):
+    """Read exact accepted coordinates and explicitly qualified categories."""
+    from agent.tools.analysis import categorical as owner
+    from agent.tools.analysis.embedding_analysis import _cell_order_digest
+    store = sessions._application.run_store
+    ids, xy, identity, coordinate_source = _coordinate_input(sessions, coordinate)
     if 'registered_source' in categories:
         if not field.startswith('source:'):
             raise ValueError('A registered source selects an exact original observation field.')
@@ -295,6 +303,32 @@ def cell_overlay(sessions, coordinate, categories, field):
     return dict(cell_ids=ids, coordinates=xy, labels=labels, field=field,
         sources=[coordinate_source, category_source],
         correspondence=dict(basis=basis, n_cells=len(ids), cell_order_sha256=_cell_order_digest(ids)))
+
+
+def marker_activity_overlay(sessions, coordinate, activity):
+    """Combine accepted UMAP and native RP through existing source qualification."""
+    from agent.tools.analysis import scatac_annotation
+    from agent.report.annotation_visualization import marker_activity_input
+    store = sessions._application.run_store
+    ids, xy, identity, coordinate_source = _coordinate_input(sessions, coordinate)
+    step, _, run = _accepted_step(store, activity['run_id'], activity['step_id'])
+    if (accepted_step_digest(step) != activity['accepted_step_sha256']
+            or step.tool_name != 'annotate_scATAC_cell_types' or activity['output_key'] not in step.result):
+        raise ValueError('Select an accepted native annotation with per-cell RP.')
+    result = step.result
+    data = scatac_annotation.presentation_data(result['manifest_path'], result['manifest_sha256'])
+    other_identity = dict(artifact_sha256=result['manifest_sha256'], source_sha256=data['source_sha256'],
+        run_id=run.run_id, step_id=step.step_id, accepted_step_sha256=activity['accepted_step_sha256'])
+    basis = qualified_sources(identity, other_identity)
+    sources = [coordinate_source]
+    for pin in data['sources']:
+        manifest = pin['path'] == result['manifest_path']
+        sources.append(dict(producing_step_id=step.step_id, tool_name=step.tool_name,
+            artifact_kind='scatac_cell_type_annotation_manifest_json' if manifest else 'native_annotation_sidecar',
+            artifact_path=pin['path'], integrity=dict(sha256=pin['sha256']), role='activity',
+            source_sha256=data['source_sha256'],
+            **(dict(accepted_output=dict(activity), field='native:RP') if manifest else {})))
+    return marker_activity_input(data, ids, xy, sources, basis=basis)
 
 
 def captured_group(state, captured, handle):
@@ -397,6 +431,8 @@ def visualization_inputs(sessions, session_id, interaction):
         return None
     if drawing.get('kind') == 'qc':
         return (_captured_output(sessions, state, origin, drawing['source']),)
+    if drawing.get('kind') == 'marker_activity_umap':
+        return tuple(_captured_output(sessions, state, origin, drawing[role]) for role in ('coordinates', 'activity'))
     coordinates = (_selected_output(sessions, state, interaction, 'visualization_coordinates')
                    if drawing['coordinates'] == 'new' else _captured_output(sessions, state, origin, drawing['coordinates']))
     if drawing['labels'].startswith('source.'):

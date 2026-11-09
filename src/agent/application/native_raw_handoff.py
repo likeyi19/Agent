@@ -248,6 +248,7 @@ def requirements(binding, declared, choices, evidence):
     else:
         questions, selected = match_preference(declared.resource_preference, choices, aliases=aliases)
     if declared.resource is not None:
+        questions = []  # An explicit offered selection supersedes textual name lookup.
         selected = next((s for s in choices if 'resource.' + s.input_set_id == declared.resource), None)
         if selected is None: questions = ['The selected reference is unavailable in this Session. Please identify the reference you want.']
     if selected is not None:
@@ -408,8 +409,9 @@ def validate_inputs(admitted, candidates, declared, selected, arguments, field):
 
 
 class ResourcePrerequisite(ValueError):
-    def __init__(self, questions):
+    def __init__(self, questions, options=()):
         self.questions = tuple(questions)
+        self.options = tuple(options)
         super().__init__(' '.join(questions))
 
 
@@ -483,7 +485,9 @@ def _component(receipt, port, description='The exact reference file for this nat
                 raise ResourcePrerequisite([f'This operation requires {description} No applicable {label} resource is available for {context}.'])
             descriptions = [row['label'] + (f" ({row['components'][port]['contig_count']} contigs; names, lengths or ordering differ)"
                 if 'contig_count' in row['components'][port] else ' (distinct reference component)') for _,row in options]
-            raise ResourcePrerequisite([f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)])
+            raise ResourcePrerequisite([f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)],
+                options=[dict(handle='resource.' + key, label=row['label'], description=description)
+                         for (key, row), description in zip(options, descriptions)])
         chosen,row = options[0]
         component = row['components'][port]
         if reason != 'explicit' and sum(bool(r['default']) for _,r in candidates) == 1: reason = 'configured_default'

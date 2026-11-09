@@ -14,7 +14,7 @@ def test_only_unprepared_integrated_downloads_can_have_unknown_size():
     integrated = ScientificArtifactHandle('a'*64, 'scientific_integrated', 'b'*64, 'revision', 'turn', None,
         'integrated-analysis.h5ad', 'Original data with accepted analysis')
     assert integrated.to_dict()['size_bytes'] is None
-    assert 'prepared when downloaded' in integrated.description
+    assert 'prepared when downloaded' in integrated.description.lower()
     for kind, filename, label in (
         ('scientific_analysis', 'analysis.h5ad', 'Embeddings and UMAP — safe export'),
         ('scientific_matrix', 'matrix.h5ad', 'Original accepted matrix'),
@@ -245,3 +245,18 @@ def test_training_notice_is_optional_and_scoped_to_running_adaptation():
     assert 'training_notice' not in StepView('inspect','inspect_scATAC','RUNNING',1).to_dict()
     for tool,status in [('inspect_scATAC','RUNNING'),('adapt_epizoo_species','SUCCEEDED')]:
         with pytest.raises(ValueError):StepView('s',tool,status,1,'Not appropriate here.')
+
+
+def test_native_step_function_comes_from_result_resolved_arguments_or_its_plan():
+    from types import SimpleNamespace as N
+    from agent.application.interactive import _step_function
+    run=N(plan=N(steps=[N(step_id='one',arguments={'function_name':'pp.import_fragments'}),
+                            N(step_id='two',arguments={'function_name':'metrics.tsse'})]))
+    step=N(step_id='two',result=None,resolved_arguments=None)
+    assert _step_function(step,run)=='metrics.tsse'
+    step.resolved_arguments={'function_name':'pp.filter_cells'}
+    assert _step_function(step,run)=='pp.filter_cells'
+    step.result={'function_name':'snapatac2.pp.filter_cells'}
+    assert _step_function(step,run)=='snapatac2.pp.filter_cells'
+    step.step_id='other';step.result={};step.resolved_arguments={}
+    assert _step_function(step,run) is None

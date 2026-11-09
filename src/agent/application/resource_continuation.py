@@ -15,11 +15,38 @@ COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
                 'h5ad-science.v1': 'h5ad'}
 
 
+def pending_choices(reference, preceding):
+    """Read this existing pending question's captured, authoritative options."""
+    if reference is None or reference['field'] not in ('resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
+        return ()
+    source = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
+    return tuple(_serialize((source.admitted or {}).get('resource_options', ())))
+
+
+def selected_answer(interaction, preceding):
+    """A Web choice is typed intent, not another language interpretation."""
+    selection = (interaction.submission or {}).get('clarification_choice')
+    if selection is None:
+        return None
+    reference = interaction.snapshot.get('prerequisite')
+    if reference is None or selection['question_turn_id'] != reference.get('predecessor_turn_id'):
+        raise IntentError('invalid_reference')
+    choices = pending_choices(reference, preceding)
+    if not any(option['handle'] == selection['handle'] for option in choices):
+        raise IntentError('invalid_reference')
+    from .turn_decisions import RoleAnswer, ResourceAnswer
+    if reference['field'] == 'resources':
+        return ResourceAnswer('@resources', selection['handle'])
+    from .raw_handoff import empty
+    declared = replace(empty(reference['field']), resource=selection['handle'])
+    return RoleAnswer('@roles', (), **{reference['field']: declared})
+
+
 def preference_schema():
     from .turn_decisions import _object
     text = dict(type='string', minLength=1, maxLength=512)
     return {'anyOf': [_object(dict(literal=text, evidence=text)), {'type': 'null'}],
-        'description': 'Quote the exact reference identity explicitly requested by the researcher. A species/assembly declaration or an application-selected candidate is not a reference preference. Otherwise use null.'}
+        'description': 'Quote the explicit reference selection; otherwise null. With an offered resource handle, supply its verbatim supporting evidence.'}
 
 
 def validate_preference(value):

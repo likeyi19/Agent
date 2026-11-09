@@ -125,10 +125,10 @@ def test_absent_component_and_cross_assembly_are_function_scoped(inputs):
     with pytest.raises(ValueError,match='substitute'):bind_plan(substituted,receipt(inputs,(inputs.full,)))
 
 
-def test_language_schema_has_grounded_preferences_and_no_raw_handles():
+def test_language_schema_has_offered_resource_selection_and_grounded_preferences():
     for field in ('fastq','bam','fragments'):
         properties=decision_schema()['$defs'][field]['properties']
-        assert 'resource' not in properties and 'resource_preference' in properties
+        assert 'resource' in properties and 'resource_preference' in properties
     text='Prepare a cCRE matrix from these human hg38 fragments.'
     raw=dict(kind='request_roles',target='run_snapatac2',required_roles=[],roles=[],arguments=[],
         fragments=declaration_dict(FragmentsDeclaration(source='source.0',species='human',assembly='hg38')))
@@ -160,9 +160,13 @@ def test_real_native_functions_receive_independent_exact_components(inputs):
 
 class TaskModel:
     model_id='scripted/resource-contract'
-    def __init__(self,preference=None):self.calls=[];self.preference=preference
+    def __init__(self,preference=None):self.calls=[];self.preference=preference;self.language_calls=[]
     def complete(self,*,prompt,response_schema):
-        data=json.loads(prompt);self.calls.append(data)
+        data=json.loads(prompt)
+        if 'clarification' in data:
+            self.language_calls.append(data)
+            return json.dumps(dict(text=data['request']))
+        self.calls.append(data)
         if 'turn_schema_version' in data:
             d=declaration_dict(FragmentsDeclaration(source='source.0',species='human',assembly='hg38'))
             if self.preference is not None:d['resource_preference']=dict(literal=self.preference,evidence=self.preference)
@@ -330,7 +334,7 @@ def test_resource_question_replays_after_catalog_order_and_wording_changes(input
     original=owner.bind_plan
     def changed_wording(*args,**kwargs):
         try:return original(*args,**kwargs)
-        except ResourcePrerequisite:raise ResourcePrerequisite(['Please identify the source reference.'])
+        except ResourcePrerequisite as exc:raise ResourcePrerequisite(['Please identify the source reference.'], options=exc.options)
     monkeypatch.setattr(owner,'bind_plan',changed_wording)
     from agent.application import ResearchAgentApplication
     reopened=ResearchAgentApplication(app.workspace_root).sessions.load('research')
@@ -596,3 +600,83 @@ def test_malformed_continuation_keeps_exact_pending_objective_without_retry(inpu
     assert after.interactions[0]==before.interactions[0]
     assert not after.turns and not after.revisions and planner.calls==1
     assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==after
+
+
+@pytest.mark.parametrize('literal', ['Human exact cCRE release 1', '使用第一版参考的原始染色体序列及配套注释'])
+def test_explicit_offered_reference_can_use_a_label_or_natural_description_without_losing_sources(inputs,literal):
+    from agent.application.native_raw_handoff import requirements
+    from agent.application.raw_handoff import resources
+    app,planner,captured=task_application(inputs)
+    choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
+    app.sessions.respond('research','first','Build a matrix from human hg38 fragments.',interpreter=TaskModel(),
+        submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
+    state=app.sessions.load('research');before=state.interactions[0]
+    evidence=before.admitted['raw_resource_evidence']
+    declared=FragmentsDeclaration(source='source.0',species='human',assembly='hg38',resource='resource.full',
+        resource_preference=dict(literal=literal,start=0,end=len(literal)))
+    missing,selected=requirements(captured,declared,resources(choices,'fragments'),evidence)
+    assert not missing and selected.input_set_id=='full'
+    # No textual alias or source replacement was needed for the interpreted selection.
+    assert app.sessions.load('research').interactions[0]==before
+    assert not state.turns and not state.revisions
+    invalid=replace(declared,resource='resource.not-offered')
+    missing,selected=requirements(captured,invalid,resources(choices,'fragments'),evidence)
+    assert missing and selected is None
+
+
+
+def test_rejected_parameter_clarification_does_not_discard_pending_raw_task(inputs):
+    app,planner,captured=task_application(inputs)
+    choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
+    app.sessions.respond('research','first','Build a matrix from human hg38 fragments.',interpreter=TaskModel(),
+        submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
+    before=app.sessions.load('research')
+    class AmbiguousModel:
+        def complete(self,**kwargs):
+            return json.dumps(dict(turn_schema_version=1,decision=dict(kind='clarify',reason='ambiguous_parameter',choices=['reference.version'],value_required=True)))
+    failed=app.sessions.respond('research','failed','Use hg38.',interpreter=AmbiguousModel(),input_sets=choices)
+    assert failed.status=='failed'
+    after=app.sessions.load('research')
+    assert after.interactions[-1].prerequisite==before.interactions[-1].prerequisite
+    assert after.interactions[0]==before.interactions[0]
+    assert not after.turns and not after.revisions and planner.calls==1
+
+
+
+def test_clicked_reference_uses_exact_pending_identity_without_language_interpretation(inputs):
+    from agent.application.resource_continuation import selected_answer
+    from agent.application.session_state import Interaction
+    from agent.application.turn_decisions import RoleAnswer
+    app,planner,captured=task_application(inputs)
+    choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
+    app.sessions.respond('research','first','Build a matrix from human hg38 fragments.',interpreter=TaskModel(),
+        submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
+    before=app.sessions.load('research');question=before.interactions[0];option=question.admitted['resource_options'][0]
+    follow=Interaction('reply',option['label'],None,0,
+        dict(prerequisite=dict(question.prerequisite,predecessor_turn_id='first')),
+        submission=dict(clarification_choice=dict(question_turn_id='first',handle=option['handle'])))
+    answer=selected_answer(follow,before.interactions)
+    assert isinstance(answer,RoleAnswer) and answer.fragments.resource==option['handle']
+    assert answer.fragments.resource_preference is None
+    from agent.application.raw_handoff import merge
+    previous=FragmentsDeclaration(**dict(question.admitted['fragments']))
+    continued=merge(previous,answer.fragments,pending=True)
+    assert continued.source==previous.source and continued.assembly==previous.assembly
+    for changed in (dict(question_turn_id='other-question',handle=option['handle']),
+                    dict(question_turn_id='first',handle='resource.not-offered')):
+        with pytest.raises(IntentError):
+            selected_answer(replace(follow,submission=dict(clarification_choice=changed)),before.interactions)
+    assert selected_answer(replace(follow,submission=None,utterance='Use the reference matching my data'),before.interactions) is None
+    assert app.sessions.load('research')==before and not before.turns and not before.revisions
+
+
+def test_finite_choice_dispatch_also_uses_existing_resource_answer():
+    from agent.application.resource_continuation import selected_answer
+    from agent.application.session_state import Interaction
+    from agent.application.turn_decisions import ResourceAnswer
+    reference=dict(field='resources',origin_turn_id='question',binding_turn_id='question',predecessor_turn_id='question')
+    question=SimpleNamespace(turn_id='question',admitted=dict(resource_options=[dict(handle='resource.exact',label='Exact offered choice')]))
+    received=Interaction('answer','Exact offered choice',None,0,dict(prerequisite=reference),
+        submission=dict(clarification_choice=dict(question_turn_id='question',handle='resource.exact')))
+    answer=selected_answer(received,(question,))
+    assert isinstance(answer,ResourceAnswer) and answer.pending=='@resources' and answer.choice=='resource.exact'

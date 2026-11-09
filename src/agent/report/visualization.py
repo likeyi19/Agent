@@ -141,6 +141,7 @@ class _EvidenceSnapshot:
     request_id: str
     plan_id: str
     cell_results: Mapping = field(default_factory=dict)
+    qc_inputs: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -393,6 +394,7 @@ def _verified_evidence_snapshot(
         request_id=run_result.request_id,
         plan_id=run_result.plan.plan_id,
         cell_results=_cell_results(run_result),
+        qc_inputs=_run_qc_inputs(run_result),
     )
 
 
@@ -663,7 +665,7 @@ def _supported_figure_sources(
     return tuple(supported)
 
 
-def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figures=True) -> tuple[_FigureProjection, ...]:
+def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figures=True, qc_figures=True) -> tuple[_FigureProjection, ...]:
     artifacts = snapshot.payload.get("artifacts")
     if not isinstance(artifacts, list):
         raise AnalysisVisualizationError(
@@ -793,12 +795,150 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
             raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Pinned annotation/comparison figure data are invalid.") from exc
         order = {s["step_id"]:i for i,s in enumerate(snapshot.payload["workflow"]["ordered_steps"])}
         projections.sort(key=lambda p:order[p.source_step_ids[0]])
+    if qc_figures:
+        for value in snapshot.qc_inputs:
+            projections.extend(_qc_projection(lambda value=value: value))
+        order = {s['step_id']: i for i, s in enumerate(snapshot.payload['workflow']['ordered_steps'])}
+        projections.sort(key=lambda p: order[p.source_step_ids[0]])
     if not projections:
         raise AnalysisVisualizationError(
             "VISUALIZATION_NO_SUPPORTED_FIGURES",
             "Verified evidence contains no supported Milestone 7.2 figure source.",
         )
     return tuple(projections)
+
+
+def _qc_input(rows):
+    """Describe already accepted native measurements and their actual populations."""
+    measurements = [(rid, s) for rid, s in rows if 'obs.tsse' in s.result.get('result_slots', ())]
+    if not measurements:
+        measurements = [(rid, s) for rid, s in rows if 'obs.n_fragment' in s.result.get('result_slots', ())]
+    if not measurements:
+        raise ValueError('Selected ancestry has no recorded native depth or TSSe measurements.')
+    rid, main = measurements[0]
+    sources = []
+    def source(run_id, step, role):
+        r = step.result
+        item = dict(run_id=run_id, producing_step_id=step.step_id, tool_name=step.tool_name,
+            artifact_kind='native_matrix_h5ad', artifact_path=r['matrix_path'],
+            integrity=dict(sha256=r['matrix_sha256']), role=role)
+        sources.append(item)
+        return dict(path=r['matrix_path'], sha256=r['matrix_sha256'], n_cells=r['n_cells'],
+                    function_name=r['function_name'])
+    primary = source(rid, main, 'qc_measurements')
+    profiles = []
+    for run_id, step in rows:
+        for slot in step.result.get('result_slots', ()):
+            if slot in ('uns.TSS_profile', 'uns.frag_size_distr'):
+                profiles.append(dict(source(run_id, step, 'qc_profile'), slot=slot[4:]))
+    selection = next((s for _, s in rows if
+        s.result.get('parameters', {}).get('population', {}).get('stage') == 'native_cell_filter'), None)
+    thresholds = {} if selection is None else dict(selection.result['parameters']['effective_native_parameters'])
+    return dict(primary=primary, profiles=profiles, sources=sources, thresholds=thresholds,
+        selected_cells=None if selection is None else selection.result['n_cells'])
+
+
+def _run_qc_inputs(run):
+    from agent.schemas import StepOutputRef
+    steps = {s.step_id: s for s in run.steps}; planned = {s.step_id: s for s in run.plan.steps}
+    native = [s for s in run.steps if s.tool_name == 'run_snapatac2' and s.result.get('matrix_path')]
+    candidates = [s for s in native if 'obs.tsse' in s.result.get('result_slots', ())]
+    if not candidates:
+        candidates = [s for s in native if 'obs.n_fragment' in s.result.get('result_slots', ())]
+    def ancestry(step):
+        rows = []
+        while step.tool_name == 'run_snapatac2' and step.result.get('matrix_path'):
+            rows.append((run.run_id, step))
+            ref = planned[step.step_id].arguments.get('input_path')
+            if not isinstance(ref, StepOutputRef): break
+            parent = steps[ref.step_id]
+            if parent.result[ref.output_key] != step.resolved_arguments['input_path']:
+                raise ValueError('QC input differs from recorded dependency.')
+            step = parent
+        return rows
+    result = []
+    measured = [s for s in native if s.result.get('parameters', {}).get('population', {}).get('stage') == 'native_cell_filter'
+                or any(slot in s.result.get('result_slots', ()) for slot in ('uns.frag_size_distr', 'uns.TSS_profile'))]
+    for step in candidates:
+        downstream = [ancestry(s) for s in measured if any(p.step_id == step.step_id for _, p in ancestry(s))]
+        leaves = [rows for rows in downstream if not any(
+            rows[0][1].step_id in {p.step_id for _, p in other[1:]} for other in downstream)]
+        result.extend(_qc_input(rows) for rows in leaves or [ancestry(step)])
+    return tuple(result)
+
+
+def _qc_projection(read_sources):
+    """Descriptive plots from pinned obs/uns only; X and fragment arrays stay unread."""
+    import h5py
+    from anndata.io import read_elem
+    from agent.tools.analysis.marker_annotation import checked_file
+    from agent.tools.analysis import peak_h5ad  # optional native HDF5 filters
+    inputs = read_sources(); primary = inputs['primary']
+    with h5py.File(checked_file(primary['path'], primary['sha256']), 'r') as handle:
+        obs = read_elem(handle['obs'])
+    if len(obs) != primary['n_cells'] or not obs.index.is_unique:
+        raise ValueError('QC observation population differs from accepted result.')
+    def numeric(name):
+        if name not in obs: return None
+        values = np.asarray(obs[name], dtype=float)
+        return [float(v) if np.isfinite(v) else None for v in values]
+    depth, tsse = numeric('n_fragment'), numeric('tsse')
+    if depth is None and tsse is None:
+        raise ValueError('No native QC observations are available.')
+    profiles = []
+    for p in inputs['profiles']:
+        with h5py.File(checked_file(p['path'], p['sha256']), 'r') as handle:
+            values = np.asarray(read_elem(handle['uns'][p['slot']]))
+        if values.ndim != 1 or not np.isfinite(values).all():
+            raise ValueError('Invalid saved native QC profile.')
+        profiles.append(dict(slot=p['slot'], n_cells=p['n_cells'], values=values.tolist()))
+    value = dict(n_cells=len(obs), cell_ids=list(map(str, obs.index)), depth=depth, tsse=tsse,
+        profiles=profiles, thresholds=inputs['thresholds'], selected_cells=inputs['selected_cells'])
+    digest = _domain_digest('agent.numeric-native-qc.v1', value)
+    caption = ('Saved native QC observations; all finite values are plotted without refitting or filtering. '
+        'Depth is displayed as log1p(unique fragments). Missing measurements are counted explicitly. '
+        'Global profiles retain their own recorded producer populations; thresholds describe the selected filtering step.')
+    return (_FigureProjection('qc-'+digest[:16], 'qc_metrics', 'qc-'+digest[:16]+'.png',
+        tuple(dict.fromkeys(s['producing_step_id'] for s in inputs['sources'])), tuple(inputs['sources']),
+        digest, 12*_DPI, 10*_DPI, _DPI,
+        dict(caption=caption, n_cells=len(obs), selected_cells=inputs['selected_cells'], thresholds=inputs['thresholds'],
+             delivery='accepted_native_qc', projection_version=1), _ScientificPanelData('qc_metrics', value)),)
+
+
+def _render_qc(figure, value):
+    axes = figure.subplots(2, 3); figure.subplots_adjust(left=.08, right=.97, bottom=.08, top=.88, hspace=.55, wspace=.45)
+    figure.suptitle(f"Saved native QC — measurement population: {value['n_cells']:,} barcodes", fontsize=12)
+    depth = np.asarray(value['depth'], dtype=float) if value['depth'] is not None else None
+    tsse = np.asarray(value['tsse'], dtype=float) if value['tsse'] is not None else None
+    for ax, values, label, threshold in [(axes[0,0],depth,'log1p(unique fragments)','min_counts'), (axes[0,1],tsse,'TSS enrichment','min_tsse')]:
+        if values is None: ax.text(.1,.5,'Measurement unavailable'); ax.set_axis_off(); continue
+        finite = np.isfinite(values); shown = np.log1p(values[finite]) if threshold == 'min_counts' else values[finite]
+        ax.hist(shown, bins=50, color='#337d9e'); ax.set(xlabel=label, ylabel='Barcodes', title=f"Finite {finite.sum():,}; missing {(~finite).sum():,}")
+        for key, style in [(threshold,'--'), (threshold.replace('min_', 'max_'), ':')]:
+            number = value['thresholds'].get(key)
+            if number is not None:
+                ax.axvline(np.log1p(number) if threshold=='min_counts' else number, color='#b43b3b', ls=style, label=f'{key}={number}')
+        if ax.lines: ax.legend(fontsize=7)
+    ax=axes[0,2]
+    if depth is not None and tsse is not None:
+        paired=np.isfinite(depth)&np.isfinite(tsse)
+        ax.scatter(np.log1p(depth[paired]),tsse[paired],s=2,alpha=.4,linewidths=0)
+        ax.set(xlabel='log1p(unique fragments)',ylabel='TSS enrichment',title=f'Paired measurements: {paired.sum():,}')
+        for key in ('min_counts','max_counts'):
+            if value['thresholds'].get(key) is not None:ax.axvline(np.log1p(value['thresholds'][key]),color='#b43b3b',ls='--')
+        for key in ('min_tsse','max_tsse'):
+            if value['thresholds'].get(key) is not None:ax.axhline(value['thresholds'][key],color='#b43b3b',ls='--')
+    else:ax.text(.1,.5,'Paired measurements unavailable');ax.set_axis_off()
+    for ax,slot in [(axes[1,0],'frag_size_distr'),(axes[1,1],'TSS_profile')]:
+        profiles=[p for p in value['profiles'] if p['slot']==slot]
+        if not profiles:ax.text(.1,.5,'Saved profile unavailable');ax.set_axis_off();continue
+        for p in profiles:
+            values=p['values'];start=1 if slot=='frag_size_distr' else 0
+            ax.plot(range(start,len(values)),values[start:],label=f"Native producer population n={p['n_cells']:,}")
+        ax.set(xlabel='Fragment length (bp)' if slot=='frag_size_distr' else 'Native TSS profile array index',ylabel='Native count',title='Fragment-size profile' if slot=='frag_size_distr' else 'TSS profile');ax.legend(fontsize=6)
+        if slot=='frag_size_distr':ax.text(.02,.95,'Overflow > recorded maximum: '+', '.join(str(p['values'][0]) for p in profiles),transform=ax.transAxes,va='top',fontsize=6)
+    axes[1,2].set_axis_off()
+    axes[1,2].text(0,.95, f"Measurement barcodes: {value['n_cells']:,}\nSelected filter output: {value['selected_cells'] if value['selected_cells'] is not None else 'not selected'}\n\nProfiles retain producer populations.\nNo QC recomputation, refiltering or\nscientific rerun.\n\nThresholds:\n"+'\n'.join(f'{k}: {v}' for k,v in value['thresholds'].items() if k in ('min_counts','max_counts','min_tsse','max_tsse')),va='top',fontsize=8)
 
 
 def _cell_overlay_projection(read_sources) -> tuple[_FigureProjection, ...]:
@@ -860,7 +1000,7 @@ def get_supported_visualization_kinds(
     if not isinstance(registry, ToolRegistry):
         raise TypeError("`registry` must be a ToolRegistry.")
     snapshot = _verified_evidence_snapshot(run_result, evidence, registry)
-    return tuple(
+    return (('qc_metrics',) if snapshot.qc_inputs else ()) + tuple(
         kind for _, _, kind, _ in _supported_figure_sources(snapshot)
     )
 
@@ -980,8 +1120,11 @@ def _render_figure(projection: _FigureProjection, path: Path) -> None:
         elif isinstance(projection.data, _MetricData):
             _render_metrics(figure, projection.data)
         elif isinstance(projection.data, _ScientificPanelData):
-            from .annotation_visualization import render
-            render(figure, projection.data)
+            if projection.data.kind == 'qc_metrics':
+                _render_qc(figure, projection.data.value)
+            else:
+                from .annotation_visualization import render
+                render(figure, projection.data)
         else:
             raise ValueError("Unknown scientific figure data")
         try:
@@ -1056,7 +1199,8 @@ def _bundle_payload(
         "status": "success",
         "figure_set": {
             "n_figures": len(projections),
-            **({"annotation_projection_version": 2} if any(isinstance(p.data, _ScientificPanelData) for p in projections) else {}),
+            **({"annotation_projection_version": 2} if any(isinstance(p.data, _ScientificPanelData) and p.figure_kind != 'qc_metrics' for p in projections) else {}),
+            **({"numeric_qc_projection_version": 1} if any(p.figure_kind == 'qc_metrics' for p in projections) else {}),
             "expected_figure_ids": tuple(value.figure_id for value in projections),
             "figure_order": "explicit_accepted_sources" if overlay else "verified_workflow_topological_order",
         },
@@ -1491,7 +1635,7 @@ def build_analysis_visualizations(
                 run_id=first.run_id, request_id=first.request_id, plan_id=first.plan_id)
 
 
-def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher):
+def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher, qc=False):
     """Publish an Interaction's figure from existing qualified scientific inputs.
 
     The application reader owns source selection and correspondence. This uses
@@ -1504,8 +1648,9 @@ def build_cell_overlay_visualizations(read_sources, output_dir, *, publisher):
                    for value in publisher.values())):
         raise ValueError('An exact Interaction publisher is required.')
     publisher = dict(publisher)
-    result = _build_bundle(output_dir, _cell_overlay_projection(read_sources),
-        lambda: _cell_overlay_projection(read_sources),
+    project = _qc_projection if qc else _cell_overlay_projection
+    result = _build_bundle(output_dir, project(read_sources),
+        lambda: project(read_sources),
         lambda projections, pngs, renderer: _interaction_manifest_payload(publisher, projections, pngs, renderer))
     return dict(result, publisher=dict(kind='interaction', **publisher))
 
@@ -1546,7 +1691,8 @@ def verify_analysis_visualizations(
                    and row['presentation'].get('projection_version') == 3
                    for row in source_manifest.get('figures', ())):
             snapshot = replace(snapshot, cell_results={})
-        projections = _derive_figure_projections(snapshot, annotation_figures=version == 2) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
+        projections = _derive_figure_projections(snapshot, annotation_figures=version == 2,
+            qc_figures=source_manifest.get('figure_set', {}).get('numeric_qc_projection_version') == 1) if cell_overlay is None else _cell_overlay_projection(cell_overlay)
         renderer = _renderer_contract()
     except (AnalysisVisualizationError, TypeError) as exc:
         code = getattr(exc, "code", "VISUALIZATION_SOURCE_INVALID")

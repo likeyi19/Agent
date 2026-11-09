@@ -395,6 +395,8 @@ def visualization_inputs(sessions, session_id, interaction):
     drawing = (origin.admitted or {}).get('visualization')
     if drawing is None:
         return None
+    if drawing.get('kind') == 'qc':
+        return (_captured_output(sessions, state, origin, drawing['source']),)
     coordinates = (_selected_output(sessions, state, interaction, 'visualization_coordinates')
                    if drawing['coordinates'] == 'new' else _captured_output(sessions, state, origin, drawing['coordinates']))
     if drawing['labels'].startswith('source.'):
@@ -403,6 +405,33 @@ def visualization_inputs(sessions, session_id, interaction):
         labels = (_selected_output(sessions, state, interaction, 'visualization_labels')
                   if drawing['labels'] == 'new' else _captured_output(sessions, state, origin, drawing['labels']))
     return coordinates, labels, drawing['field']
+
+
+def qc_plot(sessions, selected):
+    """Read pinned native QC ancestry; never compute QC or select cells again."""
+    from agent.orchestration.verification_authority import _accepted
+    from agent.report.visualization import _qc_input
+    store = sessions._application.run_store
+    run_id, step_id = selected['run_id'], selected['step_id']
+    rows = []
+    while True:
+        step, _, run = _accepted_step(store, run_id, step_id)
+        _accepted(store, run_id, step_id)
+        if not rows and accepted_step_digest(step) != selected['accepted_step_sha256']:
+            raise ValueError('Changed accepted QC selection.')
+        if step.tool_name != 'run_snapatac2' or not step.result.get('matrix_path'):
+            break
+        rows.append((run_id, step))
+        planned = next(s for s in run.plan.steps if s.step_id == step_id)
+        if not isinstance(planned.arguments.get('input_path'), (StepOutputRef, PriorOutputRef)):
+            break
+        run_id, step_id = dependency(store, run_id, step_id, 'input_path')
+    value = _qc_input(rows)
+    pin = next(s for _, s in rows if s.step_id == selected['step_id']).result
+    value['sources'].append(dict(producing_step_id=selected['step_id'], tool_name=rows[0][1].tool_name,
+        artifact_kind='native_matrix_h5ad', artifact_path=pin['matrix_path'],
+        integrity=dict(sha256=pin['matrix_sha256']), role='qc', accepted_output=dict(selected)))
+    return value
 
 
 def export_inputs(sessions, session_id, interaction):

@@ -179,6 +179,14 @@ def _present(outcome, state=None, *, turn_id=None):
                              version=3 if artifacts else 2, artifacts=artifacts or None)
 
 
+def _step_function(step, run):
+    """Project an actual function identity, including not-yet-resolved plan steps."""
+    selected = next((s.arguments for s in run.plan.steps if s.step_id == step.step_id), {}) if run.plan else {}
+    value = ((step.result or {}).get('function_name') or (step.resolved_arguments or {}).get('function_name')
+             or selected.get('function_name'))
+    return value if isinstance(value, str) else None
+
+
 class InteractiveAgentApplication:
     """Plain Python interactive boundary with exact operator-admitted profiles.
 
@@ -345,7 +353,7 @@ class InteractiveAgentApplication:
                 scientific_artifacts = ()
             from .turn_context import revision_results
             from agent.report.analysis_report import _TOOL_TITLES, _REPORT_FIELDS, _METHOD_FIELDS
-            from .dialogue_evidence import EVIDENCE_SCOPE_LIMITATIONS, RESULT_SUMMARY_FIELDS
+            from .dialogue_evidence import RESULT_SUMMARY_FIELDS, RESULT_LIMITATIONS
             groups, remaining = [], MAX_RESULT_VIEW_BYTES
             for group in revision_results(self._application.sessions, state, revision):
                 source = group['canonical']
@@ -365,9 +373,8 @@ class InteractiveAgentApplication:
                         if (group['tool'] in RESULT_SUMMARY_FIELDS
                             or field not in _METHOD_FIELDS.get(group['tool'], ()))
                         and not field.endswith(('_sha256', '_path')) and 'contract' not in field],
-                    summary_limitations=[limit for limit in evidence['limitations']
-                        if limit not in EVIDENCE_SCOPE_LIMITATIONS]
-                        if included else [],
+                    summary_limitations=[RESULT_LIMITATIONS[group['tool']]]
+                        if included and group['tool'] in RESULT_LIMITATIONS else [],
                     evidence=evidence if included else None))
                 if included and group['tool'] == 'annotate_scATAC_cell_types':
                     from agent.report.analysis_report import render_annotation_facts
@@ -515,7 +522,7 @@ class InteractiveAgentApplication:
 
     def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, attachment_ids=()):
+                            registered_input=None, attachment_ids=(), clarification_choice=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
                 or type(utterance) is not str or not utterance.strip() or len(utterance) > 4096):
@@ -536,6 +543,14 @@ class InteractiveAgentApplication:
             execution_inputs = registered_input.execution_inputs
         inputs = _inputs(execution_inputs)
         submission = self._submission(profile, expected_generation, inputs, predecessor_turn_id, registered_input)
+        if clarification_choice is not None:
+            if (not isinstance(clarification_choice, Mapping)
+                    or set(clarification_choice) != {'question_turn_id', 'handle'}):
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            for value in clarification_choice.values():
+                _identifier(value)
+            submission['clarification_choice'] = dict(clarification_choice)
+
         attachments = self._attachment_records(session_id, attachment_ids, registered_input)
         if attachments:
             submission['attachments'] = attachments
@@ -611,7 +626,7 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, input_sets=(), attachment_ids=()):
+                            registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
@@ -620,7 +635,7 @@ class InteractiveAgentApplication:
         """
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
-            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice)
         if not duplicate and registered_input is not None:
             self.resources.validate_binding(registered_input)
         return digest(dict(session_id=session_id, turn_id=turn_id,
@@ -628,11 +643,11 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, input_sets=(), attachment_ids=()):
+                    registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None):
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
-            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids)
+            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice)
         if duplicate:
             return self.turn(session_id, turn_id)
         sessions = self._application.sessions
@@ -754,7 +769,9 @@ class InteractiveAgentApplication:
                 from agent.tools.models.native_posttraining import training_notice
                 steps = tuple(StepView(s.step_id, s.tool_name, s.status.value, s.attempt_count,
                     training_notice(s.resolved_arguments) if s.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model')
-                        and s.status.value == 'RUNNING' and s.resolved_arguments else None) for s in run.steps)
+                        and s.status.value == 'RUNNING' and s.resolved_arguments else None,
+                    function_name=_step_function(s, run),
+                    error_message=public_error_message(s.error) if s.error else None) for s in run.steps)
                 if status == 'succeeded' and (turn is None or turn.status in {'linked','run_succeeded','ready'}):
                     status = 'finalizing'
                 elif status == 'succeeded' and turn.status == 'failed':
@@ -816,6 +833,10 @@ class InteractiveAgentApplication:
             if accepted_use and attachment['use'] == 'offered_for_analysis':
                 attachment['use'] = 'consumed'
             attachments.append(attachment)
+        from .resource_continuation import pending_choices
+        choices = (pending_choices(interaction.prerequisite, state.interactions)
+            if interaction is not None and interaction.prerequisite is not None
+            and state.interactions[-1].turn_id == turn_id and status == 'clarification' else ())
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,
@@ -823,7 +844,8 @@ class InteractiveAgentApplication:
             profile_id=None if interaction is None or interaction.submission is None else interaction.submission.get('profile_id'),
             run_id=run_id, revision_id=None if turn is None else turn.revision_id,
             status=status, response=response, error=error, steps=steps, state_revision=state_revision,
-            attachments=tuple(attachments), export_requested=True if admitted.get('export') else None)
+            attachments=tuple(attachments), export_requested=True if admitted.get('export') else None,
+            clarification_choices=choices or None)
 
     def turn(self, session_id, turn_id):
         _identifier(turn_id)
@@ -983,12 +1005,41 @@ class InteractiveAgentApplication:
             from .statistical_delivery import TOOLS as STATISTICAL_TOOLS, accepted_statistical_result
             items = []
             represented = set()
+            def describe_new(first, run, step):
+                plan_steps = {s.step_id: s for s in run.plan.steps} if run.plan else {}
+                ancestors = set()
+                pending = list(plan_steps[step.step_id].depends_on) if step.step_id in plan_steps else []
+                while pending:
+                    parent = pending.pop()
+                    if parent not in ancestors:
+                        ancestors.add(parent)
+                        pending.extend(plan_steps[parent].depends_on)
+                source = dict(run_id=run.run_id, step_id=step.step_id, tool_name=step.tool_name,
+                    function_name=_step_function(step, run),
+                    ancestors=sorted(ancestors),
+                    output_names=[o.name for o in revision.outputs if o.run_id == run.run_id and o.step_id == step.step_id],
+                    terminal=not any(step.step_id in s.depends_on for s in run.plan.steps) if run.plan else True)
+                for index in range(first, len(items)):
+                    item = items[index]
+                    metadata = dict(source)
+                    spec = self._application.registry.accepted(step.tool_name).scientific_delivery
+                    role = getattr(item, 'role', None)
+                    if spec is not None and role in spec.files:
+                        content_type = spec.files[role][1]
+                        metadata.update(content_type=content_type, data_output=(role in spec.h5ad_roles
+                            or content_type not in ('application/json', 'image/png')))
+                    elif item.reference.artifact_type == 'scientific_sequence':
+                        from .sequence_delivery import FILES
+                        content_type = FILES[role][1]
+                        metadata.update(content_type=content_type, data_output=content_type != 'image/png')
+                    items[index] = replace(item, reference=replace(item.reference, source_step=metadata))
             for output in revision.outputs:
                 if turn_id is not None and (output.run_id != origin.run_id
                         or (output.name, output.step_id, output.output_key) not in selections):
                     continue
                 run = self._application.run_store.load(output.run_id)
                 step = next(s for s in run.steps if s.step_id == output.step_id)
+                first_item = len(items)
                 if step.tool_name in _MATRIX_CONTRACTS:
                     from .matrix_delivery import selects_matrix_port
                     if not selects_matrix_port(self._application.registry, step.tool_name, output.output_key):
@@ -1044,6 +1095,7 @@ class InteractiveAgentApplication:
                         items.append(accepted_analysis(self, session_id, revision, origin, output))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                describe_new(first_item, run, step)
                 represented.add((output.run_id, output.step_id))
             # The captured run-result digest includes its exact plan and every
             # accepted step. It establishes current-request membership without
@@ -1055,6 +1107,7 @@ class InteractiveAgentApplication:
             for planned in run.plan.steps:
                 if (run.run_id, planned.step_id) in represented:
                     continue
+                first_item = len(items)
                 if planned.tool_name in _MATRIX_CONTRACTS:
                     items.append(self._accepted_matrix(session_id, revision, origin, None,
                         step_id=planned.step_id))
@@ -1094,6 +1147,7 @@ class InteractiveAgentApplication:
                             step_id=planned.step_id))
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         pass
+                describe_new(first_item, run, next(s for s in run.steps if s.step_id == planned.step_id))
             self._application.sessions._validate_revision(revision)
             unique = {}
             for item in items:
@@ -1109,6 +1163,9 @@ class InteractiveAgentApplication:
                     try:
                         integrated = integrated_analysis(self, item)
                         if integrated is not None:
+                            integrated = replace(integrated, reference=replace(integrated.reference,
+                                source_step=dict(item.reference.source_step or {},
+                                    original_sha256=integrated.manifest['original_source']['sha256'])))
                             unique[integrated.reference.handle] = integrated
                     except (ValueError, RuntimeError, OSError, KeyError, TypeError, StopIteration):
                         # Optional packaging availability never removes accepted

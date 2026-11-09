@@ -2,8 +2,8 @@
 
 The [fresh PBMC10k acceptance](../agent-data/acceptance/scientific-results/pbmc10k-fresh-2026-11-09/REPORT.md)
 retains **CONDITIONAL GO**: genuine Firefox/official OpenAI raw-to-MAESTRO
-science and verified downloads are complete; numeric QC plotting remains a
-product gap. Its bounded corrections retain raw biological declarations,
+science and verified downloads are complete; that acceptance recorded numeric QC
+plotting as a product gap. Its bounded corrections retain raw biological declarations,
 prepare selected future native count sources, align interpretation schemas,
 preserve pending intent on interpretation failure, isolate PCA through the
 existing native execution owner, and deliver pinned native annotation evidence.
@@ -12,6 +12,14 @@ The independent GLUE evaluation remains outside Agent. The subsequent
 authorizes one reviewed commit and normal push; prior no-commit records describe
 the acceptance stage. The [manual Web guide](docs/guides/manual-web-testing.md)
 owns the separate researcher workspace and foreground startup/shutdown commands.
+
+The subsequent [researcher-experience refinement](../agent-data/acceptance/scientific-results/researcher-refinement-2026-11-09/REPORT.md)
+adds saved native QC figures, clearer result/download presentation and native LLM
+conversation-language guidance. Finite offered choices submit their exact captured
+identity through the existing typed continuation; temporary numbered-text mapping
+is removed. The [Git closeout](../agent-data/acceptance/scientific-results/researcher-experience-git-closeout-2026-11-09/REPORT.md)
+owns the final bounded review and submission. Accepted science and historical
+evidence remain exact; PBMC10k remains **CONDITIONAL GO**.
 
 The user's cell-type mapping/comparison retirement decision supersedes the ALO-1
 and earlier product-comparison contracts below for current production behavior.

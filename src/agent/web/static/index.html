@@ -84,13 +84,14 @@
       <div id="revision-view" hidden>
         <p id="result-heading" class="result-heading"></p>
         <section id="result-panel" aria-labelledby="result-panel-heading">
-          <h3 id="result-panel-heading" class="visually-hidden">Scientific summary</h3>
+          <h3 id="result-panel-heading">Scientific summary</h3>
           <div class="summary-choice">
             <label for="result-selection">Result</label>
             <select id="result-selection"></select>
           </div>
         </section>
         <div id="result-facts" aria-live="polite"></div>
+        <div id="result-figures"></div>
         <div id="artifact-viewer" hidden>
           <h3 id="artifact-title"></h3>
           <p id="report-description" class="muted small" hidden>Execution and verification details from the accepted evidence. This privacy-safe text is not a biological interpretation; the scientific summary and limitations are shown separately.</p>
@@ -102,14 +103,18 @@
           <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
           <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
         </div>
-        <details id="artifact-panel">
-          <summary>Downloads &amp; reports</summary>
+        <details id="artifact-panel" open>
+          <summary>Results &amp; downloads</summary>
           <ul id="artifact-inventory" class="compact-list"></ul>
           <p class="muted small">Privacy-safe exports may differ from source size. Accepted source files remain unchanged.</p>
         </details>
         <section id="result-limitations-panel" aria-labelledby="limitations-heading" hidden>
           <h3 id="limitations-heading">Interpretation &amp; limitations</h3>
           <div id="result-limitations"></div>
+        </section>
+        <section id="native-results-panel" aria-labelledby="native-results-heading">
+          <h3 id="native-results-heading">Native execution details &amp; provenance</h3>
+          <div id="native-results"></div>
         </section>
         <details id="result-methods">
           <summary>Methods &amp; execution details</summary>
@@ -185,7 +190,7 @@
         <span id="turn-status">Ready</span>
         <button id="cancel-turn" class="secondary" type="button" hidden disabled>Cancel turn</button>
       </div>
-      <ul id="step-status" class="step-status" hidden></ul>
+      <section id="step-status" class="execution-progress" aria-label="Scientific step progress" hidden></section>
       <form id="turn-form">
         <p id="selected-input-context" class="muted small">Scientific inputs for next turn: none selected</p>
         <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>

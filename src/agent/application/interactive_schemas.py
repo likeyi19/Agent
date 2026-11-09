@@ -284,6 +284,8 @@ class StepView(_JsonModel):
     status: str
     attempts: int
     training_notice: str | None = dataclass_field(default=None, metadata={'omit_none': True})
+    function_name: str | None = dataclass_field(default=None, metadata={'omit_none': True})
+    error_message: str | None = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
         _identifier(self.step_id, 'step_id')
@@ -291,6 +293,10 @@ class StepView(_JsonModel):
         if self.status not in ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED'):
             raise ValueError('Invalid interactive step status.')
         _natural(self.attempts, 'step attempts')
+        if self.function_name is not None:
+            _text(self.function_name, 'native function', 256)
+        if self.error_message is not None:
+            _text(self.error_message, 'step error', 2048)
         if self.training_notice is not None:
             if self.tool_name != 'adapt_epizoo_species' or self.status != 'RUNNING':
                 raise ValueError('Training notice requires a running adaptation step.')
@@ -316,8 +322,12 @@ class TurnView(_JsonModel):
     base_revision_id: str | None = None
     attachments: tuple = ()
     export_requested: bool | None = dataclass_field(default=None, metadata={'omit_none': True})
+    clarification_choices: object = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
+        if self.clarification_choices is not None:
+            object.__setattr__(self, 'clarification_choices', freeze_json_mapping(
+                {'choices': self.clarification_choices}, 'clarification choices')['choices'])
         if type(self.attachments) is not tuple or len(self.attachments) > 16:
             raise ValueError('Invalid turn attachments.')
         for item in self.attachments:
@@ -466,9 +476,12 @@ class ScientificArtifactHandle(ArtifactHandle):
     purpose: str = dataclass_field(init=False)
     description: str = dataclass_field(init=False)
     contents: object = dataclass_field(default=None, kw_only=True, metadata={'omit_none': True})
+    source_step: object = dataclass_field(default=None, kw_only=True, metadata={'omit_none': True})
 
     def __post_init__(self):
         super().__post_init__()
+        if self.source_step is not None:
+            object.__setattr__(self, 'source_step', freeze_json_mapping(self.source_step, 'artifact source step'))
         if self.revision_id is None and self.artifact_type != 'scientific_composition':
             raise ValueError('Scientific artifacts require an accepted revision.')
         if self.artifact_type == 'scientific_composition' and self.revision_id is not None:
@@ -542,9 +555,10 @@ class ScientificArtifactHandle(ArtifactHandle):
         elif self.artifact_type == 'scientific_integrated':
             stage = {'integrated-embeddings.h5ad': 'cell embeddings', 'integrated-clusters.h5ad': 'Leiden clusters',
                      'integrated-analysis.h5ad': 'UMAP analysis'}[self.filename]
-            title, purpose, description = ('Original data with ' + stage + ' (H5AD)', 'Integrated annotated H5AD',
-                'Integrated annotated H5AD — prepared when downloaded. '
-                'Continue analysis with original measurements, features and safe metadata plus this accepted result.')
+            title, purpose, description = ('Original data with ' + stage + ' (H5AD)', 'Original measurements with selected analysis',
+                'Prepared when downloaded. Original measurements and features with ' + stage +
+                ' and safe metadata. Cell-type annotations are present only if already in the exact original source; '
+                'this export does not combine independent result branches.')
         elif self.artifact_type == 'scientific_analysis':
             stage = {'embeddings.h5ad': 'Cell embeddings', 'clusters.h5ad': 'Leiden clusters',
                      'analysis.h5ad': 'UMAP analysis', 'neighbors.h5ad': 'Neighbor graph'}[self.filename]
@@ -565,7 +579,8 @@ class ScientificArtifactHandle(ArtifactHandle):
                 'group labels follow the cell axis. Private labels in text exports follow the shared privacy policy.')
         elif self.artifact_type == 'scientific_annotation':
             title, purpose, description = ('Annotated original data (H5AD)', 'Integrated annotated H5AD',
-                'Original measurements and features with accepted cell annotations; private metadata omitted.')
+                'Original measurements and features with accepted cell annotations; private metadata omitted. '
+                'Coordinates are included only if present in its exact input, without adding another branch’s UMAP.')
         elif self.artifact_type == 'scientific_matrix':
             title, purpose, description = (self.label, 'Scientific datasets and tables',
                 'Accepted scientific matrix with its original measurement semantics.')

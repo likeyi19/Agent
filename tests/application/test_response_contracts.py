@@ -14,6 +14,30 @@ def envelope(decision):
     return json.dumps(dict(turn_schema_version=1, decision=decision))
 
 
+@pytest.mark.parametrize('question,response', [
+    ('请说明需要哪个参考。','请确认与原始数据一致的参考；原始请求和文件已保留。'),
+    ('请用英语回答。','Please select the reference matching the original data.'),
+    ('日本語で参照を確認してください。','入力データに対応する参照を選んでください。'),
+    ('Responde en español.','Selecciona la referencia de los datos originales.'),
+])
+def test_clarification_uses_the_configured_response_model_and_language_context(question,response):
+    from types import SimpleNamespace
+    from agent.application.responses import summarize, CONVERSATION_LANGUAGE
+    interaction=SimpleNamespace(turn_id='question',utterance=question,prerequisite=None)
+    sessions=SimpleNamespace(load=lambda _:SimpleNamespace(interactions=(interaction,)))
+    seen=[]
+    class Model:
+        def complete(self,*,prompt,response_schema):
+            data=json.loads(prompt);seen.append(data)
+            assert CONVERSATION_LANGUAGE in data['instructions']
+            assert data['conversation']==[question]
+            return json.dumps(dict(text=response))
+    outcome=TurnOutcome('clarify','clarification',Clarify('missing_resources',('Reference A','Reference B'),True))
+    result=summarize(sessions,'session','question',outcome,model=Model())
+    assert result.text==response and result.clarification==outcome.clarification
+    assert seen[0]['clarification']['choices']==['Reference A','Reference B']
+
+
 @pytest.mark.parametrize('intent', ('version','matrix','selection','thresholds','changes','execution','reuse','provenance','verification','unsupported'))
 def test_answer_closed_roundtrip(intent):
     decision = dict(kind='answer',intent=intent,relation='current',technical=False)
@@ -91,3 +115,11 @@ def test_missing_input_roles_asks_for_exact_captured_roles_without_scientific_gu
     assert 'scientific role' not in text
     assert 'original request and selected files are preserved' in text
     assert 'first dataset is' not in text and 'qualified' not in text
+
+
+def test_response_language_context_stops_at_captured_turn_and_keeps_explicit_preference():
+    from types import SimpleNamespace as N
+    from agent.application.responses import conversation_utterances
+    state=N(interactions=[N(turn_id=str(i),utterance=t) for i,t in enumerate([
+        '请分析这个数据', '用这个参考', 'Please answer in English.', '194', '另一个后来的请求'])])
+    assert conversation_utterances(state,'3')==['请分析这个数据','用这个参考','Please answer in English.','194']

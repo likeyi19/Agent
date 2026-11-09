@@ -315,3 +315,32 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .result-values { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 2fr); gap: .45rem 1rem; font-size: .9rem; }
 .result-values dt { font-weight: 600; }
 .result-values dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Researcher result hierarchy and authoritative step-count progress. */
+#result-panel-heading, #native-results-heading { font-size: 1.2rem; border-bottom: 2px solid var(--border, #d6e0e4); padding-bottom: .55rem; margin-top: 1.4rem; }
+#artifact-panel > summary { font-size: 1.2rem; font-weight: 700; padding: .6rem 0; }
+#result-figures, #native-results-panel { margin-top: 1.5rem; }
+.scientific-result { border: 1px solid #d6e0e4; border-radius: .5rem; padding: .7rem; margin: .6rem 0; }
+.scientific-result > summary { font-weight: 600; overflow-wrap: anywhere; }
+.primary-downloads { border-left: 3px solid #237a76; padding-left: .8rem; }
+.supporting-downloads, .advanced-downloads { margin: .7rem 0; }
+.execution-progress { width: 100%; padding: .5rem 0; }
+.step-progress-summary { margin: 0 0 .35rem; font-size: .85rem; overflow-wrap: anywhere; }
+.step-segments { display: grid; grid-template-columns: repeat(auto-fit, minmax(1.1rem, 1fr)); gap: .2rem; list-style: none; padding: 0; margin: .4rem 0; }
+.step-segment { flex: 1; min-width: 0; text-align: center; font-size: .8rem; line-height: 1.2rem; border: 1px solid #78888e; border-radius: .2rem; color: #33454b; background: #e8eef0; }
+.step-segment.state-succeeded { color: #fff; background: #237a76; border-color: #237a76; }
+.step-segment.state-running { color: #173f64; background: #d6e9fa; border: 2px solid #356c9c; }
+.step-segment.state-failed, .step-segment.state-interrupted { color: #7f2424; background: #fbe2e2; border: 2px solid #a23e3e; }
+.step-segment.state-cancelled, .step-segment.state-skipped { background: #f0ece4; border-style: dashed; }
+.step-segment:focus { outline: 2px solid #173f64; outline-offset: 2px; }
+.step-detail-list { font-size: .85rem; padding-left: 1.5rem; max-height: 15rem; overflow: auto; }
+@media (max-width: 700px) { .scientific-file { flex-wrap: wrap; gap: .5rem; } .step-segments { gap: .12rem; } }
+
+.figure-preview { display: block; padding: 0; border: 0; background: transparent; width: 100%; cursor: zoom-in; }
+.figure-preview:focus-visible { outline: 2px solid var(--accent, #276a72); outline-offset: 3px; }
+.figure-preview:hover { background: transparent; }
+.result-figures .figure-download { display: inline-block; margin: .6rem 0; font-weight: 600; }
+.result-figures figure > details { font-size: .85rem; margin-top: .3rem; }
+.workflow-summary { margin: 1.2rem 0; }
+.clarification-choices { display: grid; gap: .55rem; margin: .8rem 0; }
+.clarification-choices button { text-align: left; white-space: normal; }

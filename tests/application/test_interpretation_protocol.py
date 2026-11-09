@@ -65,6 +65,15 @@ def execute(arguments, **changes):
         unfulfilled=[], visualization=None, comparison=None, retain_parameters=[], missing_parameters=[]) | changes
 
 
+def test_read_only_qc_selection_uses_an_exact_accepted_output():
+    from agent.application.turn_decisions import ScientificQuestion, ScientificTarget
+    question = ScientificQuestion(ScientificTarget('g3'), visualization=dict(kind='qc', source='g3'))
+    assert dict(question.visualization) == dict(kind='qc', source='g3')
+    for source in ('new', 'source.0', 'g3 unknown'):
+        with pytest.raises(ValueError, match='exact accepted QC'):
+            ScientificQuestion(ScientificTarget('g3'), visualization=dict(kind='qc', source=source))
+
+
 def interpret_value(value, utterance, public):
     class Model:
         calls = 0
@@ -183,6 +192,9 @@ def test_model_strings_never_authorize_invented_or_crossed_identities(registry, 
     class Model:
         model_id='scripted/proposal-rejection'
         def complete(self, *, prompt, response_schema):
+            data = json.loads(prompt)
+            if 'clarification' in data:
+                return json.dumps(dict(text=data['request']))
             calls.append(json.loads(prompt))
             assert 'turn_schema_version' in calls[-1], 'Invalid proposal reached the Planner'
             return json.dumps(dict(turn_schema_version=1,decision=value))
@@ -268,3 +280,18 @@ def test_resource_answer_schema_cannot_claim_raw_role_pending_handle():
     value['decision']['pending']='@resources'
     assert accepts(schema,value)
     assert parse_decision(json.dumps(value)).pending=='@resources'
+
+
+def test_raw_reference_selection_can_bind_an_offered_handle_with_verbatim_researcher_evidence():
+    from agent.application.raw_handoff import FragmentsDeclaration, declaration_dict
+    text='使用原始 Alpha 版本参考，TSS 使用配套注释。'
+    declared=declaration_dict(FragmentsDeclaration(resource='resource.alpha'))
+    declared['resource_preference']=dict(literal=text,evidence=text)
+    raw=dict(turn_schema_version=1,decision=dict(kind='answer_roles',pending='@roles',roles=[],arguments=[],
+        fragments=declared,annotation=None,unknown_fields=[]))
+    assert accepts(decision_schema(),raw)
+    parsed=parse_decision(json.dumps(raw),utterance=text)
+    assert parsed.fragments.resource=='resource.alpha'
+    assert text[parsed.fragments.resource_preference['start']:parsed.fragments.resource_preference['end']]==text
+    raw['decision']['fragments']['resource_preference']=None
+    with pytest.raises(IntentError):parse_decision(json.dumps(raw),utterance='继续')

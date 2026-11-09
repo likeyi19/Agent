@@ -106,7 +106,8 @@ def test_simple_completion_groups_aliases_and_exposes_exact_fields(tmp_path):
     facade, source, calls, models = service(tmp_path, explain=False)
     view = submit(facade, source)
     assert view.response.scientific['availability'] == 'deterministic'
-    assert 'n_cells = 2' in view.response.text and 'x_is_sparse = true' in view.response.text
+    assert 'available in Results' in view.response.text
+    assert {c['field'] for c in view.response.scientific['citations']} >= {'n_cells','x_is_sparse'}
     assert len(models[0].phases) == 3 and calls == ['inspect_scATAC']
     revision = facade.revision('session', view.revision_id)
     assert len(revision.outputs) == 4 and len(revision.result_groups) == 1
@@ -151,7 +152,7 @@ def test_completion_keeps_its_captured_result_when_navigation_changes_during_lan
     assert view.response.scientific['availability'] == 'generated'
     assert view.base_generation == 0 and view.base_revision_id is None
     assert current.generation == 2 and current.active_revision_id != view.revision_id
-    assert 'historical revision' in view.response.text and 'form the current revision' not in view.response.text
+    assert any('historical' in text for text in view.response.scientific['limitations'])
     assert all(c['source']['revision_id'] == view.revision_id for c in view.response.scientific['citations'])
     assert not facade.revision('session', view.revision_id).is_active and calls == ['inspect_scATAC']
 
@@ -168,8 +169,8 @@ def test_completion_discloses_distinct_undelivered_requirements(tmp_path, monkey
         'Inspect and explain the accepted result, compare and visualize it; omit marker analysis if unavailable.',
         expected_generation=0, execution_inputs={'input_path':str(source)})
     assert view.response.scientific['availability'] == 'generated'
-    assert 'exact comparison operands were not recorded' in view.response.text
-    assert 'requested visualization has not been produced' in view.response.text
+    assert 'exact comparison operands were not recorded' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
+    assert 'requested visualization has not been produced' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
     assert 'Requirements not fulfilled: marker analysis' in view.response.text
     assert calls == ['inspect_scATAC'] and models[0].phases.count('dialogue_schema_version') == 1
 
@@ -208,7 +209,8 @@ def test_distinct_operations_keep_result_identity_without_alias_fanout(app, monk
     assert result.scientific.availability == 'deterministic'
     assert not any('figure relationships are unavailable' in value for value in result.scientific.limitations)
     assert {c.target for c in result.scientific.claims} == {'t0','t1'}
-    assert result.text.count('Dataset inspection:') == 2
+    assert [(c.target,c.value) for c in result.scientific.claims if c.field=='n_cells']==[('t0',7),('t1',7)]
+    assert 'Dataset inspection:' not in result.text
 
 
 def test_http_categorical_tables_preserve_owner_denominators_and_partial_coverage(app, monkeypatch):
@@ -412,7 +414,7 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
     assert not [a for a in revision.artifacts if a.figure]
     figures=app.sessions.presentation_figure_inventory('session','recolor')
     if failure:
-        assert not figures and 'requested visualization has not been produced' in view.response.text
+        assert not figures and 'requested visualization has not been produced' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
         assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
         assert view.response.version==2 and view.response.artifacts is None
     else:
@@ -423,7 +425,7 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
         np.testing.assert_array_equal(seen[0].data.coordinates,xy)
         assert seen[0].data.category_labels==('control','treated','Missing label (not an assigned category)')
         assert seen[0].presentation['category_order']==[dict(value='control',missing=False),dict(value='treated',missing=False),dict(value=None,missing=True)]
-        assert 'not a new embedding fit' in view.response.text
+        assert 'not a new embedding fit' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
         meta=figures[0]['metadata']
         assert meta['output_names']==[] and meta['revision_id'] is None
         assert meta['publisher']==dict(kind='interaction',session_id='session',turn_id='recolor')
@@ -495,10 +497,10 @@ def test_precise_comparison_completes_with_existing_readers_and_same_figure_fact
     view = overlay_submit(facade, coords)
     assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
     assert coords.read_bytes() == original
-    assert 'requested comparison is included' in view.response.text.lower()
+    assert 'requested comparison is included' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ()))).lower()
     if limit == 1:
-        assert 'partial coverage' in view.response.text
-    assert 'not a new embedding fit' in view.response.text
+        assert 'partial coverage' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
+    assert 'not a new embedding fit' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
     scientific = view.response.scientific
     association = [c for c in scientific['citations'] if c['field'] == 'detail.category_association']
     assert len(association) == 1
@@ -531,7 +533,7 @@ def test_unqualified_requested_comparison_keeps_independent_counts_without_match
     view = overlay_submit(facade, coords)
     assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
     assert 'comparison is unavailable' in view.response.text
-    assert 'Independent categorical counts' in view.response.text
+    assert 'category_association' not in view.response.text
     fields = [c['field'] for c in view.response.scientific['citations']]
     assert fields.count('detail.category_counts') == counts
     assert 'detail.category_association' not in fields
@@ -544,7 +546,7 @@ def test_precise_same_new_result_compares_distinct_fields_without_a_second_resul
         compare=True, compare_same=True, explain=explain)
     view = overlay_submit(facade, coords)
     assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
-    assert 'requested comparison is included' in view.response.text.lower()
+    assert 'requested comparison is included' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ()))).lower()
     claim = next(c for c in view.response.scientific['citations'] if c['field'] == 'detail.category_association')
     sources = claim['source']['derivation']['sources']
     assert sources[0]['artifact_sha256'] == sources[1]['artifact_sha256']
@@ -578,7 +580,7 @@ def test_scientific_answer_retains_exact_presentation_request_without_execution(
     assert state.active_revision_id == old and len(state.revisions) == 1
     admitted = state.interactions[-1].admitted
     assert admitted['visualization']['field'] == 'result:cohort' and admitted['references']
-    assert 'requested figure is available' in result.text and len(result.artifacts)==1
+    assert len(result.artifacts)==1 and result.artifacts[0]['figure_id']
     assert not app.sessions.presentation_figure_inventory('session','presentation')  # No final display commit at this low-level boundary.
     assert all(files(app)[p] == value for p, value in before.items() if not p.startswith('sessions/'))
 
@@ -633,7 +635,7 @@ def test_standalone_source_coloring_preserves_registration_meaning_and_figure_wh
     assert after.generation==before.generation==1 and after.active_revision_id==old and calls==[]
     assert len(model.calls)==3  # Interpretation, generation and existing R5 review, no retry.
     assert ('could not ground' in view.response.text)==withhold
-    assert 'requested figure is available' in view.response.text
+    assert len(view.response.artifacts) == 1
     handle=live.presentation_artifact_handles('session','source-color')[0]
     label_source=next(s for s in handle.figure['sources'] if s['role']=='categories')
     assert dict(label_source['registered_source'])==dict(resource_id=record.resource_id,
@@ -694,6 +696,6 @@ def test_generic_figure_delivery_recognizes_existing_native_inventory(tmp_path,m
     monkeypatch.setattr(dialogue_evidence,'figure_inventory',lambda *a:(dict(metadata=dict(
         manifest_sha256='a'*64,figure_id='simulated-native',kind='umap',sources=[])),))
     view=submit(facade,source)
-    assert 'requested visualization is available in the result view' in view.response.text
+    assert 'requested visualization is available in the result view' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
     assert 'has not been produced' not in view.response.text
     assert calls==['inspect_scATAC']

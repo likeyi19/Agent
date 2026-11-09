@@ -618,6 +618,8 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
     comparison_fields = frozenset() if independent_counts else _comparison_fields(views[:2], targets[:2]) if comparing else None
     descriptive_fields = _descriptive_fields(views[:2]) if comparing and not independent_counts else frozenset()
     claims, meanings, labels, limitations = [], {}, [], []
+    evidence_qualifications = []
+    from .dialogue_evidence import EVIDENCE_SCOPE_LIMITATIONS
     automatic_detail_ids = set()
     association_delivered = False
     for index, (target, view) in enumerate(zip(targets, views)):
@@ -645,7 +647,8 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 labels[-1]['reviewed_profile'] = asdict(PROFILE)
                 meanings[f'm{index}.profile' if evidence_targets is not None else f'm{index+2}'] = ('TSS enrichment compares endpoint incidence per base near transcription start sites with incidence in the flanking background windows. '
                     'Zero background leaves the ratio undefined; this metric alone does not establish cell purity or a calibrated selection threshold.')
-        limitations.extend(view.limitations)
+        evidence_qualifications.extend(note for note in view.limitations if note in EVIDENCE_SCOPE_LIMITATIONS)
+        limitations.extend(note for note in view.limitations if note not in EVIDENCE_SCOPE_LIMITATIONS)
         limitations.extend(f'{label}: {f.field} is {f.status}.' for f in view.facts if f.status != 'available')
         values = [(f.field, f.value, f.source_pointer) for f in view.facts if f.status == 'available']
         # Bounded summaries follow the reviewed scientific report order, not
@@ -789,7 +792,8 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             entry['semantics']['description_ref'] = descriptions[description]
         public_claims.append(entry)
     public = dict(targets=labels, claims=public_claims, meanings=meanings,
-                  limitations=list(dict.fromkeys(limitations)), scope='accepted_persisted_summary')
+                  limitations=list(dict.fromkeys(limitations)), evidence_qualifications=list(dict.fromkeys(evidence_qualifications)),
+                  scope='accepted_persisted_summary')
     if any(c.field.startswith('detail.') for c in claims):
         public['scope'] = 'accepted_summary_and_published_detail'
     if any(c.source.get('derivation') is not None or c.field == 'detail.categorical_fields' for c in claims):
@@ -844,7 +848,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         public['delivery'] = delivery
     elif admitted.get('visualization') is not None:
         public['delivery'] = dict(requested=['visualization'], visualization='unavailable',
-            requested_field=admitted['visualization']['field'])
+            requested_field=admitted['visualization'].get('field', 'numeric_qc'))
     figures, matching = _presentation_context(sessions, session_id, admitted, views, public['limitations'])
     if figures or admitted.get('presentation_artifacts'):
         delivery = public.setdefault('delivery', {})
@@ -1083,6 +1087,7 @@ ANSWER_INSTRUCTIONS = (
     'compatible measurements. Do not infer shared cells or aligned coordinates from independent facts.',
     'A computational assignment is not independent biological validation. Do not infer biological '
     'confidence, significance, equivalence, superiority or causality from descriptive summaries.',
+    'Write a concise researcher-facing answer or workflow overview. Combine repeated facts. Explain relevant scientific uncertainty naturally; do not recite internal source-authority, context-budget or verification boilerplate. Those records remain in technical details. Unless the user asks for technical detail, do not enumerate file handles, checksums, software versions, storage slots or complete native kwargs. Mention only methodological settings needed to interpret the result. '
     'Distinguish summary coverage from scientific outcomes, parameters from measurements, and '
     'operational provenance from biological evidence. Explain relevant limitations naturally.',
     'Answer supported parts. For unavailable conclusions use insufficient_evidence and explain what '
@@ -1241,11 +1246,12 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
     return retained
 
 
-def generate(model, question, focus, public, claims, *, diagnostic=None):
+def generate(model, question, focus, public, claims, *, diagnostic=None, conversation=()):
+    from .responses import CONVERSATION_LANGUAGE
     if diagnostic is not None:
         diagnostic['evidence'] = public
-    prompt = json.dumps(dict(dialogue_schema_version=4, question=question, focus=focus,
-                             evidence=public, instructions=ANSWER_INSTRUCTIONS), ensure_ascii=False)
+    prompt = json.dumps(dict(dialogue_schema_version=4, question=question, focus=focus, conversation=conversation,
+                             evidence=public, instructions=(*ANSWER_INSTRUCTIONS, CONVERSATION_LANGUAGE)), ensure_ascii=False)
     raw = _language_complete(model, prompt, response_schema(public, claims), 'provider')
     try:
         result = _json(raw)
@@ -1377,9 +1383,10 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
         public, claims = (context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
                           if evidence_context is None else evidence_context)
         selected_export = public.get('delivery', {}).get('selected_export')
+        from .responses import conversation_utterances
         response = generate(model, interaction.utterance if question is None else question,
             interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims,
-            diagnostic=diagnostic)
+            diagnostic=diagnostic, conversation=conversation_utterances(sessions.load(session_id), interaction.turn_id))
         # Generation may take time. Recheck consumed evidence and active status;
         # never move the captured targets to a newly active revision.
         stage = 'evidence_freshness'
@@ -1390,17 +1397,13 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
                 target.pop('is_active', None)
         if current_claims != claims or before != after:
             raise IntentError('unavailable_context')
-        prefix = '' if all(t['is_active'] for t in refreshed['targets']) else 'This discussion includes explicitly referenced historical results.\n\n'
-        suffix = '\n\n' + PARTIAL_NOTICE if PARTIAL_NOTICE in response.limitations else ''
-        delivery = refreshed.get('delivery', {})
-        if interaction.admitted.get('visualization') is not None:
-            suffix += ('\n\nThe requested figure is available.' if delivery.get('visualization') == 'delivered' else
-                       '\n\nThe requested figure has not been produced.')
-        if interaction.admitted.get('export') is not None:
-            suffix += '\n\n' + _export_text(delivery.get('selected_export'))
+        if not all(t['is_active'] for t in refreshed['targets']):
+            response = replace(response, limitations=response.limitations + (
+                'This discussion includes explicitly referenced historical results.',))
         _diagnose('semantic_review', 'partially_reviewed_response' if PARTIAL_NOTICE in response.limitations
             else 'reviewed_response', context=diagnostic_context, **diagnostic)
-        return TurnOutcome('answer', 'answered', text=prefix + response.explanation + suffix,
+        partial = '\n\n' + PARTIAL_NOTICE if PARTIAL_NOTICE in response.limitations else ''
+        return TurnOutcome('answer', 'answered', text=response.explanation + partial,
                            scientific=response, artifacts=artifacts)
     except _AnswerFailure as exc:
         _diagnose(exc.stage, exc.reason, context=diagnostic_context, **diagnostic)
@@ -1519,6 +1522,8 @@ def _figure_relationships(state, figures, matching=()):
                          actual_download_status='NOT_RECORDED'))
         if 'correspondence' in metadata:
             value['correspondence'] = {k:metadata['correspondence'][k] for k in ('basis', 'n_cells')}
+        if 'qc' in metadata:
+            value['qc'] = _serialize(metadata['qc'])
         result.append(value)
     return result
 
@@ -1683,14 +1688,13 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
             result = answer(sessions, session_id, reading, model, evidence_targets=targets,
                             question=origin.utterance, evidence_context=(public, claims))
             if result.scientific is not None:
-                current = sessions.load(session_id)
-                status = ('The accepted scientific results form the current revision.'
-                    if revision.revision_id == current.active_revision_id else
-                    'The accepted scientific results belong to this historical revision; another revision is current.')
+                if {'comparison', 'visualization'} & set(delivery['requested']):
+                    limitations.append(_delivery_text(delivery, public, result.scientific.claims))
                 response = replace(result.scientific,
                     limitations=tuple(dict.fromkeys(result.scientific.limitations + tuple(limitations))))
-                return replace(outcome, text=status + '\n\n' + result.text + '\n\n'
-                    + ' '.join(limitations + [_delivery_text(delivery, public, response.claims)]), scientific=response,
+                unfulfilled = ('\n\nRequirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.'
+                    if delivery['unfulfilled'] else '')
+                return replace(outcome, text=result.text + unfulfilled, scientific=response,
                     artifacts=artifacts)
             message = ('Scientific computation completed and its accepted results and downloads remain available. '
                        'The scientific explanation is unavailable. ' + result.text)
@@ -1720,8 +1724,8 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
             used.extend(c for c in comparison_claims if c not in used)
         response = ScientificResponse(tuple(used), 'supported' if used else 'insufficient_evidence',
             '\n'.join(lines), tuple(dict.fromkeys(public['limitations'] + limitations)), public['scope'], 'deterministic')
-        return replace(outcome, text=status + '\n\n' + response.explanation + '\n\n' + ' '.join(limitations
-            + [_delivery_text(delivery, public, used)]), scientific=response, artifacts=artifacts)
+        return replace(outcome, text='Analysis completed. Accepted scientific results and downloads are available in Results.\n\n'
+            + ' '.join(limitations + [_delivery_text(delivery, public, used)]), scientific=response, artifacts=artifacts)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
         # No semantic retry, scientific replay, or mutation of Run/Revision state.
         message = 'Scientific computation completed and its accepted results and downloads remain available. The scientific explanation is unavailable; a follow-up can request it.'

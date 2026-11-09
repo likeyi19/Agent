@@ -272,19 +272,25 @@ def _research_intent(interaction, decision):
         _validate_visualization(drawing, planned=get('intent') != 'scientific')
         if 'visualization' not in delivery:
             delivery.append('visualization')
-        coordinate, labels = drawing['coordinates'], drawing['labels']
-        if coordinate != 'new' and (coordinate not in by_handle
-                or not by_handle[coordinate].get('cell_capabilities', {
-                    'coordinates': 'X_umap' if by_handle[coordinate]['tool'] == 'compute_cell_umap' else None
-                }).get('coordinates')):
-            raise IntentError('invalid_reference')
-        if labels.startswith('source.'):
-            from .result_reading import _captured_source_binding
-            binding = _captured_source_binding(interaction)
-            member_count = len(binding.members) if hasattr(binding, 'members') else 1
-            if int(labels.split('.')[1]) >= member_count:
+        if drawing.get('kind') == 'qc':
+            if drawing['source'] not in by_handle:
                 raise IntentError('invalid_reference')
-        references.extend(h for h in (coordinate, labels) if h.startswith('g') and h not in references)
+            if drawing['source'] not in references:
+                references.append(drawing['source'])
+        else:
+            coordinate, labels = drawing['coordinates'], drawing['labels']
+            if coordinate != 'new' and (coordinate not in by_handle
+                    or not by_handle[coordinate].get('cell_capabilities', {
+                        'coordinates': 'X_umap' if by_handle[coordinate]['tool'] == 'compute_cell_umap' else None
+                    }).get('coordinates')):
+                raise IntentError('invalid_reference')
+            if labels.startswith('source.'):
+                from .result_reading import _captured_source_binding
+                binding = _captured_source_binding(interaction)
+                member_count = len(binding.members) if hasattr(binding, 'members') else 1
+                if int(labels.split('.')[1]) >= member_count:
+                    raise IntentError('invalid_reference')
+            references.extend(h for h in (coordinate, labels) if h.startswith('g') and h not in references)
     if comparison is not None:
         _validate_comparison(comparison)
         if 'comparison' not in delivery:
@@ -1794,10 +1800,13 @@ def planning_task(interaction, state):
         task['input_results'] = [rebind(h) for h in task['input_results']]
     if 'visualization' in task:
         drawing = task['visualization']
-        if drawing['coordinates'] != 'new':
-            drawing['coordinates'] = rebind(drawing['coordinates'])
-        if drawing['labels'].startswith('g'):
-            drawing['labels'] = rebind(drawing['labels'])
+        if drawing.get('kind') == 'qc':
+            drawing['source'] = rebind(drawing['source'])
+        else:
+            if drawing['coordinates'] != 'new':
+                drawing['coordinates'] = rebind(drawing['coordinates'])
+            if drawing['labels'].startswith('g'):
+                drawing['labels'] = rebind(drawing['labels'])
     if 'comparison' in task:
         for side in ('left', 'right'):
             if task['comparison'][side] != 'new':
@@ -1936,7 +1945,7 @@ def prepare_native_task(sessions, interaction, admitted):
         try:
             return bind_plan(plan,admitted[field + '_context'],bindings=bindings)
         except ResourcePrerequisite as exc:
-            question = (plan,exc.questions)
+            question = (plan,exc.questions,exc.options)
             raise PlannerError('NATIVE_RESOURCE_REQUIRED',str(exc),category=ErrorCategory.USER_INPUT_ERROR) from exc
     reference_owner = getattr(sessions,'_reference_resources',None)
     from .annotation_preparation import preparer, AnnotationPrerequisite
@@ -1947,15 +1956,17 @@ def prepare_native_task(sessions, interaction, admitted):
         try:
             return prepare_annotation(tool, arguments, selected)
         except AnnotationPrerequisite as exc:
-            question = (None, exc.questions)
+            question = (None, exc.questions,())
             raise PlannerError('ANNOTATION_INPUT_REQUIRED', str(exc), category=ErrorCategory.USER_INPUT_ERROR) from exc
     with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context), input_preparation(prepare_inputs), prior_output_store(app.run_store):
         planning = AgentRuntime(planner=_AdmittedPlanner(app.runtime.planner,lambda *a:None,bind_native),
             registry=app.registry,executor=app.runtime.executor).run(replace(prepared,mode=RunMode.PLAN_ONLY))
     admitted = dict(admitted,native_planning_trace=[row.to_dict() for row in planning.trace])
     if question is not None:
-        plan,questions = question
+        plan,questions,options = question
         admitted.update(choices=list(questions))
+        if options:
+            admitted['resource_options'] = list(options)
         if plan is not None:
             admitted['native_resource_plan'] = plan.to_dict()
         pending = dict(origin_turn_id=admitted.get('continuation',{}).get('origin_turn_id',interaction.turn_id),
@@ -2011,7 +2022,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         comparison = (origin.admitted or {}).get('comparison')
         purposes = []
         if drawing is not None:
-            purposes.extend('visualization_' + role for role in ('coordinates', 'labels') if drawing[role] == 'new')
+            purposes.extend('visualization_' + role for role in ('coordinates', 'labels') if drawing.get(role) == 'new')
         if comparison is not None and 'new' in (comparison['left'], comparison['right']):
             purposes.append('comparison_result')
         if purposes:

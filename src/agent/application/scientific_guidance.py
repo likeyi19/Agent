@@ -252,9 +252,12 @@ def answer(sessions, session_id, interaction, model):
                 'maxItems':0 if fixed is not None and not fixed else MAX_CANDIDATES,
                 'items':_object(dict(capability={'type':'string','enum':tools or sorted(public['catalog']['tools'])},
                     explanation=explanation_schema))}))
+        from .responses import CONVERSATION_LANGUAGE, conversation_utterances
         prompt = json.dumps(dict(guidance_schema_version=2, question=interaction.utterance,
+            conversation=conversation_utterances(sessions.load(session_id), interaction.turn_id),
             objective=interaction.admitted['focus'], offered_capabilities=tools,
             instructions=[
+                CONVERSATION_LANGUAGE,
                 'Answer the actual read-only question. For prerequisite explanations or methodological advice, return advice with candidates=[]; no capability recommendation is required. For proposed analyses, return advice=null and one or more candidates selecting only offered registered capabilities. Never build a workflow, emit execution or automatically complete prerequisites.',
                 'Use one to six natural paragraphs as needed. Explain assumptions and limitations where needed for the answer to be scientifically accurate. Do not add an analysis option merely to explain a missing prerequisite. Candidate alternatives are not ranked.',
                 *dialogue.ANSWER_INSTRUCTIONS,

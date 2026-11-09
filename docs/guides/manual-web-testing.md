@@ -1,15 +1,16 @@
 # Manual researcher Web testing on the current host
 
 The prepared private Operator file is
-`/home/likeyi/program/agent-data/config/operator-manual.json`. It uses a new
-workspace, `/home/likeyi/program/agent-data/workspaces/researcher-manual`, with
-no copied Sessions, inputs or scientific results. The PBMC10k acceptance workspace
+`/home/likeyi/program/agent-data/config/operator-manual.json`. It uses the separate
+workspace, `/home/likeyi/program/agent-data/workspaces/researcher-manual`, originally
+provisioned without copied Sessions, inputs or scientific results. Its subsequent
+manual-test Sessions and results remain there. The PBMC10k acceptance workspace
 and its evidence remain separate. This guide starts a foreground process only.
 
 The profile is `openai-gpt-5-6-sol`, provider `openai`, model `gpt-5.6-sol`.
 The file contains this existing official profile, an empty `input_sets` list,
 `scientific_resource_root` pointing at the shared library, `upload_root` pointing
-at the new workspace's `uploads`, `upload_max_bytes: 4294967296` and
+at this workspace's `uploads`, `upload_max_bytes: 4294967296` and
 `upload_max_concurrent: 1`. Credentials remain in the existing Conda environment;
 the Operator JSON contains no API key. Activating Conda loads the installed native
 runtime paths and existing credentials. Do not print the environment or keys.
@@ -140,6 +141,9 @@ You can check that the host listener has closed with:
 ss -ltnp 'sport = :8000'
 ```
 
-The numeric QC figure gap remains: native QC measurements are available, while
-the requested numeric QC distribution panels are not currently exposed by the
-scientific figure interface. PBMC10k acceptance remains **CONDITIONAL GO**.
+The scientific figure interface now plots saved native QC measurements and profiles,
+with their recorded populations and filtering thresholds. Missing measurements stay
+unavailable; viewing these figures does not repeat QC or filtering. Finite reference
+choices can be selected directly in the conversation. The same startup procedure
+and workspace apply to these researcher-experience improvements. PBMC10k scientific
+acceptance remains **CONDITIONAL GO**; this does not qualify a new full-data analysis.

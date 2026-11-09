@@ -392,6 +392,7 @@ def _visualization_manifest_path(
 from .annotation_visualization import CAPTIONS as _ANNOTATION_CAPTIONS
 
 _FIGURE_CAPTIONS: Mapping[str, str] = {
+    'qc_metrics': 'Saved native numeric QC values and actual producer populations. Display transformations and missing measurements are explicit. No QC recomputation or refiltering.',
     **_ANNOTATION_CAPTIONS,
     "umap_leiden": "Verified UMAP coordinates colored by Leiden cluster labels.",
     "umap_coordinates": "Verified UMAP coordinates; Leiden clustering was not performed for this result.",

@@ -417,6 +417,7 @@ def schema(field='fastq'):
             uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
     if field == 'fragments':
         return _object(dict(source=identity,
+            resource=identity,
             index_source=identity,
             feature_source=identity,
             genome_source=identity,
@@ -433,13 +434,14 @@ def schema(field='fastq'):
             resource_preference=preference_schema()))
     if field == 'bam':
         return _object(dict(source=identity,
+            resource=identity,
             assay=optional(('SCATAC', 'TENX_ATAC')),
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
             species=identity, assembly=identity,
             barcode_policy=optional(('corrected_cb_already_corrected',)),
             source_profile=optional(('agent-cb-paired-atac.v2',)),
             resource_preference=preference_schema()))
-    return _object(dict(assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
+    return _object(dict(resource=identity, assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
         namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
         species=identity, barcode_policy=optional(('raw_sequence_whitelist',)),
         resource_preference=preference_schema(),
@@ -1080,7 +1082,8 @@ def public(interaction, preceding):
     origin, source = _captured(interaction, preceding)
     return dict(handle='@roles', field=field, tool=source.admitted['tool'],
         objective=origin.utterance, declarations=_serialize(source.admitted[field]),
-        missing=list(source.admitted['choices']))
+        missing=list(source.admitted['choices']),
+        resource_options=_serialize(source.admitted.get('resource_options', ())))
 
 
 def validate(interaction, preceding):

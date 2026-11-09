@@ -191,6 +191,16 @@ to make a small fixture succeed. Native TSSe is distinct from the retired Agent
 TSS algorithm. QC values remain in the downloadable native H5AD; compact summaries
 expose recorded parameters and populations rather than every QC distribution.
 
+The scientific figure view can now plot saved native fragment depth, TSSe and
+their paired observations, plus recorded fragment-size and TSS profiles. A
+read-only request such as “展示已接受分析的数值质控图，不要重新计算” uses an exact
+accepted native QC result and its recorded ancestry. New native QC runs also
+include these figures when measurements exist. Plots identify measurement and
+profile producer populations separately, show recorded filter thresholds and
+retained counts, and count missing values. They never recompute QC or reselect
+cells. A profile inherited by a later H5AD still describes its original producer
+population. Analyses without native numeric QC inputs need no QC figure.
+
 Chromap stock 0.3.2 caps the tested BED duplicate support at 255. The historical
 qualified patch widens that representation to uint64; the 300-read comparison
 produces support 255 versus 300 with identical tested coordinates and corrected

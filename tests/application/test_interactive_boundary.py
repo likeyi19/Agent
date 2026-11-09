@@ -143,7 +143,7 @@ def test_nonexecuting_first_turn_and_stored_display(tmp_path):
     assert view.response.kind == 'clarify' and view.response.clarification['value_required']
     assert service.reopen_session('session').generation == 0 and view.revision_id is None
     assert service.submit_turn('session', 'hello', 'Please clarify.', expected_generation=0) == view
-    assert len(models) == 1 and len(models[0].calls) == 1
+    assert len(models) == 1 and len(models[0].calls) == 2  # interpretation and the existing clarification response
 
 
 @pytest.mark.parametrize('change', [dict(utterance='Inspect a different matrix.'),
@@ -364,7 +364,8 @@ def test_display_ack_failure_and_explicit_recovery_never_repeat_science(tmp_path
     assert retry.status=='interrupted' and retry.response is None
     assert retry.error.code=='INTERACTIVE_PROCESSING_INTERRUPTED'
     recovered=service.recover_turn('session','first')
-    assert recovered.response.status=='activated' and recovered.response.text.startswith('The accepted scientific results')
+    assert recovered.response.status=='activated' and 'available in Results' in recovered.response.text
+    assert service.revision('session',recovered.revision_id).is_active
     assert first(service,source)==recovered and len(models)==1 and calls==['inspect_scATAC']
     with pytest.raises(InteractiveBoundaryError) as caught:
         service.recover_turn('session','first',complete_presentation='false')
@@ -385,7 +386,8 @@ def test_execution_recovery_preserves_parent_and_historical_active_distinction(t
     next_turn=service.submit_turn('session','second','Inspect the supplied matrix.',expected_generation=1,
         execution_inputs={'input_path':str(source)})
     recovered=service.recover_turn('session','first')
-    assert 'historical' in recovered.response.text and 'form the active revision' not in recovered.response.text
+    assert 'available in Results' in recovered.response.text
+    assert not service.revision('session',recovered.revision_id).is_active
     assert service.reopen_session('session').active_revision_id==next_turn.revision_id
     assert calls==['inspect_scATAC']*2 and len(models)==2
 

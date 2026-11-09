@@ -1,16 +1,16 @@
-"""Chat placement and direct browser delivery for reviewed scientific files."""
+"""Result placement and direct browser delivery for reviewed scientific files."""
 from pathlib import Path
 
 
 STATIC = Path(__file__).resolve().parents[2] / 'src' / 'agent' / 'web' / 'static'
 
 
-def test_download_is_inside_corresponding_assistant_message():
+def test_dialogue_keeps_result_navigation_without_a_duplicate_download_inventory():
     source = (STATIC / 'app.js').read_text()
     history = source[source.index('function renderHistory'):source.index('function updateControls')]
-    assert 'appendScientificFiles(response, turn)' in history
-    assert history.index('article.append(response)') < history.index('appendScientificFiles(response, turn)')
-    assert history.index('appendScientificFiles(response, turn)') < history.index('View result details')
+    assert 'loadRequestedArtifacts(turn)' in history
+    assert 'appendScientificFiles' not in history
+    assert 'message-artifacts' not in history
     assert '(response || article).append(result)' in history
 
 
@@ -29,11 +29,11 @@ def test_download_uses_server_descriptor_identity_and_normal_browser_attachment(
     assert 'scientific-artifacts/${encodeURIComponent(handle)}' in files
 
 
-def test_inventory_is_cached_per_exact_accepted_execute_message_and_refreshed_on_reopen():
+def test_only_requested_presentations_are_cached_per_exact_turn_and_refreshed_on_reopen():
     source = (STATIC / 'app.js').read_text()
-    files = source[source.index('function appendScientificFiles'):source.index('function renderArtifacts')]
-    assert 'turn.response.kind === "execute"' in files
-    assert '["succeeded", "activated", "stale"].includes(turn.status)' in files
+    files = source[source.index('function loadRequestedArtifacts'):source.index('function renderArtifacts')]
+    assert 'turn.response.artifacts?.length' in files
+    assert 'if (!presentation && !recipe) return' in files
     assert 'JSON.stringify([sessionId, turn.turn_id, turn.revision_id])' in files
     assert files.index('if (cached)') < files.index('api(`${turnPath')
     assert 'epoch !== state.epoch' in files
@@ -59,16 +59,15 @@ def test_chat_and_details_use_server_file_descriptions_without_a_duplicate_label
                           'scientific_integrated', 'scientific_analysis'):
         assert artifact_type in policy
     assert 'Original accepted matrix' not in policy and 'safe export' not in policy
-    assert 'scientificFileGroups(sessionId,' in source[source.index('function appendScientificFiles'):]
+    assert 'scientificFileGroups(sessionId,' in source[source.index('function loadRequestedArtifacts'):]
 
 
 def test_report_and_figure_controls_reuse_the_existing_renderer_and_viewer():
     source = (STATIC / 'app.js').read_text()
-    messages = source[source.index('function appendScientificFiles'):source.index('function renderArtifacts')]
-    assert 'renderArtifacts(cached.revision, inventory, true)' in messages
-    assert 'api(revisionPath(sessionId, turn.revision_id))' in messages
-    assert 'revision.value?.revision_id === turn.revision_id' in messages
-    assert 'revision.value.turn_id === turn.turn_id' in messages
+    messages = source[source.index('function loadRequestedArtifacts'):source.index('function renderArtifacts')]
+    assert 'renderArtifacts(cached.revision, inventory, true)' not in messages
+    assert 'message-artifacts' not in messages
+    assert 'api(revisionPath(sessionId, turn.revision_id))' not in messages
     assert 'Promise.allSettled' in messages
     renderer = source[source.index('function renderArtifacts'):source.index('async function viewArtifact')]
     assert 'target.replaceChildren(...nodes)' in renderer

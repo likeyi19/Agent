@@ -49,7 +49,7 @@ RESULT_LIMITATIONS = {
     'compute_scATAC_qc': 'QC describes observed barcodes; it does not select barcodes or statistically call cells.',
     'select_scATAC_cells': 'QC selection applies explicit thresholds. Selected barcodes are candidate cells, not a statistical cell-calling result. These historical Agent thresholds use the recorded custom QC method; they are not SnapATAC2 defaults, universal biological optima or ArchR-equivalent scores. An empty selection means no barcode met these criteria; thresholds are not automatically lowered.',
     'call_scATAC_peaks': 'Native MACS3 discovers experimental accessible regions in one exact library population. Count each canonical fragment record once, not read-pair support. No second Tn5 shift. narrowPeak/BED are zero-based half-open; XLS positions are one-based closed. Native p/q fields are minus-log10 probabilities, fold enrichment and pileup are not cell-by-peak counts. Peak-calling q-values do not establish differential accessibility between conditions; that requires experimental replicates and the separate statistical method. Empty calls have no downstream feature reference. Accepted peaks retain exact feature files and source/population provenance. Counting is a separately selected native method with compatible explicit inputs.',
-    **{p.TOOL: p.guidance for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
+    **{p.TOOL: 'Native results retain their recorded measurement semantics; computational outputs alone do not establish biological validity.' for p in (*_NATIVE_MATRIX_PACKAGES, *_NATIVE_TABLE_PACKAGES, _CICERO_CDS, _MONALISA, _ARCHR)},
     _CHROMAP_NATIVE.TOOL: _CHROMAP_NATIVE.LIMITATIONS,
     'run_chromvar': 'Native chromVAR functions preserve their distinct output semantics: computeExpectations returns peak expectations with native norm/group behavior; count accessors return totals of the supplied measurement; computeVariability returns motif z-score variability with native chi-square/BH statistics and optional bootstrap bounds. These are not replicate-level differential tests or TF binding evidence. kwargs are exact supplied parameters; omitted arguments use native defaults. Counts require no genome or motif scan. Existing deviations are reused without upstream computation.',
     'run_motifmatchr': 'Native motifmatchr::matchMotifs scans all supplied genomic peaks against the selected motif collection. Native matches output is boolean; scores output retains matches/scores/counts, while positions output retains 1-based closed genomic hits with strands and scores. n_matches counts peak/motif incidences for matrices and is null for positions; n_positions counts native genomic hits. Ordered peaks and motif metadata remain available. Counts, clustering, chromVAR backgrounds and deviations are not computed. parameters.kwargs contains exact supplied native arguments; omitted optional arguments use native defaults, not invented user instructions. Sequence matches are not expression, binding, enrichment or causal evidence. The actual mode-specific files and ordered metadata are downloadable from the accepted result.',
@@ -59,13 +59,13 @@ RESULT_LIMITATIONS = {
     'optimize_regulatory_sequences': 'DeepPBMC predicts human PBMC peak accessibility, not enhancer activity or gene expression. Native weighted difference is target minus the weighted comparison sum divided by seven, even with a single comparison condition. It penalizes comparison score increases and rewards decreases; it does not bound absolute changes. Use recorded comparison_scores directly when available, never mistake the scaled penalty for the comparison score. Actual changed bases differ from iterations. Improved model objective is not biological validation. Exact candidate examples contain original and candidate scores, actual substitutions, protected-region satisfaction and non-improving steps. Never compare these scores numerically to DHS64 scores.',
     'predict_regulatory_sequences': 'DHS64 predicts human DNase accessibility. Continuous scores are transformed signal and may be negative; sigmoid scores predict peak calls, not enhancer functionality. Fold spread is disagreement, not calibrated uncertainty. Sequences are not cells. Scores are not measured biology or gene expression. All values and examples retain exact sequence/condition identity.',
     'evaluate_regulatory_predictions': 'Metrics compare only exact matched supplied observations in the native DNase measurement and transform. No inferred assay equivalence, training independence or experimental validation.',
-    'annotate_scATAC_cell_types': 'Annotation assignments and published rationale remain computational evidence, not independently validated biological cell identities or calibrated confidence. Omitted summary groups are not evidence of absent groups.',
+    'annotate_scATAC_cell_types': 'Cell-type assignments are computational predictions, not independently validated biological identities or calibrated confidence.',
     'build_scATAC_cell_by_ccre': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'adapt_epizoo_species': 'Model state and optimizer updates distinguish initialization from historical trained adaptation. Initialization performs native parameter transfer and zero target optimizer updates. Usable mapping fraction divides targets overlapping the exact retained reference vocabulary by all target features; liftOver success alone is insufficient. Automatic thresholds are operational preferences, not biological performance thresholds. An unavailable mapping assessment is not zero measured coverage.',
     'posttrain_epizoo_model': 'Post-training warm-starts the exact initialized checkpoint with a fresh optimizer and scheduler. Attempted steps, applied optimizer updates and AMP skips are distinct. Finite losses and completed updates do not establish biological convergence or better embeddings. Independent UMAP layouts cannot establish improvement.',
-    'cluster_cells': 'Clustering summaries record method parameters and cluster counts. They do not establish cluster correspondence, cell-type identity, biological superiority, significance or causality.',
-    'compute_cell_umap': 'UMAP parameters and output dimensions describe a layout. Independently computed coordinates have no established alignment: rotation, reflection or scale differences do not establish biological change. No coordinate comparison or biological superiority is established.',
+    'cluster_cells': 'Clusters are computational groups, not independently validated cell identities.',
+    'compute_cell_umap': 'UMAP separation alone does not establish biological identity or biological change.',
     'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
 }
 
@@ -942,7 +942,8 @@ RESULT_SUMMARY_FIELDS = {
 def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publisher=None):
     """One safe projection for historical Run and Interaction figure owners."""
     sources = []
-    composite = record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
+    composite = (record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay'
+        or any(item.get('role') == 'qc' and 'accepted_output' in item for item in record['source_artifacts']))
     for item in record['source_artifacts']:
         source = {k:item[k] for k in ('tool_name', 'artifact_kind', 'result_field', 'field', 'role',
                   'source_sha256', 'neighbors_identity_sha256', 'observation_role') if k in item}
@@ -958,11 +959,11 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
                 for k in ('resource_id', 'record_sha256', 'source_sha256')}
             source['sha256'] = item['integrity']['sha256']
         else:
-            source.update(run_id=run_id, step_id=item['producing_step_id'])
+            source.update(run_id=item.get('run_id', run_id), step_id=item['producing_step_id'])
         sources.append(source)
     outputs = () if revision is None else revision.outputs
     if composite:
-        label = next((s.get('output') for s in sources if s['role'] == 'categories'), None)
+        label = next((s.get('output') for s in sources if s.get('role') in ('categories', 'qc')), None)
         names = [] if label is None else [o.name for o in outputs if all(getattr(o, k) == label[k]
             for k in ('run_id', 'step_id', 'accepted_step_sha256'))]
     else:
@@ -974,10 +975,12 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         public['run_id'] = run_id
     if publisher is not None:
         public['publisher'] = {k:publisher[k] for k in ('kind', 'session_id', 'turn_id')}
-    if composite:
+    if record.get('presentation', {}).get('delivery') == 'accepted_cell_overlay':
         public['coordinate_reused'] = True
         public['correspondence'] = {k:record['presentation']['correspondence'][k]
             for k in ('basis', 'n_cells', 'cell_order_sha256')}
+    if record.get('presentation', {}).get('delivery') == 'accepted_native_qc':
+        public['qc'] = {k:record['presentation'][k] for k in ('n_cells', 'selected_cells', 'thresholds')}
     return public
 
 

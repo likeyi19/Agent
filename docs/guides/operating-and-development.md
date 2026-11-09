@@ -64,6 +64,34 @@ wording and source attribution; it does not change the conversation's active
 scientific result. Downloads report a request only. Verify the saved file through
 the browser's own download interface when local delivery matters.
 
+Scientific results show a workflow overview with repeated counts combined; exact
+per-output records, original explanations and evidence qualifications remain in
+collapsed native details. Figure previews open the existing full-size viewer;
+each preview has its own download. Primary scientific data and the report appear
+together. Supporting evidence and all native/intermediate artifacts remain
+expandable. The conversation shows dialogue and existing result-navigation buttons,
+without a second artifact inventory. Distinct annotation, compact analysis and
+integrated H5ADs retain their actual contents and exact source identities; display
+ranking follows source relationships rather than filenames.
+
+Authoritative finite reference choices appear as keyboard-accessible Web buttons.
+A click submits the captured question and choice identities as typed intent through
+the existing pending continuation and planning flow, without a language-model call
+to interpret the click. No numbered-text adapter is maintained. Open-ended replies
+continue through ordinary language interpretation. Language guidance applies to all
+languages supported by the configured model and respects explicit instructions;
+short value-only answers retain their conversation context. Scientific identifiers,
+historical displayed text and precise error codes remain unchanged. Static technical
+UI/status labels are not translated through additional model calls.
+
+Execution progress has one segment per planned step, its stored state, the
+completed count and the actual running function where supplied. Symbols and
+accessible labels accompany colors. Expand the details for errors and all steps;
+Cancel turn retains its existing behavior. Counts measure completed steps, not
+elapsed runtime. Conversation generation follows the user's language and explicit
+language requests while preserving scientific names. Natural reference selections
+bind offered identities; ambiguous descriptions still require clarification.
+
 RunStore records timezone-aware wall-clock observations exactly, including clock
 corrections during execution or between processes. `created_at`, `updated_at`,
 step start/finish and trace timestamps are audit observations; their numerical

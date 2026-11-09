@@ -49,7 +49,7 @@ def sessions_id(sessions):
 def _failed_admission(sessions, interaction, decision, *, preserve_pending=False):
     changes = dict(status='failed')
     reference = interaction.snapshot.get('prerequisite')
-    if reference and (preserve_pending or isinstance(decision, (SpeciesAnswer, ParameterAnswer, RoleAnswer, ResourceAnswer))):
+    if reference and (preserve_pending or isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RoleAnswer, ResourceAnswer))):
         # Failed binding is not authority to retry. A later explicit reply can
         # still address the same pending objective and last valid association.
         changes['prerequisite'] = {k: _serialize(v) for k, v in reference.items()
@@ -553,7 +553,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if motif_requirements:
                 visible['dialogue']['motif_input_declarations'] = motif_requirements
         diagnostic_stage = 'interpretation'
-        decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
+        from .resource_continuation import selected_answer
+        decision = selected_answer(interaction, state.interactions)
+        if decision is None:
+            decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
         diagnostic_stage = 'admission'
         if isinstance(decision, Execute) and decision.arguments and decision.operation != 'plan':
             raise IntentError('unsupported_intent')
@@ -584,14 +587,17 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if isinstance(decision, RequestResources):
             from .resource_continuation import request, offers
             admitted, prerequisite = request(sessions, interaction, decision, input_sets)
-            _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-            choices = tuple(c['label'] for c in offers(submission, input_sets))
+            options = offers(submission, input_sets)
             reason = 'missing_resources'
             if 'reference_requirement' in admitted:
                 from .reference_supplementation import choices as reference_choices, input_set as reference_input_set
-                choices = tuple(reference_input_set(r).label for r in reference_choices(reference_resources, session_id,
-                    admitted['reference_requirement'], origin_turn_id=turn_id)) if reference_resources else ()
+                options = [dict(handle='resource.' + choice.input_set_id, label=choice.label)
+                    for choice in (reference_input_set(r) for r in reference_choices(reference_resources, session_id,
+                        admitted['reference_requirement'], origin_turn_id=turn_id))] if reference_resources else []
                 reason = 'missing_reference'
+            admitted['resource_options'] = [dict(option, description=option['label']) for option in options]
+            _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
+            choices = tuple(option['label'] for option in options)
             return TurnOutcome('clarify', 'clarification', Clarify(reason, choices, True))
         elif isinstance(decision, ResourceAnswer):
             from .resource_continuation import answer

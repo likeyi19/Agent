@@ -82,6 +82,29 @@ def qualify(client,pending,record,session='session'):
         expected_generation=pending['expected_generation'],origin_turn_id=pending['origin_turn_id']))
 
 
+def test_reference_question_does_not_offer_unrelated_generic_companions(reference_web,monkeypatch):
+    from agent.application import resource_continuation
+    client,backend,uploads,source,start,admitted=reference_web
+    monkeypatch.setattr(resource_continuation,'offers',lambda *args:[
+        dict(handle='resource.unrelated-model',label='A generic model companion')])
+    pending=start()
+    assert not pending['choices']  # No qualified reference is available for this question.
+    turn=client.get('/api/v1/sessions/session').json()['turns'][-1]
+    assert not turn.get('clarification_choices')
+    assert not admitted
+    record=upload(client)
+    qualified=qualify(client,pending,record)
+    assert qualified.status_code==200,qualified.text
+    promoted=install_shared(uploads.resources,uploads.resources.load(qualified.json()['resource_id']))
+    next_pending=start('second')
+    assert next_pending['choices']
+    turn=client.get('/api/v1/sessions/second').json()['turns'][-1]
+    offered=refs.input_set(promoted)
+    assert [(c['handle'],c['label']) for c in turn['clarification_choices']]==[
+        ('resource.'+offered.input_set_id,offered.label)]
+    assert not admitted
+
+
 def test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch):
     client,backend,uploads,source,start,admitted=reference_web
     pending=start();assert not pending['choices']

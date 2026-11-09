@@ -317,7 +317,7 @@ def test_historical_target_uses_exact_offered_identity_without_lexical_gate(app,
     accepted(app,'inspect_scATAC',name='next',overrides={'n_cells':4})
     app = forbid_work(app,monkeypatch)
     correct = ask(app,'old','Explain the earlier assay result.',Model(question('r1'),['n_cells']))
-    assert correct.status == 'answered' and 'historical' in correct.text
+    assert correct.status == 'answered' and any('historical' in text for text in correct.scientific.limitations)
     follow = ask(app,'old-follow','Why?',Model(question('@focus'),['n_cells']))
     assert follow.status == 'answered' and follow.scientific.claims[0].value == 2
 
@@ -425,7 +425,7 @@ def test_navigation_during_generation_marks_captured_result_historical(app, monk
         c=next(c['claim_id'] for c in value['evidence']['claims'] if c['field']=='n_cells')
         return dict(support='supported',paragraphs=[dict(text='The accepted cell count is recorded.', kind='finding', citations=[c], comparisons=[])])
     result=ask(app,'a','Explain this result.',Model(question(),response=response))
-    assert result.status=='answered' and 'historical' in result.text
+    assert result.status=='answered' and any('historical' in text for text in result.scientific.limitations)
     assert result.scientific.claims[0].value==4
     assert result.scientific.claims[0].source['revision_id']==newer
 

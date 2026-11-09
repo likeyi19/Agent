@@ -63,6 +63,11 @@ class CompleteFastqCollection(_Body):
     member_ids: list[StrictStr] = Field(min_length=1, max_length=128)
 
 
+class ClarificationChoice(_Body):
+    question_turn_id: StrictStr = Field(min_length=1, max_length=256)
+    handle: StrictStr = Field(min_length=1, max_length=256)
+
+
 class SubmitTurn(_Body):
     turn_id: StrictStr = Field(min_length=1, max_length=256, pattern=r'^[^/\\]+$')
     expected_generation: StrictInt = Field(ge=0)
@@ -75,6 +80,7 @@ class SubmitTurn(_Body):
     epizoo_resource_id: StrictStr | None = Field(default=None, min_length=1, max_length=64,
                                                pattern=r'^[a-z][a-z0-9_-]*$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
+    clarification_choice: ClarificationChoice | None = None
 
     @field_validator('turn_id')
     @classmethod
@@ -163,7 +169,9 @@ class _LocalWorkers:
             return self.application.submit_turn(session_id, payload.turn_id, payload.utterance,
                 expected_generation=payload.expected_generation, profile_id=payload.profile_id,
                 input_sets=self.input_sets,
-                predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
+                predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
+                clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
+                **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
             return exc.error
@@ -185,7 +193,9 @@ class _LocalWorkers:
         fingerprint = self.application.validate_submission(session_id, payload.turn_id, payload.utterance,
             expected_generation=payload.expected_generation, profile_id=payload.profile_id,
             input_sets=self.input_sets,
-            predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids, **self._input_arguments(inputs))
+            predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
+            clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
+            **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
             receipt = self.receipts.get(key)

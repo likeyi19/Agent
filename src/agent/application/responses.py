@@ -1,4 +1,4 @@
-"""Deterministic text downstream of reviewed facts; no model or science calls."""
+"""Researcher-facing responses downstream of captured intent and reviewed facts."""
 from dataclasses import replace
 import re
 
@@ -8,6 +8,23 @@ from .response_facts import LABELS, project
 UNAVAILABLE = 'I cannot establish that from the current verified state.'
 UNSUPPORTED = ('This conversational layer supports analysis state, parameters, execution and provenance. '
                'It does not yet have reviewed evidence for biological or marker-based explanations.')
+
+CONVERSATION_LANGUAGE = ('Respond in the conversational language of the researcher question and existing conversation; a short value-only reply keeps that language. '
+    'Respect an explicit request for another response language. Keep scientific identifiers, '
+    'resource labels, function names, parameter names and citation identifiers exact; '
+    'Scientific identifiers are not a conversational language preference. A numeric or value-only '
+    'clarification reply inherits the pending objective and conversation language. This applies '
+    'to every language supported by the selected model; do not default to English because a reply is short.')
+
+
+def conversation_utterances(state, turn_id):
+    """Bound language context to captured user utterances through this turn."""
+    rows = []
+    for interaction in state.interactions:
+        rows.append(interaction.utterance)
+        if interaction.turn_id == turn_id:
+            break
+    return rows[-4:]
 
 
 def _joined(values):
@@ -232,9 +249,44 @@ def summarize(sessions, session_id, turn_id, outcome, *, model=None):
             except (ValueError, RuntimeError, OSError, KeyError, StopIteration):
                 pass  # Optional legacy structured facts never change acceptance.
         return completion(sessions, session_id, turn_id, outcome, model=model)
-    if outcome.text: return outcome
     if outcome.kind == 'clarify':
-        return replace(outcome, text=clarification_text(outcome.clarification))
+        text = clarification_text(outcome.clarification)
+        state = sessions.load(session_id)
+        interaction = next(i for i in state.interactions if i.turn_id == turn_id)
+        options = ()
+        objective = None
+        if (interaction.prerequisite or {}).get('field') in ('resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
+            reference = interaction.prerequisite
+            source = next(i for i in state.interactions if i.turn_id == reference['binding_turn_id'])
+            origin = next(i for i in state.interactions if i.turn_id == reference['origin_turn_id'])
+            options = (source.admitted or {}).get('resource_options', ())
+            objective = origin.utterance
+        if model is not None:
+            import json
+            from .scientific_dialogue import _language_complete
+            schema = dict(type='object', properties=dict(text=dict(type='string', minLength=1, maxLength=8192)),
+                          required=['text'], additionalProperties=False)
+            try:
+                raw = _language_complete(model, json.dumps(dict(question=interaction.utterance,
+                    conversation=conversation_utterances(state, turn_id),
+                    objective=objective,
+                    clarification=dict(reason=outcome.clarification.reason,
+                        choices=tuple(option['label'] for option in options) if options else outcome.clarification.choices),
+                    request=('Ask the researcher to select the matching reference from the offered controls. '
+                             'The Web interface displays these exact choices as buttons. Ask the researcher to select one; '
+                             'do not claim choices are missing or ask them to resend a name. Do not number, rename or list the choices again.' if options else text), instructions=[CONVERSATION_LANGUAGE,
+                        'Explain only this captured clarification and ask for the missing information. '
+                        'Keep distinct offered references distinct and preserve exact offered labels. '
+                        'Do not select a resource, claim execution or invent requirements. '
+                        'The original objective and input bindings are preserved.']), ensure_ascii=False), schema, 'clarification_provider')
+                rendered = json.loads(raw)['text']
+                from .interactive_schemas import _text
+                _text(rendered, 'clarification text', 8192)
+                text = rendered
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+                pass  # A language-provider failure cannot discard the captured question.
+        return replace(outcome, text=text)
+    if outcome.text: return outcome
     if outcome.kind == 'navigate' and outcome.status == 'activated':
         state = sessions.load(session_id)
         target = state.turn(turn_id).revision_id

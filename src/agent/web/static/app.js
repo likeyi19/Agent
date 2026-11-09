@@ -12,10 +12,6 @@ const TERMINAL_STATES = new Set([
   "answered", "clarification", "navigated", "succeeded", "failed", "cancelled",
   "interrupted", "unavailable", "stale", "activated", "planned",
 ]);
-const RESPONSE_LABELS = {
-  answer: "Agent · Answer", clarify: "Agent · Clarification",
-  execute: "Agent · Result", navigate: "Agent · Navigation",
-};
 const element = (id) => document.getElementById(id);
 const state = {
   session: null, models: [], activeTurn: null, submission: null, initializing: true,
@@ -431,7 +427,7 @@ function renderRevision(revision) {
   element("result-presentation").textContent = revision.result ? revision.result.text : "Stored result presentation is unavailable.";
   element("result-operations").replaceChildren(...(revision.steps || []).map((step) => {
     const item = document.createElement("li");
-    item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
+    item.textContent = `${stepLabel(step)} · ${readableLabel(step.status.toLowerCase())}`;
     if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
     return item;
   }));
@@ -505,7 +501,7 @@ function presentationChoices() {
     if (!entry) return [];
     const presentations = entry.presentations.filter((artifact) => artifact.turn_id === turn.turn_id
       && artifact.revision_id === null && artifact.figure?.sources.some((source) =>
-        source.role === "coordinates" && source.output?.revision_id === revisionId));
+        ["coordinates", "qc"].includes(source.role) && source.output?.revision_id === revisionId));
     const artifacts = entry.artifacts.filter((artifact) => {
       if (artifact.artifact_type !== "scientific_composition" || artifact.turn_id !== turn.turn_id) return false;
       const contents = artifact.contents || {};
@@ -538,7 +534,7 @@ function resultFigureArtifacts(group = null, presentation = null) {
   const names = group ? new Set(group.outputs.map((o) => o.name)) : null;
   const matching = state.revision.artifacts.filter((artifact) => artifact.figure
     && artifact.artifact_type === "analysis_figure"
-    && artifact.figure.output_names.some((name) => !names || names.has(name)));
+    && (!names || artifact.figure.output_names.some((name) => names.has(name))));
   return distinctFigureArtifacts(matching);
 }
 
@@ -548,6 +544,7 @@ function resultFigureGallery(artifacts) {
   const heading = document.createElement("h3"); heading.textContent = "Scientific figures";
   section.append(heading);
   const captions = {
+    qc_metrics: "Saved native QC measurements and recorded producer populations. Missing values are explicit; profiles are not recomputed after filtering. Thresholds describe the selected filtering result.",
     annotation_composition: "Native groups and predicted cell-type composition, including unassigned coverage. Candidate labels are computational annotations.",
     marker_activity_dot: "Native MAESTRO Enhanced RP: color = log1p(mean raw RP), size = fraction RP > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
     marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
@@ -566,20 +563,70 @@ function resultFigureGallery(artifacts) {
     image.loading = "lazy"; image.alt = title.textContent;
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
-    caption.textContent = captions[artifact.figure.kind] || "Published scientific figure. Exact sources are available in Downloads & reports.";
+    caption.textContent = captions[artifact.figure.kind] || "Published scientific figure; exact sources are available below.";
     const sources = document.createElement("p"); sources.className = "muted small";
     const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
     sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
-    const open = document.createElement("button"); open.type = "button"; open.className = "secondary";
-    open.textContent = "Open figure & provenance";
+    const open = document.createElement("button"); open.type = "button"; open.className = "figure-preview";
+    open.setAttribute("aria-label", `View full-size ${title.textContent}`);
+    open.append(image);
     open.addEventListener("click", () => viewArtifact(state.session.session_id, artifact.revision_id, artifact));
+    const download = document.createElement("a"); download.className = "figure-download";
+    download.textContent = "Download PNG";
+    download.href = image.src + "?download=true"; download.target = "_blank"; download.rel = "noopener";
+    download.setAttribute("aria-label", `Download ${title.textContent} (PNG)`); guardDownload(download);
+    const provenance = document.createElement("details");
+    const sourceTitle = document.createElement("summary"); sourceTitle.textContent = "Figure sources";
+    provenance.append(sourceTitle, sources, evidenceValueNode(artifact.figure));
     image.addEventListener("error", () => {
       image.hidden = true;
       caption.textContent = "Figure preview unavailable. Open the figure to check its saved artifact; no analysis was rerun.";
     });
-    card.append(title, image, caption, sources, open); section.append(card);
+    card.append(title, open, caption, download, provenance); section.append(card);
   }
   return section;
+}
+
+function workflowSummaryFacts(groups) {
+  const rows = new Map();
+  const byHandle = new Map(groups.map((group) => [group.handle, group]));
+  const derivesFrom = (group, ancestor) => {
+    const pending = [...(group.derived_from || [])], seen = new Set();
+    while (pending.length) {
+      const handle = pending.pop();
+      if (handle === ancestor) return true;
+      if (seen.has(handle)) continue;
+      seen.add(handle);
+      pending.push(...(byHandle.get(handle)?.derived_from || []));
+    }
+    return false;
+  };
+  const add = (field, label, value, source) => {
+    const key = JSON.stringify([field, value]);
+    if (!rows.has(key)) rows.set(key, {field, label, value, sources: []});
+    const row = rows.get(key);
+    if (!row.sources.includes(source)) row.sources.push(source);
+  };
+  const populations = groups.flatMap((group) => {
+    const parameters = group.evidence?.facts.find((f) => f.field === "parameters" && f.status === "available")?.value;
+    const population = parameters?.population;
+    return population?.stage === "native_cell_filter" ? [{group, population}] : [];
+  });
+  for (const {group, population} of populations) {
+    if (typeof population.input_barcodes === "number") add("input_barcodes", "QC input barcodes", population.input_barcodes, group.label);
+    if (typeof population.output_barcodes === "number") add("retained_barcodes", "QC retained barcodes", population.output_barcodes, group.label);
+  }
+  for (const group of groups) {
+    for (const fact of group.evidence?.facts || []) {
+      if (!group.summary_fields.includes(fact.field) || fact.status !== "available" || typeof fact.value !== "number") continue;
+      if (fact.field === "n_features" && fact.value === 0) continue;
+      if (fact.field === "n_cells" && populations.some(({group: filter, population}) =>
+        (group.handle === filter.handle || derivesFrom(group, filter.handle) || derivesFrom(filter, group.handle))
+        && [population.input_barcodes, population.output_barcodes].includes(fact.value))) continue;
+      add(fact.field, group.evidence.field_labels[fact.field] || readableLabel(fact.field), fact.value, group.label);
+    }
+  }
+  return [...rows.values()];
 }
 
 function renderResultSelection() {
@@ -595,56 +642,58 @@ function renderResultSelection() {
   const visible = selected ? [selected] : groups;
   element("result-method").textContent = selected ? selected.label : "Accepted analysis";
   const nodes = [];
+  const technicalNodes = [];
   const limitations = [];
-  if (presentation) {
-    const request = document.createElement("p"); request.className = "muted small";
-    request.textContent = `Requested: ${presentation.turn.utterance}`;
-    const response = document.createElement("p"); response.className = "message-text";
-    response.textContent = presentation.turn.response.text;
-    nodes.push(request, response);
-  } else if (!selected && state.revision.result) {
-    const summary = document.createElement("p");
-    summary.className = "message-text";
-    summary.textContent = state.revision.result.text;
-    nodes.push(summary);
+  limitations.push(...(state.revision.result?.scientific?.limitations || []));
+  if (!selected && state.revision.result) {
+    const record = document.createElement("details");
+    const title = document.createElement("summary"); title.textContent = "Original accepted explanation";
+    const text = document.createElement("p"); text.className = "message-text"; text.textContent = state.revision.result.text;
+    record.append(title, text); technicalNodes.push(record);
   }
-  const headlineFields = new Map();
-  for (const group of visible) {
-    const wanted = {annotate_scATAC_cell_types: ["n_cells", "n_groups", "assigned_cells", "unassigned_cells"]}[group.tool] || [];
-    const facts = wanted.flatMap(field => (group.evidence?.facts || []).filter(fact =>
-      fact.field === field && fact.status === "available" && (fact.value === null || typeof fact.value === "number")));
-    headlineFields.set(group.handle, new Set(facts.map(fact => fact.field)));
-    if (!facts.length) continue;
-    const headline = document.createElement("section"); headline.className = "result-headline";
-    const title = document.createElement("h3"); title.textContent = `${group.label} · key results`;
-    const values = document.createElement("dl"); values.className = "result-values";
-    for (const fact of facts) {
-      const label = document.createElement("dt"); label.textContent = group.evidence.field_labels[fact.field] || readableLabel(fact.field);
-      const value = document.createElement("dd");
-      if (fact.value === null) value.textContent = "Unavailable for this comparison";
-      else value.append(evidenceValueNode(fact.value));
-      values.append(label, value);
+  const summaryFacts = workflowSummaryFacts(visible);
+  if (summaryFacts.length) {
+    const values = document.createElement("dl"); values.className = "result-values workflow-summary";
+    for (const fact of summaryFacts) {
+      const name = document.createElement("dt"); name.textContent = fact.label;
+      const value = document.createElement("dd"); value.append(evidenceValueNode(fact.value));
+      if (fact.sources.length > 1) value.title = `Recorded for ${fact.sources.length} accepted outputs: ${fact.sources.join("; ")}. Equal counts alone do not establish shared cells.`;
+      values.append(name, value);
     }
-    headline.append(title, values); nodes.push(headline);
+    nodes.push(values);
   }
-  for (const group of visible) limitations.push(...(group.summary_limitations || group.evidence?.limitations || []));
-  if (limitations.length) {
+  const scientificNotes = [...new Set(visible.flatMap((group) => group.summary_limitations || []))];
+  if (scientificNotes.length) {
     const note = document.createElement("p"); note.className = "result-caution small";
-    note.textContent = [...new Set(limitations)].join(" "); nodes.push(note);
+    note.textContent = scientificNotes.join(" "); nodes.push(note);
+  }
+  limitations.push(...visible.flatMap((group) => group.evidence?.limitations || []));
+  if (limitations.length) {
+    const record = document.createElement("details");
+    const title = document.createElement("summary"); title.textContent = "Evidence scope & technical qualifications";
+    const text = document.createElement("p"); text.textContent = [...new Set(limitations)].join(" ");
+    record.append(title, text); technicalNodes.push(record);
   }
   const gallery = resultFigureGallery(resultFigureArtifacts(selected, presentation));
-  if (gallery) nodes.push(gallery);
+  element("result-figures").replaceChildren(...(gallery ? [gallery] : []));
   for (const group of visible) {
-    const section = document.createElement("section");
+    const section = document.createElement("details");
     section.className = "scientific-result";
-    const heading = document.createElement("h3"); heading.textContent = group.label;
+    const heading = document.createElement("summary");
+    const fn = group.evidence?.facts.find((f) => f.field === "function_name" && f.status === "available");
+    heading.textContent = fn?.value || group.label;
     section.append(heading);
+    if (group.evidence?.facts.some((f) => f.field === "n_features" && f.value === 0 && f.status === "available")) {
+      const context = document.createElement("p"); context.className = "muted small";
+      context.textContent = "This native observation stage has no feature matrix yet. Its feature count describes this step, not the final count matrix.";
+      section.append(context);
+    }
     if (group.factual_report) {
       section.append(scientificReportNode(group.factual_report));
     }
     if (group.evidence) {
       const view = group.evidence;
-      const facts = (group.factual_report ? [] : group.summary_fields).filter(field => !headlineFields.get(group.handle)?.has(field))
+      const facts = (group.factual_report ? [] : group.summary_fields)
         .flatMap((field) => view.facts.filter((fact) => fact.field === field));
       const values = document.createElement("dl"); values.className = "result-values";
       for (const fact of facts) {
@@ -671,7 +720,7 @@ function renderResultSelection() {
         values.append(label, value);
       }
       section.append(values);
-      if (!group.factual_report && !facts.length && !headlineFields.get(group.handle)?.size) {
+      if (!group.factual_report && !facts.length) {
         const empty = document.createElement("p");
         empty.textContent = `Summary: ${view.reason || view.status}. Accepted fields remain in details.`;
         section.append(empty);
@@ -689,8 +738,9 @@ function renderResultSelection() {
       source: group.evidence?.source || "Unavailable", limitations: group.evidence?.limitations || []}));
     if (group.evidence) methods.append(...evidenceFactNodes(group.evidence.facts.filter((fact) =>
       !group.summary_fields.includes(fact.field)), group.evidence.field_labels || {}));
-    section.append(methods); nodes.push(section);
+    section.append(methods); technicalNodes.push(section);
   }
+  element("native-results").replaceChildren(...technicalNodes);
   element("result-facts").replaceChildren(...nodes);
   if (!nodes.length) element("result-facts").textContent = "Accepted summary unavailable. Detailed historical outputs remain accessible.";
   // Field-detail navigation uses this panel; overview limitations are inline.
@@ -767,19 +817,6 @@ function scientificFileNode(sessionId, artifact) {
     const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
     details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
   }
-  if ((artifact.artifact_type === "scientific_sequence" && ["scores.png", "design.png", "composition.png"].includes(artifact.filename)) ||
-      (artifact.artifact_type === "scientific_motifs" && artifact.filename === "patterns.png") ||
-      (artifact.artifact_type === "scientific_peaks" && artifact.filename === "distributions.png")) {
-    const figure = document.createElement("img");
-    figure.src = download.href;
-    figure.alt = artifact.title + (artifact.artifact_type === "scientific_peaks"
-      ? "; peak-calling enrichment is not differential accessibility"
-      : artifact.artifact_type === "scientific_motifs"
-        ? "; descriptive motif accessibility is not TF binding" : "; model predictions are not experimental validation");
-    figure.loading = "lazy";
-    figure.style.maxWidth = "100%";
-    row.append(figure);
-  }
   if (artifact.artifact_type === "scientific_model") {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
@@ -789,17 +826,31 @@ function scientificFileNode(sessionId, artifact) {
   return row;
 }
 
-function scientificFileGroups(sessionId, artifacts) {
+function scientificFileGroups(sessionId, artifacts, selectedOutputs = []) {
   const groups = new Map();
+  const primary = document.createElement("li"); primary.className = "download-group primary-downloads";
+  const heading = document.createElement("h4"); heading.textContent = "Primary scientific results"; primary.append(heading);
+  const supporting = document.createElement("details"); supporting.className = "supporting-downloads";
+  const supportingTitle = document.createElement("summary"); supportingTitle.textContent = "Supporting scientific evidence"; supporting.append(supportingTitle);
+  const advanced = document.createElement("details"); advanced.className = "advanced-downloads";
+  const advancedTitle = document.createElement("summary"); advancedTitle.textContent = "All native and intermediate files, by source step"; advanced.append(advancedTitle);
+  const primaryFiles = primaryScientificFiles(artifacts, selectedOutputs);
   for (const artifact of artifacts.filter(supportedScientificFile)) {
-    const purpose = artifact.purpose || "Scientific files";
-    if (!groups.has(purpose)) {
-      const group = document.createElement("li");
+    if (primaryFiles.has(artifact.handle)) primary.append(scientificFileNode(sessionId, artifact));
+    else if (artifact.artifact_type === "scientific_annotation_evidence" || artifact.artifact_type === "scientific_analysis") {
+      supporting.append(scientificFileNode(sessionId, artifact));
+    }
+    const source = artifact.source_step;
+    const purpose = source ? `${source.function_name || readableLabel(source.tool_name)} · ${source.step_id}` : artifact.purpose || "Scientific files";
+    const groupKey = source ? `${source.run_id}:${source.step_id}` : purpose;
+    if (!groups.has(groupKey)) {
+      const group = document.createElement("div");
       group.className = "download-group";
       const heading = document.createElement("h4"); heading.textContent = purpose;
-      group.append(heading); groups.set(purpose, group);
+      if (source) heading.title = `Run: ${source.run_id}; step: ${source.step_id}`;
+      group.append(heading); groups.set(groupKey, group);
     }
-    groups.get(purpose).append(scientificFileNode(sessionId, artifact));
+    groups.get(groupKey).append(scientificFileNode(sessionId, artifact));
   }
   if (artifacts.some((a) => a.artifact_type === "scientific_analysis")
       && !artifacts.some((a) => a.artifact_type === "scientific_integrated")) {
@@ -807,69 +858,56 @@ function scientificFileGroups(sessionId, artifacts) {
     note.textContent = "Integrated H5AD requires an available, exactly recorded original H5AD source. Compact results remain available.";
     groups.set("availability", note);
   }
-  return [...groups.values()];
+  advanced.append(...groups.values());
+  const nodes = [];
+  if (primary.childElementCount > 1) nodes.push(primary);
+  if (supporting.childElementCount > 1) { const item = document.createElement("li"); item.append(supporting); nodes.push(item); }
+  if (groups.size) { const item = document.createElement("li"); item.append(advanced); nodes.push(item); }
+  return nodes;
 }
 
-function appendScientificFiles(response, turn) {
-  const scientific = turn.response.kind === "execute" && turn.revision_id
-    && ["succeeded", "activated", "stale"].includes(turn.status);
+function primaryScientificFiles(artifacts, selectedOutputs = []) {
+  // Presentation ranking only. Every exact handle stays in the advanced list.
+  const files = artifacts.filter(supportedScientificFile);
+  return new Set(files.filter((a) => {
+    if (a.artifact_type === "scientific_annotation_evidence") return false;
+    if (a.source_step?.data_output === false) return false;
+    if (selectedOutputs.length && a.source_step) return a.source_step.output_names?.some((name) => selectedOutputs.includes(name));
+    if (a.artifact_type === "scientific_integrated") return !files.some((other) =>
+      other.artifact_type === "scientific_integrated" && a.source_step?.original_sha256
+      && other.source_step?.original_sha256 === a.source_step.original_sha256
+      && other.source_step.run_id === a.source_step.run_id
+      && other.source_step.ancestors?.includes(a.source_step.step_id));
+    if (["scientific_annotation", "scientific_matrix", "scientific_composition", "scientific_statistics", "scientific_model"].includes(a.artifact_type)) return true;
+    if (a.source_step) return a.source_step.terminal;
+    return a.artifact_type !== "scientific_analysis";
+  }).map((a) => a.handle));
+}
+
+function loadRequestedArtifacts(turn) {
   const presentation = Boolean(turn.response.artifacts?.length);
   const recipe = turn.export_requested === true;
-  if (!scientific && !presentation && !recipe) return;
+  if (!presentation && !recipe) return;
   const sessionId = state.session.session_id;
   const key = JSON.stringify([sessionId, turn.turn_id, turn.revision_id]);
   const cached = state.scientificFiles.get(key);
-  if (cached) {
-    const details = document.createElement("details");
-    details.className = "message-artifacts";
-    details.open = presentation || recipe;
-    details.dataset.detailKey = "result-artifacts";
-    const summary = document.createElement("summary");
-    summary.textContent = "Downloads & technical report";
-    summary.dataset.actionKey = "result-artifacts";
-    details.append(summary);
-    const files = document.createElement("ul"); files.className = "compact-list";
-    files.append(...scientificFileGroups(sessionId, cached.artifacts)); details.append(files);
-    if (cached.error) {
-      const note = document.createElement("p");
-      note.className = "turn-error";
-      note.textContent = "Downloads could not be listed. Open result details to try again.";
-      response.append(note);
-    }
-    if (cached.revision) {
-      const inventory = document.createElement("ul");
-      inventory.className = "compact-list";
-      renderArtifacts(cached.revision, inventory, true);
-      details.append(inventory);
-    }
-    if (cached.presentations.length) {
-      const inventory = document.createElement("ul"); inventory.className = "compact-list";
-      renderArtifacts({ revision_id: null, artifacts: cached.presentations }, inventory, true);
-      details.append(inventory);
-    }
-    if (cached.artifacts.length || cached.revision?.artifacts.length || cached.presentations.length) response.append(details);
-    return;
-  }
+  if (cached) return;
   const epoch = state.epoch;
-  const entry = { artifacts: [], revision: null, presentations: [] };
+  const entry = { artifacts: [], presentations: [] };
   state.scientificFiles.set(key, entry);
   // Inventory is metadata only and requested once per captured result. Regular
   // conversation polling reuses this display cache; refresh reads it afresh.
   Promise.allSettled([
-    scientific || recipe ? api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`) : Promise.resolve({ artifacts: [] }),
-    scientific ? api(revisionPath(sessionId, turn.revision_id)) : Promise.resolve(null),
+    recipe ? api(`${turnPath(sessionId, turn.turn_id)}/scientific-artifacts`) : Promise.resolve({ artifacts: [] }),
     presentation ? api(`${turnPath(sessionId, turn.turn_id)}/artifacts`) : Promise.resolve({ artifacts: [] }),
-  ]).then(([inventory, revision, figures]) => {
+  ]).then(([inventory, figures]) => {
     if (epoch !== state.epoch || state.scientificFiles.get(key) !== entry) return;
     if (inventory.status === "fulfilled") {
       entry.artifacts = inventory.value.artifacts.filter((artifact) => supportedScientificFile(artifact)
         && artifact.turn_id === turn.turn_id && (artifact.revision_id === turn.revision_id
           || recipe && artifact.artifact_type === "scientific_composition" && artifact.revision_id === null));
     }
-    if (revision.status === "fulfilled" && revision.value?.revision_id === turn.revision_id
-        && revision.value.turn_id === turn.turn_id) entry.revision = revision.value;
     if (figures.status === "fulfilled") entry.presentations = figures.value.artifacts;
-    entry.error = inventory.status === "rejected" || revision.status === "rejected" || figures.status === "rejected";
     renderHistory();
     renderPresentationChoices();
     if (!state.artifactPreview && (element("result-selection").value === "@latest"
@@ -879,11 +917,10 @@ function appendScientificFiles(response, turn) {
   });
 }
 
-function renderArtifacts(revision, target = element("artifact-inventory"), inConversation = false) {
+function renderArtifacts(revision, target = element("artifact-inventory")) {
   const sessionId = state.session.session_id;
-  const artifacts = distinctFigureArtifacts(inConversation ? revision.artifacts.filter((artifact) =>
-    ["analysis_report", "analysis_figure"].includes(artifact.artifact_type)) : revision.artifacts);
-  const nodes = artifacts.map((artifact) => {
+  const artifacts = distinctFigureArtifacts(revision.artifacts);
+  const artifactNode = (artifact) => {
     const item = document.createElement("li");
     const supported = ["analysis_report", "analysis_figure"].includes(artifact.artifact_type);
     const title = document.createElement("span");
@@ -894,6 +931,11 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
       : kind === "analysis_figure" ? `${artifact.figure ? readableLabel(artifact.figure.kind) : "Analysis figure"}${number} (PNG)` : "Accepted artifact";
     title.className = "artifact-name";
     title.textContent = name;
+    if (kind === "analysis_report") {
+      const description = document.createElement("span"); description.className = "file-description";
+      description.textContent = "Accepted methods, parameters and execution/provenance record; this report is not independent biological validation.";
+      title.append(description);
+    }
     const metadata = document.createElement("details");
     metadata.dataset.detailKey = `artifact:${artifact.handle}`;
     const label = document.createElement("summary");
@@ -929,12 +971,30 @@ function renderArtifacts(revision, target = element("artifact-inventory"), inCon
     }
     item.append(metadata);
     return item;
-  });
-  nodes.unshift(...scientificFileGroups(sessionId, inConversation ? [] : revision.scientific_artifacts || []));
+  };
+  const selected = state.revision?.result_groups?.find((g) => g.handle === element("result-selection").value);
+  const nodes = scientificFileGroups(sessionId, revision.scientific_artifacts || [], selected ? selected.outputs.map((o) => o.name) : []);
+  let primary = nodes.find((node) => node.classList.contains("primary-downloads"));
+  const reports = artifacts.filter((artifact) => artifact.artifact_type === "analysis_report");
+  if (reports.length) {
+    if (!primary) {
+      primary = document.createElement("li"); primary.className = "download-group primary-downloads";
+      const heading = document.createElement("h4"); heading.textContent = "Primary scientific results";
+      primary.append(heading); nodes.unshift(primary);
+    }
+    for (const report of reports) { const list = document.createElement("ul"); list.append(artifactNode(report)); primary.append(list); }
+  }
+  if (artifacts.length) {
+    let advanced = nodes.flatMap((node) => [...node.querySelectorAll(".advanced-downloads")])[0];
+    if (!advanced) {
+      const item = document.createElement("li"); advanced = document.createElement("details"); advanced.className = "advanced-downloads";
+      const heading = document.createElement("summary"); heading.textContent = "All files & provenance";
+      advanced.append(heading); item.append(advanced); nodes.push(item);
+    }
+    const complete = document.createElement("ul"); complete.append(...artifacts.map(artifactNode)); advanced.append(complete);
+  }
   if (!nodes.length) {
-    const empty = document.createElement("li");
-    empty.textContent = "No accepted reports, figures or eligible scientific downloads are available.";
-    nodes.push(empty);
+    const empty = document.createElement("li"); empty.textContent = "No accepted scientific downloads are available."; nodes.push(empty);
   }
   target.replaceChildren(...nodes);
 }
@@ -999,7 +1059,7 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       element("figure-content").hidden = false;
       element("figure-description").hidden = false;
       element("figure-description").textContent = artifact.figure
-        ? `Accepted ${readableLabel(artifact.figure.kind)} · Source run ${artifact.figure.run_id} · Operations: ${artifact.figure.step_ids.join(", ")}. Exact figure sources are available in File provenance.`
+        ? `Accepted ${readableLabel(artifact.figure.kind)} · Source runs: ${[...new Set([artifact.figure.run_id, ...(artifact.figure.sources || []).map((s) => s.run_id)].filter(Boolean))].join(", ")} · Operations: ${artifact.figure.step_ids.join(", ")}. Exact figure sources are available in File provenance.`
         : "Accepted historical PNG. Figure subject metadata is unavailable; no association with the selected field is asserted.";
       if (artifact.figure?.coordinate_reused) {
         const coordinates = artifact.figure.sources.find((source) => source.role === "coordinates");
@@ -1266,7 +1326,7 @@ async function loadEvidence(detail = false) {
       // Field evidence uses the same source-bound gallery as result summaries.
       // A manually opened artifact remains a separate, explicit preview.
       const gallery = group && resultFigureGallery(resultFigureArtifacts(group));
-      if (gallery) element("result-facts").append(gallery);
+      element("result-figures").replaceChildren(...(gallery ? [gallery] : []));
       if (!state.artifactPreview) clearArtifactView();
       element("result-limitations").replaceChildren(textList(view.limitations));
       element("result-limitations-panel").hidden = !view.limitations.length;
@@ -1517,10 +1577,24 @@ function renderHistory() {
     }
     let response = null;
     if (turn.response) {
-      response = messageNode(RESPONSE_LABELS[turn.response.kind] || "Agent", turn.response.text, "assistant");
+      response = messageNode("Agent", turn.response.text, "assistant");
       article.append(response);
       if (turn.response.guidance) response.append(guidanceNode(turn.response.guidance));
-      appendScientificFiles(response, turn);
+      if (turn.clarification_choices?.length) {
+        const choices = document.createElement("div"); choices.className = "clarification-choices";
+        for (const option of turn.clarification_choices) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
+          button.textContent = option.description || option.label;
+          button.dataset.actionKey = `clarification-choice:${option.handle}`;
+          button.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
+          button.addEventListener("click", () => submitRequest(option.label, null,
+            {question_turn_id: turn.turn_id, handle: option.handle}));
+          choices.append(button);
+        }
+        response.append(choices);
+      }
+
+      loadRequestedArtifacts(turn);
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
@@ -1544,6 +1618,10 @@ function renderHistory() {
     }
     const scientific = turn.response && turn.response.scientific;
     if (scientific) {
+      if (scientific.limitations?.length) {
+        const note = document.createElement("p"); note.className = "result-caution small";
+        note.textContent = scientific.limitations.join(" "); metadata.append(note);
+      }
       const targets = document.createElement("div");
       targets.className = "turn-checkpoint";
       if (scientific.targets) {
@@ -1563,19 +1641,21 @@ function renderHistory() {
         references.append(label, evidenceValueNode(scientific.citations)); metadata.append(references);
       }
     }
-    if (turn.revision_id) {
+    const discussed = [...new Set((scientific?.targets || []).map((target) => target.revision_id))];
+    const resultRevision = turn.revision_id || (discussed.length === 1 ? discussed[0] : null);
+    if (resultRevision) {
       const result = document.createElement("button");
       result.className = "secondary view-result";
       result.type = "button";
       result.dataset.actionKey = "view-result";
       result.textContent = "View result details";
       result.title = turn.response && turn.response.kind === "execute"
-        ? `View created result revision ${turn.revision_id}` : `View revision ${turn.revision_id}`;
+        ? `View created result revision ${resultRevision}` : `View revision ${resultRevision}`;
       result.addEventListener("click", () => {
         showWorkspacePanel("results");
         element("evidence-panel").open = false;
         element("artifact-panel").open = true;
-        loadRevision(turn.revision_id);
+        loadRevision(resultRevision);
         const details = element("scientific-details");
         details.focus({ preventScroll: true });
       });
@@ -1651,19 +1731,53 @@ function updateControls() {
   element("complete-fastq-collection").textContent = completing ? "Completing library…" : "Complete FASTQ library";
 }
 
+function stepLabel(step) {
+  return step.function_name || readableLabel(step.tool_name);
+}
+
+function stepProgress(steps, status, expanded = false) {
+  const section = document.createElement("div");
+  const completed = steps.filter((s) => s.status === "SUCCEEDED").length;
+  const running = steps.filter((s) => s.status === "RUNNING");
+  const summary = document.createElement("p"); summary.className = "step-progress-summary";
+  const interrupted = status === "interrupted";
+  const cancelled = status === "cancelled";
+  summary.textContent = `${completed} of ${steps.length} steps completed`;
+  if (interrupted) summary.textContent += " · Interrupted; no automatic retry";
+  else if (cancelled) summary.textContent += " · Cancelled";
+  else if (status === "failed") summary.textContent += " · Failed";
+  else if (running.length) summary.textContent += ` · Running: ${running.map(stepLabel).join(", ")}`;
+  const segments = document.createElement("ol"); segments.className = "step-segments";
+  const details = document.createElement("details"); details.open = expanded;
+  details.dataset.detailKey = "execution-steps";
+  const title = document.createElement("summary"); title.textContent = "Scientific step details";
+  const list = document.createElement("ol"); list.className = "step-detail-list";
+  for (const step of steps) {
+    const display = cancelled && ["PENDING", "RUNNING", "SKIPPED"].includes(step.status) ? "CANCELLED"
+      : interrupted && step.status === "RUNNING" ? "INTERRUPTED" : step.status;
+    const text = `${stepLabel(step)} · ${readableLabel(display.toLowerCase())}`;
+    const segment = document.createElement("li"); segment.className = `step-segment state-${display.toLowerCase()}`;
+    segment.textContent = ({SUCCEEDED:"✓", RUNNING:"●", PENDING:"…", FAILED:"×", SKIPPED:"—", CANCELLED:"■", INTERRUPTED:"!"})[display] || "?";
+    segment.title = text; segment.tabIndex = 0; segment.setAttribute("aria-label", text);
+    segment.dataset.stepId = step.step_id; segment.dataset.recordedStatus = step.status;
+    segments.append(segment);
+    const item = document.createElement("li"); item.textContent = text;
+    if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
+    if (step.error_message) { const error = document.createElement("p"); error.className = "turn-error"; error.textContent = step.error_message; item.append(error); }
+    list.append(item);
+  }
+  details.append(title, list); section.append(summary, segments, details); return section;
+}
+
 function renderExecution() {
   element("turn-status").parentElement.hidden = !state.posting && !state.activeTurn;
   element("turn-status").textContent = state.posting ? "Submitting request…" : state.activeTurn ? statusLabel(state.activeTurn.status, state.activeTurn.response && state.activeTurn.response.kind, state.activeTurn.revision_id, state.activeTurn.run_id, state.activeTurn.steps) : "Ready";
   element("turn-status").title = state.activeTurn ? checkpointText(state.activeTurn) : "";
   const steps = state.activeTurn && state.activeTurn.steps || [];
   const list = element("step-status");
-  list.hidden = !steps.length || !state.activeTurn || terminal(state.activeTurn);
-  list.replaceChildren(...steps.map((step) => {
-    const item = document.createElement("li");
-    item.textContent = `${readableLabel(step.tool_name)} · ${readableLabel(step.status.toLowerCase())}`;
-    if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
-    return item;
-  }));
+  list.hidden = !steps.length;
+  const expanded = list.querySelector("details")?.open || false;
+  list.replaceChildren(...(steps.length ? [stepProgress(steps, state.activeTurn.status, expanded)] : []));
   updateControls();
 }
 
@@ -2385,7 +2499,7 @@ element("reopen-form").addEventListener("submit", (event) => {
   if (id) openSession(id);
 });
 
-function submitRequest(utterance, predecessorTurnId = null) {
+function submitRequest(utterance, predecessorTurnId = null, clarificationChoice = null) {
   if (element("submit-turn").disabled || !state.session) return;
   if (!utterance.trim()) return;
   const body = {
@@ -2393,6 +2507,7 @@ function submitRequest(utterance, predecessorTurnId = null) {
     utterance, profile_id: element("model-choice").value,
   };
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
+  if (clarificationChoice !== null) body.clarification_choice = Object.freeze(clarificationChoice);
   const selectedIds = selectedResourceIds();
   const h5ads = state.attachments.filter((a) => a.resource.input_type === "h5ad").map((a) => a.resource.resource_id);
   if (state.attachments.length) body.attachment_ids = Object.freeze(state.attachments.map((a) => a.resource.resource_id));

@@ -31,6 +31,8 @@ class Model:
 
     def complete(self, *, prompt, response_schema):
         p = json.loads(prompt)
+        if 'clarification' in p:
+            return json.dumps(dict(text=p['request']))
         if 'grounding_review_version' in p:
             return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
         self.requests.append((prompt, response_schema))

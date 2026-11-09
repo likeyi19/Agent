@@ -88,7 +88,7 @@ def test_exact_presentation_is_rendered_as_text():
     assert 'innerHTML' not in code
     assert 'insertAdjacentHTML' not in code
     assert 'eval(' not in code
-    assert 'RESPONSE_LABELS' in code
+    assert 'messageNode("Agent", turn.response.text' in code
 
 
 def test_refresh_reopens_instead_of_replaying_and_retry_keeps_identity():
@@ -126,7 +126,7 @@ def test_browser_uses_application_status_without_reconstructing_presentation_lif
 
 def _javascript_predicates(code, turns):
     """Evaluate the actual shared predicates in an optional system JS runtime."""
-    constants = code[code.index('const TERMINAL_STATES'):code.index('const RESPONSE_LABELS')]
+    constants = code[code.index('const TERMINAL_STATES'):code.index('const element =')]
     functions = code[code.index('function terminal'):code.index('function checkpointText')]
     script = ('(() => {\n' + constants + '\n' + functions + '\nreturn ' + json.dumps(turns) +
               '.map(turn => terminal(turn));})()')
@@ -232,7 +232,7 @@ def _javascript_poll(turn, *, offered=(), refresh_error=None, reopen=False):
     The Session endpoint supplies the independently authoritative accepted result.
     """
     code = (STATIC / 'app.js').read_text()
-    constants = code[code.index('const POLL_INTERVAL_MS'):code.index('const RESPONSE_LABELS')]
+    constants = code[code.index('const POLL_INTERVAL_MS'):code.index('const element =')]
     predicates = code[code.index('function terminal'):code.index('function shortIdentity')]
     labels = code[code.index('function readableLabel'):code.index('function evidenceValueNode')]
     controls = code[code.index('function updateControls'):code.index('function mergeTurn')]
@@ -246,7 +246,7 @@ def _javascript_poll(turn, *, offered=(), refresh_error=None, reopen=False):
       const result = {calls: [], errors: [], delays: [], displayed: [], merged: []};
       const dom = {};
       const element = id => dom[id] || (dom[id] = {
-        options: [], parentElement: {}, replaceChildren() {},
+        options: [], parentElement: {}, replaceChildren() {}, querySelector() {return null;},
       });
       const document = {querySelectorAll() {return [];}, createElement() {return {};}};
       const canAddScientificInput = () => true;
@@ -412,17 +412,38 @@ def test_results_and_conversation_are_independent_workspace_panels():
     assert '[data-panel="conversation"]' in css and '[data-panel="results"]' in css
 
 
-def test_technical_details_and_downloads_are_closed_and_result_summary_is_open():
+def test_technical_details_are_closed_and_primary_downloads_are_visible():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
     for identifier in ('session-identities', 'revision-identities', 'revision-history-panel',
-                       'result-methods', 'technical-report-record', 'evidence-panel', 'artifact-panel'):
+                       'result-methods', 'technical-report-record', 'evidence-panel'):
         assert identifier in details and 'open' not in details[identifier]
+    assert 'open' in details['artifact-panel']
     for identifier in ('current-session', 'current-generation', 'current-revision'):
         assert 'session-identities' in page.ancestors[identifier]
     for identifier in ('viewed-revision', 'revision-summary'):
         assert 'revision-identities' in page.ancestors[identifier]
     assert 'revision-history-panel' in page.ancestors['revision-history']
+
+
+def test_primary_downloads_keep_independent_branches_and_explicit_native_outputs():
+    code=(STATIC/'app.js').read_text()
+    supported=code[code.index('function supportedScientificFile'):code.index('function guardDownload')]
+    primary=code[code.index('function primaryScientificFiles'):code.index('function loadRequestedArtifacts')]
+    rows=[
+        dict(handle='annotation',artifact_type='scientific_annotation',filename='annotated.h5ad'),
+        dict(handle='pca',artifact_type='scientific_integrated',filename='integrated-embeddings.h5ad',source_step=dict(original_sha256='source1',run_id='run',step_id='pca',ancestors=[])),
+        dict(handle='umap',artifact_type='scientific_integrated',filename='integrated-analysis.h5ad',source_step=dict(original_sha256='source1',run_id='run',step_id='umap',ancestors=['pca'])),
+        dict(handle='other',artifact_type='scientific_integrated',filename='integrated-embeddings.h5ad',source_step=dict(original_sha256='source2')),
+        dict(handle='native',artifact_type='scientific_native_result',filename='result.h5ad',source_step=dict(terminal=True,output_names=['native'])) ,
+        dict(handle='intermediate',artifact_type='scientific_native_result',filename='result.h5ad',source_step=dict(terminal=False,output_names=['import'])) ,
+        dict(handle='receipt',artifact_type='scientific_native_result',filename='native-receipt.json',source_step=dict(terminal=True,data_output=False)),
+        dict(handle='rp',artifact_type='scientific_annotation_evidence',filename='native-rp.npz'),
+    ]
+    result=_javascript_value('(() => {'+supported+primary+'const rows='+json.dumps(rows)+';return [[...primaryScientificFiles(rows)], [...primaryScientificFiles(rows,["import"])],rows.length];})()')
+    assert set(result[0])=={'annotation','umap','other','native'}
+    assert 'intermediate' in result[1] and 'receipt' not in result[1]
+    assert result[2]==len(rows)  # ranking never deletes or deduplicates source files.
 
 
 def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
@@ -435,7 +456,7 @@ def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
     assert 'inputContext();' in code
     button = code[code.index('result.className = "secondary view-result"'):code.index('(response || article).append(result)')]
     assert 'result.textContent = "View result details"' in button
-    assert 'loadRevision(turn.revision_id)' in button
+    assert 'loadRevision(resultRevision)' in button
     assert 'showWorkspacePanel("results")' in button and 'details.focus' in button
     assert 'submitRequest(' not in button and 'postSubmission(' not in button
     assert 'execution_inputs' not in code and 'innerHTML' not in code
@@ -545,3 +566,94 @@ def test_failure_without_run_does_not_claim_science_failed():
 """)==['Request failed before scientific execution','Answer unavailable','Analysis failed',
         'Request failed before scientific execution','Request failed before scientific execution',
         'Analysis failed','Answer unavailable']
+
+
+@pytest.mark.parametrize('status,expected', [
+    ('running', ['state-succeeded','state-running','state-pending','state-failed']),
+    ('cancelled', ['state-succeeded','state-cancelled','state-cancelled','state-failed']),
+    ('interrupted', ['state-succeeded','state-interrupted','state-pending','state-failed']),
+    ('succeeded', ['state-succeeded']*4),
+])
+def test_compact_progress_retains_real_step_identity_status_and_error(status, expected):
+    code=(STATIC/'app.js').read_text()
+    functions=code[code.index('function stepLabel'):code.index('function renderExecution')]
+    steps=[dict(step_id=f's{i}',tool_name='run_snapatac2',function_name=fn,status=state,
+                error_message='Native input rejected' if state=='FAILED' else None)
+           for i,(fn,state) in enumerate(zip(['pp.import_fragments','metrics.tsse','pp.filter_cells','pp.make_peak_matrix'],
+                                             ['SUCCEEDED']*4 if status=='succeeded' else ['SUCCEEDED','RUNNING','PENDING','FAILED']))]
+    script='''(() => {
+      const document={createElement(tag){return {tag,children:[],dataset:{},attrs:{},textContent:'',
+        append(...items){this.children.push(...items)},setAttribute(k,v){this.attrs[k]=v}}}};
+      const readableLabel=x=>x;
+    '''+functions+'const section=stepProgress('+json.dumps(steps)+','+json.dumps(status)+''');
+      return {summary:section.children[0].textContent,
+        segments:section.children[1].children.map(x=>({state:x.className, recorded:x.dataset.recordedStatus,
+          label:x.attrs['aria-label'],id:x.dataset.stepId,focus:x.tabIndex,symbol:x.textContent})),
+        open:section.children[2].open, errors:section.children[2].children[1].children.flatMap(x=>x.children.map(p=>p.textContent))};
+    })()'''
+    value=_javascript_value(script)
+    assert value['summary'].startswith(('4' if status=='succeeded' else '1')+' of 4 steps completed')
+    assert not value['open']
+    assert [s['state'].split()[-1] for s in value['segments']]==expected
+    assert [s['id'] for s in value['segments']]==['s0','s1','s2','s3']
+    assert all(s['focus']==0 and s['symbol'] and s['label'] for s in value['segments'])
+    if status!='succeeded':assert value['errors']==['Native input rejected']
+    if status=='running':assert 'Running: metrics.tsse' in value['summary']
+
+
+def test_workflow_overview_combines_repeated_counts_and_supports_nonclustering_results():
+    code=(STATIC/'app.js').read_text()
+    function=code[code.index('function workflowSummaryFacts'):code.index('function renderResultSelection')]
+    def group(name, facts):
+        return dict(label=name,summary_fields=list(facts),evidence=dict(field_labels={},facts=[dict(field=k,value=v,status='available') for k,v in facts.items()]))
+    rows=[group('first',dict(n_cells=12,n_features=0)),group('second',dict(n_cells=12,n_features=90,n_clusters=3)),
+          group('sequence result',dict(n_sequences=8,score_max=.7))]
+    script='(() => {const readableLabel=x=>x;'+function+'return workflowSummaryFacts('+json.dumps(rows)+');})()'
+    result=_javascript_value(script)
+    assert [(r['field'],r['value']) for r in result]==[('n_cells',12),('n_features',90),('n_clusters',3),('n_sequences',8),('score_max',.7)]
+    assert result[0]['sources']==['first','second']
+    assert not any(r['field'].startswith('cell_type') for r in result)
+
+
+def test_gallery_downloads_and_conversation_use_the_existing_result_owners():
+    code=(STATIC/'app.js').read_text()
+    gallery=code[code.index('function resultFigureGallery'):code.index('function workflowSummaryFacts')]
+    assert 'Open figure & provenance' not in gallery
+    assert 'download.href = image.src + "?download=true"' in gallery
+    assert 'viewArtifact(state.session.session_id, artifact.revision_id, artifact)' in gallery
+    conversation=code[code.index('function loadRequestedArtifacts'):code.index('function renderArtifacts')]
+    assert 'message-artifacts' not in conversation and 'scientificFileGroups(' not in conversation
+    history=code[code.index('function renderHistory'):code.index('function updateControls')]
+    assert 'metadata.append(note)' in history and '(response || article).append(note)' not in history
+    assert 'loadRevision(resultRevision)' in history
+
+
+def test_finite_choice_buttons_submit_question_and_option_identity_directly():
+    source=(STATIC/'app.js').read_text()
+    history=source[source.index('function renderHistory'):source.index('function updateControls')]
+    assert 'turn.clarification_choices?.length' in history
+    assert 'button.type = "button"' in history
+    assert 'submitRequest(option.label, null,' in history
+    assert '{question_turn_id: turn.turn_id, handle: option.handle}' in history
+    submission=source[source.index('function submitRequest'):source.index('element("turn-form").addEventListener')]
+    assert 'body.clarification_choice = Object.freeze(clarificationChoice)' in submission
+
+
+def test_workflow_qc_counts_do_not_hide_an_independent_equal_population():
+    code=(STATIC/'app.js').read_text()
+    function=code[code.index('function workflowSummaryFacts'):code.index('function renderResultSelection')]
+    def group(handle, label, cells, parents=(), population=None):
+        facts=[dict(field='n_cells',value=cells,status='available')]
+        if population is not None:
+            facts.append(dict(field='parameters',value=dict(population=population),status='available'))
+        return dict(handle=handle,label=label,derived_from=list(parents),summary_fields=['n_cells'],
+                    evidence=dict(field_labels={},facts=facts))
+    rows=[group('input','Observed input',14),
+          group('filter','QC selection',8,('input',),dict(stage='native_cell_filter',input_barcodes=14,output_barcodes=8)),
+          group('clusters','Dependent clustering',8,('filter',)),
+          group('other','Independent data',8)]
+    result=_javascript_value('(() => {const readableLabel=x=>x;'+function+
+        'return workflowSummaryFacts('+json.dumps(rows)+');})()')
+    assert [(row['field'],row['value']) for row in result]==[
+        ('input_barcodes',14),('retained_barcodes',8),('n_cells',8)]
+    assert result[-1]['sources']==['Independent data']

@@ -160,4 +160,15 @@ no additional annotation or marker test runs in the renderer.
 
 The accepted factual report displays data context, method, group/label counts and assigned/unresolved populations independently of optional generated prose. Native RP, marker and signature details, effective parameters and source identities remain available in evidence and methods; source matrix and analysis sections own their feature counts and preprocessing/clustering facts. Download the annotated H5AD and useful scientific figures.
 
+`Downloads & reports` also offers accepted native annotation evidence: per-cell
+and per-group JSON, candidate signature evidence, marker statistics TSV, and the
+CSR RP matrix (`native-rp.npz`) with its ordered cell, gene and group companions.
+Keep these companions together: matrix rows follow the cell axis and columns
+follow the gene axis. The group TSV retains native cell/group associations.
+These files support inspection of the existing annotation; downloading them
+does not rerun RP, marker tests or scoring. Text exports use the shared privacy
+projection, while the numeric NPZ retains its exact accepted bytes. Download
+descriptions establish eligibility for preparation, not completed browser transfer.
+RP is accessibility-derived activity, not measured RNA or independent validation.
+
 Agent ends this workflow at its own native annotations and supporting evidence. Label renaming, ontology alignment and predicted-versus-reference label benchmarks are external research tasks. They are not Agent execution modes or resource requirements. The independent Gate 2 evidence remains outside the product.

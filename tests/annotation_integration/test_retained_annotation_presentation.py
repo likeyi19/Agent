@@ -72,6 +72,40 @@ def test_native_annotation_figures_factual_report_download_and_restart(external_
     with MatrixDownloadPreparer().prepare(artifact) as download:payload=b''.join(download.iter_chunks())
     assert payload and Path(args['source_path']).read_bytes()==source_bytes
     preserved=run.to_dict();monkeypatch.setattr(scatac_annotation,'execute_annotation',lambda *a,**k:pytest.fail('Native rerun on read'))
+    from agent.application.annotation_delivery import accepted_annotations, EVIDENCE_FILES
+    from agent.application.matrix_delivery import MatrixDeliveryError
+    import io
+    from scipy.sparse import load_npz
+    delivered = accepted_annotations(SimpleNamespace(_application=app), sid, state.revisions[-1],
+        state.turn('retained-native'), None, step_id='annotation')
+    assert {a.role for a in delivered[1:]} == set(EVIDENCE_FILES)
+    from agent.application.analysis_delivery import export_descriptions
+    output = next(o for o in state.revisions[-1].outputs if o.name == 'annotation')
+    descriptions = export_descriptions(app.sessions, sid, [dict(revision_id=state.revisions[-1].revision_id,
+        output_name=output.name, accepted_step_sha256=output.accepted_step_sha256)])
+    assert {x['handle'] for x in descriptions} == {a.reference.handle for a in delivered}
+    assert all(x['actual_download_status'] == 'NOT_RECORDED' for x in descriptions)
+    for entry in delivered[1:]:
+        with MatrixDownloadPreparer().prepare(entry) as download:
+            raw = b''.join(download.iter_chunks())
+            assert download.source_sha256 == entry.sha256
+        original = entry.path.read_bytes()
+        if entry.role.endswith('.json'):
+            assert json.loads(raw) == json.loads(original)
+        elif entry.role.endswith('.npz'):
+            assert raw == original
+            assert load_npz(io.BytesIO(raw)).shape[0] == result['n_cells']
+        else:
+            assert raw.decode().splitlines() == original.decode().splitlines()
+    marker = next(a for a in delivered if a.role == 'native-markers.tsv')
+    original = marker.path.read_bytes()
+    try:
+        marker.path.write_bytes(b'changed')
+        with pytest.raises(MatrixDeliveryError):
+            MatrixDownloadPreparer().prepare(marker)
+    finally:
+        marker.path.write_bytes(original)
+    assert len(calls) == 1
     fresh=ResearchAgentApplication(workspace,planner=Planner())
     assert fresh.sessions.evidence(sid,state.revisions[-1].revision_id,'annotation').status=='available'
     assert fresh.run_store.load(run.run_id).to_dict()==preserved

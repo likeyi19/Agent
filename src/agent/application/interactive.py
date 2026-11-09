@@ -1029,8 +1029,8 @@ class InteractiveAgentApplication:
                     items.extend(accepted_sequences(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'annotate_scATAC_cell_types':
-                    from .annotation_delivery import accepted_annotation
-                    items.append(accepted_annotation(self, session_id, revision, origin,
+                    from .annotation_delivery import accepted_annotations
+                    items.extend(accepted_annotations(self, session_id, revision, origin,
                         None if output.run_id == origin.run_id else output, step_id=output.step_id))
                 elif step.tool_name == 'build_cell_neighbors':
                     try:
@@ -1078,8 +1078,8 @@ class InteractiveAgentApplication:
                     from .sequence_delivery import accepted_sequences
                     items.extend(accepted_sequences(self, session_id, revision, origin, None, step_id=planned.step_id))
                 elif planned.tool_name == 'annotate_scATAC_cell_types':
-                    from .annotation_delivery import accepted_annotation
-                    items.append(accepted_annotation(self, session_id, revision, origin, None,
+                    from .annotation_delivery import accepted_annotations
+                    items.extend(accepted_annotations(self, session_id, revision, origin, None,
                         step_id=planned.step_id))
                 elif planned.tool_name == 'build_cell_neighbors':
                     try:

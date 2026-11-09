@@ -1,5 +1,18 @@
 # Agent
 
+The [fresh PBMC10k acceptance](../agent-data/acceptance/scientific-results/pbmc10k-fresh-2026-11-09/REPORT.md)
+retains **CONDITIONAL GO**: genuine Firefox/official OpenAI raw-to-MAESTRO
+science and verified downloads are complete; numeric QC plotting remains a
+product gap. Its bounded corrections retain raw biological declarations,
+prepare selected future native count sources, align interpretation schemas,
+preserve pending intent on interpretation failure, isolate PCA through the
+existing native execution owner, and deliver pinned native annotation evidence.
+The independent GLUE evaluation remains outside Agent. The subsequent
+[closeout](../agent-data/acceptance/scientific-results/pbmc10k-fresh-2026-11-09/closeout-2026-11-09/REPORT.md)
+authorizes one reviewed commit and normal push; prior no-commit records describe
+the acceptance stage. The [manual Web guide](docs/guides/manual-web-testing.md)
+owns the separate researcher workspace and foreground startup/shutdown commands.
+
 The user's cell-type mapping/comparison retirement decision supersedes the ALO-1
 and earlier product-comparison contracts below for current production behavior.
 Agent retains native annotation, native reference-to-query label transfer,

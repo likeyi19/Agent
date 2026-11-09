@@ -501,6 +501,8 @@ class ScientificArtifactHandle(ArtifactHandle):
             ('scientific_model', 'epizoox-features.txt', 'Exact ordered EpiZooX feature vocabulary'),
             ('scientific_model', 'epizoox-document-frequency.npy', 'EpiZooX input-corpus document frequency'),
         }
+        from .annotation_delivery import EVIDENCE_FILES
+        reviewed.update(('scientific_annotation_evidence', name, value[1]) for name, value in EVIDENCE_FILES.items())
         from .native_delivery import definitions, CELL_MATRIX_LABELS
         for _, spec in definitions():
             reviewed.update((spec.artifact_type, name, value[0]) for name, value in spec.files.items())
@@ -556,6 +558,11 @@ class ScientificArtifactHandle(ArtifactHandle):
             }[self.filename]
             title, purpose = self.label + ' (H5AD)', 'Statistical results'
             description += ' Private metadata omitted.'
+        elif self.artifact_type == 'scientific_annotation_evidence':
+            title, purpose, description = (self.label, 'Native annotation evidence',
+                'Accepted MAESTRO evidence. RP is accessibility-derived activity, not RNA expression or '
+                'independent validation. The CSR NPZ matrix uses the accompanying ordered cell/gene axes; '
+                'group labels follow the cell axis. Private labels in text exports follow the shared privacy policy.')
         elif self.artifact_type == 'scientific_annotation':
             title, purpose, description = ('Annotated original data (H5AD)', 'Integrated annotated H5AD',
                 'Original measurements and features with accepted cell annotations; private metadata omitted.')

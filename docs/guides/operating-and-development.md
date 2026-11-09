@@ -24,6 +24,10 @@ Optional dependencies are grouped under `requirements/`:
 
 For the Web application:
 
+The [manual Web testing guide](manual-web-testing.md) provides the prepared,
+separate researcher workspace, complete host commands, finite upload/download
+settings, a runtime-derived native memory budget, SSH forwarding and shutdown.
+
 ```bash
 python -m pip install -r requirements/web.txt
 PYTHONPATH=src conda run --no-capture-output -n agent python -m agent.web --config /path/to/operator-web.json \

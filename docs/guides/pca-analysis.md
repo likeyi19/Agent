@@ -45,6 +45,14 @@ checks operate on the chosen representation. Unchanged raw-X publications retain
 v1 identities; transformed publications use embedding/publication v2 and a distinct
 scientific profile. Readers do not reinterpret accepted v1 evidence.
 
+PCA execution and source-fit verification use the shared systemd/cgroup native
+process boundary and the operator's `AGENT_NATIVE_MEMORY_BYTES` and
+`AGENT_NATIVE_TIMEOUT_SECONDS`. The kernel budget governs their allocations;
+fixed 2 GiB input/workspace estimates do not reject isolated execution. This
+changes execution capacity, not preprocessing, component selection or scientific
+verification. The small in-process suitability observation retains its bounded
+read; accepted-result reuse does not repeat the fit.
+
 RPD-1 acceptance, including real PBMC analysis, explicit graph reuse, original-data
 exports and provider limitations, is recorded in
 [the managed report](../../../agent-data/acceptance/researcher-pilot-demo/rpd-1/REPORT.md).

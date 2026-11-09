@@ -94,6 +94,33 @@ def test_missing_budget_starts_no_process(tmp_path,monkeypatch):
     assert not (tmp_path/'native.log').exists()
 
 
+def test_pca_publication_preserves_authority_in_kernel_boundary(tmp_path, monkeypatch):
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    from scipy import sparse
+    from agent.orchestration import AgentPlan, AgentRequest, AgentRuntime, FileRunStore, PlanStep
+    monkeypatch.setenv('AGENT_NATIVE_MEMORY_BYTES', str(2*1024**3))
+    monkeypatch.setenv('AGENT_NATIVE_TIMEOUT_SECONDS', '120')
+    source = tmp_path/'counts.h5ad'
+    ad.AnnData(sparse.csr_matrix(np.random.default_rng(9).poisson(2, (12, 31))),
+        obs=pd.DataFrame(index=[f'cell-{i}' for i in range(12)])).write_h5ad(source)
+    class Planner:
+        def plan(self, request, registry):
+            return AgentPlan('isolated-pca', request.request_id, 'Explicit native isolation test', (
+                PlanStep('pca', 'pca_embed_cells', dict(input_path=str(source),
+                    output_dir=str(tmp_path/'pca'), preprocessing='tfidf_l2', n_components=3)),))
+    run = AgentRuntime(planner=Planner(), run_store=FileRunStore(tmp_path/'state')).run(
+        AgentRequest('isolated-pca', 'Kernel qualification', {}))
+    assert run.status.value == 'SUCCEEDED', run.errors
+    assert run.steps[0].verification.artifact_authority is not None
+    record = json.loads((tmp_path/'.pca-execution.json').read_text())
+    assert record['completed'] and record['operation'] == 'pca'
+    assert record['membership']['effective']['memory.max'] == str(2*1024**3)
+    data = ad.read_h5ad(run.steps[0].result['analysis_path'])
+    assert data.obsm['X_pca'].shape == (12, 3)
+
+
 @pytest.mark.parametrize('failure', ['journal', 'launcher'])
 def test_supervisor_fault_still_stops_owned_unit(tmp_path, monkeypatch, failure):
     import subprocess

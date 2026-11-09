@@ -418,7 +418,11 @@ class RequestRoles:
             _validate_arguments(self.arguments)
             validate_arguments(self.arguments, 'epizoo')
             return
-        if self.annotation is not None:
+        raw_annotation = self.annotation is not None and any(v is not None for v in (self.fastq, self.bam, self.fragments))
+        if raw_annotation:
+            from .raw_handoff import validate_downstream_annotation
+            validate_downstream_annotation(self.annotation)
+        if self.annotation is not None and not raw_annotation:
             from .raw_handoff import AnnotationDeclaration, validate_arguments
             if (type(self.annotation) is not AnnotationDeclaration or any(v is not None for v in (self.fastq, self.bam, self.fragments))
                     or self.target != 'annotate_scATAC_cell_types' or self.required_roles or self.roles
@@ -501,11 +505,13 @@ class RoleAnswer:
                 raise ValueError('Invalid EpiZoo task answer.')
             validate_arguments(self.arguments, 'epizoo')
         if self.annotation is not None:
-            from .raw_handoff import AnnotationDeclaration, validate_arguments
-            if (type(self.annotation) is not AnnotationDeclaration or self.roles
-                    or any(v is not None for v in (self.fastq, self.bam, self.fragments))):
+            from .raw_handoff import AnnotationDeclaration, validate_arguments, validate_downstream_annotation
+            if type(self.annotation) is not AnnotationDeclaration or self.roles:
                 raise ValueError('Invalid annotation task answer.')
-            validate_arguments(self.arguments, 'annotation')
+            if any(v is not None for v in (self.fastq, self.bam, self.fragments)):
+                validate_downstream_annotation(self.annotation)
+            else:
+                validate_arguments(self.arguments, 'annotation')
         if self.fragments is not None:
             from .raw_handoff import FragmentsDeclaration, validate_arguments
             if type(self.fragments) is not FragmentsDeclaration or self.fastq is not None or self.bam is not None or self.roles:
@@ -1014,7 +1020,7 @@ def parse_decision(raw, *, utterance=None):
                                 declaration(value['fastq']) if 'fastq' in value else None,
                                 declaration(value['bam'], 'bam') if 'bam' in value else None,
                                 declaration(value['fragments'], 'fragments') if 'fragments' in value else None,
-                                declaration(value['annotation'], 'annotation') if 'annotation' in value else None,
+                                declaration(value['annotation'], 'annotation') if value.get('annotation') is not None else None,
                                 declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None,
                                 input_results=tuple(value.get('input_results', [])), references=tuple(value.get('references', [])), delivery=tuple(value.get('delivery', [])),
                                 unfulfilled=tuple(value.get('unfulfilled', [])), visualization=value.get('visualization'),
@@ -1031,7 +1037,7 @@ def parse_decision(raw, *, utterance=None):
                               declaration(value['fastq']) if 'fastq' in value else None,
                                 declaration(value['bam'], 'bam') if 'bam' in value else None,
                                 declaration(value['fragments'], 'fragments') if 'fragments' in value else None,
-                                declaration(value['annotation'], 'annotation') if 'annotation' in value else None,
+                                declaration(value['annotation'], 'annotation') if value.get('annotation') is not None else None,
                                 declaration(value['epizoo'], 'epizoo') if 'epizoo' in value else None,
                               unknown_fields=tuple(value.get('unknown_fields', ())))
         if kind == 'answer_guidance':
@@ -1167,7 +1173,10 @@ def decision_schema():
     variants = [
         _object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i not in ('scientific', 'guidance')),
                      relation=enum(RELATIONS), technical=dict(type='boolean'))),
-        _object(dict(kind=enum(('clarify',)), reason=enum(REASONS), choices=array(text(256), 8))),
+        _object(dict(kind=enum(('clarify',)), reason=enum(PARAMETER_CLARIFICATION_REASONS),
+                     choices=array(dict(text(256), pattern=r'^[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*$'), 8))),
+        _object(dict(kind=enum(('clarify',)), reason=enum(r for r in REASONS if r not in PARAMETER_CLARIFICATION_REASONS),
+                     choices=array(text(256), 0))),
         _object(dict(kind=enum(('navigate',)), relation=enum(RELATIONS))),
         _object(dict(kind=enum(('execute',)), base=enum(RELATIONS), operation=text(),
                      target=enum(('selection', 'matrix')), delta=optional(ref('delta')))),
@@ -1183,7 +1192,8 @@ def decision_schema():
                      roles=array(ref('role'), 8), context=enum(('none', 'current')),
                      input_results=array(text(), 32),
                      reference_category=optional(enum(('peak_set', 'regulatory_regions'))))),
-        _object(dict(kind=enum(('answer_resources',)), pending=text(), choice=text(), arguments=declarations)),
+        _object(dict(kind=enum(('answer_resources',)), pending=enum(('@resources',)),
+                     choice=dict(text(), pattern=r'^resource\.'), arguments=declarations)),
         _object(dict(kind=enum(('answer_prerequisite',)), pending=text(), species=enum(('human', 'mouse')), arguments=declarations)),
         _object(dict(kind=enum(('answer_parameters',)), pending=text(), arguments=array(ref('declaration'), MAX_SCIENTIFIC_ARGUMENTS, 1))),
     ]
@@ -1191,10 +1201,11 @@ def decision_schema():
     for field in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
         definitions[field] = raw_schema(field)
         roles = array(ref('role'), 0)
+        downstream = dict(annotation=optional(ref('annotation'))) if field in ('fastq', 'bam', 'fragments') else {}
         variants.append(_object(dict(kind=enum(('request_roles',)), target=text(), roles=roles,
-            required_roles=array(ref('requirement'), 0), arguments=declarations, **{field: ref(field)}, **(dict(context=enum(('none', 'current'))) if field == 'annotation' else {}), **delivery)))
+            required_roles=array(ref('requirement'), 0), arguments=declarations, **{field: ref(field)}, **downstream, **(dict(context=enum(('none', 'current'))) if field == 'annotation' else {}), **delivery)))
         variants.append(_object(dict(kind=enum(('answer_roles',)), pending=text(), roles=roles,
-            arguments=declarations, **{field: ref(field)},
+            arguments=declarations, **{field: ref(field)}, **downstream,
             unknown_fields=array(enum(scientific_metadata_fields(empty(field))), 16))))
     return _object(dict(turn_schema_version=dict(type='integer', enum=[1]), decision={'anyOf': variants})) | {'$defs': definitions}
 
@@ -1281,6 +1292,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Pending scientific declarations are user intent, not accepted evidence. In answer_roles, explicitly stated corrections may update scientific metadata while preserving captured files, source roles, namespace and operation. A null declaration field means no addition. If the user explicitly says a previously recorded scientific claim is unknown or cannot be confirmed, name that offered metadata field in unknown_fields and leave its addition null; do not silently retain it as known. Never retract sources, roles, operation or resource identities through unknown_fields. When the user asks which prerequisites or evidence are needed rather than supplying declarations, choose answer_guidance; the captured pending task can inform conditional advice without scientific execution.',
             'For scientific tasks starting with external fragments use request_roles with target run_snapatac2, fragments and empty required_roles/roles. Bind source and optional feature_source only to explicitly selected attachments; source assembly/species are declarations. Namespace and source_profile may remain null: native import does not require internal profiles or certified barcode-correction history. Index is optional and is not used by native import. Existing fragments_resources supply chromosome sizes, exact regions and available GTF/GFF annotation. Missing biological history stays unknown. For uploaded custom BED preserve its source coordinates and feature_category; it directly supplies the requested regions without a reference-bundle qualification. genome_index_source supplies chromosome sizes; an explicitly supplied genome_source pins the exact FASTA association. Agent resolves the actual native inputs after function selection. resource_preference quotes only an explicitly requested reference name with literal/evidence; otherwise use null, never an internal resource handle. A broad request may compose native import, QC, filtering, a feature matrix and downstream analysis through ordinary planning. Do not ask the researcher to split internal steps or know Registry IDs. Pending fragments use answer_roles and explicit additions. Explicit native-function requests use ordinary execute_plan with the offered native source ports and unchanged native function/kwargs, without task-mode prerequisites.',
             'For EpiZoo target-species inference or native post-training with uploaded H5AD, use request_roles with epizoo and empty roles/required_roles. Set operation initialization with target adapt_epizoo_species for transfer without training, inference with target epizoo_embed_cells, or posttraining_initialized with target posttrain_epizoo_model to train the accepted initialized model; never train merely to obtain embeddings. Bind source from selected_sources. Declare scientific_name, taxonomy_id, assembly and fragment_counts/binary_accessibility only from explicit processing context; unknown fields remain null. For initialization leave strategy null for automatic qualified mapping assessment unless the user explicitly chooses de_novo or mapped_reference. Declare peak_set/regulatory_regions feature_category from the data context. Initialization has zero optimizer updates. For posttraining_initialized reuse the exact initialized model; no new genome or strategy is needed. Inference needs the exact accepted model vocabulary, not a new genome. Initialization may bind genome_source and optional genome_index_source attachments, or a qualified genome_resource. epizoo_resources are scientific models/references, distinct from the conversational LLM. resource and genome_resource express explicit preferences only; otherwise leave null for compatible unique selection. checkpoint_source may identify an uploaded exact qualified checkpoint; weights alone do not establish vocabulary or provenance. Missing mapping/resources must clarify, never invent coordinate correspondence. Use offered scientific arguments for explicit native settings; omit absent settings for owner defaults. Pending epizoo uses answer_roles, @roles and only additions; preserve the original inputs, operation and explicit settings. Never ask the researcher to build manifests, hashes, InputSets or authority records.',
+            'When a raw FASTQ/BAM/fragments objective also requests cell-type annotation, retain the raw declaration and include annotation for user-supported species, assembly and tissue context. Match an explicitly stated tissue to the offered annotation resource context. Leave annotation source/groups_source/groups_result/uploaded null: counts and grouping will be selected by the Planner. Do not invent future measurement semantics; the selected native count construction owns them. Pending raw continuations keep their raw declaration and may update these downstream biological declarations.',
             'For region-count H5AD cell-type annotation use request_roles with annotation and empty roles/required_roles. For an uploaded source, bind source and optional exact ordered groups TSV from selected_sources. For accepted scientific inputs, select input_results; context=current permits broad reuse only when no exact scientific input is selected. Keep explanation/figure references in references, leave attachment source null and let the normal Planner select its exact accepted count and clustering ports. Both routes prepare internal specifications only after operation/source selection; never request specification filenames or digests from the researcher. To reuse accepted Leiden groups, select the exact annotation_group_results handle in groups_result; Agent projects the ordered groups after checking the original count-source identity. Do not ask for download/re-upload or grouping provenance for that accepted result. Declare species, assembly, raw measurement history, tissue context and grouping provenance only when supported by the user; missing fields stay null. Agent checks source-bound metadata and resolves compatible annotation_resources. Set grouping_strategy=reuse_only when the user requires existing groups or prohibits recomputing them; otherwise use compute_if_needed or null. If no qualified grouping exists, preserve the annotation goal: the Planner can compute scientifically appropriate grouping prerequisites using existing tools. Do not ask the user to create clusters or specify preprocessing enums. Reuse qualified supplied or accepted groups when available; ask only about genuinely missing biological declarations. Match a supported tissue meaning to an offered exact resource context; do not infer tissue from resource availability. resource is an explicit preference only; otherwise leave null. Use existing scientific arguments for explicit count_slot and group_column; do not invent defaults. Pending annotation requests use answer_roles with annotation and explicit additions or corrections to species, assembly, measurement or tissue context. Use the measurement identifier described in the annotation schema when the declared counting history supports it. Match user-supported tissue meaning to an offered exact resource context, including when a resource becomes available later. Corrections create a new declaration record; they cannot replace captured source files or override conflicting source metadata. A categorical obs column alone does not establish a clustering result. Never invent cell groups, count history or biological context.',
             'For user-supplied MAESTRO references, annotation.uploaded binds gene_source to a native MAESTRO refgenes transcript/exon table and signature_source to a candidate/gene TSV, using only captured source handles. Record explicit reference species, assembly, biological context, gene_namespace, publisher/derivation provenance and release for each supplied component; unknown fields stay null. These are declarations of origin and applicability, never proof of biological validation. Uploaded roles take precedence over catalog components; never fall back from an invalid explicit upload. A marker table alone cannot replace gene annotations or the qualified genome chromosome scope. Available annotation_resources may supply those remaining dependencies, including a genome-scope-only entry. Ask for missing scientific files or declarations, not InputSet IDs, paths, digests or manifests. A pending annotation may receive uploaded resources through answer_roles without losing the source H5AD or original request.',
             'For scientific BAM preprocessing use request_roles with target run_snapatac2, bam and empty required_roles/roles. Preserve the selected file, source assembly, assay and known barcode history. source_profile and namespace can stay null; the native BAM method owns filtering, duplicate flags, endpoints and shifts. It differs from historical Agent policies. Existing bam_resources supply compatible reference files. Ask intelligible questions only about actual missing scientific inputs; do not request FASTQs, sorting, a BAI, an internal profile or retained duplicate pairs merely for native BAM admission. For pending bam use answer_roles with @roles and explicit additions. For raw tasks, resource_preference quotes only an explicitly requested reference name with literal/evidence; omit it otherwise. Agent resolves concrete components after native function selection. Never emit a resource handle. A named native-function request uses execute_plan and native file ports directly, without substituting task defaults.',

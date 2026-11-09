@@ -98,9 +98,10 @@ def prepare(stream, role):
         import json
         from .sequence_delivery import prepare as metadata_prepare
         value = json.load(stream)
-        value.pop('session', None)
-        if isinstance(value.get('receipt'), dict):
-            value['receipt'].pop('session', None)
+        if isinstance(value, dict):
+            value.pop('session', None)
+            if isinstance(value.get('receipt'), dict):
+                value['receipt'].pop('session', None)
         return metadata_prepare(io.BytesIO(json.dumps(value).encode()), 'metadata.json')
     raw = stream.read()
     if role.endswith('.tsv'):

@@ -27,6 +27,8 @@ class Model:
 
 
 def test_pca_authority_report_graph_reuse_and_recovery(tmp_path,monkeypatch):
+    from agent.tools import _native_process
+    monkeypatch.setattr(_native_process, 'call', lambda operation, arguments, local: local())
     x=sparse.csr_matrix(np.random.default_rng(4).poisson(.4,(24,71)))
     path=tmp_path/'input.h5ad';ad.AnnData(x,obs=pd.DataFrame(index=[f'c{i}' for i in range(24)])).write_h5ad(path)
     app=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(Model()))

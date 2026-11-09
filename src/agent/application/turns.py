@@ -744,7 +744,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                        'unsupported_intent', 'unavailable_context'}
                 and getattr(exc, 'diagnostic_reason', None) != 'incompatible_scientific_reference'):
             from .interactive_schemas import ClientError
-            _failed_admission(sessions, interaction, decision)
+            _failed_admission(sessions, interaction, decision,
+                preserve_pending=diagnostic_stage == 'interpretation')
             if reason == 'unavailable_context' and (isinstance(decision, Answer) or diagnostic_stage == 'preparation'):
                 error = ClientError('INTERACTIVE_REFERENCE_INVALID',
                     'The saved evidence required for this answer is unavailable or invalid.')

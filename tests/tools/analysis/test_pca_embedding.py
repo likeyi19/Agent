@@ -11,6 +11,12 @@ from agent.tools.analysis import pca_embedding as pca
 from agent.tools.analysis import embedding_analysis as analysis
 from agent.tools.analysis import neighbors_publication as publication
 
+@pytest.fixture(autouse=True)
+def simulated_process_boundary(monkeypatch):
+    """Numerical/corruption tests run locally; kernel qualification is separate."""
+    from agent.tools import _native_process
+    monkeypatch.setattr(_native_process, 'call', lambda operation, arguments, local: local())
+
 @pytest.fixture
 def source(tmp_path):
     x = np.random.default_rng(41).poisson(.6, (24,71)).astype(np.float64)

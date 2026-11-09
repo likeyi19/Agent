@@ -19,6 +19,39 @@ LABEL = 'Annotated cells — safe export'
 EXPORT_CONTRACT = 'scatac-cell-type-annotation-export.v1'
 DESTINATION_OVERHEAD_BYTES = 65536
 
+# Exact native evidence, including the axis companions required to interpret RP.
+# The shared download owner pins bytes and applies its existing JSON/TSV privacy
+# projection. No markers, scores or annotations are recomputed for delivery.
+EVIDENCE_FILES = {
+    'annotation-cells.json': ('primary/cells.json', 'Native per-cell annotations and status', 'application/json'),
+    'annotation-groups.json': ('primary/groups.json', 'Native group annotations and evidence status', 'application/json'),
+    'annotation-candidate-evidence.json': ('primary/candidate_evidence.json', 'Native candidate signature evidence', 'application/json'),
+    'native-markers.tsv': ('primary/markers-signature-input.tsv', 'Native MAESTRO marker statistics', 'text/tab-separated-values; charset=utf-8'),
+    'native-rp.npz': ('primary/rp.npz', 'Native MAESTRO RP matrix (CSR NPZ)', 'application/octet-stream'),
+    'native-rp-cells.tsv': ('primary/cells.tsv', 'RP ordered cell axis', 'text/tab-separated-values; charset=utf-8'),
+    'native-rp-genes.tsv': ('primary/genes.tsv', 'RP ordered gene axis', 'text/tab-separated-values; charset=utf-8'),
+    'native-rp-groups.tsv': ('primary/groups.tsv', 'RP ordered cell group labels', 'text/tab-separated-values; charset=utf-8'),
+}
+
+
+def accepted_annotations(app, session_id, revision, origin, output, *, step_id=None):
+    """Reuse the accepted annotation owner for H5AD and native evidence files."""
+    from dataclasses import replace
+    from .interactive_schemas import ScientificArtifactHandle
+    from .session_state import digest
+    matrix_artifact = accepted_annotation(app, session_id, revision, origin, output, step_id=step_id)
+    items = [matrix_artifact]
+    for name, (relative, label, _) in EVIDENCE_FILES.items():
+        pin = matrix_artifact.manifest['sidecars'].get(relative)
+        if pin is None or not pin['size_bytes']:
+            continue
+        identity = dict(annotation=matrix_artifact.reference.handle, role=name, payload=pin)
+        ref = ScientificArtifactHandle(digest(identity), 'scientific_annotation_evidence', pin['sha256'],
+            revision.revision_id, origin.turn_id, pin['size_bytes'], name, label)
+        items.append(replace(matrix_artifact, reference=ref, path=matrix_artifact.path.parent / relative,
+            sha256=pin['sha256'], size_bytes=pin['size_bytes'], role=name))
+    return items
+
 
 def _strings(item):
     matrix._reject(h5py.check_string_dtype(item.dtype) is None or item.ndim != 1)

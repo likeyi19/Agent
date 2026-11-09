@@ -218,6 +218,40 @@ def preparer(sessions, interaction, admitted):
             return row.result[value.output_key]
         return value
 
+    def planned_counts(producer, values, selected):
+        """Project a selected native count construction, never qualify its output.
+
+        Execution still checks actual source metadata, counts and ordered groups.
+        No reference choice, counting choice or biological context is inferred here.
+        """
+        if producer != 'run_snapatac2' or values.get('function_name') != 'pp.make_peak_matrix':
+            return None
+        kwargs = values.get('kwargs', {})
+        if kwargs.get('use_x') or values.get('count_slot', 'X') != 'X':
+            return None
+        source = values.get('input_path')
+        seen = set()
+        while isinstance(source, StepOutputRef):
+            if source.step_id in seen:
+                raise ValueError('Cyclic planned fragment source.')
+            seen.add(source.step_id)
+            tool, upstream = selected[source.step_id]
+            if tool != 'run_snapatac2':
+                return None
+            function = upstream.get('function_name')
+            if function == 'pp.import_fragments':
+                from agent.tools.analysis.snapatac_raw_worker import peak_measurement
+                storage = 'paired_fragments' if upstream.get('kwargs', {}).get('is_paired', True) else 'single_end_insertions'
+                strategy = values.get('counting_strategy', kwargs.get('counting_strategy', 'paired-insertion'))
+                if 'counting_strategy' in kwargs and kwargs['counting_strategy'] != strategy:
+                    raise ValueError('Explicit native kwargs and scalar have conflicting counting_strategy values')
+                return dict(measurement=peak_measurement(storage, strategy), count_slot='X',
+                    **{key: upstream[key] for key in ('species', 'assembly') if upstream.get(key) is not None})
+            if function not in ('metrics.tsse', 'metrics.frag_size_distr', 'pp.filter_cells'):
+                return None
+            source = upstream.get('input_path')
+        return None
+
     def prepare(tool, arguments, selected):
         if tool.name != 'annotate_scATAC_cell_types' or 'annotation_spec_path' in arguments:
             return arguments  # Explicit pinned specifications keep their meaning.
@@ -225,10 +259,12 @@ def preparer(sessions, interaction, admitted):
         from .input_sets import ScientificInputSet
         from agent.tools.analysis import annotation_input, annotation_contract as c
         from .result_reading import handoff
-        declared = declaration(_serialize(admitted['annotation']), 'annotation') if 'annotation' in admitted else AnnotationDeclaration()
+        annotation = admitted.get('annotation', admitted.get('downstream_annotation'))
+        declared = declaration(_serialize(annotation), 'annotation') if annotation is not None else AnnotationDeclaration()
         source = arguments.get('source_path')
         sha = arguments.get('source_sha256')
         visited = set()
+        projected = None
         # A planned count-preserving operation may use an already available
         # input for declarations. This does not qualify the future output.
         while isinstance(source, StepOutputRef):
@@ -238,13 +274,28 @@ def preparer(sessions, interaction, admitted):
             producer, values = selected[source.step_id]
             from agent.tools.analysis.cell_result import planned_count_preservation
             if not planned_count_preservation(producer, values):
+                projected = planned_counts(producer, values, selected)
+                if projected is not None:
+                    break
                 raise AnnotationPrerequisite(('Select an available count matrix with declared measurement semantics.',))
             source, sha = values.get('input_path'), values.get('input_sha256')
-        source, sha = exact(source), exact(sha)
-        if not isinstance(source, (str, Path)) or not isinstance(sha, str):
-            raise AnnotationPrerequisite(('Select the count H5AD to annotate.',))
-        observation = annotation_input.observe(source, sha)
-        supplied = dict(observation['declarations'])
+        observation = None
+        if projected is None:
+            source, sha = exact(source), exact(sha)
+            if not isinstance(source, (str, Path)) or not isinstance(sha, str):
+                raise AnnotationPrerequisite(('Select the count H5AD to annotate.',))
+            observation = annotation_input.observe(source, sha)
+            supplied = dict(observation['declarations'])
+        else:
+            supplied = projected
+            # Raw biological declarations bind import later, after compilation.
+            for field in ('fastq', 'bam', 'fragments'):
+                for key in ('species', 'assembly'):
+                    value = admitted.get(field, {}).get(key)
+                    if value is not None:
+                        if key in supplied and supplied[key] != value:
+                            raise ValueError('Planned count source conflicts with raw ' + key + '.')
+                        supplied[key] = value
         metadata_slot = supplied.pop('count_slot', 'X')
         if arguments.get('count_slot', 'X') != metadata_slot:
             supplied.pop('measurement', None)
@@ -276,6 +327,8 @@ def preparer(sessions, interaction, admitted):
         elif isinstance(groups, PriorOutputRef):
             grouping_locator = dict(run_id=groups.binding.run_id, step_id=groups.binding.step_id)
         if grouping_locator is not None:
+            if observation is None:
+                raise AnnotationPrerequisite(('Select clustering computed from the planned count source.',))
             view = handoff(store, grouping_locator['run_id'], grouping_locator['step_id'])
             grouping = None if view is None else view['groups']
             source_view = (handoff(store, arguments['source_path'].binding.run_id, arguments['source_path'].binding.step_id)
@@ -309,15 +362,15 @@ def preparer(sessions, interaction, admitted):
             declared = replace(declared, grouping_provenance=declared.grouping_provenance or
                 'Exact-source independent clustering selected by the scientific plan')
         elif 'groups_path' not in arguments and 'group_column' not in arguments:
-            qualified = observation['qualified_groupings']
+            qualified = [] if observation is None else observation['qualified_groupings']
             if len(qualified) == 1:
                 arguments['group_column'] = qualified[0]['column']
                 declared = replace(declared, grouping_provenance=qualified[0]['provenance'])
             else:
-                columns = ', '.join(observation['grouping_columns'])
+                columns = '' if observation is None else ', '.join(observation['grouping_columns'])
                 raise AnnotationPrerequisite(('Select independently derived clustering'
                     + (' from ' + columns if columns else '') + ' or plan clustering for these counts.',))
-        if 'group_column' in arguments and declared.grouping_provenance is None:
+        if observation is not None and 'group_column' in arguments and declared.grouping_provenance is None:
             offered = [row for row in observation['qualified_groupings'] if row['column'] == arguments['group_column']]
             if len(offered) == 1:
                 declared = replace(declared, grouping_provenance=offered[0]['provenance'])

@@ -20,6 +20,8 @@ REPRESENTATION = 'X_pca'
 
 
 def _source(path, *, require_variance=True, preprocessing="none"):
+    # Reuse the storage owner's optional native HDF5 filter registration.
+    from . import peak_h5ad  # noqa: F401
     if preprocessing not in ("none", "tfidf_l2"):
         raise ValueError("PCA preprocessing must be none or tfidf_l2.")
     data = ad.read_h5ad(path, backed='r')
@@ -36,8 +38,9 @@ def _source(path, *, require_variance=True, preprocessing="none"):
             estimated += group['data'].size * 8
         else:
             estimated = data.n_obs * data.n_vars * (matrix.dtype.itemsize + 8)
-        if estimated > 2 * 1024**3:
-            raise ValueError('PCA input storage and numeric copy exceed the 2 GiB execution bound.')
+        from agent.tools._native_process import _CONTROLLED
+        if not _CONTROLLED.get() and estimated > 2 * 1024**3:
+            raise ValueError('PCA source observation exceeds the in-process read bound.')
         x = matrix.to_memory() if hasattr(matrix, 'to_memory') else matrix[:]
     finally:
         data.file.close()
@@ -113,6 +116,14 @@ def descriptor(data):
 def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
                     n_components: int | None = None, random_seed: int = 0, preprocessing: str = "none",
                     overwrite: bool = False):
+    from agent.tools._native_process import call
+    arguments = dict(input_path=str(input_path), output_dir=str(output_dir),
+        n_components=n_components, random_seed=random_seed, preprocessing=preprocessing, overwrite=overwrite)
+    return call('pca', dict(arguments=arguments), lambda: _pca_embed_cells(**arguments))
+
+
+def _pca_embed_cells(input_path, output_dir, *, n_components=None, random_seed=0,
+                     preprocessing="none", overwrite=False):
     common._validate_overwrite(overwrite); common._validate_seed(random_seed)
     path = common._resolve_existing_file(input_path, 'input_path')
     root = common._resolve_output_dir(output_dir)
@@ -125,9 +136,6 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
     if n_components is not None and (type(n_components) is not int or not 0 < n_components < min(x.shape)):
         raise ValueError('PCA n_components must be positive and below min(n_cells, n_features).')
     k = min(50, min(x.shape)-1) if n_components is None else n_components
-    # Bound fit/workspace allocations separately from the sparse source storage.
-    if 8 * (x.shape[0]+x.shape[1]) * max(2*k+1,20) > 2 * 1024**3:
-        raise ValueError('PCA solver workspace estimate exceeds 2 GiB; use fewer components.')
     with common._preserve_loaded_torch_threads():
         import scanpy as sc
         scores, loadings, ratios, variances = sc.pp.pca(x, n_comps=k, zero_center=True,
@@ -166,6 +174,14 @@ def pca_embed_cells(input_path: str | Path, output_dir: str | Path, *,
 
 
 def _verify_result(arguments, result):
+    from agent.tools._native_process import call
+    from agent.schemas.orchestration import _serialize
+    wire_arguments = {key: str(value) if isinstance(value, Path) else value for key, value in arguments.items()}
+    return call('pca_verify', dict(arguments=_serialize(wire_arguments), result=_serialize(result)),
+                lambda: _verify_fit(arguments, result))
+
+
+def _verify_fit(arguments, result):
     path = Path(result['analysis_path']); before = snapshots([path, result['input_path'], result['cell_ids_path']])
     if (common._analysis_digest(path) != result['analysis_sha256'] or
             Path(arguments['input_path']).resolve() != Path(result['input_path']) or

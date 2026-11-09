@@ -543,3 +543,56 @@ def test_conflicting_explicit_sizes_remain_a_saved_question_before_science(input
     assert 'no recorded association' in admitted['choices'][0]
     assert not state.turns and not state.revisions and not list((app.workspace_root/'run_state').glob('*.json'))
     assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==state
+
+
+def test_raw_annotation_context_survives_reference_question_and_restart(inputs):
+    from agent.application.raw_handoff import AnnotationDeclaration
+    from agent.application import ResearchAgentApplication
+    class CompoundModel(TaskModel):
+        def complete(self, *, prompt, response_schema):
+            value=json.loads(super().complete(prompt=prompt,response_schema=response_schema))
+            value['decision']['annotation']=declaration_dict(AnnotationDeclaration(context='human PBMC'))
+            return json.dumps(value)
+    app,planner,captured=task_application(inputs)
+    choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
+    outcome=app.sessions.respond('research','first','Analyze and annotate human PBMC fragments on hg38.',
+        interpreter=CompoundModel(),submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
+    assert outcome.status=='clarification',outcome
+    state=app.sessions.load('research')
+    admitted=state.interactions[-1].admitted
+    assert admitted['downstream_annotation']['context']=='human PBMC'
+    assert admitted['fragments']['source']=='source.0'
+    assert state.interactions[-1].prerequisite['field']=='fragments'
+    assert not state.turns and not state.revisions
+    assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==state
+    class Continuation:
+        model_id='scripted/context-continuation'
+        def complete(self, *, prompt, response_schema):
+            return json.dumps(dict(turn_schema_version=1,decision=dict(kind='answer_roles',pending='@roles',roles=[],arguments=[],
+                fragments=declaration_dict(FragmentsDeclaration()),annotation=declaration_dict(AnnotationDeclaration(context='human blood')))))
+    next_outcome=app.sessions.respond('research','second','The tissue context is human blood.',interpreter=Continuation(),input_sets=choices)
+    assert next_outcome.status=='clarification',next_outcome
+    new=app.sessions.load('research')
+    assert new.interactions[-1].admitted['downstream_annotation']['context']=='human blood'
+    assert new.interactions[0]==state.interactions[0]
+    assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==new
+
+
+def test_malformed_continuation_keeps_exact_pending_objective_without_retry(inputs):
+    from agent.application import ResearchAgentApplication
+    app,planner,captured=task_application(inputs)
+    choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
+    first=app.sessions.respond('research','first','Build a matrix from human hg38 fragments.',interpreter=TaskModel(),
+        submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
+    assert first.status=='clarification'
+    before=app.sessions.load('research')
+    class BrokenModel:
+        model_id='scripted/malformed'
+        def complete(self,**kwargs):return '{broken'
+    failed=app.sessions.respond('research','failed','Use the first reference.',interpreter=BrokenModel(),input_sets=choices)
+    assert failed.status=='failed'
+    after=app.sessions.load('research')
+    assert after.interactions[-1].prerequisite==before.interactions[-1].prerequisite
+    assert after.interactions[0]==before.interactions[0]
+    assert not after.turns and not after.revisions and planner.calls==1
+    assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==after

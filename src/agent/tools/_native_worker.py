@@ -48,6 +48,12 @@ def main():
 
 
 def dispatch(operation, args):
+    if operation == 'pca':
+        from agent.tools.analysis.pca_embedding import _pca_embed_cells
+        return _pca_embed_cells(**args['arguments'])
+    if operation == 'pca_verify':
+        from agent.tools.analysis.pca_embedding import _verify_fit
+        return _verify_fit(**args)
     if operation == 'command':
         from agent.tools._native_process import run
         args['log_path'] = Path(args['log_path'])

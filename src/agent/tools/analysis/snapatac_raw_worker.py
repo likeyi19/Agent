@@ -10,6 +10,13 @@ import sys
 import traceback
 
 
+def peak_measurement(source_measurement, strategy):
+    """Meaning of the native counting choice, shared by planning and publication."""
+    return ({'fragment': 'fragment_counts', 'insertion': 'insertion_counts',
+             'paired-insertion': 'paired_insertion_counts'}[strategy]
+            if source_measurement == 'paired_fragments' else 'snapatac2_' + source_measurement)
+
+
 def main(request_path):
     raw = Path(request_path).read_bytes(); req = json.loads(raw); stage = Path(req['stage'])
     try:
@@ -69,8 +76,7 @@ def main(request_path):
                 if result is not None:
                     a.close(); a = result
                 strategy = kw.get('counting_strategy', 'paired-insertion')
-                measurement = {'fragment': 'fragment_counts', 'insertion': 'insertion_counts',
-                    'paired-insertion': 'paired_insertion_counts'}[strategy] if source_measurement == 'paired_fragments' else 'snapatac2_' + source_measurement
+                measurement = peak_measurement(source_measurement, strategy)
                 slots = ['X']
             elif name == 'metrics.tsse': slots = ['obs.tsse', 'uns.library_tsse', 'uns.frac_overlap_TSS', 'uns.TSS_profile']
             elif name == 'metrics.frag_size_distr': slots = ['uns.' + kw.get('add_key', 'frag_size_distr')]

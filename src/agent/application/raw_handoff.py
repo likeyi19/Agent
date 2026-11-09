@@ -243,6 +243,13 @@ def _field(interaction):
     return 'epizoo' if 'epizoo' in admitted else 'annotation' if 'annotation' in admitted else 'fragments' if 'fragments' in admitted else 'bam' if 'bam' in admitted else 'fastq' if 'fastq' in admitted else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
 
 
+def validate_downstream_annotation(value):
+    """Biological declarations for planned counts; raw intake owns file roles."""
+    if (type(value) is not AnnotationDeclaration or source_handles(value)
+            or value.groups_result is not None or value.uploaded is not None):
+        raise ValueError('Raw-to-annotation declarations cannot replace planned count or grouping sources.')
+
+
 def validate_arguments(arguments, field='fastq'):
     from .epizoo_handoff import TOOLS
     downstream=('pca_embed_cells','build_cell_neighbors','cluster_cells','compute_cell_umap')
@@ -850,7 +857,10 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     from .turn_decisions import RequestRoles, IntentError
     from .resource_continuation import catalog
     from .local_resources import LocalResourceAdmission
-    field = 'epizoo' if decision.epizoo is not None else 'annotation' if decision.annotation is not None else 'fragments' if decision.fragments is not None else 'bam' if decision.bam is not None else (interaction.snapshot.get('prerequisite') or {}).get('field', 'fastq')
+    field = ('epizoo' if decision.epizoo is not None else 'fragments' if decision.fragments is not None
+             else 'bam' if decision.bam is not None else 'fastq' if decision.fastq is not None
+             else (interaction.snapshot.get('prerequisite') or {}).get('field')
+             or ('annotation' if decision.annotation is not None else 'fastq'))
     if field == 'annotation':
         from .annotation_preparation import admit as admit_annotation
         return admit_annotation(sessions, interaction, decision, input_sets)
@@ -933,6 +943,14 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         arguments=[asdict(a) for a in decision.arguments])
     if native:
         admitted['resource_resolution'] = 'native-inputs.v1'
+        previous_annotation = None if source is None else source.admitted.get('downstream_annotation')
+        if decision.annotation is not None or previous_annotation is not None:
+            addition = decision.annotation or AnnotationDeclaration()
+            validate_downstream_annotation(addition)
+            combined = merge(AnnotationDeclaration() if previous_annotation is None else
+                declaration(_serialize(previous_annotation), 'annotation'), addition, pending=True)
+            admitted['downstream_annotation'] = declaration_dict(combined)
+            admitted['downstream_annotation_addition'] = declaration_dict(addition)
         # Native selection is per function. A corrected name identifying
         # several component aliases must not retain an older whole-set choice.
         admitted['raw_resource_choice'] = None if selected is None else 'resource.' + selected.input_set_id
@@ -1093,6 +1111,14 @@ def validate(interaction, preceding):
                 raise ValueError('FASTQ question lost its captured scope.')
             return
         origin, source = _captured(interaction, preceding)
+        if 'downstream_annotation' in admitted:
+            addition = declaration(admitted['downstream_annotation_addition'], 'annotation')
+            validate_downstream_annotation(addition)
+            previous = None if source is None else source.admitted.get('downstream_annotation')
+            combined = merge(AnnotationDeclaration() if previous is None else
+                declaration(_serialize(previous), 'annotation'), addition, pending=True)
+            if admitted['downstream_annotation'] != declaration_dict(combined):
+                raise ValueError('Downstream annotation declarations changed.')
         rows = admitted['resource_catalog']
         evidence = admitted.get('raw_resource_evidence')
         if (('raw_resource_evidence' in admitted) != ('raw_resource_choice' in admitted)

@@ -87,9 +87,9 @@ def test_one_structurally_stable_schema_and_complete_inventory(registry):
         projection = _interpretation_public(public, 'Explore the supplied data.')['dialogue']
         capabilities = projection['capabilities']
         assert set(capabilities) == set(registry.names())
-        assert len(capabilities) == 45
-        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == 74
-        assert sum(len(c['parameters']) for c in capabilities.values()) == 183
+        assert len(capabilities) == 37
+        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == 82
+        assert sum(len(c['parameters']) for c in capabilities.values()) == 180
         for row in scientific_parameters(registry):
             actual=dict(capabilities[row['tool']]['parameters'][row['argument']])
             expected={k:v for k,v in row.items() if k not in ('tool','argument')}
@@ -243,3 +243,28 @@ def test_retired_initialization_parameters_stay_readable_but_cannot_be_new_inten
     declaration=ScopedArgument('adapt_epizoo_species','max_steps','10',0,2)
     with pytest.raises(IntentError):_bind_arguments(registry,'10',{},(declaration,))
     assert _bind_arguments(registry,'10',{},(declaration,),historical=True)['max_steps']==10
+
+
+def test_clarification_schema_agrees_with_parameter_choice_admission():
+    schema=decision_schema()
+    for reason,choices,valid in [
+        ('unavailable_context',[],True),
+        ('unavailable_context',['Run the original analysis'],False),
+        ('missing_parameter_value',['run_snapatac2.kwargs'],True),
+        ('missing_parameter_value',['Use threshold four'],False),
+    ]:
+        value=dict(turn_schema_version=1,decision=dict(kind='clarify',reason=reason,choices=choices))
+        assert accepts(schema,value)==valid
+        if valid:assert parse_decision(json.dumps(value)).reason==reason
+        else:
+            with pytest.raises(IntentError):parse_decision(json.dumps(value))
+
+
+def test_resource_answer_schema_cannot_claim_raw_role_pending_handle():
+    schema=decision_schema()
+    value=dict(turn_schema_version=1,decision=dict(kind='answer_resources',pending='@roles',choice='resource.reference',arguments=[]))
+    assert not accepts(schema,value)
+    with pytest.raises(IntentError):parse_decision(json.dumps(value))
+    value['decision']['pending']='@resources'
+    assert accepts(schema,value)
+    assert parse_decision(json.dumps(value)).pending=='@resources'

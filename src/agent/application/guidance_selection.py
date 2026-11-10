@@ -6,7 +6,7 @@ import json
 import re
 
 from agent.orchestration.active_context import ActiveContextItem, ActivePlanningContext
-from agent.orchestration.prior_outputs import binding_for_locator, validate_binding
+from agent.orchestration.prior_outputs import binding_for_locator, validate_binding, matrix_dataset_binding
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import digest
 from .turn_decisions import IntentError, _shape, clauses
@@ -43,6 +43,25 @@ def public_candidates(state, captured):
         subjects=[t['subject'] for t in r['targets']]) for n,r in enumerate(refs)]
 
 
+def selected_candidate(interaction):
+    choice = (interaction.submission or {}).get('candidate_selection')
+    if choice is None:
+        return None
+    if choice['origin_turn_id'] != interaction.snapshot['dialogue']['predecessor']:
+        raise IntentError('invalid_reference')
+    from .turn_decisions import ExecuteCandidate
+    return ExecuteCandidate(choice['candidate_id'], interaction.utterance)
+
+
+def selection_evidence(interaction, candidate, evidence):
+    choice = (interaction.submission or {}).get('candidate_selection')
+    if choice is None:
+        command_evidence(interaction.utterance, evidence)
+    elif (choice['candidate_id'] != candidate['candidate_id']
+          or choice['origin_turn_id'] != candidate['origin_turn_id']):
+        raise IntentError('invalid_reference')
+
+
 def command_evidence(utterance, evidence):
     # Reuse M15's rejection of conditional/negated command clauses. Splitting
     # command boundaries never selects a capability or interprets a referent.
@@ -58,8 +77,10 @@ def command_evidence(utterance, evidence):
 def validate_selection(state, interaction, preceding):
     """Validate durable selection metadata on the ordinary session load path."""
     a = _serialize(interaction.admitted)
+    if 'scope_selection' in a:
+        return  # The exact captured plan continuation is checked by validate_scope.
     _shape(a, ('kind','operation','tool','revision_id','request_id','inputs',
-               'selected_candidate','command_evidence','catalog_sha256'))
+               'selected_candidate','command_evidence','catalog_sha256') + tuple(k for k in ('arguments', 'parameter_scope', 'scope_selection', 'native_plan', 'native_planning_trace', 'native_resource_bindings') if k in a))
     r = a['selected_candidate']
     if (a['kind'] != 'execute' or a['operation'] != 'plan'
             or r not in [_serialize(v) for v in candidates(preceding, interaction.snapshot)]
@@ -71,7 +92,7 @@ def validate_selection(state, interaction, preceding):
         raise ValueError('Selected catalog changed.')
     if a['request_id'] != 'turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)):
         raise ValueError('Selection request identity changed.')
-    command_evidence(interaction.utterance, a['command_evidence'])
+    selection_evidence(interaction, r, a['command_evidence'])
 
 
 def _check(sessions, interaction, selected, catalog_sha256):
@@ -105,19 +126,21 @@ def execution_context(sessions, interaction, admitted):
     items, bindings = [], set()
     for _, binding in _bindings(state, app, selected):
         validate_binding(binding, store=app.run_store, registry=app.registry, integrity=True)
-        if binding not in bindings:
-            items.append(ActiveContextItem(f'ctx.{len(items)}', binding)); bindings.add(binding)
+        dataset = matrix_dataset_binding(binding, app.run_store, app.registry)
+        for offered in (binding, dataset):
+            if offered is not None and offered not in bindings:
+                items.append(ActiveContextItem(f'ctx.{len(items)}', offered)); bindings.add(offered)
     return ActivePlanningContext(state.session_id, interaction.base_revision_id,
                                  interaction.base_generation, tuple(items))
 
 
 def admit(sessions, interaction, decision, inputs):
-    command_evidence(interaction.utterance, decision.evidence)
     state = sessions.load(sessions._interaction_session_id)
     preceding = state.interactions[:next(n for n,i in enumerate(state.interactions) if i.turn_id == interaction.turn_id)]
     matches = [r for r in candidates(preceding, interaction.snapshot) if r['candidate_id'] == decision.candidate]
     if len(matches) != 1: raise IntentError('ambiguous_predecessor')
     selected = _serialize(matches[0])
+    selection_evidence(interaction, selected, decision.evidence)
     origin = next(i for i in preceding if i.turn_id == selected['origin_turn_id'])
     admitted = dict(kind='execute', operation='plan', tool=selected['capability'],
         revision_id=interaction.base_revision_id,
@@ -125,6 +148,12 @@ def admit(sessions, interaction, decision, inputs):
         inputs={} if inputs is None else _serialize(freeze_json_mapping(inputs, 'execution_inputs')),
         selected_candidate=selected, command_evidence=decision.evidence,
         catalog_sha256=origin.admitted['catalog_sha256'])
+    if decision.arguments:
+        from dataclasses import asdict
+        from .dialogue_execution import _bind_arguments
+        admitted['arguments'] = [asdict(d) for d in decision.arguments]
+        admitted['inputs'] = _bind_arguments(registry=sessions._application.registry, utterance=interaction.utterance,
+            inputs=admitted['inputs'], declarations=decision.arguments)
     _check(sessions, interaction, selected, admitted['catalog_sha256'])
     try: execution_context(sessions, interaction, admitted)
     except (ValueError, RuntimeError, OSError, KeyError) as exc:
@@ -139,7 +168,7 @@ def planning_intent(sessions, interaction, admitted, context):
     subjects = [dict(context_handle=next(i.handle for i in context.items if i.binding == binding),
                      output=target['output_name'], subject=target['subject'])
                 for target, binding in _bindings(state, sessions._application, r)]
-    return json.dumps(dict(objective=objective, selected_capability=r['capability'],
+    return json.dumps(dict(objective=objective, selection_intent='execute', selected_capability=r['capability'],
         captured_subjects=subjects,
         current_user_request=interaction.utterance,
         instructions='Plan the explicitly selected objective using normal Registry contracts and offered inputs/context. '

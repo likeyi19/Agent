@@ -46,6 +46,8 @@ class ExportModel(Model):
         if self.unavailable:
             assert recipe['status'] == 'unavailable'
             text = 'The accepted PCA cell count remains available; the selected export recipe is unavailable.'
+            if recipe.get('reason') == 'destination_collision':
+                text += ' Choose a distinct destination name.'
         else:
             assert recipe['status'] == 'available_for_preparation'
             assert recipe['size_bytes'] is None and recipe['artifact_type'] == 'scientific_composition'
@@ -75,9 +77,11 @@ def test_selected_export_uses_existing_r5_and_survives_withholding_without_prepa
     state = guarded.sessions.load('session')
     model = ExportModel(withhold=withhold)
     outcome = ask(guarded, 'export', 'Use the original measurements and selected PCA/cohort fields in one Scanpy H5AD.', model)
-    assert outcome.status == 'answered' and not outcome.artifacts
-    assert 'H5AD recipe is available for preparation when downloaded' in outcome.text
-    assert ('could not ground' in outcome.text) == withhold
+    assert outcome.status == ('unavailable' if withhold else 'answered') and not outcome.artifacts
+    assert ('Response unavailable:' in outcome.text) == withhold
+    assert (outcome.error is not None) == withhold
+    if not withhold:
+        assert 'Preparation occurs when downloaded' in outcome.text
     assert (outcome.scientific is None) == withhold
     assert len(model.calls) == 3
     after = guarded.sessions.load('session')
@@ -101,7 +105,7 @@ def test_optional_recipe_and_legacy_download_metadata_failure_preserve_primary_f
     outcome = ask(guarded, 'unavailable-export', 'Explain the accepted PCA and selected export.', model)
     assert outcome.status == 'answered' and outcome.scientific is not None
     assert 'accepted PCA cell count remains available' in outcome.text
-    assert 'H5AD recipe is unavailable' in outcome.text and '/private/' not in outcome.text
+    assert 'selected export recipe is unavailable' in outcome.text and '/private/' not in outcome.text
     assert len(model.calls) == 3
     assert any('Optional download descriptions are unavailable' in text for text in outcome.scientific.limitations)
 
@@ -125,7 +129,7 @@ def test_stable_native_method_tampering_removes_recipe_but_preserves_accepted_nu
     outcome = ask(guarded, 'changed-native-method', 'Explain the accepted PCA and select its H5AD representation.', model)
     assert outcome.status == 'answered' and outcome.scientific is not None
     assert any(c.field == 'n_cells' and c.value == 4 for c in outcome.scientific.claims)
-    assert 'accepted PCA cell count remains available' in outcome.text and 'H5AD recipe is unavailable' in outcome.text
+    assert 'accepted PCA cell count remains available' in outcome.text and 'selected export recipe is unavailable' in outcome.text
     assert len(model.calls) == 3
 
 
@@ -199,7 +203,7 @@ def test_selected_recipe_details_remain_available_above_the_preferred_budget(app
             citations=[cells['claim_id']], comparisons=[])])
     outcome = ask(guarded, 'bounded-export', 'Explain the accepted PCA and selected export.', Model(selection, response=response))
     assert outcome.status == 'answered' and outcome.scientific is not None
-    assert 'H5AD recipe is available' in outcome.text
+    assert 'exact representation source' in outcome.text
 
 
 def test_recipe_components_keep_cross_revision_methods_separate_from_primary_umap_summary(app, monkeypatch):
@@ -256,5 +260,5 @@ def test_recipe_components_keep_cross_revision_methods_separate_from_primary_uma
     before = files(guarded)
     outcome = ask(guarded, 'cross-revision-export', 'Combine the new clusters with the previous UMAP and original measurements.',
         Model(choose, response=response))
-    assert outcome.status == 'answered' and 'H5AD recipe is available' in outcome.text, outcome
+    assert outcome.status == 'answered' and 'preserving their distinct method settings' in outcome.text, outcome
     assert all(files(guarded)[path] == sha_bytes for path, sha_bytes in before.items() if not path.startswith('sessions/'))

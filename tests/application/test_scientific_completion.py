@@ -47,8 +47,15 @@ class CompletionModel(ScriptedModel):
             assert cells['value'] == 2 and sparse['value'] is True
             refs = [cells['claim_id'], sparse['claim_id']]
             if self.failure == 'binding': refs = ['invented-claim']
+            delivery=payload['evidence'].get('delivery',{})
+            text='The accepted inspection describes two cells in a sparse matrix. This does not establish biological quality.'
+            if delivery.get('comparison',{}).get('reason')=='exact_operands_not_recorded':
+                text+=' The exact comparison operands were not recorded.'
+            if delivery.get('visualization')=='unavailable':text+=' The requested visualization has not been produced.'
+            if delivery.get('visualization')=='delivered':text+=' The requested visualization is available in the result view.'
+            if delivery.get('unfulfilled'):text+=' Requirements not fulfilled: '+', '.join(delivery['unfulfilled'])
             return json.dumps(dict(support='supported', paragraphs=[dict(
-                text='The accepted inspection describes two cells in a sparse matrix. This does not establish biological quality.',
+                text=text,
                 kind='finding', citations=refs, comparisons=[])]))
         if phase == 'grounding_review_version' and self.failure == 'review':
             return json.dumps(dict(verdicts={p['id']: dict(verdict='unsupported', independent=True) for p in payload['paragraphs']}))
@@ -81,14 +88,15 @@ def test_completion_reuses_r5_and_never_revokes_scientific_success(tmp_path, fai
     assert view.status == 'succeeded' and view.response.status == 'activated'
     assert view.response.version == 2 and view.profile_id == 'alpha'
     scientific = view.response.scientific
-    assert scientific['availability'] == ('generated' if failure is None else 'unavailable')
-    assert scientific['targets'] == (dict(revision_id=view.revision_id, output_name='cells', subject=None),)
     if failure is None:
+        assert scientific['availability']=='generated'
+        assert scientific['targets'] == (dict(revision_id=view.revision_id,output_name='cells',subject=None),)
         assert 'two cells' in view.response.text
         assert {c['field'] for c in scientific['citations']} == {'n_cells', 'x_is_sparse'}
         assert all(c['source']['revision_id'] == view.revision_id for c in scientific['citations'])
     else:
-        assert 'explanation is unavailable' in view.response.text and scientific['citations'] == ()
+        assert scientific is None and view.response.error is not None
+        assert 'Analysis accepted; response unavailable:' in view.response.text
     assert calls == ['inspect_scATAC']
     assert models[0].phases.count('dialogue_schema_version') == 1
     assert models[0].phases.count('grounding_review_version') == (failure not in ('provider', 'binding'))
@@ -105,9 +113,7 @@ def test_completion_reuses_r5_and_never_revokes_scientific_success(tmp_path, fai
 def test_simple_completion_groups_aliases_and_exposes_exact_fields(tmp_path):
     facade, source, calls, models = service(tmp_path, explain=False)
     view = submit(facade, source)
-    assert view.response.scientific['availability'] == 'deterministic'
-    assert 'available in Results' in view.response.text
-    assert {c['field'] for c in view.response.scientific['citations']} >= {'n_cells','x_is_sparse'}
+    assert view.response.scientific is None and view.response.text == 'Analysis accepted.'
     assert len(models[0].phases) == 3 and calls == ['inspect_scATAC']
     revision = facade.revision('session', view.revision_id)
     assert len(revision.outputs) == 4 and len(revision.result_groups) == 1
@@ -132,7 +138,7 @@ def test_accepted_science_without_saved_display_recovers_without_language(tmp_pa
     phases = list(models[0].phases)
     monkeypatch.setattr(AnalysisSessions, 'store_presentation', original)
     recovered = read_only_boundary(facade._application).recover_turn('session', 'first')
-    assert recovered.status == 'succeeded' and recovered.response.scientific['availability'] == 'unavailable'
+    assert recovered.status == 'succeeded' and recovered.response.scientific is None and recovered.response.error is not None
     assert models[0].phases == phases and calls == ['inspect_scATAC']
 
 
@@ -206,11 +212,8 @@ def test_distinct_operations_keep_result_identity_without_alias_fanout(app, monk
     groups = facade.revision('session', rid).result_groups
     assert len(groups) == 2 and {g['canonical_output'] for g in groups} == {'output0','output1'}
     result = completion(app.sessions, 'session', 'initial', TurnOutcome('execute','activated'))
-    assert result.scientific.availability == 'deterministic'
-    assert not any('figure relationships are unavailable' in value for value in result.scientific.limitations)
-    assert {c.target for c in result.scientific.claims} == {'t0','t1'}
-    assert [(c.target,c.value) for c in result.scientific.claims if c.field=='n_cells']==[('t0',7),('t1',7)]
-    assert 'Dataset inspection:' not in result.text
+    assert result.scientific is None and result.text == 'Analysis accepted.'
+    assert all(g['evidence']['status']=='available' for g in groups)
 
 
 def test_http_categorical_tables_preserve_owner_denominators_and_partial_coverage(app, monkeypatch):
@@ -336,20 +339,26 @@ def overlay_service(tmp_path, monkeypatch, *, failure=None, compare=False, expla
                     dict(name='label_count',step_id='labels',output_key='n_clusters',use=None)]))
             if 'dialogue_schema_version' in value:
                 evidence = value['evidence']
-                table = next(c for c in evidence['claims'] if c['field'] == 'detail.category_association')
+                tables = [c for c in evidence['claims'] if c['field'] == 'detail.category_association']
                 assert evidence['targets'][0]['completion_role'] == ('created_by_this_run' if compare_same else 'referenced_accepted_result')
                 assert evidence['targets'][1]['completion_role'] == 'created_by_this_run'
-                assert evidence['delivery']['comparison']['status'] == ('partial' if limit == 1 else 'available')
-                figure = evidence['delivery']['figure_relationships'][0]
-                assert figure['satisfies_request']
-                assert figure['coordinate_reused'] and figure['correspondence']['basis'] == 'same_qualified_neighbors'
-                assert {s['field'] for s in figure['sources']} == {'obsm:X_umap', 'result:cohort'}
+                if tables:
+                    assert evidence['delivery']['comparison']['status'] == ('partial' if limit == 1 else 'available')
+                    figure = evidence['delivery']['figure_relationships'][0]
+                    assert figure['satisfies_request']
+                    assert figure['coordinate_reused'] and figure['correspondence']['basis'] == 'same_qualified_neighbors'
+                    assert {s['field'] for s in figure['sources']} == {'obsm:X_umap', 'result:cohort'}
+                    text = 'The requested descriptive association uses the selected accepted ordered cells. The figure reuses the accepted coordinates unchanged.'
+                    if limit == 1:
+                        text += ' The table has partial coverage.'
+                else:
+                    assert evidence['delivery']['comparison']['status'] == 'unavailable'
+                    tables = [c for c in evidence['claims'] if c['field'] == 'detail.category_counts']
+                    text = 'The requested comparison is unavailable. The separate category counts do not establish matched cells.'
                 assert '/secret' not in json.dumps(evidence)
                 return json.dumps(dict(support='supported', paragraphs=[dict(kind='finding',
-                    text='The requested descriptive association uses the selected accepted ordered cells. The figure reuses the accepted coordinates unchanged.',
-                    citations=[table['claim_id']], comparisons=[])]))
+                    text=text, citations=[table['claim_id'] for table in tables], comparisons=[])]))
             if 'grounding_review_version' in value:
-                assert value['evidence']['delivery']['figure_relationships'][0]['coordinate_reused']
                 return json.dumps(dict(verdicts={row['id']:dict(verdict='unsupported' if failure=='review' else 'entailed', independent=True)
                     for row in value['paragraphs']}))
             raise AssertionError('Unexpected provider phase')
@@ -414,18 +423,18 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
     assert not [a for a in revision.artifacts if a.figure]
     figures=app.sessions.presentation_figure_inventory('session','recolor')
     if failure:
-        assert not figures and 'requested visualization has not been produced' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
-        assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
+        assert not figures and 'Output unavailable: visualization' in view.response.text
+        assert not deliveries  # No duplicate evidence/prose assembly for a UI status.
         assert view.response.version==2 and view.response.artifacts is None
     else:
         assert len(figures)==1 and len(seen)==1
         assert view.response.version==3 and len(view.response.artifacts)==1
-        assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='delivered'
+        assert not deliveries
         import numpy as np
         np.testing.assert_array_equal(seen[0].data.coordinates,xy)
         assert seen[0].data.category_labels==('control','treated','Missing label (not an assigned category)')
         assert seen[0].presentation['category_order']==[dict(value='control',missing=False),dict(value='treated',missing=False),dict(value=None,missing=True)]
-        assert 'not a new embedding fit' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
+        assert view.response.text=='Analysis accepted.'
         meta=figures[0]['metadata']
         assert meta['output_names']==[] and meta['revision_id'] is None
         assert meta['publisher']==dict(kind='interaction',session_id='session',turn_id='recolor')
@@ -442,9 +451,9 @@ def test_new_labels_on_exact_old_coordinates_use_normal_conversation_and_preserv
         # Explicit completion without a live model never adopts or regenerates
         # an existing Interaction bundle as a new delivered presentation.
         outcome=sd.completion(app.sessions,'session','recolor',TurnOutcome('execute','activated'))
-        assert 'requested visualization has not been produced' in outcome.text
+        assert 'Output unavailable: visualization' in outcome.text
         assert not outcome.artifacts
-        assert deliveries[-1]['accepted_figures']==0 and deliveries[-1]['visualization']=='unavailable'
+        assert not deliveries
     saved=files(app); restarted=read_only_boundary(app)
     assert restarted.turn('session','recolor')==view
     assert restarted.revision('session',view.revision_id).artifacts==revision.artifacts
@@ -457,13 +466,13 @@ def test_review_withholding_keeps_independently_published_figure_pins(tmp_path,m
     facade,coords,_,_,calls,models=overlay_service(tmp_path,monkeypatch,compare=True,explain=True,failure='review')
     view=overlay_submit(facade,coords)
     assert view.status=='succeeded' and calls==['scripted_cluster_owner']
-    assert view.response.scientific['availability']=='unavailable'
-    assert view.response.scientific['citations']==()
-    assert 'scientific explanation is unavailable' in view.response.text
-    assert 'requested visualization is available' in view.response.text
+    assert view.response.scientific is None and view.response.error is not None
+    assert 'Analysis accepted; response unavailable:' in view.response.text
     assert view.response.version==3 and len(view.response.artifacts)==1
     assert sum('dialogue_schema_version' in c for c in models[0].calls)==1
     assert sum('grounding_review_version' in c for c in models[0].calls)==1
+    downloads=facade.scientific_artifact_handles('session',view.revision_id,turn_id='recolor')
+    assert downloads and facade.scientific_artifacts_for_turn('session','recolor')==downloads
     figure=facade.presentation_artifact_handles('session','recolor')[0]
     data=facade.presentation_artifact_content('session','recolor',figure.handle).data
     before=files(facade._application)
@@ -497,10 +506,10 @@ def test_precise_comparison_completes_with_existing_readers_and_same_figure_fact
     view = overlay_submit(facade, coords)
     assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
     assert coords.read_bytes() == original
-    assert 'requested comparison is included' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ()))).lower()
+    assert 'requested descriptive association' in view.response.text
     if limit == 1:
         assert 'partial coverage' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
-    assert 'not a new embedding fit' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ())))
+    assert 'reuses the accepted coordinates unchanged' in view.response.text
     scientific = view.response.scientific
     association = [c for c in scientific['citations'] if c['field'] == 'detail.category_association']
     assert len(association) == 1
@@ -510,8 +519,8 @@ def test_precise_comparison_completes_with_existing_readers_and_same_figure_fact
     phases = [next((k for k in ('turn_schema_version', 'semantic_prompt_version',
         'output_selection_schema_version', 'dialogue_schema_version', 'grounding_review_version') if k in c), '')
         for c in models[0].calls]
-    assert phases.count('dialogue_schema_version') == int(explain)
-    assert phases.count('grounding_review_version') == int(explain)
+    assert phases.count('dialogue_schema_version') == 1
+    assert phases.count('grounding_review_version') == 1
     before = files(facade._application)
     restarted = read_only_boundary(facade._application)
     assert restarted.turn('session', 'recolor') == view
@@ -537,7 +546,7 @@ def test_unqualified_requested_comparison_keeps_independent_counts_without_match
     fields = [c['field'] for c in view.response.scientific['citations']]
     assert fields.count('detail.category_counts') == counts
     assert 'detail.category_association' not in fields
-    assert len(models[0].calls) == 3
+    assert len(models[0].calls) == 5
 
 
 @pytest.mark.parametrize('explain', [False, True])
@@ -546,12 +555,12 @@ def test_precise_same_new_result_compares_distinct_fields_without_a_second_resul
         compare=True, compare_same=True, explain=explain)
     view = overlay_submit(facade, coords)
     assert view.status == 'succeeded' and calls == ['scripted_cluster_owner']
-    assert 'requested comparison is included' in (view.response.text + ' '.join((view.response.scientific or {}).get('limitations', ()))).lower()
+    assert 'requested descriptive association' in view.response.text
     claim = next(c for c in view.response.scientific['citations'] if c['field'] == 'detail.category_association')
     sources = claim['source']['derivation']['sources']
     assert sources[0]['artifact_sha256'] == sources[1]['artifact_sha256']
     assert {s['field'] for s in sources} == {'cohort', 'condition'}
-    assert len(models[0].calls) == 3 + 2 * int(explain)
+    assert len(models[0].calls) == 5
 
 
 def test_scientific_answer_retains_exact_presentation_request_without_execution(tmp_path, monkeypatch):
@@ -634,7 +643,8 @@ def test_standalone_source_coloring_preserves_registration_meaning_and_figure_wh
     assert after.turns==before.turns and after.revisions==before.revisions
     assert after.generation==before.generation==1 and after.active_revision_id==old and calls==[]
     assert len(model.calls)==3  # Interpretation, generation and existing R5 review, no retry.
-    assert ('could not ground' in view.response.text)==withhold
+    assert ('Response unavailable:' in view.response.text)==withhold
+    assert (view.response.error is not None)==withhold
     assert len(view.response.artifacts) == 1
     handle=live.presentation_artifact_handles('session','source-color')[0]
     label_source=next(s for s in handle.figure['sources'] if s['role']=='categories')

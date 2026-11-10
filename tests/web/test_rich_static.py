@@ -28,37 +28,36 @@ def code():
 def test_scientific_state_stays_separate_from_conversation():
     page = Page()
     assert {'conversation-history', 'scientific-heading', 'revision-view',
-            'revision-history', 'revision-summary', 'result-panel',
+            'result-choice', 'result-methods', 'result-panel',
             'evidence-panel', 'artifact-panel'} <= page.ids
     assert any(tag == 'aside' and attrs.get('aria-labelledby') == 'scientific-heading'
                for tag, attrs in page.tags)
     assert 'turn.utterance || turn.response' in code()
-    assert '(turn.utterance || turn.response) && !terminal(turn)' in code()
+    assert '(turn.utterance || turn.response || turn.rerun_revision_id) && !terminal(turn)' in code()
 
 
-def test_revision_browsing_and_activation_have_different_operations():
+def test_revision_browsing_is_read_only_and_has_one_selector():
     source = code()
     assert 'api(revisionPath(sessionId, revisionId))' in source
-    assert '/activate`, "POST"' in source
-    assert 'revision_id: revisionId, expected_generation: state.session.generation' in source
-    assert 'displaySession(view)' in source
-    assert 'state.navigating = true' in source
-    continuation = source[source.index('async function activateViewedRevision'):source.index('function renderHistory')]
-    assert 'element("utterance").value = "Continue from this result."' in continuation
-    assert 'submitRequest(' not in continuation
-    assert 'if (state.session.active_revision_id !== revisionId)' in continuation
-    assert 'state.session.active_revision_id === revisionId' in continuation
-    assert 'REVISION_ACTIVATION_CHANGED' in continuation
+    viewing = source[source.index('async function loadRevision'):source.index('async function loadRevision') + 1200]
+    assert '/activate' not in viewing
+    continuation = source[source.index('async function continueFromResult'):source.index('async function openResultParameters')]
+    assert '/activate`, "POST"' in continuation
+    assert 'element("utterance").value = ""' in continuation
+    assert 'postSubmission' not in continuation
+    assert 'Continue from this result.' not in source
+    assert 'result-selection' not in Page().ids
 
 
 def test_guidance_uses_persisted_identity_and_semantic_turn_submission():
     source = code()
     guidance = source[source.index('function guidanceNode'):source.index('function textList')]
     assert 'card.dataset.candidateId = candidate.candidate_id' in guidance
-    assert 'candidate.option' in guidance and 'candidate.origin_turn_id' in guidance
+    assert 'candidate.option' not in guidance and 'candidate.origin_turn_id' in guidance
     assert 'candidate.text' in guidance and 'candidate.limitations' in guidance
     assert 'candidate.readiness' in guidance and 'candidate.base_revision_id' in guidance
-    assert 'submitRequest(`Run option ${candidate.option}.`, candidate.origin_turn_id)' in guidance
+    assert 'origin_turn_id: candidate.origin_turn_id, candidate_id: candidate.candidate_id' in guidance
+    assert 'Run option' not in guidance
     assert 'Readiness metadata was not stored for this historical candidate.' in guidance
     assert 'fetch(' not in guidance and 'api(' not in guidance
     assert 'body.predecessor_turn_id = predecessorTurnId' in source
@@ -83,14 +82,13 @@ def test_evidence_and_supported_detail_use_the_same_bounded_owner_endpoint():
     assert 'fact.reason' in source
 
 
-def test_artifacts_use_handles_safe_types_and_plain_report_display():
+def test_artifacts_use_handles_and_reports_download_without_duplicate_preview():
     source = code()
     assert '/artifacts/${encodeURIComponent(handle)}' in source
     assert '["analysis_report", "analysis_figure"].includes(artifact.artifact_type)' in source
     assert '?download=true' in source
-    assert 'contentType.startsWith("text/plain")' in source
     assert 'contentType.startsWith("image/png")' in source
-    assert 'element("report-content").textContent = text' in source
+    assert 'report-content' not in Page().ids
     assert 'Technical report' in source
     assert 'URL.revokeObjectURL(state.artifactUrl)' in source
     assert 'innerHTML' not in source and 'insertAdjacentHTML' not in source
@@ -102,7 +100,7 @@ def test_rich_view_is_reconstructed_without_persisting_scientific_state_locally(
     convenience = source[source.index('function saveConveniences'):source.index('async function api')]
     assert set(re.findall(r'^\s+(\w+):', convenience, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
-        'viewedRevisionId', 'workspacePanel', 'resultChoice',
+        'viewedRevisionId', 'workspacePanel',
     }
     initialize = source[source.index('async function initialize'):]
     assert 'choice.input_set_id === conveniences.inputSetId' in initialize
@@ -128,9 +126,8 @@ def test_captured_base_and_scientific_targets_are_not_inferred_from_prose():
 def test_metadata_only_scientific_runs_do_not_block_conversation_reopen():
     source = code()
     reopen = source[source.index('async function openSession'):source.index('function newTurnId')]
-    assert '(turn.utterance || turn.response) && !terminal(turn)' in reopen
+    assert '(turn.utterance || turn.response || turn.rerun_revision_id) && !terminal(turn)' in reopen
     assert 'requested && (requested.utterance || requested.response)' in reopen
     assert 'requestedConversation && !terminal(requested)' in reopen
     assert 'resumeTurnId && !requested ? resumeTurnId' in reopen
     assert 'turn.run_id' not in reopen
-    assert 'Stored result presentation is unavailable.' in source

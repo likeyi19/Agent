@@ -225,6 +225,12 @@ def validate_capture(state, interaction, preceding):
         allowed.update(historical)
         required_refs.update((r.revision_id, o.name) for r in state.revisions
                              if r.revision_id in historical for o in r.outputs)
+    selected = (interaction.submission or {}).get('selected_results', ())
+    if selected and interaction.admitted is not None and interaction.admitted.get('operation') == 'plan':
+        from .structured_parameters import selected_groups
+        groups = selected_groups(interaction.snapshot, state, selected)
+        if list(interaction.admitted.get('input_results', ())) != [g['handle'] for g in groups]:
+            raise ValueError('Structured result selection changed its captured identity.')
     if interaction.admitted is not None and interaction.admitted.get('intent') == 'guidance':
         from .scientific_guidance import validate_admitted
         validate_admitted(state, interaction, preceding)
@@ -576,18 +582,9 @@ def _descriptive_fields(views):
             or a.source.result_contract != b.source.result_contract
             or a.source.recovery_identity != b.source.recovery_identity):
         return frozenset()
-    fields = {
-        'pca_embed_cells': ('method', 'representation', 'embedding_dim', 'embedding_dtype', 'parameters'),
-        'epizoo_embed_cells': ('species', 'embedding_dim', 'embedding_dtype', 'device',
-                              'target_model_method', 'target_assembly', 'target_matrix_semantics'),
-        'build_cell_neighbors': ('n_neighbors', 'metric', 'neighbors_method', 'transformer',
-                                 'embedding_dim', 'random_seed'),
-        'cluster_cells': ('resolution', 'random_seed', 'algorithm', 'clustering_parameters.resolution',
-                          'clustering_parameters.random_seed', 'clustering_resolution_origin'),
-        'compute_cell_umap': ('min_dist', 'spread', 'random_seed', 'n_components', 'coordinate_dtype',
-                              'clustering_present'),
-    }
-    return frozenset(fields.get(a.source.tool_name, ()))
+    from .dialogue_evidence import METHOD_FIELDS
+    available = [{f.field for f in view.facts if f.status == 'available'} for view in views]
+    return METHOD_FIELDS & available[0] & available[1]
 
 
 def context(sessions, session_id, admitted, *, evidence_targets=None):
@@ -630,6 +627,22 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
         labels.append(dict(handle=f't{index}', label=label, subject=target['subject'], is_active=view.is_active,
                            tool=view.source.tool_name,
                            coverage=[dict(field=f.field,status=f.status,value=_serialize(f.value)) for f in view.coverage]))
+        locator = view.source.output_locator
+        run = sessions._application.run_store.load(locator['run_id'])
+        labels[-1]['identity'] = dict(revision_id=revision.revision_id,
+            parent_revision_id=revision.parent_revision_id, run_id=locator['run_id'],
+            step_id=locator['step_id'], accepted_step_sha256=locator['accepted_step_sha256'])
+        labels[-1]['execution'] = dict(
+            steps=[dict(step_id=step.step_id, tool=step.tool_name,
+                function_name=None if step.result is None else step.result.get('function_name'),
+                status=step.status.value, attempt_count=step.attempt_count,
+                verification_passed=None if step.verification is None else step.verification.passed)
+                for step in run.steps],
+            depends_on=list(view.source.depends_on),
+            prior_outputs=_serialize(view.source.prior_outputs),
+            verification_checks=list(view.source.verification_checks),
+            evidence_sha256=view.source.evidence_sha256,
+            native_internal_call_counts='NOT_RECORDED')
         if 'completion_run_id' in admitted:
             published = next((r for r in state.revisions
                 if r.revision_id == admitted.get('completion_revision_id')), None)
@@ -929,8 +942,8 @@ def _comparison_delivery(public, claims, detail):
 
 class _AnswerFailure(ValueError):
     """Closed diagnostic codes only; never carry provider text or exceptions."""
-    def __init__(self, stage, reason):
-        self.stage, self.reason = stage, reason
+    def __init__(self, stage, reason, code=None):
+        self.stage, self.reason, self.code = stage, reason, code
         super().__init__(reason)
 
 
@@ -941,10 +954,12 @@ def _language_complete(model, prompt, schema, stage):
         raise _AnswerFailure('request_preparation', 'request_resource_limit')
     try:
         return model.complete(prompt=prompt, response_schema=schema)
-    except (ValueError, TypeError, KeyError, RuntimeError, OSError) as exc:
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError, AttributeError) as exc:
         reason = ('provider_request_too_large' if getattr(exc, 'code', None) == 'PROVIDER_REQUEST_TOO_LARGE'
                   else 'provider_failure')
-        raise _AnswerFailure(stage, reason) from exc
+        from agent.orchestration.error_policy import BUILTIN_ERROR_CODES
+        code = getattr(exc, 'code', None)
+        raise _AnswerFailure(stage, reason, code if code in BUILTIN_ERROR_CODES else None) from exc
 
 
 def _diagnose(stage, reason, *, context=None, candidate=None, evidence=None,
@@ -1035,6 +1050,8 @@ PARTIAL_NOTICE = 'Some parts could not be independently supported by the accepte
 
 
 ANSWER_INSTRUCTIONS = (
+    "Keep the response concise and relevant to the researcher question. Include specific material scientific limitations; do not mechanically append generic biological-validity, authority or technical-readiness disclaimers. The application presents figures, downloads and method details separately; do not repeat their inventories.",
+    'Structured outcome and target execution metadata are application-recorded operational facts, not biological findings. Explain clarifications, failures and missing prerequisites using these facts in the researcher language. Preserve original error codes and execution/acceptance status. Never infer execution success, a replacement method or a missing value. Use limitation/conditional paragraphs for operational-only explanations. In recorded_interaction_outcome scope, supported may refer to those recorded facts without empirical citations; missing scientific conclusions still use insufficient_evidence.',
     'Write natural scientific prose, including accepted numbers, units and categories where useful. '
     'Each paragraph is a short statement with exact citations and kind finding, limitation or conditional.',
     'In a scientific answer, make each paragraph a complete response unit that can be understood on its '
@@ -1134,7 +1151,7 @@ def render_response(result, public, claims):
             if by_id[key] not in used:
                 used.append(by_id[key])
         rendered.append(row['text'])
-    if result['support'] == 'supported' and not used:
+    if result['support'] == 'supported' and not used and public.get('scope') != 'recorded_interaction_outcome':
         raise _AnswerFailure('evidence_binding', 'missing_evidence')
     return ScientificResponse(tuple(used), result['support'], '\n\n'.join(rendered),
                               tuple(public['limitations']), public['scope'])
@@ -1183,6 +1200,7 @@ def review_response(model, responses, public, *, guidance=None, diagnostic=None)
             'and wrong source, population, subject or version attribution. A valid citation alone does not '
             'support surrounding assertions. Check the actual assertions regardless of paragraph kind; '
             'conditional phrasing must not excuse fabricated observations or biological conclusions.',
+            'Structured outcome and target execution metadata are authoritative operational records; check code, operation, execution state, acceptance and missing inputs exactly. They do not establish biological findings. Operational-only explanations may use limitation/conditional paragraphs without empirical citations.',
             'Empirical findings must agree with their cited accepted facts. Supplied target metadata, '
             'method context, field definitions, pinned delivery relationships and limitations also support an explanation without exhaustive '
             'per-sentence citations. Resolve semantics.description_ref through meanings; shared definitions never '
@@ -1350,39 +1368,23 @@ def _selected_export_context(sessions, session_id, admitted, *, matching_targets
         return unavailable
 
 
-def _export_text(selected):
-    return ('The requested H5AD recipe is available for preparation when downloaded.'
-            if selected is not None and selected.get('status') == 'available_for_preparation' else
-            'The requested H5AD recipe is unavailable for the selected sources or fields.'
-                + (' ' + selected['message'] if selected is not None and selected.get('message') else ''))
-
-
 def answer(sessions, session_id, interaction, model, *, evidence_targets=None, question=None,
            evidence_context=None):
     from .turns import TurnOutcome
     stage = 'evidence_context'
     diagnostic = {}
     diagnostic_context = (session_id, interaction.turn_id)
-    selected_export = None
     artifacts = tuple(interaction.admitted.get('presentation_artifacts', ()))
     if evidence_targets is None and interaction.admitted.get('visualization') is not None:
         artifacts, _ = _compose_presentation(sessions, session_id, interaction, model)
     from dataclasses import replace
     interaction = replace(interaction, admitted=dict(interaction.admitted,
         presentation_artifacts=artifacts, presentation_turn_id=interaction.turn_id))
-    def unavailable(message):
-        suffix = ('\n\nThe requested figure is available.' if artifacts else
-                  '\n\nThe requested figure has not been produced.' if interaction.admitted.get('visualization') else '')
-        selected = selected_export if stage != 'evidence_freshness' else None
-        if interaction.admitted.get('export') is not None:
-            suffix += '\n\n' + _export_text(selected)
-        available = artifacts or selected is not None and selected.get('status') == 'available_for_preparation'
-        return TurnOutcome('answer', 'answered' if available else 'unavailable', text=message + suffix,
-                           artifacts=artifacts)
+    def unavailable(code):
+        return status_outcome(TurnOutcome('answer', 'unavailable', artifacts=artifacts), code)
     try:
         public, claims = (context(sessions, session_id, interaction.admitted, evidence_targets=evidence_targets)
                           if evidence_context is None else evidence_context)
-        selected_export = public.get('delivery', {}).get('selected_export')
         from .responses import conversation_utterances
         response = generate(model, interaction.utterance if question is None else question,
             interaction.admitted['focus'] if evidence_targets is None else 'completion', public, claims,
@@ -1402,36 +1404,20 @@ def answer(sessions, session_id, interaction, model, *, evidence_targets=None, q
                 'This discussion includes explicitly referenced historical results.',))
         _diagnose('semantic_review', 'partially_reviewed_response' if PARTIAL_NOTICE in response.limitations
             else 'reviewed_response', context=diagnostic_context, **diagnostic)
-        partial = '\n\n' + PARTIAL_NOTICE if PARTIAL_NOTICE in response.limitations else ''
-        return TurnOutcome('answer', 'answered', text=response.explanation + partial,
+        return TurnOutcome('answer', 'answered', text=response.explanation,
                            scientific=response, artifacts=artifacts)
     except _AnswerFailure as exc:
         _diagnose(exc.stage, exc.reason, context=diagnostic_context, **diagnostic)
-        if exc.reason == 'request_resource_limit':
-            message = ('The selected explanation exceeds Agent\'s operational language-request budget. '
-                       'Select fewer results or request specific detail; accepted scientific results remain available.')
-        elif exc.stage in ('provider', 'semantic_review_provider'):
-            message = ('The language provider rejected this explanation request as too large.'
-                       if exc.reason == 'provider_request_too_large' else
-                       'The language provider could not complete this explanation request.')
-            message += ' Accepted scientific results remain available.'
-        else:
-            message = ('I could not ground the generated explanation in the accepted evidence. The result and its scientific details remain available.'
-                       if exc.stage.startswith('semantic_review') else 'I could not produce a response with valid evidence bindings.')
-        return unavailable(message)
+        return unavailable(exc.code or exc.reason.upper())
     except IntentError as exc:
         reason = ('changed_accepted_evidence' if stage == 'evidence_freshness' else
                   'incompatible_scientific_context' if exc.reason == 'incompatible_comparison' else
                   'subject_not_in_summary' if exc.reason == 'subject_not_in_summary' else 'unavailable_accepted_evidence')
         _diagnose(stage, reason, context=diagnostic_context, **diagnostic)
-        messages = {'subject_not_in_summary':'The current compact evidence does not contain that subject detail; this does not establish scientific absence.',
-                    'incompatible_comparison':'These result scopes do not support this comparison without an explicit scientific correspondence.',
-                    'invalid_decision':'I could not produce a response with valid evidence bindings.'}
-        return unavailable(messages.get(exc.reason, 'The required accepted evidence is unavailable.'))
+        return unavailable(exc.reason.upper())
     except (ValueError, TypeError, KeyError, RuntimeError, OSError):
-        _diagnose(stage, 'changed_accepted_evidence' if stage == 'evidence_freshness' else 'invalid_evidence_context',
-            context=diagnostic_context, **diagnostic)
-        return unavailable('I could not produce a response with valid evidence bindings.')
+        _diagnose(stage, 'invalid_evidence_context', context=diagnostic_context, **diagnostic)
+        return unavailable('INVALID_EVIDENCE_CONTEXT')
 
 
 def _presentation_context(sessions, session_id, admitted, views, limitations):
@@ -1530,84 +1516,6 @@ def _figure_relationships(state, figures, matching=()):
     return result
 
 
-def _comparison_text(public, claims):
-    """Present selected owner records in a non-language completion, never recovery."""
-    selected = public.get('delivery', {}).get('comparison', {})
-    required = set(selected.get('claim_ids', ()))
-    used = [c for c in claims if c.claim_id in required]
-    independent = (not used and selected.get('section') == 'category_association')
-    if independent:
-        used = [c for c in claims if c.target in ('t0', 't1') and c.field == 'detail.category_counts']
-    if not used:
-        return '', ()
-    labels = {t['handle']:t['label'] for t in public['targets']}
-    lines = []
-    if selected['section'] == 'summary':
-        by_id = {c.claim_id:c for c in used}
-        for pair in public['comparison']['pairs']:
-            a, b = by_id[pair['left']], by_id[pair['right']]
-            lines.append(f'{a.field}: {labels[a.target]} = {json.dumps(_serialize(a.value), ensure_ascii=False)}; '
-                         f'{labels[b.target]} = {json.dumps(_serialize(b.value), ensure_ascii=False)}.')
-    else:
-        for claim in used:
-            table = _serialize(claim.value)
-            def cell(value):
-                return json.dumps(value, ensure_ascii=False).replace('|', '\\|')
-            fields = ', '.join(f"{f['location']}:{f['field']}" for f in table['fields'])
-            coverage = (f"Showing {table['returned_records']} of {table['total_records']} records "
-                        f"from offset {table['offset']}; " + ('complete.' if table['complete'] else
-                        'partial coverage; omitted records are not absence.'))
-            lines.append(labels[claim.target] + ' — ' + fields)
-            if claim.field == 'detail.category_counts':
-                lines.append(f"{table['n_entities']} cells; {table['n_missing']} missing labels. "
-                    f"Denominators: all cells = {table['denominator_all']}; labeled cells = {table['denominator_labeled']}. "
-                    + coverage)
-                columns = ('category', 'count', 'proportion_all', 'proportion_labeled')
-                lines.extend(('', '| Category | Cells | Proportion of all | Proportion of labeled |', '| --- | --- | --- | --- |'))
-            else:
-                lines.append(f"{table['n_paired']} paired cells of {table['n_entities']}; "
-                    f"missing left = {table['n_left_missing']}, right = {table['n_right_missing']}, "
-                    f"both = {table['n_both_missing']}. Paired denominator = {table['denominator']}. " + coverage)
-                columns = ('left', 'right', 'count', 'row_total', 'column_total', 'proportion_paired',
-                           'proportion_row', 'proportion_column')
-                lines.extend(('', '| Left category | Right category | Cells | Row total | Column total | Proportion paired | Proportion of row | Proportion of column |',
-                              '| --- | --- | --- | --- | --- | --- | --- | --- |'))
-            lines.extend('| ' + ' | '.join(cell(row[key]) for key in columns) + ' |' for row in table['records'])
-            lines.extend(('', 'Categories retain owner order; this is not a ranking. Source labels do not establish biological identities.'))
-    heading = ('Independent categorical counts; requested comparison unavailable:\n'
-               if independent or selected.get('status') == 'unavailable' else
-               'Requested comparison:\n')
-    return heading + '\n'.join(lines), tuple(used)
-
-
-def _delivery_text(delivery, public=None, used=()):
-    figure = ('The requested visualization is available in the result view.'
-              if delivery['visualization'] == 'delivered' else
-              'The requested visualization has not been produced.' if 'visualization' in delivery['requested'] else
-              'Figures and downloadable files are listed in the result view.')
-    if (delivery['visualization'] == 'delivered'
-            and any(f['satisfies_request'] and f['coordinate_reused'] for f in delivery.get('figure_relationships', ()))):
-        figure += ' It reuses the explicitly selected accepted coordinates; this presentation is not a new embedding fit.'
-    comparison = delivery.get('comparison', {})
-    if comparison.get('status') == 'not_requested':
-        return figure
-    cited = {c.claim_id for c in used}
-    required = set(comparison.get('claim_ids', ()))
-    presented = bool(required) and required <= cited
-    if comparison.get('section') == 'summary' and public is not None:
-        presented = any({p['left'], p['right']} <= cited for p in public.get('comparison', {}).get('pairs', ()))
-    if presented and comparison.get('status') in ('available', 'partial'):
-        text = ('The requested comparison is included with partial coverage; omitted records are not scientific absence.'
-                if comparison['status'] == 'partial' else 'The requested comparison is included.')
-    elif comparison.get('status') in ('available', 'partial'):
-        text = 'The requested comparison facts were read, but a grounded comparison explanation has not been delivered.'
-    elif comparison.get('reason') == 'exact_operands_not_recorded':
-        text = 'The exact comparison operands were not recorded; no comparison has been inferred.'
-    else:
-        text = 'The requested comparison is unavailable for the selected sources or fields; independent accepted facts remain usable.'
-    return text + ' ' + figure
-
-
 def completion(sessions, session_id, turn_id, outcome, *, model=None):
     """Deliver accepted science through the same facts and R5 answer path.
 
@@ -1624,9 +1532,6 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
     origin = None if interaction is None else _received_origin(interaction, state.interactions)
     intent = {} if origin is None else origin.admitted or {}
     requested = intent.get('delivery', ())
-    status = ('The accepted scientific results form the current revision.'
-              if revision.revision_id == state.active_revision_id else
-              'The accepted scientific results belong to this historical revision; another revision is current.')
     limitations = []
     from .dialogue_evidence import figure_inventory
     figures, relationships = (), []
@@ -1644,9 +1549,12 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
         comparison=dict(status='unavailable', reason='exact_operands_not_recorded') if 'comparison' in requested else dict(status='not_requested'),
         unfulfilled=list(intent.get('unfulfilled', ())),
         figure_relationships=relationships)
-    delivery_text = _delivery_text(delivery)
     if delivery['unfulfilled']:
         limitations.append('Requirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.')
+    if not {'explanation', 'comparison'} & set(requested):
+        missing = [kind for kind in ('visualization',) if delivery[kind] == 'unavailable']
+        text = 'Analysis accepted.' + (' Output unavailable: ' + ', '.join(missing) if missing else '')
+        return replace(outcome, text=text, artifacts=artifacts)
     targets = ()
     try:
         groups = revision_results(sessions, state, revision)
@@ -1680,58 +1588,70 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
                 admitted.update(target=left, comparison=right, detail=detail)
             except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
                 delivery['comparison'] = dict(status='unavailable', reason='accepted_comparison_inputs_unavailable')
+        delivery['limitations'] = limitations
         public, claims = context(sessions, session_id, admitted, evidence_targets=targets)
         delivery = public['delivery']
-        delivery_text = _delivery_text(delivery, public)
         # The captured original request continues through prerequisite turns.
         # Only existing explicit delivery intentions request extra language work.
-        if 'explanation' in requested and model is not None:
-            reading = replace(interaction, admitted=admitted)
-            result = answer(sessions, session_id, reading, model, evidence_targets=targets,
-                            question=origin.utterance, evidence_context=(public, claims))
-            if result.scientific is not None:
-                if {'comparison', 'visualization'} & set(delivery['requested']):
-                    limitations.append(_delivery_text(delivery, public, result.scientific.claims))
-                response = replace(result.scientific,
-                    limitations=tuple(dict.fromkeys(result.scientific.limitations + tuple(limitations))))
-                unfulfilled = ('\n\nRequirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.'
-                    if delivery['unfulfilled'] else '')
-                return replace(outcome, text=result.text + unfulfilled, scientific=response,
-                    artifacts=artifacts)
-            message = ('Scientific computation completed and its accepted results and downloads remain available. '
-                       'The scientific explanation is unavailable. ' + result.text)
-            response = ScientificResponse((), 'insufficient_evidence', message, tuple(limitations),
-                                          'accepted_execution_state', 'unavailable')
-            return replace(outcome, text=status + '\n\n' + message + '\n\n' + delivery_text,
-                           scientific=response, artifacts=artifacts)
-        if 'explanation' in requested:
-            raise IntentError('unavailable_context')
-        # Report fields already define reviewed scientific summary priorities.
-        # Keep exact values; never select arbitrary numeric leaves or infer biology.
-        from agent.report.analysis_report import _REPORT_FIELDS, _TOOL_TITLES
-        lines, used = [], []
-        for index, target in enumerate(public['targets']):
-            fields = _REPORT_FIELDS.get(target['tool'], ())
-            selected = [c for c in claims if c.target == f't{index}'
-                        and c.field.split('.')[0] in fields and not c.field.endswith(('_sha256', '_path'))
-                        and not isinstance(c.value, (dict, list, tuple)) and not hasattr(c.value, 'items')]
-            used.extend(selected)
-            values = '; '.join(c.field + ' = ' + json.dumps(_serialize(c.value), ensure_ascii=False)
-                               for c in selected)
-            lines.append(target['label'] + ' — ' + _TOOL_TITLES.get(target['tool'], target['tool'])
-                         + (': ' + values if values else ': accepted.'))
-        comparison_text, comparison_claims = _comparison_text(public, claims)
-        if comparison_text:
-            lines.append(comparison_text)
-            used.extend(c for c in comparison_claims if c not in used)
-        response = ScientificResponse(tuple(used), 'supported' if used else 'insufficient_evidence',
-            '\n'.join(lines), tuple(dict.fromkeys(public['limitations'] + limitations)), public['scope'], 'deterministic')
-        return replace(outcome, text='Analysis completed. Accepted scientific results and downloads are available in Results.\n\n'
-            + ' '.join(limitations + [_delivery_text(delivery, public, used)]), scientific=response, artifacts=artifacts)
+        reading = replace(interaction, admitted=admitted)
+        result = answer(sessions, session_id, reading, model, evidence_targets=targets,
+                        question=origin.utterance, evidence_context=(public, claims))
+        if result.error is not None:
+            return status_outcome(replace(outcome, error=result.error, artifacts=artifacts), result.error.code)
+        return replace(outcome, text=result.text, scientific=result.scientific, artifacts=artifacts)
     except (ValueError, TypeError, KeyError, RuntimeError, OSError, StopIteration):
-        # No semantic retry, scientific replay, or mutation of Run/Revision state.
-        message = 'Scientific computation completed and its accepted results and downloads remain available. The scientific explanation is unavailable; a follow-up can request it.'
-        response = ScientificResponse((), 'insufficient_evidence', message, tuple(limitations),
-                                      'accepted_execution_state', 'unavailable')
-        return replace(outcome, text=status + '\n\n' + message + '\n\n' + ' '.join(limitations + [delivery_text]),
-                       scientific=response, artifacts=artifacts)
+        return status_outcome(replace(outcome, artifacts=artifacts), 'RESPONSE_UNAVAILABLE')
+
+
+def language_failure(code):
+    return code in {'INTERACTIVE_INTENT_BINDING_INVALID', 'INTERACTIVE_REFERENCE_INVALID'} or code.startswith(('PROVIDER_', 'PLANNING_PROVIDER_', 'INTERACTIVE_MODEL_'))
+
+
+def status_outcome(outcome, code):
+    """Minimal application status, never a second prose engine or model retry."""
+    from .interactive_schemas import ClientError
+    error = outcome.error or ClientError(code, 'Response unavailable: ' + code)
+    label = ('Analysis accepted; response unavailable' if outcome.status in {'activated', 'stale'}
+             else 'Input required' if outcome.kind == 'clarify' else 'Response unavailable')
+    codes = error.code if error.code == code else error.code + '; ' + code
+    return replace(outcome, text=label + ': ' + codes, error=error)
+
+
+def explain_outcome(sessions, session_id, interaction, outcome, model):
+    """Explain recorded non-execution/failed outcomes with the existing R5 owner."""
+    state = sessions.load(session_id)
+    turn = next((t for t in state.turns if t.turn_id == interaction.turn_id), None)
+    run = None if turn is None or turn.run_id is None else sessions._application.run_store.load(turn.run_id)
+    admitted = interaction.admitted or {}
+    recorded_error = next((e for e in run.errors if outcome.error is not None
+        and e.code == outcome.error.code), None) if run is not None else None
+    facts = dict(kind=outcome.kind, status=outcome.status,
+        error=None if outcome.error is None else dict(code=outcome.error.code, message=outcome.error.message,
+            category=None if recorded_error is None else recorded_error.category.value),
+        clarification=None if outcome.clarification is None else asdict(outcome.clarification),
+        requested_operation=admitted.get('tool'),
+        science_started=bool(run and any(s.attempt_count for s in run.steps)),
+        accepted_revision=None if turn is None else turn.revision_id,
+        pending_task_preserved=interaction.prerequisite is not None,
+        steps=[] if run is None else [dict(step_id=s.step_id, tool=s.tool_name,
+            status=s.status.value, attempt_count=s.attempt_count,
+            error_code=None if s.error is None else s.error.code) for s in run.steps])
+    if interaction.prerequisite is not None:
+        origin = next((i for i in state.interactions
+            if i.turn_id == interaction.prerequisite['origin_turn_id']), None)
+        facts['preserved_objective'] = None if origin is None else origin.utterance
+    public = dict(scope='recorded_interaction_outcome', targets=[], claims=[], meanings={},
+                  limitations=[], outcome=facts)
+    diagnostic = {}
+    try:
+        from .responses import conversation_utterances
+        response = generate(model, interaction.utterance, 'outcome', public, (),
+            conversation=conversation_utterances(state, interaction.turn_id), diagnostic=diagnostic)
+        _diagnose('semantic_review', 'reviewed_response', context=(session_id, interaction.turn_id), **diagnostic)
+        # Outcome kinds and errors retain their exact authority; explanation is presentation only.
+        return replace(outcome, text=response.explanation)
+    except _AnswerFailure as exc:
+        _diagnose(exc.stage, exc.reason, context=(session_id, interaction.turn_id), **diagnostic)
+        return status_outcome(outcome, exc.code or exc.reason.upper())
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+        return status_outcome(outcome, 'RESPONSE_UNAVAILABLE')

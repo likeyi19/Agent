@@ -15,7 +15,7 @@ import pytest
 from agent.application.dialogue_execution import scientific_parameters
 from agent.application.session_state import SessionError, digest
 from agent.application.turn_decisions import (
-    Clarify, Execute, IntentError, LeidenResolution, ScalarChoiceArgument, ScopedArgument, SpeciesAnswer,
+    Clarify, Execute, IntentError, ScalarChoiceArgument, ScopedArgument, SpeciesAnswer,
     admit_scientific_argument, decision_schema, interpret, parse_decision,
 )
 from agent.orchestration import build_default_tool_registry
@@ -60,10 +60,9 @@ def public():
 
 class InitialWitness(MappingWitness):
     def __init__(self, calls, *, objective=EXPLICIT, declarations=(), species='human',
-                 repeated=False, mutate=None, argument=None, initial_decision=None):
+                 repeated=False, mutate=None, initial_decision=None):
         super().__init__(species, calls, objective=objective)
         self.declarations, self.repeated, self.mutate = declarations, repeated, mutate
-        self.argument = argument
         self.initial_decision = initial_decision
 
     def complete(self, *, prompt, response_schema):
@@ -74,8 +73,6 @@ class InitialWitness(MappingWitness):
                 return wire(self.initial_decision)
             decision = dict(kind='execute_plan', target='compute_cell_umap',
                 arguments=[asdict(item) for item in self.declarations])
-            if self.argument is not None:
-                decision['argument'] = asdict(self.argument)
             return wire(decision)
         raw = super().complete(prompt=prompt, response_schema=response_schema)
         if self.repeated and 'semantic_prompt_version' in value:
@@ -89,7 +86,7 @@ class InitialWitness(MappingWitness):
 
 
 def harness(tmp_path, *, objective=EXPLICIT, declarations=None, species='human', typed=None,
-            resources=None, repeated=False, mutate=None, plain=False, selected_id=None, argument=None,
+            resources=None, repeated=False, mutate=None, plain=False, selected_id=None,
             initial_decision=None):
     config = configuration(tmp_path)
     if resources is not None:
@@ -101,7 +98,7 @@ def harness(tmp_path, *, objective=EXPLICIT, declarations=None, species='human',
     declarations = (choice(objective, value=species),) if declarations is None else declarations
     factories = PlanningModelFactoryRegistry({'scripted': lambda _: InitialWitness(calls,
         objective=objective, declarations=declarations, species=species,
-        repeated=repeated, mutate=mutate, argument=argument, initial_decision=initial_decision)})
+        repeated=repeated, mutate=mutate, initial_decision=initial_decision)})
 
     def application():
         return build_interactive_application(config, planning_model_factory_registry=factories,
@@ -164,12 +161,11 @@ def test_old_numeric_wire_and_new_choice_wire_share_one_arguments_contract():
     declarations = (choice(utterance), numeric(utterance))
     parsed = parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap',
         arguments=[asdict(item) for item in declarations])))
-    assert parsed == Execute('current', 'plan', 'compute_cell_umap', None, arguments=declarations)
+    assert parsed == Execute('compute_cell_umap', arguments=declarations)
     assert parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
-        arguments=[asdict(declarations[1])]))) == Execute('current', 'plan', 'cluster_cells', None,
+        arguments=[asdict(declarations[1])]))) == Execute('cluster_cells',
             arguments=declarations[1:])
-    assert parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap'))) == Execute(
-        'current', 'plan', 'compute_cell_umap', None)
+    assert parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap'))) == Execute('compute_cell_umap')
 
 
 def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
@@ -271,7 +267,7 @@ def test_supported_new_request_with_omitted_declaration_reaches_existing_compile
             assert not captured['dialogue'].get('pending_prerequisite')
             return wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[]))
     decision = interpret(Model(), OMITTED, public())
-    assert decision == Execute('current', 'plan', 'compute_cell_umap', None)
+    assert decision == Execute('compute_cell_umap')
 
 
 
@@ -336,7 +332,7 @@ def test_conflicting_companion_rejects_initial_declaration_before_planner_or_sci
     result = submit(h)
     assert result.status == 'clarification' and result.revision_id is None, result
     assert result.response.clarification['reason'] in ('conflicting_species', 'conflicting_scientific_parameter')
-    assert not h[4].plans and len(h[5]) == 1
+    assert not h[4].plans and sum('turn_schema_version' in c for c in h[5]) == 1
     assert_no_publication(h)
 
 
@@ -356,7 +352,7 @@ def test_fresh_semantic_species_refusal_preserves_reason_without_fabricating_pen
     state = assert_no_publication(h)
     assert state.interactions[0].prerequisite is None
     assert not state.turns and state.interactions[0].status == 'clarification'
-    assert not h[4].plans and len(h[5]) == 1
+    assert not h[4].plans and sum('turn_schema_version' in c for c in h[5]) == 1
 
 
 @pytest.mark.parametrize('decision', [dict(kind='clarify', reason='missing_species'),
@@ -371,7 +367,7 @@ def test_fresh_missing_species_or_unoffered_answer_cannot_create_a_durable_prere
     assert result.run_id is None and result.revision_id is None
     state = assert_no_publication(h)
     assert state.interactions[0].prerequisite is None
-    assert not h[4].plans and len(h[5]) == 1
+    assert not h[4].plans and sum('turn_schema_version' in c for c in h[5]) == 1
 
 
 @pytest.mark.parametrize('objective', [OMITTED, SUPPORTED])
@@ -403,15 +399,15 @@ def test_initial_species_and_numeric_resolution_share_exact_consumer_binding(tmp
     assert 'min_dist' not in h[4].plans[0].steps[3].arguments
 
 
-def test_initial_choice_and_historical_singular_resolution_use_generic_binding_records(tmp_path):
+def test_initial_choice_and_numeric_resolution_share_generic_binding_records(tmp_path):
     objective = EXPLICIT + ' Use resolution 0.7.'
-    legacy = LeidenResolution(**asdict(numeric(objective)))
-    h = harness(tmp_path, objective=objective, declarations=(choice(objective),), argument=legacy)
+    resolution = numeric(objective)
+    h = harness(tmp_path, objective=objective, declarations=(resolution, choice(objective)))
     result = submit(h, objective)
     state = assert_admitted(h, result, objective=objective, extra=dict(resolution=.7))
     admitted = state.interactions[0].admitted
     assert 'argument' not in admitted
-    assert _serialize(admitted['arguments']) == [asdict(legacy), asdict(choice(objective))]
+    assert _serialize(admitted['arguments']) == [asdict(resolution), asdict(choice(objective))]
     assert h[4].plans[0].steps[2].arguments['resolution'] == .7
 
 

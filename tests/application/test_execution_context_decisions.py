@@ -21,7 +21,7 @@ def wire(value):
 @pytest.mark.parametrize('context', ['none', 'current'])
 def test_execution_scope_is_a_closed_generic_choice(context):
     result = parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', context=context)))
-    assert result == Execute('current', 'plan', 'cluster_cells', None, context=context)
+    assert result == Execute('cluster_cells', context=context)
 
 
 @pytest.mark.parametrize('context', [None, True, 1, {}, [], '', 'parent', 'ctx.0'])
@@ -32,18 +32,9 @@ def test_context_is_never_a_locator_or_free_form_memory(context):
 
 @pytest.mark.parametrize('decision', [
     dict(kind='execute_plan', target='cluster_cells'),
-    dict(kind='execute_plan', base='current', operation='plan', target='cluster_cells', delta=None),
-    dict(kind='execute', base='current', operation='plan', target='cluster_cells', delta=None),
 ])
 def test_previous_execution_wires_do_not_implicitly_inherit_context(decision):
     assert parse_decision(wire(decision)).context == 'none'
-
-
-def test_specialized_execution_cannot_bypass_its_existing_context_contract():
-    with pytest.raises(ValueError, match='execution context'):
-        Execute('current', 'selection', 'selection', None, context='current')
-
-
 
 
 @pytest.mark.parametrize('offered', [False, True])
@@ -67,18 +58,9 @@ def test_interpreter_receives_bounded_scope_instructions_without_session_identit
 ])
 def test_research_intention_uniqueness_remains_owned_by_typed_validation(field, value):
     with pytest.raises(ValueError, match='Invalid bounded research intention'):
-        Execute('current', 'plan', 'cluster_cells', None, **{field: (value, value)})
+        Execute('cluster_cells', **{field: (value, value)})
     with pytest.raises(IntentError, match='invalid_decision'):
         parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', **{field: [value, value]})))
-
-
-def test_historical_singular_parameter_is_read_into_the_generic_writer():
-    from dataclasses import asdict
-    result = parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
-        argument=dict(tool='cluster_cells', argument='resolution', literal='0.5', start=0, end=3))))
-    assert result.argument is None
-    assert [asdict(a) for a in result.arguments] == [dict(tool='cluster_cells', argument='resolution',
-                                                      literal='0.5', start=0, end=3)]
 
 
 @pytest.mark.parametrize('tool,name,value,new_name,new_value,new_input', [
@@ -102,7 +84,7 @@ def test_retained_settings_bind_separately_from_current_values_and_defaults(tool
     interaction = Interaction('change', utterance, 'captured', 0,
                               dict(dialogue=dict(results=[row])))
     sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry), _interaction_session_id='session')
-    decision = Execute('current', 'plan', tool, None,
+    decision = Execute(tool,
         arguments=(ScopedArgument(tool, new_name, literal, start, start+len(literal)),),
         references=('g0',), delivery=('explanation',), retain_parameters=(RetainedParameter('g0', name),))
     admitted = admit(sessions, interaction, decision, {})
@@ -152,7 +134,7 @@ def test_same_input_continuation_retains_exact_scientific_declarations_without_r
     interaction = Interaction('continue', utterance, 'captured', 0, dict(dialogue=dict(results=[row])))
     sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry), _interaction_session_id='session')
     start = utterance.index('17')
-    decision = Execute('current', 'plan', 'epizoo_embed_cells', None,
+    decision = Execute('epizoo_embed_cells',
         arguments=(ScopedArgument('build_cell_neighbors', 'n_neighbors', '17', start, start+2),),
         references=('g0',), retain_parameters=tuple(RetainedParameter('g0', name) for name in known))
     admitted = admit(sessions, interaction, decision, {})

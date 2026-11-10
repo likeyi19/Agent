@@ -97,7 +97,7 @@ def test_standalone_figure_survives_review_withholding_save_reopen_and_duplicate
     assert view.response.version == 3 and len(view.response.artifacts) == 1, view.to_dict()
     assert view.status == 'answered' and len(current.rendered) == 1
     assert current.models[0].phases == ['interpretation', 'generation', 'review']
-    assert 'could not ground' in view.response.text
+    assert view.response.text == 'Response unavailable: UNSUPPORTED_STATEMENT'
     reference, = current.facade.presentation_artifact_handles('session', 'draw')
     assert reference.revision_id is None and reference.turn_id == 'draw'
     content = current.facade.presentation_artifact_content('session', 'draw', reference.handle)

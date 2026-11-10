@@ -36,7 +36,7 @@ def argument(utterance, token='0.7', **changes):
 
 def execute(utterance, token='0.7', **changes):
     return dict(kind='execute_plan', target='compute_cell_umap',
-                argument=argument(utterance, token, **changes))
+                arguments=[argument(utterance, token, **changes)])
 
 
 def resolution_harness(tmp_path, monkeypatch, *, decisions=None, missing_species=False,
@@ -51,6 +51,14 @@ def resolution_harness(tmp_path, monkeypatch, *, decisions=None, missing_species
     class ResolutionModel(original_model):
         def complete(self, *, prompt, response_schema):
             value = json.loads(prompt)
+            if value.get('focus') == 'outcome':
+                self.calls.append(value)
+                return json.dumps(dict(support='supported', paragraphs=[dict(kind='limitation',
+                    text='The request needs clarification before scientific execution.', citations=[], comparisons=[])]))
+            if 'grounding_review_version' in value and value['evidence'].get('scope') == 'recorded_interaction_outcome':
+                self.calls.append(value)
+                return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed', independent=True)
+                    for p in value['paragraphs']}))
             if 'turn_schema_version' in value and value['utterance'] in decisions:
                 self.calls.append(value)
                 decision = decisions[value['utterance']]
@@ -144,7 +152,7 @@ def test_normal_chat_execution_uses_explicit_leiden_argument_or_existing_owner_d
         assert 'resolution' not in interaction.submission['execution_inputs']
         assert interaction.submission['registered_input']['resource_id'] == resource_id
         if explicit:
-            assert _serialize(interaction.admitted['argument']) == argument(utterance)
+            assert _serialize(interaction.admitted['arguments'][0]) == argument(utterance)
             assert interaction.admitted['inputs']['resolution'] == .7
         else:
             assert 'resolution' not in interaction.admitted['inputs']
@@ -178,7 +186,6 @@ def test_text_and_typed_resolution_agree_or_require_explicit_conflict_resolution
             assert_chain(harness, result, .7, explicit=True)
         else:
             assert_no_science(harness, result)
-            assert result['response']['kind'] == 'clarify'
             assert result['response']['clarification']['reason'] == 'conflicting_scientific_parameter'
         original = harness.service._application.sessions.load('session').interactions[0]
         assert original.submission['execution_inputs']['resolution'] == typed
@@ -198,7 +205,10 @@ def test_invalid_explicit_declaration_never_reaches_scientific_production(
         client.post('/api/v1/sessions', json={'session_id': 'session'})
         result, _, _ = start(client, harness, utterance=utterance)
         assert_no_science(harness, result)
-        assert result['response']['kind'] == 'clarify', result
+        if changes:
+            assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
+        else:
+            assert result['response']['kind'] == 'clarify', result
 
 
 def test_unique_legacy_literal_normalizes_offsets_before_verified_execution(tmp_path, monkeypatch):
@@ -210,7 +220,7 @@ def test_unique_legacy_literal_normalizes_offsets_before_verified_execution(tmp_
         result, _, _ = start(client, harness)
         assert_chain(harness, result, .7, explicit=True)
         interaction = harness.service._application.sessions.load('session').interactions[0]
-        assert _serialize(interaction.admitted['argument']) == argument(EXPLICIT)
+        assert _serialize(interaction.admitted['arguments'][0]) == argument(EXPLICIT)
 
 
 @pytest.mark.parametrize('utterance,decision', [
@@ -280,14 +290,12 @@ def test_pending_resolution_survives_refresh_restart_species_answer_and_retry(tm
         assert calls == (len(harness.models), len(harness.science_calls), len(harness.inference_calls))
 
 
-@pytest.mark.parametrize('original_explicit,reply_literal,accepted', [
-    (False, '0.7', True), (True, '0.9', False),
-])
-def test_combined_species_parameter_reply_preserves_original_objective_and_conflicts(
-        tmp_path, monkeypatch, original_explicit, reply_literal, accepted):
+@pytest.mark.parametrize('original_explicit,reply_literal', [(False, '0.7'), (True, '0.9')])
+def test_combined_species_parameter_reply_preserves_original_objective_and_explicit_correction(
+        tmp_path, monkeypatch, original_explicit, reply_literal):
     utterance = f'Mouse; use Leiden resolution {reply_literal}.'
     decision = dict(kind='answer_prerequisite', pending='@species', species='mouse',
-                    argument=argument(utterance, reply_literal))
+                    arguments=[argument(utterance, reply_literal)])
     harness, inputs = resolution_harness(tmp_path, monkeypatch, missing_species=True,
         decisions={utterance: decision})
     with TestClient(web(harness, inputs)) as client:
@@ -295,31 +303,24 @@ def test_combined_species_parameter_reply_preserves_original_objective_and_confl
         pending, _, _ = start(client, harness, utterance=EXPLICIT if original_explicit else OMITTED)
         assert pending['response']['clarification']['reason'] == 'missing_species'
         result, _ = reply(client, utterance=utterance)
-        if accepted:
-            assert_chain(harness, result, .7, explicit=True)
-            selection = next(c for c in harness.models[-1].calls if 'output_selection_schema_version' in c)
-            assert selection['question'] == OMITTED
-            sessions = harness.service._application.sessions
-            persisted = sessions._store._path('session', '.json')
-            original = persisted.read_bytes()
-            corrupt = json.loads(original)
-            del corrupt['record']['interactions'][-1]['admitted']['argument']
-            corrupt['sha256'] = digest(corrupt['record'])
-            calls = (len(harness.models), len(harness.science_calls), len(harness.inference_calls))
-            try:
-                persisted.write_text(json.dumps(corrupt))
-                with pytest.raises(SessionError):
-                    sessions.load('session')
-            finally:
-                persisted.write_bytes(original)
-            assert sessions.load('session').interactions[-1].admitted['inputs']['resolution'] == .7
-            assert calls == (len(harness.models), len(harness.science_calls), len(harness.inference_calls))
-        else:
-            assert_no_science(harness, result)
-            assert result['response']['clarification']['reason'] == 'conflicting_scientific_parameter'
-            recovered, _ = reply(client, turn='valid-after-conflict')
-            assert_chain(harness, recovered, .7, explicit=True)
-
+        assert_chain(harness, result, float(reply_literal), explicit=True)
+        selection = next(c for c in harness.models[-1].calls if 'output_selection_schema_version' in c)
+        assert selection['question'] == (EXPLICIT if original_explicit else OMITTED)
+        sessions = harness.service._application.sessions
+        persisted = sessions._store._path('session', '.json')
+        original = persisted.read_bytes()
+        corrupt = json.loads(original)
+        del corrupt['record']['interactions'][-1]['admitted']['arguments']
+        corrupt['sha256'] = digest(corrupt['record'])
+        calls = (len(harness.models), len(harness.science_calls), len(harness.inference_calls))
+        try:
+            persisted.write_text(json.dumps(corrupt))
+            with pytest.raises(SessionError):
+                sessions.load('session')
+        finally:
+            persisted.write_bytes(original)
+        assert sessions.load('session').interactions[-1].admitted['inputs']['resolution'] == float(reply_literal)
+        assert calls == (len(harness.models), len(harness.science_calls), len(harness.inference_calls))
 
 def test_current_typed_resolution_continues_omitted_origin_and_cannot_be_rewritten(tmp_path, monkeypatch):
     harness, inputs = resolution_harness(tmp_path, monkeypatch, missing_species=True)
@@ -378,7 +379,7 @@ def test_changed_dataset_cannot_receive_the_pending_parameter(tmp_path, monkeypa
         assert second != first
         result, _ = reply(client, resource_id=second, input_set_id='declarations')
         assert_no_science(harness, result)
-        assert result['response']['clarification']['reason'] == 'invalid_prerequisite'
+        assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
 
 
 def test_new_objective_uses_omitted_default_instead_of_old_pending_parameter(tmp_path, monkeypatch):
@@ -427,7 +428,7 @@ def test_pending_parameter_cannot_be_rewritten_under_a_valid_outer_session_check
         corrupt = json.loads(original)
         admitted = corrupt['record']['interactions'][0]['admitted']
         if mutation == 'deleted-argument':
-            del admitted['argument']
+            del admitted['arguments']
         else:
             admitted['inputs']['resolution'] = True if mutation == 'boolean-equal-one' else .9
         corrupt['sha256'] = digest(corrupt['record'])
@@ -458,7 +459,7 @@ def test_direct_session_retry_compares_received_inputs_before_text_argument_bind
     original = sessions.load('direct-session').interactions[0]
     assert original.submission is None
     assert original.admitted['inputs']['resolution'] == .7
-    assert original.admitted['argument_received_inputs_sha256'] == digest(received)
+    assert original.admitted['arguments_received_inputs_sha256'] == digest(received)
     calls = (len(model.calls), len(harness.science_calls), len(harness.inference_calls))
     assert sessions.respond('direct-session', 'first', EXPLICIT, interpreter=model,
         expected_generation=0, execution_inputs=received).status == 'activated'
@@ -469,7 +470,7 @@ def test_direct_session_retry_compares_received_inputs_before_text_argument_bind
                 expected_generation=0, execution_inputs=changed)
     persisted = sessions._store._path('direct-session', '.json')
     accepted = persisted.read_bytes()
-    for deleted in ('argument', 'argument_received_inputs_sha256'):
+    for deleted in ('arguments', 'arguments_received_inputs_sha256'):
         corrupt = json.loads(accepted)
         del corrupt['record']['interactions'][0]['admitted'][deleted]
         corrupt['sha256'] = digest(corrupt['record'])

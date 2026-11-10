@@ -734,6 +734,7 @@ class NativeFunctionCatalog:
 
     package: str
     functions: tuple[tuple[str, tuple[str, ...]], ...]
+    parameter_metadata: Callable | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         _planning_text(self.package, 'native package', 128)

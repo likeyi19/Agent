@@ -39,7 +39,7 @@ REQUIRED_ROLES = [{key: role[key] for key in ('tool', 'port')} for role in ROLES
 def role_request(utterance=OBJECTIVE, *, roles=(), label=True):
     return dict(kind='request_roles', target='evaluate_cell_clustering',
         required_roles=deepcopy(REQUIRED_ROLES), roles=deepcopy(list(roles)),
-        argument=None, arguments=[declaration(utterance)] if label else [], context='none')
+        arguments=[declaration(utterance)] if label else [], context='none')
 
 
 def role_answer(roles=ROLES, *, pending='@roles', arguments=()):

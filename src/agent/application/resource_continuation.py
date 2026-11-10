@@ -17,7 +17,33 @@ COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
 
 def pending_choices(reference, preceding):
     """Read this existing pending question's captured, authoritative options."""
-    if reference is None or reference['field'] not in ('resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
+    if reference is None:
+        return ()
+    if reference['field'] == 'species':
+        return tuple(dict(handle='species:' + value, label=value, description=label)
+            for value, label in (('human', '人类 · human'), ('mouse', '小鼠 · mouse')))
+    if reference['field'] == 'parameters':
+        origin = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
+        record = origin.admitted or {}
+        functions = {s['arguments']['function_name'] for s in record.get('native_plan', {}).get('steps', ())
+                     if s['tool_name'] == reference['tool'] and s['arguments'].get('function_name')}
+        functions.update(d['native_function'] for d in record.get('arguments', ())
+                         if d['tool'] == reference['tool'] and d.get('native_function'))
+        scope = {'native_function': next(iter(functions))} if len(functions) == 1 else {}
+        return tuple(dict(**scope, handle='parameter:' + reference['tool'] + ':' + name,
+            label=reference['tool'] + '.' + name, action='parameter', tool=reference['tool'], argument=name)
+            for name in reference['missing'])
+    if reference['field'] == 'roles':
+        from .dialogue_execution import _role_source
+        origin, source = _role_source(reference, preceding)
+        metadata = (source.admitted or {}).get('registered_input', {})
+        assigned = {(r['tool'], r['port']) for r in source.admitted.get('roles', ())}
+        return tuple(dict(handle='role:' + role['tool'] + ':' + role['port'],
+            label=role['tool'] + '.' + role['port'], action='input_role', tool=role['tool'], port=role['port'],
+            sources=[dict(resource_id=member['resource_id'], label=member['label'])
+                     for member in metadata.get('members', ())])
+            for role in reference['required_roles'] if (role['tool'], role['port']) not in assigned)
+    if reference['field'] not in ('resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
         return ()
     source = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
     return tuple(_serialize((source.admitted or {}).get('resource_options', ())))
@@ -26,15 +52,37 @@ def pending_choices(reference, preceding):
 def selected_answer(interaction, preceding):
     """A Web choice is typed intent, not another language interpretation."""
     selection = (interaction.submission or {}).get('clarification_choice')
-    if selection is None:
-        return None
     reference = interaction.snapshot.get('prerequisite')
+    if selection is None:
+        settings = (interaction.submission or {}).get('parameter_overrides', ())
+        if reference is not None and reference['field'] == 'parameters' and settings:
+            from .turn_decisions import ParameterAnswer, ExplicitArgument
+            return ParameterAnswer('@parameters', tuple(ExplicitArgument(**_serialize(row)) for row in settings))
+        return None
     if reference is None or selection['question_turn_id'] != reference.get('predecessor_turn_id'):
         raise IntentError('invalid_reference')
+    if reference['field'] == 'roles':
+        from .dialogue_execution import captured_input_group
+        from .turn_decisions import RoleAnswer, InputRole
+        parts = selection['handle'].split(':', 3)
+        if len(parts) != 4 or parts[0] != 'role':
+            raise IntentError('invalid_reference')
+        _, tool, port, resource_id = parts
+        offered = pending_choices(reference, preceding)
+        if not any(row['tool'] == tool and row['port'] == port for row in offered):
+            raise IntentError('invalid_reference')
+        binding = captured_input_group(interaction, preceding)
+        matches = [] if binding is None else [i for i, member in enumerate(binding.members)
+                                              if member['resource_id'] == resource_id]
+        if len(matches) != 1:
+            raise IntentError('invalid_reference')
+        return RoleAnswer('@roles', (InputRole(tool, port, 'source.' + str(matches[0])),))
     choices = pending_choices(reference, preceding)
     if not any(option['handle'] == selection['handle'] for option in choices):
         raise IntentError('invalid_reference')
-    from .turn_decisions import RoleAnswer, ResourceAnswer
+    from .turn_decisions import RoleAnswer, ResourceAnswer, SpeciesAnswer, InputRole
+    if reference['field'] == 'species':
+        return SpeciesAnswer('@species', selection['handle'].partition(':')[2])
     if reference['field'] == 'resources':
         return ResourceAnswer('@resources', selection['handle'])
     from .raw_handoff import empty
@@ -180,7 +228,7 @@ def request(sessions, interaction, decision, input_sets):
     from .turn_decisions import Execute
     if source_kind(interaction.submission) is None:
         raise IntentError('invalid_prerequisite')
-    admitted = admit(sessions, interaction, Execute('current', 'plan', decision.target, None,
+    admitted = admit(sessions, interaction, Execute(decision.target,
         arguments=decision.arguments, roles=decision.roles, context=decision.context,
         input_results=decision.input_results), interaction.submission['execution_inputs'])
     rows = catalog(input_sets)

@@ -10,7 +10,6 @@ from agent.application.interactive import InteractiveAgentApplication
 from agent.application import turns, turn_decisions
 from agent.application.turn_decisions import Clarify, interpret
 from agent.orchestration.planning_model import PlanningModelError, PlanningModelProfile
-from agent.orchestration.error_policy import safe_message_for
 from agent.providers import PlanningModelFactoryRegistry
 
 SID = str(UUID(int=1))
@@ -29,6 +28,13 @@ class Model:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
+        payload = json.loads(kwargs['prompt'])
+        if payload.get('focus') == 'outcome':
+            return json.dumps(dict(support='supported', paragraphs=[dict(kind='limitation',
+                text='Please clarify the requested analysis.', citations=[], comparisons=[])]))
+        if 'grounding_review_version' in payload:
+            return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed', independent=True)
+                for p in payload['paragraphs']}))
         return self.raw
 
 
@@ -82,7 +88,7 @@ def test_provider_failure_is_failed_interaction_with_safe_typed_error(tmp_path, 
     expected = code if code != SECRET else 'PLANNING_PROVIDER_ERROR'
     assert result.kind == 'execute' and result.status == 'failed'
     assert result.clarification is None
-    assert result.error.code == expected and result.text == safe_message_for(expected)
+    assert result.error.code == expected and result.text == 'Response unavailable: ' + expected
     interaction = state.interactions[0]
     assert interaction.status == 'failed' and interaction.admitted is None and interaction.prerequisite is None
     assert len(model.calls) == 1
@@ -164,7 +170,7 @@ def test_interactive_failure_and_clarification_survive_retry_and_reopen_without_
         planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted': forbidden}))
     assert reopened.status(SID, TID) == result
     assert reopened.submit_turn(SID, TID, 'Please inspect the supplied data.', **request) == result
-    assert len(factories) == 1 and len(model.calls) == (case != 'application')
+    assert len(factories) == 1 and len(model.calls) == (0 if case == 'application' else 3 if case == 'model_clarification' else 1)
     assert reopened._application.sessions.load(SID) == state
 
 
@@ -181,12 +187,12 @@ def test_interpreter_preparation_failure_does_not_call_model(caplog, monkeypatch
 
 
 def test_successful_read_only_admission_preserves_result(tmp_path, caplog):
-    model = Model(dict(kind='answer', intent='unsupported', relation='current', technical=False))
+    model = Model(dict(kind='clarify', reason='unsupported_intent'))
     result, state = invoke(tmp_path, model)
-    assert result.kind == 'answer' and result.status == 'unsupported'
-    assert state.interactions[0].status == 'answered'
-    assert len(model.calls) == 1
-    assert next(r for r in records(caplog) if r['event'] == 'interpreter.parse_completed')['kind'] == 'Answer'
+    assert result.kind == 'clarify' and result.status == 'clarification'
+    assert state.interactions[0].status == 'clarification'
+    assert len(model.calls) == 3
+    assert next(r for r in records(caplog) if r['event'] == 'interpreter.parse_completed')['kind'] == 'Clarify'
     assert not any('exception_class' in r for r in records(caplog))
 
 

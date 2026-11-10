@@ -18,9 +18,8 @@ from .session_state import (
     Navigation, SessionError, SessionConflictError,
 )
 from .sessions import AnalysisSessions
-from .turn_decisions import Execute, ExecuteCandidate, Navigate, Clarify, Answer, IntentDelta, TurnDecision, ScientificQuestion, ScientificTarget
+from .turn_decisions import Execute, ExecuteCandidate, Navigate, Clarify, Answer, TurnDecision, ScientificQuestion, ScientificTarget
 from .turns import TurnOutcome
-from .response_facts import TurnResponseFacts
 from .dialogue_evidence import DialogueEvidence, EvidenceFact, EvidenceSource, DetailRequest
 from .scientific_dialogue import ScientificClaim, ScientificResponse
 from .scientific_guidance import GuidanceCandidate, GuidanceResponse
@@ -40,7 +39,7 @@ __all__ = [
     "GuidanceQuestion", "GuidanceCandidate", "GuidanceResponse",
     "ScientificQuestion", "ScientificTarget", "ScientificClaim", "ScientificResponse",
     "DialogueEvidence", "EvidenceFact", "EvidenceSource", "DetailRequest",
-    "Execute", "ExecuteCandidate", "Navigate", "Clarify", "Answer", "TurnResponseFacts", "IntentDelta", "TurnDecision", "TurnOutcome",
+    "Execute", "ExecuteCandidate", "Navigate", "Clarify", "Answer", "TurnDecision", "TurnOutcome",
     "AnalysisSession", "AnalysisRevision", "AnalysisSessions", "SessionTurn",
     "OutputSelection", "OutputLocator", "Navigation", "SessionError", "SessionConflictError",
     "ApplicationError",

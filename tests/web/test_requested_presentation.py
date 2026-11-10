@@ -34,7 +34,7 @@ def fixture_script():
       append(option){this.options.push(option);option.remove=()=>{this.options=this.options.filter(o=>o!==option);};},
       replaceChildren(...nodes){this.nodes=nodes;},textContent:'',hidden:false});
     const document = {createElement:tag=>({tag,nodes:[],events:{},dataset:{},
-      append(...nodes){this.nodes.push(...nodes);},addEventListener(event,fn){this.events[event]=fn;}})};
+      get childElementCount(){return this.nodes.length;},append(...nodes){this.nodes.push(...nodes);},addEventListener(event,fn){this.events[event]=fn;}})};
     const readableLabel=x=>x;
     const resultLabel=x=>x;
     const artifactPath=(session,revision,handle,turn)=>`/${session}/${revision || turn}/${handle}`;
@@ -61,7 +61,7 @@ def test_latest_requested_output_uses_conversation_order_not_http_completion_ord
     ''')
     assert result['views'] == []  # Inline gallery does not select a scientific result.
     assert [a['handle'] for a in result['inventory']['scientific_artifacts']] == ['export']
-    assert result['text'][:2] == ['Requested: Other labels and data', 'Latest supplied labels']
+    assert [a['handle'] for a in result['inventory']['artifacts']] == ['older', 'latest']
 
 
 def test_explicit_historical_presentation_and_manual_artifact_preview_survive_later_inventory():
@@ -82,15 +82,15 @@ def test_explicit_historical_presentation_and_manual_artifact_preview_survive_la
 def test_multiple_requested_figures_are_displayed_without_arbitrary_generic_fallback():
     result = run_render('''
       state.revision.artifacts=[{handle:'native',artifact_type:'analysis_figure',revision_id:'r',
-        figure:{manifest_sha256:'native',figure_id:'native',output_names:['umap']}}];
+        figure:{manifest_sha256:'native',figure_id:'native',sources:[],output_names:['umap']}}];
       cache('latest',[figure('latest','r','one'),figure('latest','r','two')]);
       renderResultSelection(); return {views,inventory:inventories.at(-1),
-        figures:dom['result-facts'].nodes.find(n=>n.className==='result-figures').nodes
+        figures:dom['result-figures'].nodes[0].nodes
           .filter(n=>n.tag==='figure').map(n=>n.nodes.find(c=>c.tag==='img').src)};
     ''')
     assert result['views'] == []
     assert [a['handle'] for a in result['inventory']['artifacts']] == ['one', 'two', 'native']
-    assert result['figures'] == ['/api/v1/session/latest/one', '/api/v1/session/latest/two']
+    assert result['figures'] == ['/api/v1/session/latest/one', '/api/v1/session/latest/two', '/api/v1/session/r/native']
 
 
 def test_presentation_association_requires_exact_coordinates_or_export_references():
@@ -105,21 +105,10 @@ def test_presentation_association_requires_exact_coordinates_or_export_reference
     assert result == []
 
 
-def test_saved_selection_restores_when_its_inventory_arrives_and_is_not_replaced_by_latest():
-    result = run_render('''
-      const select=element('result-selection');select.append({value:'@latest'});select.append({value:'@overview'});
-      state.resultChoice={revisionId:'r',selection:'@turn:older'};
-      cache('latest',[figure('latest')]);renderPresentationChoices();
-      const waiting=select.value;
-      cache('older',[figure('older')]);renderPresentationChoices();
-      renderResultSelection();
-      return {waiting,selection:select.value,figures:resultFigureArtifacts(null,presentationChoices()[0]).map(a=>a.handle),
-        options:select.options.map(o=>o.value)};
-    ''')
-    assert result['waiting'] == '@latest'
-    assert result['selection'] == '@turn:older'
-    assert result['figures'] == ['older']
-    assert result['options'] == ['@latest', '@overview', '@turn:older', '@turn:latest']
+def test_revision_has_no_secondary_presentation_selection():
+    source = (STATIC / 'app.js').read_text()
+    assert 'renderPresentationChoices' not in source
+    assert 'resultChoice' not in source
 
 
 def test_tab_conveniences_do_not_follow_another_tabs_session_or_draft():
@@ -130,7 +119,7 @@ def test_tab_conveniences_do_not_follow_another_tabs_session_or_draft():
       const storage=()=>({data:{},getItem(k){return this.data[k]||null;},setItem(k,v){this.data[k]=v;}});
       const first=storage(),second=storage();let sessionStorage=first;
       const state={session:{session_id:'macaque',active_revision_id:'new'},viewedRevisionId:'old',
-        resultChoice:{revisionId:'old',selection:'@turn:older'}};
+        parameterEditor:null};
       const dom={utterance:{value:'Continue macaque'},'research-layout':{dataset:{panel:'results'}}};
       const element=id=>dom[id]||(dom[id]={value:''});
       saveConveniences();
@@ -142,7 +131,7 @@ def test_tab_conveniences_do_not_follow_another_tabs_session_or_draft():
     assert result['macaque']['sessionId'] == 'macaque'
     assert result['macaque']['draft'] == 'Continue macaque'
     assert result['macaque']['viewedRevisionId'] == 'old'
-    assert result['macaque']['resultChoice'] == dict(revisionId='old', selection='@turn:older')
+    assert 'resultChoice' not in result['macaque']
     source = (STATIC / 'app.js').read_text()
     # Shared discovery remains browser-local; active context/attachments are tab-local.
     assert 'localStorage.getItem(RECENT_SESSIONS_KEY)' in source
@@ -158,7 +147,7 @@ def test_accepted_result_refreshes_missing_explanation_once_when_saved_response_
         revision:{revision_id:'r',turn_id:'t',result:null},attachmentSession:'s'};
       const nodes={};const element=id=>nodes[id]||(nodes[id]={});
       const shortIdentity=x=>x,resultLabel=x=>x;
-      const rememberSession=()=>{},renderHistory=()=>{},renderRevisionHistory=()=>{},
+      const refreshRequestOptions=()=>{},rememberSession=()=>{},renderHistory=()=>{},renderRevisionHistory=()=>{},
         renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{};
       const loads=[];const clearRevisionView=()=>{};
       const loadRevision=id=>{loads.push(id);state.revision.result={text:'Saved response'};};
@@ -174,7 +163,7 @@ def test_accepted_result_refreshes_missing_explanation_once_when_saved_response_
 
 def test_summary_and_inline_figures_precede_download_details():
     html = (STATIC / 'index.html').read_text()
-    assert html.index('id="result-selection"') < html.index('id="artifact-viewer"')
+    assert html.index('id="result-choice"') < html.index('id="artifact-viewer"')
     assert html.index('id="result-facts"') < html.index('id="artifact-viewer"') < html.index('id="artifact-panel"')
 
 
@@ -190,7 +179,7 @@ def test_gallery_preserves_all_distinct_figures_and_exact_group_association():
       const cards=gallery.nodes.filter(n=>n.tag==='figure');
       const first=cards[0],image=first.nodes.find(n=>n.tag==='img');
       const src=image.src;image.events.error();
-      first.nodes.find(n=>n.tag==='button').events.click();
+
       return {selected:selected.map(a=>a.handle),cards:cards.length,src,hidden:image.hidden,
         error:first.nodes.find(n=>n.tag==='figcaption').textContent,
         notes:gallery.nodes.filter(n=>n.tag==='p').map(n=>n.textContent),views,empty:resultFigureGallery([])};
@@ -200,7 +189,7 @@ def test_gallery_preserves_all_distinct_figures_and_exact_group_association():
     assert result['src'] == '/api/v1/session/r/same'
     assert result['hidden'] and 'unavailable' in result['error']
     assert result['notes'] == []
-    assert result['views'] == [dict(session='session', revision='r', handle='same')]
+    assert result['views'] == []
 
 
 def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_methods():
@@ -208,7 +197,7 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
     result = run_render(values + '''
       document.createTextNode=text=>({textContent:text});
       document.createElementOld=document.createElement;
-      document.createElement=tag=>({...document.createElementOld(tag),setAttribute(){}});
+      document.createElement=tag=>Object.assign(document.createElementOld(tag),{setAttribute(){}});
       const facts=[
         {field:'n_cells',status:'available',value:569},
         {field:'group_summary',status:'available',value:[{group:'0',n_cells:203,primary_annotation:'B cells',status:'assigned'}]},
@@ -216,13 +205,13 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
         {field:'unavailable_metric',status:'unavailable',value:0.99,reason:'No independent reference'},
         {field:'source_sha256',status:'available',value:'exact-sha'}];
       state.revision.result={text:'Saved scientific response'};
-      state.revision.result_groups=[{handle:'a',label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','unavailable_metric'],
+      state.revision.result_groups=[{handle:'a',outputs:[{name:'annotation'}],label:'Annotation',summary_fields: ['n_cells','group_summary','metrics','unavailable_metric'],
         parameters:{},derived_from:[],
         evidence:{facts,field_labels:{},coverage:[],limitations:['Predictions are not validated identities.']}}];
       renderResultSelection();
       const nodes=dom['result-facts'].nodes;
       const section=nodes.find(n=>n.className==='scientific-result');
-      return {nodes,methods:section.nodes.find(n=>n.tag==='details')};
+      return {nodes,methods:dom['native-results'].nodes};
     ''')
     text = json.dumps(result)
     assert '569' in text and '203' in text and 'B cells' in text
@@ -233,5 +222,39 @@ def test_group_table_and_exact_metrics_are_visible_and_other_facts_remain_in_met
     section = next(n for n in result['nodes'] if n.get('className') == 'scientific-result')
     values = next(n for n in section['nodes'] if n['tag'] == 'dl')
     assert not any(n.get('tag') == 'details' for n in values['nodes'])
-    assert result['nodes'][0]['textContent'] == 'Saved scientific response'
-    assert 'not validated' in result['nodes'][1]['textContent']
+    assert 'Saved scientific response' not in json.dumps(result['nodes'])
+    assert 'not validated' in json.dumps(result['methods'])
+
+
+def test_retained_groups_and_duplicate_numeric_summary_are_not_new_outputs():
+    values = functions('function evidenceValueNode', 'function renderEvidence')
+    result = run_render(values + '''
+      document.createTextNode=text=>({textContent:text});
+      const group=(handle,n)=>({handle,label:handle,outputs:[{name:handle}],
+        summary_fields:['n_cells'],parameters:[],derived_from:[],
+        evidence:{facts:[{field:'n_cells',status:'available',value:n}],field_labels:{},coverage:[],limitations:[]}});
+      state.revision.retained_outputs=['old'];
+      state.revision.result_groups=[group('old',900),group('new',128)];
+      renderResultSelection();
+      return dom['result-facts'].nodes;
+    ''')
+    text = json.dumps(result)
+    assert '900' not in text
+    assert text.count('128') == 1
+    assert 'undefined' not in text
+
+
+def test_download_partition_keeps_each_exact_handle_once():
+    source = functions('function supportedScientificFile', 'const recentDownloads')
+    groups = functions('function scientificFileGroups', 'function loadRequestedArtifacts')
+    result = _javascript_value('(() => {' + source + groups + '''
+      const document={createElement:tag=>({tag,nodes:[],get childElementCount(){return this.nodes.length;},append(...nodes){this.nodes.push(...nodes);}})};
+      const scientificFileNode=(session,file)=>({handle:file.handle});
+      const files=[{handle:'main',filename:'result.h5ad',artifact_type:'scientific_native_result',source_step:{terminal:true}},
+        {handle:'other',filename:'result.h5ad',artifact_type:'scientific_native_result',source_step:{terminal:false}}];
+      return scientificFileGroups('s',[...files,files[0]]);
+    })()''')
+    text = json.dumps(result)
+    assert text.count('"handle": "main"') == 1
+    assert text.count('"handle": "other"') == 1
+    assert 'Additional files' in text

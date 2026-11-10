@@ -6,7 +6,7 @@ import pytest
 
 from agent.application.turn_decisions import (
     Execute, IntentError, LeidenResolution, ParameterAnswer, ScopedArgument,
-    SpeciesAnswer, admit_leiden_resolution, admit_scientific_argument,
+    SpeciesAnswer, admit_scientific_argument,
     decision_schema, interpret, parse_decision,
 )
 from agent.orchestration import build_default_tool_registry
@@ -57,8 +57,7 @@ def test_initial_request_and_partial_or_complete_answer_share_typed_declarations
     declarations = (declaration(utterance, '1200', argument='min_qc_fragment_records'),
                     declaration(utterance, '4.5'))
     assert parse_decision(wire(dict(kind='execute_plan', target='select_scATAC_cells',
-        arguments=[asdict(item) for item in declarations]))) == Execute(
-            'current', 'plan', 'select_scATAC_cells', None, arguments=declarations)
+        arguments=[asdict(item) for item in declarations]))) == Execute('select_scATAC_cells', arguments=declarations)
     for arguments in (declarations[:1], declarations):
         assert parse_decision(wire(dict(kind='answer_parameters', pending='@parameters',
             arguments=[asdict(item) for item in arguments]))) == ParameterAnswer('@parameters', arguments)
@@ -108,9 +107,7 @@ def test_historical_resolution_class_and_admission_stay_strict_and_share_validat
     generic = declaration(utterance, '1', 'cluster_cells', 'resolution')
     historical = LeidenResolution(**asdict(generic))
     spec = registry.get('cluster_cells').optional_arguments['resolution']
-    assert admit_scientific_argument(generic, utterance, spec) == admit_leiden_resolution(historical, utterance, spec) == 1.0
-    with pytest.raises(IntentError, match='invalid_decision'):
-        admit_leiden_resolution(generic, utterance, spec)
+    assert admit_scientific_argument(generic, utterance, spec) == admit_scientific_argument(historical, utterance, spec) == 1.0
     with pytest.raises(ValueError):
         LeidenResolution(**(asdict(generic) | {'tool': 'compute_cell_umap'}))
 
@@ -167,7 +164,7 @@ def test_historical_and_generic_identity_cannot_conflict():
             argument=argument, arguments=[argument])))
 
 
-def test_combined_historical_and_generic_declarations_share_the_scientific_argument_bound(registry):
+def test_generic_declarations_share_one_scientific_argument_bound(registry):
     from agent.application.dialogue_execution import scientific_parameters
     candidates = [item for item in scientific_parameters(registry)
         if (item['tool'], item['argument']) != ('cluster_cells', 'resolution')]
@@ -176,10 +173,10 @@ def test_combined_historical_and_generic_declarations_share_the_scientific_argum
         for item in candidates[:32]]
     legacy = dict(tool='cluster_cells', argument='resolution', literal='1', start=0, end=1)
     with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', argument=legacy, arguments=arguments)))
+        parse_decision(wire(dict(kind='execute_plan', target='cluster_cells', arguments=[legacy, *arguments])))
     accepted = parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
-        argument=legacy, arguments=arguments[:31])))
-    assert len(accepted.arguments) == 32 and accepted.argument is None
+        arguments=[legacy, *arguments[:31]])))
+    assert len(accepted.arguments) == 32
     assert accepted.arguments[0].tool == 'cluster_cells'
 
 

@@ -7,6 +7,7 @@ import math
 import json
 import csv
 import os
+from functools import lru_cache
 from pathlib import Path
 import shutil
 import tempfile
@@ -113,6 +114,18 @@ def prepare_input(args, stage):
     return matrix, effective
 
 
+@lru_cache(maxsize=128)
+def _installed_parameter_metadata(executable, package, function):
+    import subprocess
+    script = Path(__file__).with_name('native_matrix_worker.py')
+    try:
+        result = subprocess.run([executable, '-B', str(script), '--parameters', package, function],
+            capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return {}
+
+
 class MatrixPackage:
     """One package interface, several compatible public functions, one lifecycle."""
     FACT_FIELDS, RESULT_FIELDS, DELIVERY_FILES = FACT_FIELDS, RESULT_FIELDS, DELIVERY_FILES
@@ -205,6 +218,19 @@ class MatrixPackage:
             if isinstance(value, str) and ('/' in value or '\\' in value or value in ('.', '..')):
                 raise ValueError('Native object keys must be local field names')
         return kwargs
+
+    def parameter_metadata(self, function):
+        """Inspect the same installed runtime used by native dispatch; run no science."""
+        if function not in self.FUNCTIONS or self.package == 'Signac':
+            return {}
+        override = os.environ.get('AGENT_' + self.package.upper() + '_PYTHON')
+        try:
+            executable = Path(override) if override else library().root.parent / 'runtimes' / self.runtime / 'env/bin/python'
+        except ValueError:
+            return {}
+        if not executable.is_file():
+            return {}
+        return _installed_parameter_metadata(str(executable), self.package, function)
 
     def native(self, args, stage, matrix):
         is_r = self.package == 'Signac'

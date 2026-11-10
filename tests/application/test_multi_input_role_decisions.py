@@ -47,7 +47,7 @@ def test_exact_role_proposals_are_immutable_and_independent_of_upload_order():
     value = parse_decision(wire(roles()))
     assert value.roles == tuple(InputRole(**item) for item in roles())
     assert value.context == 'none'
-    assert value.argument is None and value.arguments == ()
+    assert value.arguments == ()
     with pytest.raises(FrozenInstanceError):
         value.roles[0].source = 'source.1'
     reversed_roles = list(reversed(roles()))
@@ -69,7 +69,7 @@ def test_invalid_or_conflicting_role_wire_fails_closed(submitted):
 
 
 def test_existing_execute_wire_and_schema_do_not_require_new_selection():
-    assert parse_decision(wire()) == Execute('current', 'plan', 'evaluate_cell_clustering', None)
+    assert parse_decision(wire()) == Execute('evaluate_cell_clustering')
     assert execution(decision_schema())['roles']['minItems'] == 0
 
 

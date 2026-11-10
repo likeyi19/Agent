@@ -45,7 +45,7 @@ def selected(sources):
 
 def test_generic_candidate_only_admission_explicitly_clears_received_binding(sources):
     owner, records, pool, item, sessions = sources
-    value = admit(sessions, item, Execute('current', 'plan', 'inspect_scATAC', None), {})
+    value = admit(sessions, item, Execute('inspect_scATAC'), {})
     assert value['registered_input'] is None and not value['inputs']
     current = replace(item, admitted=value)
     assert 'registered_input' not in execution_submission(current)
@@ -55,7 +55,7 @@ def test_generic_candidate_only_admission_explicitly_clears_received_binding(sou
 
 def test_reuse_of_existing_upload_establishes_the_new_consumer_role(sources):
     owner, records, pool, item, sessions = sources
-    value = admit(sessions, item, Execute('current', 'plan', 'inspect_scATAC', None,
+    value = admit(sessions, item, Execute('inspect_scATAC',
         roles=(InputRole('inspect_scATAC', 'dataset', 'source.1'),)), {})
     submission = execution_submission(replace(item, admitted=value))
     assert submission['registered_input']['roles'] == [dict(tool='inspect_scATAC', port='dataset', source='source.1')]
@@ -174,7 +174,7 @@ def test_real_execution_acceptance_installs_only_the_selected_upload_guard(sourc
     state = sessions.create('session')
     item = replace(item, snapshot=snapshot(sessions, state))
     sessions._store._write(replace(state, interactions=(item,)))
-    value = admit(sessions, item, Execute('current', 'plan', 'inspect_scATAC', None,
+    value = admit(sessions, item, Execute('inspect_scATAC',
         roles=(InputRole('inspect_scATAC', 'dataset', 'source.1'),)), {})
     path = records[0].source_path if variant == 'wrong_consumer_path' else records[1].source_path
     value['native_plan'] = AgentPlan('plan', value['request_id'], item.utterance,

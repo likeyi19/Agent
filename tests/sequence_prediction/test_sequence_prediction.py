@@ -222,10 +222,8 @@ def test_model_resource_change_during_execution_is_not_published(tmp_path,native
 
 def test_unavailable_condition_message_uses_captured_choices():
     from agent.application.turn_decisions import parse_decision,Clarify
-    from agent.application import responses
     # Model selects the reason; exact displayed labels come from resource discovery.
     decision=parse_decision(json.dumps(dict(turn_schema_version=1,
         decision=dict(kind='clarify',reason='unavailable_model_condition'))))
     assert isinstance(decision,Clarify)
-    text=responses.clarification_text(Clarify(decision.reason,('K562','CD8 T cells')))
-    assert 'No substitute' in text and 'K562; CD8 T cells' in text
+    assert Clarify(decision.reason,('K562','CD8 T cells')).choices == ('K562','CD8 T cells')

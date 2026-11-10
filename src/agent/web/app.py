@@ -25,7 +25,7 @@ from agent.application.local_resources import (RegisteredInput, RegisteredInputC
 from agent.application.matrix_delivery import MatrixDeliveryError
 from agent.application.uploads import H5ADUploadAdmission, UploadError
 
-from .config import QualifiedEpiZooResource, ScientificInputSet
+from .config import ScientificInputSet
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ class ClarificationChoice(_Body):
 class SubmitTurn(_Body):
     turn_id: StrictStr = Field(min_length=1, max_length=256, pattern=r'^[^/\\]+$')
     expected_generation: StrictInt = Field(ge=0)
-    utterance: StrictStr = Field(min_length=1, max_length=4096)
+    utterance: StrictStr = Field(default="", max_length=4096)
     profile_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     input_set_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     resource_id: StrictStr | None = Field(default=None, pattern=r'^local-[0-9a-f]{64}$')
@@ -81,6 +81,10 @@ class SubmitTurn(_Body):
                                                pattern=r'^[a-z][a-z0-9_-]*$')
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     clarification_choice: ClarificationChoice | None = None
+    rerun_revision_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
+    parameter_overrides: list[dict] = Field(default_factory=list, max_length=32)
+    candidate_selection: dict[str, str] | None = None
+    selected_results: list[dict] = Field(default_factory=list, max_length=32)
 
     @field_validator('turn_id')
     @classmethod
@@ -171,6 +175,8 @@ class _LocalWorkers:
                 input_sets=self.input_sets,
                 predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
                 clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
+                rerun_revision_id=payload.rerun_revision_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
+                selected_results=payload.selected_results,
                 **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
             logger.warning('Interactive turn failed: %s', exc.error.code, exc_info=True)
@@ -195,6 +201,8 @@ class _LocalWorkers:
             input_sets=self.input_sets,
             predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
             clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
+                rerun_revision_id=payload.rerun_revision_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
+                selected_results=payload.selected_results,
             **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)
         with self.lock:
@@ -419,6 +427,22 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     def models():
         return {'choices': [c.to_dict() for c in application.model_choices()]}
 
+    @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/parameters')
+    def result_parameters(session_id: str, revision_id: str):
+        from agent.application.structured_parameters import result_parameters
+        try:
+            return result_parameters(application._application.sessions, session_id, revision_id)
+        except (ValueError, KeyError, RuntimeError, OSError) as exc:
+            raise InteractiveBoundaryError('INTERACTIVE_REFERENCE_INVALID') from exc
+
+    @app.get('/api/v1/parameters')
+    def parameter_catalog(tool: str, function: str | None = None):
+        from agent.application.structured_parameters import catalog
+        try:
+            return {'tools': catalog(application._application.registry, tool, function)}
+        except (ValueError, KeyError) as exc:
+            raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID') from exc
+
     @app.get('/api/v1/input-sets')
     def scientific_inputs():
         return {'choices': [s.choice() for s in input_sets]}
@@ -436,6 +460,22 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         members = () if uploads is None else uploads.fastq_members()
         if members:
             result['fastq_members'] = list(members)
+        return result
+
+    @app.get('/api/v1/sessions/{session_id}/interaction-options')
+    def interaction_options(session_id: str, resource_ids: list[str] = Query(default=[])):
+        from agent.application.structured_parameters import interaction_options
+        from agent.application.local_resources import group_choices, source_field_choices, source_slot_choices
+        state = application._application.sessions.load(session_id)
+        result = interaction_options(application._application.sessions, state)
+        result['sources'] = []
+        if resource_ids:
+            binding = application.resources.compose_group(tuple(resource_ids), attachment_candidates=True, verify_source=False)
+            result.update(group_choices(binding, application._application.registry))
+            for row, member in zip(result['sources'], binding.members):
+                row['resource_id'] = member['resource_id']
+            result['fields'] = source_field_choices(binding)
+            result['slots'] = source_slot_choices(binding)
         return result
 
     @app.get('/api/v1/sessions/{session_id}/attachments')

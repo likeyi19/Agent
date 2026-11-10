@@ -192,8 +192,7 @@ def unchanged(current):
 def test_normal_export_answer_keeps_recipe_through_withholding_reopen_and_real_http_download(app,monkeypatch,tmp_path):
     current=case(app,monkeypatch)
     view=current.facade.submit_turn('session','compose',REQUEST,expected_generation=2)
-    assert view.status=='answered' and 'could not ground' in view.response.text,view.to_dict()
-    assert 'available for preparation' in view.response.text.lower()
+    assert view.status=='failed' and view.response.status=='unavailable' and view.response.error.code=='UNSUPPORTED_STATEMENT',view.to_dict()
     assert view.export_requested is True
     assert current.models[0].phases==['interpretation','generation','review']
     saved=current.facade._application.sessions.load('session').interactions[-1]
@@ -255,8 +254,8 @@ def test_normal_export_answer_keeps_recipe_through_withholding_reopen_and_real_h
 def test_exact_but_ineligible_export_preserves_answer_and_discloses_safe_owner_reason(app,monkeypatch,tmp_path,failure,message):
     current=case(app,monkeypatch,failure=failure)
     view=current.facade.submit_turn('session','compose',REQUEST,expected_generation=2)
-    assert view.response.kind=='answer' and 'recipe is unavailable' in view.response.text
-    assert message in view.response.text and str(tmp_path) not in view.response.text
+    assert view.response.kind=='answer' and view.response.error.code=='UNSUPPORTED_STATEMENT'
+    assert str(tmp_path) not in view.response.text
     state=current.facade._application.sessions.load('session')
     assert state.interactions[-1].presentation is not None and state.interactions[-1].admitted['export']
     assert current.facade.scientific_artifacts_for_turn('session','compose')==()

@@ -45,7 +45,7 @@ def label_declaration(utterance=OBJECTIVE, label=LABEL, **changes):
 
 def request(*, roles=(), required=REQUIRED_ROLES, declarations=None):
     return dict(kind='request_roles', target='transfer_cell_labels',
-        required_roles=deepcopy(required), roles=deepcopy(list(roles)), argument=None,
+        required_roles=deepcopy(required), roles=deepcopy(list(roles)),
         arguments=[label_declaration()] if declarations is None else declarations, context='none')
 
 

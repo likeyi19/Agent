@@ -6,8 +6,6 @@ from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputLocator
 from .turn_decisions import IntentError
 
-SELECTION = 'select_scATAC_cells'
-MATRIX = 'build_scATAC_cell_by_ccre'
 
 
 def supplied_input_context(inputs, registry):
@@ -43,12 +41,6 @@ def supplied_input_context(inputs, registry):
                         consumers[name].append(descriptor)
     return dict(present=bool(values), fields=[dict(name=name, json_type=_json_type(values[name]),
         consumers=consumers[name]) for name in sorted(consumers)], omitted_count=len(values)-len(consumers))
-
-
-def parameter_specs(registry):
-    spec = registry.accepted(SELECTION)
-    return {k:v for k,v in {**spec.required_arguments, **spec.optional_arguments}.items()
-            if v.planning is not None and v.planning.scientific_parameter}
 
 
 def stored_step(sessions, locator):
@@ -172,17 +164,6 @@ def revision_results(sessions, state, revision):
                  for group, description in zip(groups, descriptions))
 
 
-def selection_parameters(step, specs):
-    """Exact supplied recipe values precede the fixed selection owner defaults.
-
-    Pre-default accepted selections always supplied both minima. Their captured
-    values remain unchanged; omission is possible only under the new contract.
-    """
-    from agent.tools.data.scatac_selection_profile import DEFAULTS
-    return {**DEFAULTS, **{k: _serialize(step.resolved_arguments[k])
-                          for k in specs if k in step.resolved_arguments}}
-
-
 def snapshot(sessions, state, *, tool_names=None):
     revisions = {r.revision_id:r for r in state.revisions}
     current = revisions.get(state.active_revision_id)
@@ -195,55 +176,16 @@ def snapshot(sessions, state, *, tool_names=None):
                      if e.to_revision_id != e.from_revision_id), None)
     if previous is not None: relations['previous_active'] = previous
     bases = {}
-    specs = parameter_specs(sessions._application.registry)
     for rid in dict.fromkeys(relations.values()):
         revision = revisions[rid]
-        operations = []
-        matrix_outputs = []
-        for locator in revision.outputs:
-            step = stored_step(sessions, locator)
-            if tool_names is not None:
-                tool_names[rid, locator.name] = step.tool_name
-            if step.tool_name == MATRIX:
-                matrix_outputs.append(locator)
-            if step.tool_name != SELECTION: continue
-            if any(o['source']['run_id'] == locator.run_id and o['source']['step_id'] == locator.step_id for o in operations):
-                continue
-            parameters = selection_parameters(step, specs)
-            required = set(specs).intersection(sessions._application.registry.accepted(SELECTION).required_arguments)
-            if not required <= set(parameters): raise IntentError('unavailable_context')
-            for key, value in parameters.items(): specs[key].validate(key, value)
-            operations.append(dict(handle=f'op.{len(operations)}', source=asdict(locator), parameters=parameters))
-        if len(operations) > 1 or len(revision.outputs) > 32:
-            raise IntentError('unavailable_context')
-        if len({(o.run_id, o.step_id, o.accepted_step_sha256) for o in matrix_outputs}) > 1:
-            raise IntentError('unavailable_context')
-        # Match result_groups: cooutputs of one exact accepted step share its
-        # recipe. The canonical locator never chooses among distinct matrices.
-        matrix_source = (asdict(min(matrix_outputs, key=lambda o: (o.name, o.output_key)))
-                         if matrix_outputs else None)
-        # Preserve an exact prior recipe pointer, not its stale matrix artifact or
-        # a target to maintain. The pointer was captured by this revision's turn.
-        origin = next((i for i in state.interactions if i.turn_id == revision.turn_id), None)
-        focus = None
-        if origin is not None and origin.admitted is not None:
-            admitted = _serialize(origin.admitted)
-            if matrix_source is None: matrix_source = admitted.get('matrix_source')
-            focus = admitted.get('parameter')
-        if matrix_source is not None: stored_step(sessions, matrix_source)
-        bases[rid] = dict(revision_id=rid, outputs=[asdict(o) for o in revision.outputs],
-                          operations=operations, matrix_source=matrix_source, focus=focus)
+        if tool_names is not None:
+            for locator in revision.outputs:
+                tool_names[rid, locator.name] = stored_step(sessions, locator).tool_name
+        bases[rid] = dict(revision_id=rid, outputs=[asdict(o) for o in revision.outputs])
     return dict(relations=relations, bases=bases)
 
 
 def public_context(captured):
-    if not captured['relations']:
-        return dict(relations=('current',), bases={}, previous_is_ambiguous=False)
-    bases = {}
-    for relation, rid in captured['relations'].items():
-        base = captured['bases'][rid]
-        bases[relation] = dict(operations=[dict(handle=o['handle'], tool=SELECTION,
-            parameters=o['parameters']) for o in base['operations']],
-            matrix_recipe_available=base['matrix_source'] is not None, parameter_focus=base['focus'])
-    return dict(relations=tuple(bases) + ('previous',), bases=bases,
-                previous_is_ambiguous=len(set(v for k,v in captured['relations'].items() if k != 'current')) > 1)
+    relations = captured['relations']
+    return dict(relations=tuple(relations) + ('previous',) if relations else ('current',),
+                previous_is_ambiguous=len({v for k, v in relations.items() if k != 'current'}) > 1)

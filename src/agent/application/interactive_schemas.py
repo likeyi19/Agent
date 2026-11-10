@@ -321,6 +321,7 @@ class TurnView(_JsonModel):
     state_revision: int | None = None
     base_revision_id: str | None = None
     attachments: tuple = ()
+    rerun_revision_id: str | None = dataclass_field(default=None, metadata={'omit_none': True})
     export_requested: bool | None = dataclass_field(default=None, metadata={'omit_none': True})
     clarification_choices: object = dataclass_field(default=None, metadata={'omit_none': True})
 

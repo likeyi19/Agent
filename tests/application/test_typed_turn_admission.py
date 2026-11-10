@@ -11,7 +11,7 @@ import pytest
 from agent.application import SessionConflictError
 from agent.application import dialogue_execution
 from agent.application.session_state import Interaction, digest
-from agent.application.turn_decisions import Execute, IntentDelta, IntentError
+from agent.application.turn_decisions import Execute, IntentError
 from agent.application.turns import TurnOutcome
 from agent.orchestration import LLMPlanner
 from agent.orchestration.executor import PlanExecutor
@@ -62,12 +62,10 @@ def stop_before_planning(app, monkeypatch):
 
 
 @pytest.mark.parametrize('utterance', WORDINGS)
-@pytest.mark.parametrize('minimal', [False, True])
-def test_same_typed_execute_is_admitted_without_reclassifying_language(app, monkeypatch, utterance, minimal):
+def test_same_typed_execute_is_admitted_without_reclassifying_language(app, monkeypatch, utterance):
     app, reached, forbidden_calls = stop_before_planning(app, monkeypatch)
     inputs = {'input_path': '/operator-owned/provided-matrix.h5ad'}
-    choice = dict(kind='execute_plan', target='inspect_scATAC') if minimal else dict(
-        kind='execute', base='current', operation='plan', target='inspect_scATAC', delta=None)
+    choice = dict(kind='execute_plan', target='inspect_scATAC')
     model = Model(choice)
 
     outcome = ask(app, 'first', utterance, model, expected_generation=0, execution_inputs=inputs)
@@ -90,7 +88,6 @@ def test_same_typed_execute_is_admitted_without_reclassifying_language(app, monk
 
 @pytest.mark.parametrize('choice,kind,status', [
     (dict(kind='clarify', reason='unavailable_context'), 'clarify', 'clarification'),
-    (dict(kind='answer', intent='unsupported', relation='current', technical=False), 'answer', 'unsupported'),
 ])
 def test_execution_words_do_not_override_a_nonexecuting_typed_decision(app, monkeypatch, choice, kind, status):
     app, reached, forbidden_calls = stop_before_planning(app, monkeypatch)
@@ -99,7 +96,7 @@ def test_execution_words_do_not_override_a_nonexecuting_typed_decision(app, monk
     outcome = ask(app, 'first', R2, model, execution_inputs={'input_path': '/operator-owned/provided-matrix.h5ad'})
 
     assert (outcome.kind, outcome.status) == (kind, status)
-    assert len(model.calls) == 1 and not reached and not forbidden_calls
+    assert sum('turn_schema_version' in c for c in model.calls) == 1 and not reached and not forbidden_calls
     state = app.sessions.load('session')
     assert state.generation == 0 and not state.revisions
     assert not tuple(app.run_store.root.glob('*.json'))
@@ -107,14 +104,12 @@ def test_execution_words_do_not_override_a_nonexecuting_typed_decision(app, monk
 
 @pytest.mark.parametrize('changes', [
     dict(target='unregistered_tool'),
-    dict(base='parent'),
-    dict(delta=IntentDelta('min_tss_enrichment', 'set', '5', 'Set TSS enrichment to 5.')),
 ])
 def test_generic_admission_still_rejects_invalid_typed_contracts(app, changes):
     sessions = app.sessions
     sessions._interaction_session_id = 'session'
     interaction = Interaction('first', R2, None, 0, dict(relations={}, bases={}))
-    decision = replace(Execute('current', 'plan', 'inspect_scATAC', None), **changes)
+    decision = replace(Execute('inspect_scATAC'), **changes)
 
     with pytest.raises(IntentError, match='unsupported_intent'):
         dialogue_execution.admit(sessions, interaction, decision, {'input_path': '/provided.h5ad'})
@@ -129,7 +124,7 @@ def test_generic_admission_preserves_existing_json_mapping_validation(app, input
     interaction = Interaction('first', R2, None, 0, dict(relations={}, bases={}))
 
     with pytest.raises((TypeError, ValueError)):
-        dialogue_execution.admit(sessions, interaction, Execute('current', 'plan', 'inspect_scATAC', None), inputs)
+        dialogue_execution.admit(sessions, interaction, Execute('inspect_scATAC'), inputs)
 
     assert not app.sessions.load('session').interactions
 
@@ -140,7 +135,7 @@ def test_generic_admission_preserves_exact_inputs_without_inference(app, inputs)
     sessions._interaction_session_id = 'session'
     interaction = Interaction('first', 'Here is the selected dataset.', None, 0, dict(relations={}, bases={}))
 
-    admitted = dialogue_execution.admit(sessions, interaction, Execute('current', 'plan', 'inspect_scATAC', None), inputs)
+    admitted = dialogue_execution.admit(sessions, interaction, Execute('inspect_scATAC'), inputs)
 
     assert admitted['inputs'] == ({} if inputs is None else inputs)
     if inputs is not None:
@@ -176,11 +171,11 @@ def test_generic_execute_cannot_bypass_existing_candidate_selection(app, monkeyp
 
     outcome = ask(app, 'select', utterance, model, execution_inputs={'input_path': '/provided.h5ad'})
 
-    assert outcome.status == 'clarification' and outcome.clarification.reason == 'unsupported_intent'
-    assert len(model.calls) == 1 and not reached and not forbidden_calls
+    assert outcome.status == 'failed' and outcome.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
+    assert sum('turn_schema_version' in c for c in model.calls) == 1 and not reached and not forbidden_calls
     state = app.sessions.load('session')
     assert state.revisions == before.revisions and state.generation == before.generation
-    assert state.interactions[-1].admitted['kind'] == 'clarify'
+    assert state.interactions[-1].admitted is None
 
 
 @pytest.mark.parametrize('utterance', ['Run option 1.', 'Execute option 1.'])
@@ -195,7 +190,7 @@ def test_valid_execute_candidate_retains_existing_admission_route(app, monkeypat
     outcome = ask(app, 'select', utterance, model, execution_inputs=inputs)
 
     assert (outcome.kind, outcome.status) == ('execute', 'admitted')
-    assert len(model.calls) == 1 and not forbidden_calls
+    assert sum('turn_schema_version' in c for c in model.calls) == 1 and not forbidden_calls
     _, admitted = reached.pop()
     assert admitted['operation'] == 'plan' and admitted['tool'] == 'inspect_scATAC'
     assert admitted['selected_candidate']['candidate_id'] == candidate_id
@@ -216,6 +211,6 @@ def test_candidate_command_evidence_keeps_existing_m17_2_rejections(app, monkeyp
 
     outcome = ask(app, 'select', utterance, Selection(candidate_id, utterance))
 
-    assert outcome.status == 'clarification' and not reached and not forbidden_calls
+    assert outcome.status == 'failed' and not reached and not forbidden_calls
     state = app.sessions.load('session')
     assert state.revisions == before.revisions and state.generation == before.generation

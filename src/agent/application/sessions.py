@@ -180,11 +180,6 @@ class AnalysisSessions:
                                   artifact_id=pin['artifact_id']))
         return tuple(inventory)
 
-    def answer(self, session_id, request):
-        """Read-only structured answer; no interpreter, Planner, or scientific calls."""
-        from .responses import answer_outcome
-        return answer_outcome(self, session_id, request)
-
     def composed_export(self, session_id, interaction):
         """Resolve the immutable selected recipe without preparing file bytes.
 
@@ -556,7 +551,7 @@ class AnalysisSessions:
         if admitted is not None:
             interaction = replace(interaction, admitted=admitted)
         value = interaction.admitted or {}
-        task = planning_task(interaction, state)
+        task = planning_task(interaction, state, self._application.registry)
         selected = tuple(task.get('input_results', ()))
         _validate_input_results(selected)
         # Typed scientific owners lower their existing explicit selections into
@@ -612,7 +607,7 @@ class AnalysisSessions:
             raise SessionError('Unknown captured interaction for planning context.')
         interaction = matches[0]
         from .dialogue_execution import planning_task
-        task = planning_task(interaction, state)
+        task = planning_task(interaction, state, self._application.registry)
         if interaction.base_revision_id is None:
             if selected_outputs is not None:
                 raise SessionError('Scientific selection requires a captured accepted Revision.')

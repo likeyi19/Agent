@@ -1,125 +1,156 @@
-"""Closed answer contracts and deterministic wording, without scientific fixtures."""
+"""One reviewed response owner; deterministic controls and honest status fallback."""
 from dataclasses import replace
+from types import SimpleNamespace as N
 import json
 import pytest
 from agent.application import Answer, TurnOutcome
-from agent.application.turn_decisions import parse_decision, IntentError, decision_schema
-from agent.application.response_facts import TurnResponseFacts, OutputFact, WorkFact, ReuseFact
-from agent.application.responses import render, clarification_text, UNSUPPORTED, admit_answer
-from agent.application.turn_decisions import Clarify
-from agent.application.session_state import Interaction
+from agent.application.turn_decisions import Clarify, IntentError, parse_decision, decision_schema
+from agent.application.responses import summarize, conversation_utterances, CONVERSATION_LANGUAGE
+from agent.application import scientific_dialogue as sd
+from agent.application.interactive_schemas import ClientError
+from agent.orchestration.planning_model import PlanningModelError
+from test_dialogue_evidence import app, accepted, forbid_work
+from test_scientific_dialogue import Model, question, ask
 
 
-def envelope(decision):
-    return json.dumps(dict(turn_schema_version=1, decision=decision))
+@pytest.mark.parametrize('intent', ['version','matrix','selection','thresholds','changes','execution','reuse','comparison','provenance','verification','unsupported'])
+def test_retired_answers_are_not_active_decisions(intent):
+    with pytest.raises(IntentError):
+        parse_decision(json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer',intent=intent,relation='current',technical=False))))
+    with pytest.raises(ValueError): Answer(intent)
 
 
-@pytest.mark.parametrize('question,response', [
-    ('请说明需要哪个参考。','请确认与原始数据一致的参考；原始请求和文件已保留。'),
-    ('请用英语回答。','Please select the reference matching the original data.'),
-    ('日本語で参照を確認してください。','入力データに対応する参照を選んでください。'),
-    ('Responde en español.','Selecciona la referencia de los datos originales.'),
+def test_retired_execution_and_answer_grammar_removed():
+    variants=decision_schema()['properties']['decision']['anyOf']
+    kinds={k for v in variants for k in v['properties']['kind']['enum']}
+    assert 'answer' not in kinds and 'execute' not in kinds
+    assert {'answer_scientific','answer_guidance','execute_plan'} <= kinds
+    with pytest.raises(IntentError):
+        parse_decision(json.dumps(dict(turn_schema_version=1,decision=dict(kind='execute',base='current',operation='op.0',target='selection',delta=None))))
+    from agent.orchestration import build_default_tool_registry
+    registry=build_default_tool_registry()
+    for name in ('select_scATAC_cells','build_scATAC_cell_by_ccre','build_scATAC_cell_by_features','pca_embed_cells'):
+        assert name not in registry.names()
+        assert registry.accepted(name).name == name
+        assert not hasattr(registry.accepted(name), 'function')
+
+
+class OutcomeModel:
+    def __init__(self, text='请提供所需参数。', fail=False):
+        self.text,self.fail,self.calls=text,fail,[]
+    def complete(self, *, prompt, response_schema):
+        data=json.loads(prompt);self.calls.append(data)
+        if self.fail: raise PlanningModelError('private provider payload',code='PROVIDER_RATE_LIMITED')
+        if 'grounding_review_version' in data:
+            return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed',independent=True) for p in data['paragraphs']}))
+        assert data['focus']=='outcome' and CONVERSATION_LANGUAGE in data['instructions']
+        return json.dumps(dict(support='supported',paragraphs=[dict(text=self.text,kind='limitation',citations=[],comparisons=[])]))
+
+
+def outcome_session():
+    interaction=N(turn_id='q',utterance='请用中文说明原因。',admitted={'tool':'run_snapatac2'},prerequisite=None,submission=None)
+    state=N(interactions=(interaction,),turns=())
+    return N(load=lambda _:state),interaction
+
+
+@pytest.mark.parametrize('outcome', [TurnOutcome('clarify','clarification',Clarify('invalid_parameter_value',('run_snapatac2.kwargs',),True)),
+    TurnOutcome('execute','failed',error=ClientError('NATIVE_FUNCTION_FAILED','Native failure'))])
+def test_clarification_and_failure_share_generation_and_review(outcome):
+    sessions,interaction=outcome_session();model=OutcomeModel()
+    result=summarize(sessions,'s','q',outcome,model=model)
+    assert result.text=='请提供所需参数。' and result.clarification==outcome.clarification and result.error==outcome.error
+    assert len(model.calls)==2 and model.calls[1]['grounding_review_version']==4
+    facts=model.calls[0]['evidence']['outcome']
+    assert facts['science_started'] is False and facts['accepted_revision'] is None
+    assert facts['requested_operation']=='run_snapatac2'
+    assert facts['error']==(None if outcome.error is None else {'code':outcome.error.code,'message':outcome.error.message,'category':None})
+    assert model.calls[1]['evidence']['outcome']==facts
+
+
+def test_provider_failure_never_recurses_and_preserves_original_error():
+    sessions,_=outcome_session();model=OutcomeModel(fail=True)
+    native=TurnOutcome('execute','failed',error=ClientError('NATIVE_FUNCTION_FAILED','Native failure'))
+    result=summarize(sessions,'s','q',native,model=model)
+    assert len(model.calls)==1
+    assert result.error==native.error and 'PROVIDER_RATE_LIMITED' in result.text and 'NATIVE_FUNCTION_FAILED' in result.text
+    assert 'private' not in result.text
+    model.calls.clear()
+    provider=TurnOutcome('execute','failed',error=ClientError('PROVIDER_RATE_LIMITED','Provider failed'))
+    result=summarize(sessions,'s','q',provider,model=model)
+    assert not model.calls and result.error==provider.error
+
+
+def test_reviewed_answer_and_exact_result_edit_do_not_generate_again():
+    sessions,interaction=outcome_session();model=OutcomeModel()
+    reviewed=TurnOutcome('answer','answered',text='已有回答',scientific=object())
+    assert summarize(sessions,'s','q',reviewed,model=model) is reviewed
+    interaction.admitted={'result_edit':True}
+    assert summarize(sessions,'s','q',TurnOutcome('execute','activated'),model=model).text=='Analysis accepted.'
+    assert not model.calls
+
+
+@pytest.mark.parametrize('tool,function,parameters', [
+    ('run_snapatac2','tl.leiden',{'resolution':0.8,'random_state':7}),
+    ('run_snapatac2','tl.spectral',{'n_comps':17}),
+    ('run_scanpy','pp.scale',{'zero_center':False,'max_value':3}),
+    ('run_snapatac2','pp.filter_cells',{'min_counts':45,'min_tsse':2.5}),
+    ('compute_motif_accessibility',None,{'niterations':50,'p_cutoff':0.00005}),
 ])
-def test_clarification_uses_the_configured_response_model_and_language_context(question,response):
-    from types import SimpleNamespace
-    from agent.application.responses import summarize, CONVERSATION_LANGUAGE
-    interaction=SimpleNamespace(turn_id='question',utterance=question,prerequisite=None)
-    sessions=SimpleNamespace(load=lambda _:SimpleNamespace(interactions=(interaction,)))
-    seen=[]
-    class Model:
-        def complete(self,*,prompt,response_schema):
-            data=json.loads(prompt);seen.append(data)
-            assert CONVERSATION_LANGUAGE in data['instructions']
-            assert data['conversation']==[question]
-            return json.dumps(dict(text=response))
-    outcome=TurnOutcome('clarify','clarification',Clarify('missing_resources',('Reference A','Reference B'),True))
-    result=summarize(sessions,'session','question',outcome,model=Model())
-    assert result.text==response and result.clarification==outcome.clarification
-    assert seen[0]['clarification']['choices']==['Reference A','Reference B']
+def test_native_effective_parameters_and_exact_repeated_steps(app,monkeypatch,tool,function,parameters):
+    rid,_,_=accepted(app,tool,overrides={'function_name':function,'parameters':parameters},copies=2)
+    app=forbid_work(app,monkeypatch)
+    model=Model(question('r1'),['parameters'])
+    result=ask(app,'q','这个步骤实际使用了什么参数？',model)
+    assert result.status=='answered',result
+    assert result.scientific.claims[0].value==parameters
+    assert result.scientific.claims[0].source['output_locator']['step_id']=='step1'
+    state=app.sessions.load('session');interaction=state.interactions[-1]
+    public,_=sd.context(app.sessions,'session',interaction.admitted)
+    target=public['targets'][0]
+    assert target['identity']['revision_id']==rid and target['identity']['step_id']=='step1'
+    assert [s['step_id'] for s in target['execution']['steps']]==['step0','step1']
+    assert all(s['attempt_count']==1 for s in target['execution']['steps'])
 
 
-@pytest.mark.parametrize('intent', ('version','matrix','selection','thresholds','changes','execution','reuse','provenance','verification','unsupported'))
-def test_answer_closed_roundtrip(intent):
-    decision = dict(kind='answer',intent=intent,relation='current',technical=False)
-    assert parse_decision(envelope(decision)) == Answer(intent)
+def test_response_language_context_stops_at_captured_turn():
+    state=N(interactions=[N(turn_id=str(i),utterance=t) for i,t in enumerate(['请分析','用这个','Please answer in English.','194','后来的请求'])])
+    assert conversation_utterances(state,'3')==['请分析','用这个','Please answer in English.','194']
 
 
-@pytest.mark.parametrize('change', ({'intent':'biology'}, {'relation':'newest'}, {'technical':'yes'},
-                                  {'payload':{'guess':'marker'}}, {'intent':'comparison'}))
-def test_invalid_answer_rejected(change):
-    with pytest.raises(IntentError):
-        parse_decision(envelope(dict(kind='answer',intent='version',relation='current',technical=False) | change))
+def test_native_method_comparison_uses_shared_field_meanings(app,monkeypatch):
+    old,_,_=accepted(app,'run_snapatac2',overrides={'function_name':'tl.leiden','parameters':{'resolution':0.8,'random_state':7}})
+    new,_,_=accepted(app,'run_snapatac2',name='edited',overrides={'function_name':'tl.leiden','parameters':{'resolution':1.1,'random_state':7}})
+    app=forbid_work(app,monkeypatch)
+    model=Model(question('r1',comparison={'output':'r0','subject':None}),['parameters'])
+    result=ask(app,'compare','比较这两个已接受结果的参数。',model)
+    assert result.status=='answered'
+    interaction=app.sessions.load('session').interactions[-1]
+    public,claims=sd.context(app.sessions,'session',interaction.admitted)
+    assert public['comparison']['mode']=='descriptive_accepted_operands'
+    pairs=public['comparison']['pairs'];by_id={c.claim_id:c for c in claims}
+    pair=next(p for p in pairs if by_id[p['left']].field=='parameters')
+    assert {by_id[pair[k]].source['revision_id'] for k in ('left','right')}=={old,new}
+    assert {by_id[pair[k]].value['resolution'] for k in ('left','right')}=={0.8,1.1}
 
 
-def test_answer_without_scientific_operations_and_backwards_outcome():
-    schema = decision_schema()
-    variants = schema['properties']['decision']['anyOf']
-    assert any(v['properties']['kind']['enum'] == ['answer'] for v in variants)
-    assert TurnOutcome('navigate','activated').text == ''
-
-
-def test_render_no_artifacts_no_invented_defaults_and_no_technical_ids():
-    facts = TurnResponseFacts('matrix','secret-rid',2,True,'current',(),())
-    assert 'no matrix' in render(facts)
-    assert 'secret-rid' not in render(facts)
-    assert 'secret-rid' in render(facts,technical=True)
-    assert 'no active selection thresholds' in render(replace(facts,intent='thresholds'))
-    assert render(replace(facts,intent='unsupported')) == UNSUPPORTED
-    assert 'label' not in UNSUPPORTED
-
-
-def test_work_wording_does_not_infer_production_or_reconstruction():
-    output = OutputFact('QC','run','step','a'*64,'b'*64,'c'*64,'scientific-authority.v2')
-    facts = TurnResponseFacts('reuse','revision',2,True,'current',(output,),(),
-        work=(WorkFact('matrix','m',1,1,0),), reuse=(ReuseFact(output,'m',True,True),))
-    text = render(facts)
-    assert 'tool attempts for matrix' in text and 'No QC production step' in text
-    assert 'call totals were not recorded' in text
-    assert 'reconstruction was avoided' not in text and 'cached' not in text
-    assert facts.owner_reconstruction_calls is None and facts.production_calls is None
-    assert 'same-run recovery' in render(replace(facts,work=(WorkFact('matrix','m',1,1,1),)))
-    assert render(replace(facts,is_active=False)).startswith('For historical version 2 (not active):')
-
-
-def test_grounded_relations_technical_optin_and_minimal_clarification():
-    interaction = Interaction('turn','How is this version different from the parent?', 'r3',3,
-        dict(relations={'current':'r3','parent':'r1','previous_active':'r2'},bases={}))
-    assert admit_answer(interaction,Answer('comparison','parent'))['comparison_id'] == 'r1'
-    assert admit_answer(replace(interaction,utterance='Was the parent result verified?'),Answer('verification','parent'))['revision_id'] == 'r1'
-    with pytest.raises(IntentError):
-        admit_answer(replace(interaction,utterance='What changed from the previous version?'),Answer('comparison','parent'))
-    with pytest.raises(IntentError): admit_answer(interaction,Answer('comparison','parent',True))
-    assert clarification_text(Clarify('missing_parameter_value',('min_tss_enrichment',),True)) == 'What value should I use for minimum tss enrichment?'
-    assert 'parent version or the previously active version' in clarification_text(Clarify('ambiguous_revision',('parent','previous_active')))
-
-
-def test_no_previous_revision_does_not_offer_nonexistent_choices():
-    from types import SimpleNamespace
-    from agent.application.responses import answer_outcome, UNAVAILABLE
-    state = SimpleNamespace(active_revision_id='initial', navigation=(),
-        revisions=(SimpleNamespace(revision_id='initial',parent_revision_id=None),))
-    sessions = SimpleNamespace(load=lambda _:state)
-    outcome = answer_outcome(sessions,'analysis',Answer('comparison','previous'))
-    assert outcome.text == UNAVAILABLE and not outcome.clarification.choices
-    assert clarification_text(Clarify('ambiguous_revision')) == UNAVAILABLE
-
-
-def test_missing_input_roles_asks_for_exact_captured_roles_without_scientific_guesses():
-    text = clarification_text(Clarify('missing_input_roles', (
-        'cluster_cells.analysis', 'evaluate_cell_clustering.ground_truth_dataset'), True))
-    assert 'analysis for cluster cells' in text
-    assert 'ground truth dataset for evaluate cell clustering' in text
-    assert 'cluster_cells.analysis' not in text
-    assert 'Name the file or its displayed number' in text
-    assert 'If it is not attached yet' in text
-    assert 'scientific role' not in text
-    assert 'original request and selected files are preserved' in text
-    assert 'first dataset is' not in text and 'qualified' not in text
-
-
-def test_response_language_context_stops_at_captured_turn_and_keeps_explicit_preference():
-    from types import SimpleNamespace as N
-    from agent.application.responses import conversation_utterances
-    state=N(interactions=[N(turn_id=str(i),utterance=t) for i,t in enumerate([
-        '请分析这个数据', '用这个参考', 'Please answer in English.', '194', '另一个后来的请求'])])
-    assert conversation_utterances(state,'3')==['请分析这个数据','用这个参考','Please answer in English.','194']
+def test_web_boundary_explains_recorded_failure_without_new_execution(tmp_path):
+    from test_structured_interaction import setup
+    app, executor, model, inputs = setup(tmp_path)
+    normal = model.complete
+    language = OutcomeModel('本次执行失败，错误代码为 TEST_SCIENCE_WITHHELD；没有接受新的结果。')
+    def complete(*,prompt,response_schema):
+        data=json.loads(prompt)
+        if data.get('focus')=='outcome' or 'grounding_review_version' in data:
+            return language.complete(prompt=prompt,response_schema=response_schema)
+        return normal(prompt=prompt,response_schema=response_schema)
+    model.complete=complete
+    result=app.submit_turn('session','failed','请分析这个数据。',expected_generation=0,execution_inputs=inputs)
+    assert result.status=='failed' and result.error.code=='TEST_SCIENCE_WITHHELD'
+    assert result.response.text==language.text and len(executor.plans)==1
+    assert len(language.calls)==2
+    facts=language.calls[0]['evidence']['outcome']
+    assert facts['error']['code']=='TEST_SCIENCE_WITHHELD' and facts['accepted_revision'] is None
+    assert facts['science_started'] is False  # This fixture withholds native science.
+    before=app._application.sessions.load('session')
+    assert app.submit_turn('session','failed','请分析这个数据。',expected_generation=0,execution_inputs=inputs)==result
+    assert app._application.sessions.load('session')==before and len(language.calls)==2

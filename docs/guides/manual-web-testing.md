@@ -119,8 +119,8 @@ Origin headers for mutations; use the UI and API through the same forwarded URL.
 No firewall change is needed.
 
 The page should offer **GPT-5.6 Sol · OpenAI API** in **Conversation model**.
-In **Session settings**, check the current Session identity. Start with **New
-conversation**. **Recent conversations · this browser** is browser-local history;
+Use **Open by ID** beside recent conversations to reopen a known Session.
+Start with **New conversation**. **Recent conversations · this browser** is browser-local history;
 an old acceptance entry can remain in that list but is not migrated into this
 new server workspace. A new Session starts without accepted results or uploaded
 sample data. The `/api/v1/models` and `/api/v1/health` endpoints can confirm the

@@ -665,6 +665,22 @@ def source_field_choices(binding):
     return rows
 
 
+def source_slot_choices(binding):
+    """Shallow matrix-slot names from the same exact registered H5AD offers."""
+    import h5py
+    from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value
+    rows = []
+    for index, member in enumerate(binding.members):
+        if member['input_type'] != 'h5ad':
+            continue
+        descriptor = os.open(member['source_path'], os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as stream, h5py.File(stream, 'r') as data:
+            names = (['X'] if 'X' in data else []) + ['layers/' + name for name in data.get('layers', {})
+                if not _unsafe_fact_field(name) and not _unsafe_fact_value(name)]
+        rows.append(dict(source='source.' + str(index), values=names))
+    return rows
+
+
 def source_field_inputs(registry, binding, roles, choices):
     """Resolve captured field names by exact Registry source role without I/O."""
     from .turn_decisions import InputRole

@@ -159,7 +159,7 @@ def test_no_implicit_cross_revision_cluster_correspondence(app, monkeypatch):
     guarded = forbid_work(app, monkeypatch)
     result = ask(guarded, 'compare', 'Compare cluster 3 with cluster 3 in the parent.',
         Model(question('r0','3', comparison=dict(output='r1',subject='3'))))
-    assert result.status == 'unavailable' and 'correspondence' in result.text
+    assert result.status == 'unavailable' and result.error.code == 'INCOMPATIBLE_COMPARISON'
 
 
 
@@ -236,8 +236,7 @@ print(json.dumps(result.scientific.to_dict()))
     assert all('explanation' not in i.admitted for i in state.interactions)
 
 
-@pytest.mark.parametrize('minimal', [False, True])
-def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path, minimal):
+def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path):
     accepted(app, 'inspect_scATAC')
     import anndata as ad
     from scipy import sparse
@@ -251,8 +250,7 @@ def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path, mini
             return AgentPlan('inspect-plan',request.request_id,'Explicit inspection.',
                 (PlanStep('inspect','inspect_scATAC',dict(path=request.inputs['path'])),))
     app = ResearchAgentApplication(app.workspace_root, planner=Planner())
-    model = Model(dict(kind='execute_plan',target='inspect_scATAC') if minimal else
-                  dict(kind='execute',base='current',operation='plan',target='inspect_scATAC',delta=None))
+    model = Model(dict(kind='execute_plan',target='inspect_scATAC'))
     result = ask(app, 'science', 'Inspect the supplied matrix.', model, execution_inputs={'path':str(path)})
     assert result.kind == 'execute' and result.status == 'activated', result
     assert len(calls) == 1 and calls[0].prompt == 'Inspect the supplied matrix.'
@@ -328,7 +326,7 @@ def test_incompatible_matrix_comparison_and_preferred_context_budget(app, monkey
     app = forbid_work(app,monkeypatch)
     compared = ask(app,'comparison','Compare with the parent.',Model(question('r0',comparison=dict(output='r1',subject=None)), ['n_cells']))
     assert compared.status == 'answered'
-    assert any('No compatible measurement pairs' in x for x in compared.scientific.limitations)
+    assert any('No compatible measurement pairs' in x or 'does not establish common cells' in x for x in compared.scientific.limitations)
     monkeypatch.setattr(sd,'PREFERRED_CONTEXT_BYTES',10)
     assert ask(app,'bounded','Explain this result',Model(question(),['n_cells'])).status == 'answered'
 

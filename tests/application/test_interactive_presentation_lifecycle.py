@@ -132,7 +132,7 @@ def test_figure_bytes_wait_for_committed_response_even_when_r5_withholds(tmp_pat
         finally:
             release.set()
         completed = future.result(timeout=20)
-    assert 'could not ground' in completed.response.text
+    assert completed.response.text == 'Response unavailable: UNSUPPORTED_STATEMENT'
     reference, = current.facade.presentation_artifact_handles('session', 'draw')
     content = current.facade.presentation_artifact_content('session', 'draw', reference.handle)
     restored = restarted(current)
@@ -160,7 +160,7 @@ def test_qualified_export_is_not_announced_before_response_publication(app, monk
         finally:
             release.set()
         completed = future.result(timeout=20)
-    assert 'available for preparation' in completed.response.text.lower()
+    assert completed.response.error.code == 'UNSUPPORTED_STATEMENT'
     assert len(current.facade.scientific_artifacts_for_turn('session', 'compose')) == 1
     assert current.facade.status('session', 'compose') == completed
     unchanged(current)
@@ -333,7 +333,7 @@ def test_saved_figure_response_is_visible_while_publisher_still_holds_lease(tmp_
                          readers.submit(facade.turn, 'session', 'draw'), readers.submit(submit, current)]
                 views = [read.result(timeout=20) for read in reads]
             assert all(view == views[0] for view in views)
-            assert views[0].status == 'answered' and views[0].response is not None and views[0].error is None
+            assert views[0].status == 'answered' and views[0].response is not None and views[0].error.code == 'UNSUPPORTED_STATEMENT'
             reference, = facade.presentation_artifact_handles('session', 'draw')
             delivered = facade.presentation_artifact_content('session', 'draw', reference.handle).data
             assert delivered.startswith(b'\x89PNG\r\n\x1a\n')

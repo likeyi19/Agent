@@ -211,7 +211,9 @@ class Interaction:
     prerequisite: object = None
 
     def __post_init__(self):
-        for v in (self.turn_id, self.utterance): text(v)
+        text(self.turn_id)
+        if self.utterance != '' or not self.submission or not (self.submission.get('rerun_revision_id') or self.submission.get('parameter_overrides')):
+            text(self.utterance)
         if self.base_revision_id is not None: text(self.base_revision_id)
         natural(self.base_generation)
         if self.status not in {'interpreting', 'admitted', 'submitted', 'clarification', 'navigated', 'answered', 'failed'}:
@@ -367,6 +369,12 @@ class AnalysisSession:
                 validate_capture(self, interaction, self.interactions[:interaction_index])
             from .dialogue_execution import validate_prerequisite
             validate_prerequisite(interaction, self.interactions[:interaction_index])
+            edit = (interaction.admitted or {}).get('result_edit')
+            if edit is not None:
+                source = revisions.get(edit['revision_id'])
+                if (source is None or edit['run_id'] != source.run_id
+                        or edit['run_result_sha256'] != source.run_result_sha256):
+                    raise SessionError('Parameter edit accepted-run anchor changed.')
 
     def to_dict(self):
         # MappingProxyType in frozen interaction payloads is not deepcopyable.

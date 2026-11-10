@@ -102,7 +102,7 @@ def test_refresh_reopens_instead_of_replaying_and_retry_keeps_identity():
     convenience_fields = convenience_fields[:convenience_fields.index('};')]
     assert set(re.findall(r'^\s+(\w+):', convenience_fields, re.M)) == {
         'sessionId', 'profileId', 'polledTurnId', 'draft', 'inputSetId', 'epizooResourceId',
-        'viewedRevisionId', 'workspacePanel', 'resultChoice',
+        'viewedRevisionId', 'workspacePanel',
     }
 
 
@@ -246,7 +246,7 @@ def _javascript_poll(turn, *, offered=(), refresh_error=None, reopen=False):
       const result = {calls: [], errors: [], delays: [], displayed: [], merged: []};
       const dom = {};
       const element = id => dom[id] || (dom[id] = {
-        options: [], parentElement: {}, replaceChildren() {}, querySelector() {return null;},
+        options: [], parentElement: {}, replaceChildren() {}, querySelector() {return null;}, querySelectorAll() {return [];},
       });
       const document = {querySelectorAll() {return [];}, createElement() {return {};}};
       const canAddScientificInput = () => true;
@@ -415,15 +415,10 @@ def test_results_and_conversation_are_independent_workspace_panels():
 def test_technical_details_are_closed_and_primary_downloads_are_visible():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
-    for identifier in ('session-identities', 'revision-identities', 'revision-history-panel',
-                       'result-methods', 'technical-report-record', 'evidence-panel'):
+    for identifier in ('result-methods', 'evidence-panel'):
         assert identifier in details and 'open' not in details[identifier]
     assert 'open' in details['artifact-panel']
-    for identifier in ('current-session', 'current-generation', 'current-revision'):
-        assert 'session-identities' in page.ancestors[identifier]
-    for identifier in ('viewed-revision', 'revision-summary'):
-        assert 'revision-identities' in page.ancestors[identifier]
-    assert 'revision-history-panel' in page.ancestors['revision-history']
+    assert 'native-results' in page.ancestors and 'result-methods' in page.ancestors['native-results']
 
 
 def test_primary_downloads_keep_independent_branches_and_explicit_native_outputs():
@@ -462,28 +457,24 @@ def test_selected_input_label_and_result_details_use_existing_safe_read_paths():
     assert 'execution_inputs' not in code and 'innerHTML' not in code
 
 
-def test_compact_header_and_advanced_session_controls_preserve_existing_ids():
+def test_header_keeps_navigation_without_global_settings():
     page = HierarchyPage((STATIC / 'index.html').read_text())
-    details = {attrs['id']: attrs for tag, attrs in page.tags if tag == 'details' and 'id' in attrs}
-    assert 'open' not in details['advanced-controls']
-    for identifier in ('session-input', 'reopen-form', 'session-context', 'model-description', 'session-identities'):
-        assert 'advanced-controls' in page.ancestors[identifier]
-    for identifier in ('model-choice', 'new-session'):
-        assert 'advanced-controls' not in page.ancestors[identifier]
-    assert any(tag == 'section' and attrs.get('id') == 'scientific-panel' for tag, attrs in page.tags)
+    assert 'advanced-controls' not in page.ancestors
+    assert 'connection-state' not in page.ancestors
+    assert 'reopen-form' in page.ancestors['session-input']
     assert 'scientific-panel' in page.ancestors['scientific-details']
 
 
 def test_composer_keeps_message_selected_files_and_transfer_state_outside_disclosures():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
-    assert ids.index('selected-scientific-inputs') < ids.index('utterance') < ids.index('attachment-panel')
-    for identifier in ('utterance', 'selected-scientific-inputs', 'upload-status', 'upload-progress'):
+    assert ids.index('selected-scientific-inputs') < ids.index('utterance') < ids.index('attachment-dialog')
+    for identifier in ('utterance', 'selected-scientific-inputs'):
         assert 'turn-form' in page.ancestors[identifier]
-        assert 'attachment-panel' not in page.ancestors[identifier]
+        assert 'attachment-dialog' not in page.ancestors[identifier]
         assert 'scientific-input-settings' not in page.ancestors[identifier]
-    for identifier in ('upload-file', 'resource-choice', 'fastq-fields'):
-        assert 'attachment-panel' in page.ancestors[identifier]
+    for identifier in ('upload-type', 'resource-choice', 'fastq-fields', 'upload-status', 'upload-progress'):
+        assert 'attachment-dialog' in page.ancestors[identifier]
     assert 'scientific-input-settings' in page.ancestors['input-choice']
     assert 'scientific-input-settings' in page.ancestors['epizoo-resource-choice']
 
@@ -541,7 +532,7 @@ def test_answer_and_failed_turn_refresh_do_not_replace_same_revision_content():
         attachmentSession:'s',viewedRevisionId:'one',revision:{revision_id:'one'}};
       const loads=[];
       const loadRevision=id=>loads.push(id), clearRevisionView=()=>loads.push(null);
-      const rememberSession=()=>{},renderHistory=()=>{},renderRevisionHistory=()=>{},renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{};
+      const rememberSession=()=>{},renderHistory=()=>{},renderRevisionHistory=()=>{},renderRevisionContext=()=>{},renderResultNavigation=()=>{},updateControls=()=>{},refreshRequestOptions=()=>{};
       const shortIdentity=x=>x,resultLabel=x=>x;
     """ + functions + """
       for(const status of ['answered','clarification','running','failed','cancelled']) {
@@ -619,10 +610,10 @@ def test_gallery_downloads_and_conversation_use_the_existing_result_owners():
     code=(STATIC/'app.js').read_text()
     gallery=code[code.index('function resultFigureGallery'):code.index('function workflowSummaryFacts')]
     assert 'Open figure & provenance' not in gallery
-    assert 'download.href = image.src + "?download=true"' in gallery
+    assert 'download.href' not in gallery
     assert 'viewArtifact(' not in gallery
     assert 'figure-preview' not in gallery
-    assert 'card.append(title, image, caption, download, provenance)' in gallery
+    assert 'card.append(title, image, caption)' in gallery
     conversation=code[code.index('function loadRequestedArtifacts'):code.index('function renderArtifacts')]
     assert 'message-artifacts' not in conversation and 'scientificFileGroups(' not in conversation
     history=code[code.index('function renderHistory'):code.index('function updateControls')]
@@ -634,10 +625,10 @@ def test_report_uses_a_primary_file_row_without_nested_list_or_preview_action():
     code=(STATIC/'app.js').read_text()
     renderer=code[code.index('function renderArtifacts'):code.index('async function viewArtifact')]
     assert 'Read technical report' not in renderer
-    assert 'for (const report of reports) primary.append(artifactNode(report))' in renderer
+    assert 'for (const artifact of artifacts) primary.append(artifactNode(artifact))' in renderer
     assert 'item.className = "scientific-file"' in renderer
     assert 'kind === "analysis_figure"' in renderer
-    assert 'File provenance' in renderer and 'guardDownload(download)' in renderer
+    assert 'File provenance' not in renderer and 'guardDownload(download)' in renderer
 
 
 def test_finite_choice_buttons_submit_question_and_option_identity_directly():

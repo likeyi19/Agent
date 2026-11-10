@@ -17,15 +17,16 @@ const state = {
   session: null, models: [], activeTurn: null, submission: null, initializing: true,
   durableTurnIds: new Set(),
   posting: false, opening: false, timer: null, epoch: 0, pollEpoch: 0,
-  navigating: false, viewedRevisionId: null, revision: null, revisionEpoch: 0,
+  viewedRevisionId: null, revision: null, revisionEpoch: 0,
   evidenceEpoch: 0, evidence: null, artifactUrl: null, artifactEpoch: 0,
   attachments: [], attachmentSession: null, restoringAttachments: false,
   resources: [], resourcesEnabled: false, uploadMaxBytes: null, upload: null,
   selectedResourceIds: [],
+  parameterEditor: null, requestOptions: null, optionsEpoch: 0,
   fastqMembers: [], fastqCompletion: null,
   inputSets: [], epizooResources: [],
   scientificFiles: new Map(),
-  artifactPreview: false, resultChoice: null,
+  artifactPreview: false,
 };
 
 class ApiError extends Error {
@@ -81,7 +82,6 @@ function saveConveniences() {
     epizooResourceId: element("epizoo-resource-choice").value,
     viewedRevisionId: state.session && state.viewedRevisionId !== state.session.active_revision_id ? state.viewedRevisionId : null,
     workspacePanel: element("research-layout").dataset.panel,
-    resultChoice: state.resultChoice,
   };
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch (_) {}
 }
@@ -160,22 +160,19 @@ function guidanceNode(guidance) {
   section.className = "guidance";
   const heading = document.createElement("h3");
   heading.textContent = "Proposed next steps";
-  const explanation = document.createElement("p");
-  explanation.className = "muted small";
-  explanation.textContent = "Continuing with an option starts a new Agent turn. Agent checks the captured scientific context before execution.";
-  section.append(heading, explanation);
+  section.append(heading);
   for (const candidate of guidance.candidates) {
     const card = document.createElement("div");
     card.className = "guidance-candidate";
     card.dataset.candidateId = candidate.candidate_id;
     const title = document.createElement("h3");
-    title.textContent = `Option ${candidate.option} · ${readableLabel(candidate.capability)}`;
+    title.textContent = readableLabel(candidate.capability);
     const rationale = document.createElement("p");
     rationale.textContent = candidate.text;
     const metadata = document.createElement("span");
     metadata.className = "candidate-metadata";
     metadata.textContent = `Support: ${candidate.support} · Candidate ${candidate.candidate_id} · Origin turn ${candidate.origin_turn_id}`;
-    card.append(title, rationale, textList(candidate.limitations));
+    card.append(title, rationale);
     const context = document.createElement("p");
     context.className = "muted small";
     context.textContent = candidate.base_revision_id ? `Captured revision: ${candidate.base_revision_id}` : "Captured revision metadata was not stored in this historical display.";
@@ -184,7 +181,7 @@ function guidanceNode(guidance) {
     const diagnosticsLabel = document.createElement("summary");
     diagnosticsLabel.textContent = "Scientific details";
     diagnosticsLabel.dataset.actionKey = `candidate-details:${candidate.candidate_id}`;
-    diagnostics.append(diagnosticsLabel, metadata, context);
+    diagnostics.append(diagnosticsLabel, metadata, context, textList(candidate.limitations));
     card.append(diagnostics);
     if (candidate.readiness) {
       const readiness = document.createElement("details");
@@ -208,7 +205,7 @@ function guidanceNode(guidance) {
       const readiness = document.createElement("p");
       readiness.className = "muted small";
       readiness.textContent = "Readiness metadata was not stored for this historical candidate.";
-      card.append(readiness);
+      diagnostics.append(readiness);
     }
     const action = document.createElement("button");
     action.className = "guidance-select";
@@ -216,14 +213,17 @@ function guidanceNode(guidance) {
     action.type = "button";
     action.textContent = "Continue with this";
     action.addEventListener("click", () => {
-      // The click supplies a command and persisted discussion referent only.
-      // The existing semantic interpreter and M17.2 admit the exact candidate.
-      submitRequest(`Run option ${candidate.option}.`, candidate.origin_turn_id);
+      submitRequest(candidate.capability, candidate.origin_turn_id, null,
+        {origin_turn_id: candidate.origin_turn_id, candidate_id: candidate.candidate_id});
     });
     card.append(action);
     section.append(card);
   }
-  if (guidance.limitations.length) section.append(textList(guidance.limitations));
+  if (guidance.limitations.length) {
+    const details = document.createElement("details");
+    const label = document.createElement("summary"); label.textContent = "Guidance scope";
+    details.append(label, textList(guidance.limitations)); section.append(details);
+  }
   return section;
 }
 
@@ -277,14 +277,7 @@ function renderResultNavigation() {
   const hasResults = Boolean(state.session?.revisions.length);
   element("research-layout").classList.toggle("has-results", hasResults);
   element("result-navigation").hidden = !hasResults;
-  element("revision-history-panel").hidden = !hasResults;
   element("show-results").disabled = !hasResults;
-  const active = state.session?.active_revision_id;
-  const preview = active && state.viewedRevisionId && active !== state.viewedRevisionId;
-  element("result-update").hidden = !preview;
-  element("result-update-text").textContent = preview
-    ? `Preview: ${resultLabel(state.viewedRevisionId)} · Conversation: ${resultLabel(active)}.` : "";
-  element("show-results").textContent = preview ? "Results · preview" : "Results";
   if (!hasResults) showWorkspacePanel("conversation");
 }
 
@@ -305,26 +298,7 @@ function renderRevisionHistory() {
     return option;
   }));
   element("result-choice").value = state.viewedRevisionId || state.session?.active_revision_id || "";
-  element("show-current-result").hidden = !state.session?.active_revision_id;
-  element("revision-history").replaceChildren(...revisions.map((revision) => {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = `${resultLabel(revision.revision_id)}${revision.is_active ? " · Current" : ""}`;
-    button.title = revision.revision_id;
-    button.dataset.revisionId = revision.revision_id;
-    button.setAttribute("aria-current", String(revision.is_active));
-    button.addEventListener("click", () => loadRevision(revision.revision_id));
-    const metadata = document.createElement("details");
-    const label = document.createElement("summary");
-    label.textContent = "Revision details";
-    const identity = document.createElement("span");
-    identity.className = "revision-metadata";
-    identity.textContent = `Revision: ${revision.revision_id}\nParent: ${revision.parent_revision_id || "None"} · Turn: ${revision.turn_id} · Outputs: ${revision.outputs.join(", ") || "None"}`;
-    metadata.append(label, identity);
-    item.append(button, metadata);
-    return item;
-  }));
+
 }
 
 function clearArtifactView() {
@@ -332,12 +306,7 @@ function clearArtifactView() {
   if (state.artifactUrl) URL.revokeObjectURL(state.artifactUrl);
   state.artifactUrl = null;
   element("artifact-viewer").hidden = true;
-  element("report-content").hidden = true;
-  element("report-description").hidden = true;
-  element("technical-report-record").hidden = true;
-  element("technical-report-record").open = false;
   element("figure-description").hidden = true;
-  element("report-content").textContent = "";
   element("figure-content").hidden = true;
   element("figure-content").removeAttribute("src");
   element("artifact-view-error").hidden = true;
@@ -362,7 +331,6 @@ async function loadRevision(revisionId) {
   const sessionId = state.session.session_id;
   const epoch = state.epoch;
   const revisionEpoch = ++state.revisionEpoch;
-  const previousSelection = state.resultChoice?.revisionId === revisionId ? state.resultChoice.selection : null;
   const previousOutput = state.revision?.revision_id === revisionId ? element("evidence-output").value : null;
   if (state.viewedRevisionId !== revisionId) element("scientific-panel").scrollTop = 0;
   state.evidenceEpoch += 1;
@@ -383,13 +351,8 @@ async function loadRevision(revisionId) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     state.revision = revision;
     renderRevision(revision);
-    renderPresentationChoices();
     if (previousOutput && revision.evidence_outputs.includes(previousOutput)) element("evidence-output").value = previousOutput;
-    if (previousSelection && Array.from(element("result-selection").options).some((o) => o.value === previousSelection)) {
-      element("result-selection").value = previousSelection;
-    }
-    if (element("result-selection").value === "@field") loadEvidence();
-    else renderResultSelection();
+    renderResultSelection();
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch) return;
     element("scientific-empty").textContent = `${error.code}: ${error.message}`;
@@ -400,55 +363,20 @@ async function loadRevision(revisionId) {
 function renderRevisionContext(revision) {
   element("result-heading").textContent = `${resultLabel(revision.revision_id)} · ${revision.is_active ? "Current" : "Earlier result"} · ${statusLabel(revision.status)}`;
   element("result-heading").title = revision.revision_id;
-  const originatingTurn = state.session.turns.find((turn) => turn.turn_id === revision.turn_id);
-  element("result-origin").textContent = originatingTurn && originatingTurn.utterance
-    ? `Requested in this turn: ${originatingTurn.utterance}`
-    : "Originating analysis identifiers are available in Revision details.";
-  element("result-origin").title = `Originating turn: ${revision.turn_id}. Viewing this result does not change the active revision.`;
-  element("result-panel-heading").textContent = "Scientific summary";
-  element("result-context-help").textContent = revision.is_active
-    ? "This is the current result for your conversation."
-    : `You are browsing ${resultLabel(revision.revision_id)}. Your conversation still uses ${resultLabel(state.session.active_revision_id)}.`;
-  element("result-output-summary").textContent = `${(revision.result_groups || []).length} accepted scientific operations · ${revision.outputs.length} detailed fields`;
-  element("viewed-revision").textContent = revision.revision_id;
-  element("revision-summary").replaceChildren(...summaryRows([
-    ["State", revision.is_active ? "Active revision" : "Historical revision"],
-    ["Parent", revision.parent_revision_id || "None"], ["Turn", revision.turn_id],
-    ["Run", revision.run_id], ["Checkpoint", revision.status],
-    ["Base generation", revision.base_generation], ["Session generation", revision.session_generation],
-  ]));
-  element("activate-revision").hidden = revision.is_active;
+
 }
 
 function renderRevision(revision) {
   element("scientific-empty").hidden = true;
   element("revision-view").hidden = false;
   renderRevisionContext(revision);
-  element("result-presentation").textContent = revision.result ? revision.result.text : "Stored result presentation is unavailable.";
   element("result-operations").replaceChildren(...(revision.steps || []).map((step) => {
     const item = document.createElement("li");
     item.textContent = `${stepLabel(step)} · ${readableLabel(step.status.toLowerCase())}`;
     if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
     return item;
   }));
-  const retained = new Set(revision.retained_outputs);
-  element("revision-outputs").replaceChildren(...revision.outputs.map((output) => {
-    const item = document.createElement("li");
-    item.textContent = `${output}${retained.has(output) ? " · Retained from an earlier result" : ""}`;
-    return item;
-  }));
-  renderArtifacts(revision);
   const groups = revision.result_groups || [];
-  element("result-selection").replaceChildren(...[
-    ["@latest", "Latest requested outputs"],
-    ["@overview", "Accepted analysis overview"],
-    ...groups.map((group) => [group.handle, group.label]),
-    ["@field", "Selected field (details)"],
-  ].map(([value, label]) => {
-    const option = document.createElement("option");
-    option.value = value; option.textContent = label; option.disabled = value === "@field";
-    return option;
-  }));
   element("detail-comparison").replaceChildren(...[["", "Same result"],
     ...groups.map((group) => [group.canonical_output, group.label])].map(([value, label]) => {
       const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
@@ -465,8 +393,6 @@ function renderRevision(revision) {
   element("load-evidence").disabled = !revision.evidence_outputs.length;
   element("result-method").textContent = "Scientific results";
   element("result-facts").textContent = "No accepted summary is available.";
-  element("result-limitations").replaceChildren();
-  element("result-limitations-panel").hidden = true;
   element("evidence-content").replaceChildren();
   element("detail-content").replaceChildren();
   element("detail-form").hidden = true;
@@ -484,8 +410,8 @@ function artifactPath(sessionId, revisionId, handle, turnId = null) {
 function distinctFigureArtifacts(artifacts) {
   const seen = new Set();
   return artifacts.filter((artifact) => {
-    if (!artifact.figure) return true;
-    const key = `${artifact.revision_id}:${artifact.figure.manifest_sha256}:${artifact.figure.figure_id}`;
+    const key = artifact.figure ? `${artifact.revision_id}:${artifact.figure.manifest_sha256}:${artifact.figure.figure_id}`
+      : `${artifact.revision_id}:${artifact.turn_id}:${artifact.handle}`;
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
@@ -512,24 +438,9 @@ function presentationChoices() {
   });
 }
 
-function renderPresentationChoices() {
-  if (!state.revision) return;
-  const select = element("result-selection");
-  const previous = select.value;
-  for (const option of Array.from(select.options)) if (option.value.startsWith("@turn:")) option.remove();
-  for (const {turn} of presentationChoices()) {
-    const option = document.createElement("option");
-    option.value = `@turn:${turn.turn_id}`;
-    option.textContent = `Requested: ${turn.utterance.slice(0, 100)}`;
-    select.append(option);
-  }
-  const saved = state.resultChoice?.revisionId === state.revision.revision_id ? state.resultChoice.selection : null;
-  select.value = Array.from(select.options).some((o) => o.value === saved) ? saved : previous;
-}
-
 function resultFigureArtifacts(group = null, presentation = null) {
   if (presentation?.presentations.length) {
-    return distinctFigureArtifacts(presentation.presentations);
+    return distinctFigureArtifacts([...presentation.presentations, ...state.revision.artifacts.filter((a) => a.figure)]);
   }
   const names = group ? new Set(group.outputs.map((o) => o.name)) : null;
   const matching = state.revision.artifacts.filter((artifact) => artifact.figure
@@ -565,21 +476,11 @@ function resultFigureGallery(artifacts) {
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
     caption.textContent = captions[artifact.figure.kind] || "Published scientific figure; exact sources are available below.";
-    const sources = document.createElement("p"); sources.className = "muted small";
-    const fields = artifact.figure.sources.map((source) => source.field).filter(Boolean);
-    sources.textContent = `Source: ${artifact.revision_id === null ? "requested presentation" : resultLabel(artifact.revision_id)}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
-    const download = document.createElement("a"); download.className = "figure-download";
-    download.textContent = "Download PNG";
-    download.href = image.src + "?download=true"; download.target = "_blank"; download.rel = "noopener";
-    download.setAttribute("aria-label", `Download ${title.textContent} (PNG)`); guardDownload(download);
-    const provenance = document.createElement("details");
-    const sourceTitle = document.createElement("summary"); sourceTitle.textContent = "Figure sources";
-    provenance.append(sourceTitle, sources, evidenceValueNode(artifact.figure));
     image.addEventListener("error", () => {
       image.hidden = true;
       caption.textContent = "Figure preview unavailable. Download the saved PNG to inspect it; no analysis was rerun.";
     });
-    card.append(title, image, caption, download, provenance); section.append(card);
+    card.append(title, image, caption); section.append(card);
   }
   return section;
 }
@@ -630,24 +531,15 @@ function renderResultSelection() {
   if (!state.revision) return;
   state.evidenceEpoch += 1;
   const groups = state.revision.result_groups || [];
-  const choice = element("result-selection").value;
-  if (choice === "@field") return;
   const presentations = presentationChoices();
-  const presentation = choice === "@latest" ? presentations.at(-1)
-    : presentations.find((entry) => choice === `@turn:${entry.turn.turn_id}`);
-  const selected = groups.find((g) => g.handle === element("result-selection").value);
-  const visible = selected ? [selected] : groups;
-  element("result-method").textContent = selected ? selected.label : "Accepted analysis";
+  const presentation = {presentations: presentations.flatMap((p) => p.presentations), artifacts: presentations.flatMap((p) => p.artifacts)};
+  const retained = new Set(state.revision.retained_outputs || []);
+  const visible = groups.filter((g) => g.outputs.some((o) => !retained.has(o.name)));
+  element("result-method").textContent = "Scientific results";
   const nodes = [];
   const technicalNodes = [];
   const limitations = [];
   limitations.push(...(state.revision.result?.scientific?.limitations || []));
-  if (!selected && state.revision.result) {
-    const record = document.createElement("details");
-    const title = document.createElement("summary"); title.textContent = "Original accepted explanation";
-    const text = document.createElement("p"); text.className = "message-text"; text.textContent = state.revision.result.text;
-    record.append(title, text); technicalNodes.push(record);
-  }
   const summaryFacts = workflowSummaryFacts(visible);
   if (summaryFacts.length) {
     const values = document.createElement("dl"); values.className = "result-values workflow-summary";
@@ -659,11 +551,7 @@ function renderResultSelection() {
     }
     nodes.push(values);
   }
-  const scientificNotes = [...new Set(visible.flatMap((group) => group.summary_limitations || []))];
-  if (scientificNotes.length) {
-    const note = document.createElement("p"); note.className = "result-caution small";
-    note.textContent = scientificNotes.join(" "); nodes.push(note);
-  }
+  limitations.push(...visible.flatMap((group) => group.summary_limitations || []));
   limitations.push(...visible.flatMap((group) => group.evidence?.limitations || []));
   if (limitations.length) {
     const record = document.createElement("details");
@@ -671,12 +559,12 @@ function renderResultSelection() {
     const text = document.createElement("p"); text.textContent = [...new Set(limitations)].join(" ");
     record.append(title, text); technicalNodes.push(record);
   }
-  const gallery = resultFigureGallery(resultFigureArtifacts(selected, presentation));
+  const gallery = resultFigureGallery(resultFigureArtifacts(null, presentation));
   element("result-figures").replaceChildren(...(gallery ? [gallery] : []));
   for (const group of visible) {
-    const section = document.createElement("details");
+    const section = document.createElement("section");
     section.className = "scientific-result";
-    const heading = document.createElement("summary");
+    const heading = document.createElement("h3");
     const fn = group.evidence?.facts.find((f) => f.field === "function_name" && f.status === "available");
     heading.textContent = fn?.value || group.label;
     section.append(heading);
@@ -691,7 +579,8 @@ function renderResultSelection() {
     if (group.evidence) {
       const view = group.evidence;
       const facts = (group.factual_report ? [] : group.summary_fields)
-        .flatMap((field) => view.facts.filter((fact) => fact.field === field));
+        .flatMap((field) => view.facts.filter((fact) => fact.field === field))
+        .filter((fact) => !summaryFacts.some((shown) => shown.field === fact.field && shown.value === fact.value));
       const values = document.createElement("dl"); values.className = "result-values";
       for (const fact of facts) {
         const label = document.createElement("dt"); label.textContent = view.field_labels[fact.field] || readableLabel(fact.field);
@@ -716,8 +605,8 @@ function renderResultSelection() {
         } else value.append(evidenceValueNode(fact.value));
         values.append(label, value);
       }
-      section.append(values);
-      if (!group.factual_report && !facts.length) {
+      if (values.childElementCount) section.append(values);
+      if (!group.factual_report && !view.facts.some((fact) => group.summary_fields.includes(fact.field))) {
         const empty = document.createElement("p");
         empty.textContent = `Summary: ${view.reason || view.status}. Accepted fields remain in details.`;
         section.append(empty);
@@ -730,27 +619,22 @@ function renderResultSelection() {
       section.append(omitted);
     }
     const methods = document.createElement("details");
-    const title = document.createElement("summary"); title.textContent = "Accepted methods & sources";
+    const title = document.createElement("summary"); title.textContent = group.label;
     methods.append(title, evidenceValueNode({parameters: group.parameters, derived_from: group.derived_from,
       source: group.evidence?.source || "Unavailable", limitations: group.evidence?.limitations || []}));
     if (group.evidence) methods.append(...evidenceFactNodes(group.evidence.facts.filter((fact) =>
       !group.summary_fields.includes(fact.field)), group.evidence.field_labels || {}));
-    section.append(methods); technicalNodes.push(section);
+    if (section.childElementCount > 1) nodes.push(section);
+    else { const method = document.createElement("p"); method.className = "accepted-operation"; method.textContent = heading.textContent; nodes.push(method); }
+    technicalNodes.push(methods);
   }
   element("native-results").replaceChildren(...technicalNodes);
   element("result-facts").replaceChildren(...nodes);
   if (!nodes.length) element("result-facts").textContent = "Accepted summary unavailable. Detailed historical outputs remain accessible.";
-  // Field-detail navigation uses this panel; overview limitations are inline.
-  element("result-limitations-panel").hidden = true;
-  state.evidence = selected?.evidence || null;
-  if (selected) element("evidence-output").value = selected.canonical_output;
-  if (selected?.evidence) renderEvidence(selected.evidence, element("evidence-content"));
-  else element("evidence-content").textContent = "Select an accepted field to inspect its exact value and provenance.";
-  const sections = selected?.evidence?.supported_details || [];
-  element("detail-section").replaceChildren(...sections.map((section) => {
-    const option = document.createElement("option"); option.value = section; option.textContent = section; return option;
-  }));
-  element("detail-form").hidden = !sections.length;
+  state.evidence = null;
+  element("evidence-content").textContent = "Select an accepted field to inspect its exact value and provenance.";
+  element("detail-section").replaceChildren();
+  element("detail-form").hidden = true;
   element("detail-content").replaceChildren();
   renderArtifacts({...state.revision,
     artifacts: [...(presentation?.presentations || []), ...state.revision.artifacts],
@@ -809,11 +693,6 @@ function scientificFileNode(sessionId, artifact) {
   guardDownload(download);
   // The browser streams an attachment directly; scientific bytes stay out of JS.
   row.append(title, download);
-  if (artifact.contents) {
-    const details = document.createElement("details");
-    const summary = document.createElement("summary"); summary.textContent = "Selected contents & provenance";
-    details.append(summary, evidenceValueNode(artifact.contents)); row.append(details);
-  }
   if (artifact.artifact_type === "scientific_model") {
     const note = document.createElement("span");
     note.className = "scientific-export-note";
@@ -824,42 +703,14 @@ function scientificFileNode(sessionId, artifact) {
 }
 
 function scientificFileGroups(sessionId, artifacts, selectedOutputs = []) {
-  const groups = new Map();
+  const files = [...new Map(artifacts.filter(supportedScientificFile).map((a) => [a.handle, a])).values()];
+  const primaryFiles = primaryScientificFiles(files, selectedOutputs);
   const primary = document.createElement("li"); primary.className = "download-group primary-downloads";
-  const heading = document.createElement("h4"); heading.textContent = "Primary scientific results"; primary.append(heading);
-  const supporting = document.createElement("details"); supporting.className = "supporting-downloads";
-  const supportingTitle = document.createElement("summary"); supportingTitle.textContent = "Supporting scientific evidence"; supporting.append(supportingTitle);
-  const advanced = document.createElement("details"); advanced.className = "advanced-downloads";
-  const advancedTitle = document.createElement("summary"); advancedTitle.textContent = "All native and intermediate files, by source step"; advanced.append(advancedTitle);
-  const primaryFiles = primaryScientificFiles(artifacts, selectedOutputs);
-  for (const artifact of artifacts.filter(supportedScientificFile)) {
-    if (primaryFiles.has(artifact.handle)) primary.append(scientificFileNode(sessionId, artifact));
-    else if (artifact.artifact_type === "scientific_annotation_evidence" || artifact.artifact_type === "scientific_analysis") {
-      supporting.append(scientificFileNode(sessionId, artifact));
-    }
-    const source = artifact.source_step;
-    const purpose = source ? `${source.function_name || readableLabel(source.tool_name)} · ${source.step_id}` : artifact.purpose || "Scientific files";
-    const groupKey = source ? `${source.run_id}:${source.step_id}` : purpose;
-    if (!groups.has(groupKey)) {
-      const group = document.createElement("div");
-      group.className = "download-group";
-      const heading = document.createElement("h4"); heading.textContent = purpose;
-      if (source) heading.title = `Run: ${source.run_id}; step: ${source.step_id}`;
-      group.append(heading); groups.set(groupKey, group);
-    }
-    groups.get(groupKey).append(scientificFileNode(sessionId, artifact));
-  }
-  if (artifacts.some((a) => a.artifact_type === "scientific_analysis")
-      && !artifacts.some((a) => a.artifact_type === "scientific_integrated")) {
-    const note = document.createElement("li"); note.className = "small";
-    note.textContent = "Integrated H5AD requires an available, exactly recorded original H5AD source. Compact results remain available.";
-    groups.set("availability", note);
-  }
-  advanced.append(...groups.values());
-  const nodes = [];
-  if (primary.childElementCount > 1) nodes.push(primary);
-  if (supporting.childElementCount > 1) { const item = document.createElement("li"); item.append(supporting); nodes.push(item); }
-  if (groups.size) { const item = document.createElement("li"); item.append(advanced); nodes.push(item); }
+  const additional = document.createElement("details"); additional.className = "additional-downloads";
+  const title = document.createElement("summary"); title.textContent = "Additional files"; additional.append(title);
+  for (const file of files) (primaryFiles.has(file.handle) ? primary : additional).append(scientificFileNode(sessionId, file));
+  const nodes = [primary];
+  if (additional.childElementCount > 1) { const item = document.createElement("li"); item.append(additional); nodes.push(item); }
   return nodes;
 }
 
@@ -906,9 +757,7 @@ function loadRequestedArtifacts(turn) {
     }
     if (figures.status === "fulfilled") entry.presentations = figures.value.artifacts;
     renderHistory();
-    renderPresentationChoices();
-    if (!state.artifactPreview && (element("result-selection").value === "@latest"
-        || element("result-selection").value.startsWith("@turn:"))) renderResultSelection();
+    if (!state.artifactPreview) renderResultSelection();
   }).catch(() => {
     // Missing or unqualified historical associations expose no download.
   });
@@ -930,19 +779,9 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
     title.append(heading);
     if (kind === "analysis_report") {
       const description = document.createElement("span"); description.className = "file-description";
-      description.textContent = "Accepted methods, parameters and execution/provenance record; this report is not independent biological validation.";
+      description.textContent = "Accepted methods, parameters and execution/provenance record; saved with this analysis.";
       title.append(description);
     }
-    const metadata = document.createElement("details");
-    metadata.dataset.detailKey = `artifact:${artifact.handle}`;
-    const label = document.createElement("summary");
-    label.dataset.actionKey = `artifact-identity:${artifact.handle}`;
-    label.textContent = "File provenance";
-    const identity = document.createElement("p");
-    identity.className = "small";
-    identity.textContent = `Handle: ${artifact.handle}\nSource SHA-256: ${artifact.sha256}\n${artifact.revision_id === null ? `Presentation turn: ${artifact.turn_id}` : `Revision: ${artifact.revision_id}`}`;
-    metadata.append(label, identity);
-    if (artifact.figure) metadata.append(evidenceValueNode(artifact.figure));
     item.append(title);
     if (supported) {
       const actions = document.createElement("div");
@@ -967,34 +806,12 @@ function renderArtifacts(revision, target = element("artifact-inventory")) {
       actions.append(download);
       item.append(actions);
     }
-    title.append(metadata);
     return item;
   };
-  const selected = state.revision?.result_groups?.find((g) => g.handle === element("result-selection").value);
-  const nodes = scientificFileGroups(sessionId, revision.scientific_artifacts || [], selected ? selected.outputs.map((o) => o.name) : []);
-  let primary = nodes.find((node) => node.classList.contains("primary-downloads"));
-  const reports = artifacts.filter((artifact) => artifact.artifact_type === "analysis_report");
-  if (reports.length) {
-    if (!primary) {
-      primary = document.createElement("li"); primary.className = "download-group primary-downloads";
-      const heading = document.createElement("h4"); heading.textContent = "Primary scientific results";
-      primary.append(heading); nodes.unshift(primary);
-    }
-    for (const report of reports) primary.append(artifactNode(report));
-  }
-  if (artifacts.length) {
-    let advanced = nodes.flatMap((node) => [...node.querySelectorAll(".advanced-downloads")])[0];
-    if (!advanced) {
-      const item = document.createElement("li"); advanced = document.createElement("details"); advanced.className = "advanced-downloads";
-      const heading = document.createElement("summary"); heading.textContent = "All files & provenance";
-      advanced.append(heading); item.append(advanced); nodes.push(item);
-    }
-    const complete = document.createElement("ul");
-    for (const artifact of artifacts) {
-      const item = document.createElement("li"); item.append(artifactNode(artifact)); complete.append(item);
-    }
-    advanced.append(complete);
-  }
+  const nodes = scientificFileGroups(sessionId, revision.scientific_artifacts || []);
+  const primary = nodes[0];
+  for (const artifact of artifacts) primary.append(artifactNode(artifact));
+  if (!primary.childElementCount) nodes.shift();
   if (!nodes.length) {
     const empty = document.createElement("li"); empty.textContent = "No accepted scientific downloads are available."; nodes.push(empty);
   }
@@ -1018,22 +835,13 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
     if (state.session && state.session.session_id === sessionId) element("scientific-details").scrollIntoView({ block: "nearest" });
     return;
   }
-  if (reveal) {
-    state.artifactPreview = true;
-    if (revisionId === null && coordinateRevision === state.revision?.revision_id) {
-      element("result-selection").value = `@turn:${artifact.turn_id}`;
-      state.resultChoice = {revisionId: coordinateRevision, selection: element("result-selection").value};
-      renderResultSelection();
-      saveConveniences();
-    }
-  }
+  if (reveal) state.artifactPreview = true;
   clearArtifactView();
   const artifactEpoch = state.artifactEpoch;
   const revisionEpoch = state.revisionEpoch;
   element("artifact-viewer").hidden = false;
   const figures = revisionId === null ? [artifact] : state.revision.artifacts.filter((entry) => entry.artifact_type === "analysis_figure");
-  element("artifact-title").textContent = artifact.artifact_type === "analysis_report" ? "Technical report"
-    : artifact.figure ? readableLabel(artifact.figure.kind) : `Analysis figure${figures.length > 1 ? ` ${figures.findIndex((entry) => entry.handle === artifact.handle) + 1} of ${figures.length}` : ""}`;
+  element("artifact-title").textContent = artifact.figure ? readableLabel(artifact.figure.kind) : `Analysis figure${figures.length > 1 ? ` ${figures.findIndex((entry) => entry.handle === artifact.handle) + 1} of ${figures.length}` : ""}`;
   try {
     const response = await fetch(`/api/v1${artifactPath(sessionId, revisionId, artifact.handle, artifact.turn_id)}`, {
       credentials: "same-origin", cache: "no-store",
@@ -1043,16 +851,7 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       throw new ApiError(data.error.code, data.error.message, response.status);
     }
     const contentType = response.headers.get("Content-Type") || "";
-    if (artifact.artifact_type === "analysis_report") {
-      if (!contentType.startsWith("text/plain")) throw new ApiError("ARTIFACT_TYPE_UNSUPPORTED", "This artifact is not a supported text report projection.");
-      const text = await response.text();
-      if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || artifactEpoch !== state.artifactEpoch) return;
-      element("report-content").textContent = text;
-      element("report-content").hidden = false;
-      element("report-description").hidden = false;
-      element("technical-report-record").hidden = false;
-      element("technical-report-record").open = true;
-    } else if (artifact.artifact_type === "analysis_figure") {
+    if (artifact.artifact_type === "analysis_figure") {
       if (!contentType.startsWith("image/png")) throw new ApiError("ARTIFACT_TYPE_UNSUPPORTED", "This artifact is not a supported PNG figure.");
       const blob = await response.blob();
       if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || artifactEpoch !== state.artifactEpoch) return;
@@ -1061,13 +860,13 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       element("figure-content").hidden = false;
       element("figure-description").hidden = false;
       element("figure-description").textContent = artifact.figure
-        ? `Accepted ${readableLabel(artifact.figure.kind)} · Source runs: ${[...new Set([artifact.figure.run_id, ...(artifact.figure.sources || []).map((s) => s.run_id)].filter(Boolean))].join(", ")} · Operations: ${artifact.figure.step_ids.join(", ")}. Exact figure sources are available in File provenance.`
+        ? `Accepted ${readableLabel(artifact.figure.kind)} · Source runs: ${[...new Set([artifact.figure.run_id, ...(artifact.figure.sources || []).map((s) => s.run_id)].filter(Boolean))].join(", ")} · Operations: ${artifact.figure.step_ids.join(", ")}. Exact sources are saved in the technical report.`
         : "Accepted historical PNG. Figure subject metadata is unavailable; no association with the selected field is asserted.";
       if (artifact.figure?.coordinate_reused) {
         const coordinates = artifact.figure.sources.find((source) => source.role === "coordinates");
         const categories = artifact.figure.sources.find((source) => source.role === "categories");
         const labelSource = categories.output ? resultLabel(categories.output.revision_id) : "the registered input";
-        element("figure-description").textContent = `Accepted UMAP coordinates from ${resultLabel(coordinates.output.revision_id)}. Categories: ${categories.field}, from ${labelSource}. No UMAP fit was performed to render this figure; exact sources are in File provenance.`;
+        element("figure-description").textContent = `Accepted UMAP coordinates from ${resultLabel(coordinates.output.revision_id)}. Categories: ${categories.field}, from ${labelSource}. No UMAP fit was performed to render this figure; exact sources are saved in the technical report.`;
       }
     }
     if (reveal) element("artifact-viewer").scrollIntoView({ block: "nearest" });
@@ -1079,6 +878,12 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
 }
 
 function readableLabel(value) {
+  const scientificLabels = {umap_leiden: "UMAP · Leiden", umap_coordinates: "UMAP coordinates",
+    umap_categorical: "UMAP · categorical field", annotation_umap: "UMAP · cell-type annotation",
+    qc_metrics: "QC measurements", annotation_composition: "Cell-type composition",
+    marker_activity_umap: "UMAP · marker activity", marker_activity_dot: "Marker activity",
+    marker_activity_distribution: "Marker activity distributions"};
+  if (scientificLabels[value]) return scientificLabels[value];
   const label = String(value).replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
@@ -1298,10 +1103,6 @@ async function loadEvidence(detail = false) {
   const target = element(detail ? "detail-content" : "evidence-content");
   if (!detail) {
     state.evidence = null;
-    element("result-method").textContent = "Scientific results";
-    element("result-facts").textContent = "Reading accepted summary…";
-    element("result-limitations").replaceChildren();
-    element("result-limitations-panel").hidden = true;
     element("detail-form").hidden = true;
     element("detail-content").replaceChildren();
   }
@@ -1312,26 +1113,12 @@ async function loadEvidence(detail = false) {
   } catch (error) {
     if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
     target.textContent = `${error.code || "EVIDENCE_REQUEST_FAILED"}: ${error.message}`;
-    if (!detail) element("result-facts").textContent = "Evidence request failed. Use Show evidence to retry.";
     return;
   }
   if (epoch !== state.epoch || revisionEpoch !== state.revisionEpoch || evidenceEpoch !== state.evidenceEpoch) return;
   try {
     renderEvidence(view, target);
     if (!detail) {
-      const group = (state.revision.result_groups || []).find((g) => g.outputs.some((o) => o.name === view.output_name));
-      const binding = group?.outputs.find((o) => o.name === view.output_name);
-      element("result-selection").value = "@field";
-      element("result-method").textContent = `${group?.label || "Accepted result"} · ${readableLabel(binding?.field || view.output_name)}`;
-      element("result-facts").replaceChildren(...evidenceFactNodes(view.facts, view.field_labels || {}));
-      if (!view.facts.length) element("result-facts").textContent = `Selected field unavailable: ${view.reason || "not supplied by this accepted summary"}.`;
-      // Field evidence uses the same source-bound gallery as result summaries.
-      // A manually opened artifact remains a separate, explicit preview.
-      const gallery = group && resultFigureGallery(resultFigureArtifacts(group));
-      element("result-figures").replaceChildren(...(gallery ? [gallery] : []));
-      if (!state.artifactPreview) clearArtifactView();
-      element("result-limitations").replaceChildren(textList(view.limitations));
-      element("result-limitations-panel").hidden = !view.limitations.length;
       element("detail-section").replaceChildren(...view.supported_details.map((section) => {
         const option = document.createElement("option");
         option.value = section;
@@ -1343,50 +1130,11 @@ async function loadEvidence(detail = false) {
         element("detail-content").textContent = "No reviewed detailed-evidence section is offered for this output.";
       }
       state.evidence = view;
-      state.resultChoice = {revisionId, selection: "@field"};
       saveConveniences();
     }
   } catch (error) {
     console.error("Accepted evidence rendering failed.", error);
     target.textContent = "EVIDENCE_RENDER_FAILED: Accepted evidence was received, but this browser could not display it. Reload the page to try again.";
-    if (!detail) element("result-facts").textContent = "Accepted evidence was received. Its display could not be completed.";
-  }
-}
-
-async function activateViewedRevision(continueFromHere = false) {
-  if (!state.session || !state.revision || element("continue-revision").disabled) return;
-  const sessionId = state.session.session_id;
-  const revisionId = state.revision.revision_id;
-  const epoch = state.epoch;
-  if (state.session.active_revision_id !== revisionId) {
-    state.navigating = true;
-    updateControls();
-    showError(null);
-    try {
-      const view = await api(`${sessionPath(sessionId)}/activate`, "POST", {
-        turn_id: newTurnId(), revision_id: revisionId, expected_generation: state.session.generation,
-      });
-      if (epoch !== state.epoch) return;
-      displaySession(view);
-      saveConveniences();
-      if (state.session.active_revision_id !== revisionId) {
-        throw new ApiError("REVISION_ACTIVATION_CHANGED", "Agent confirmed a different active revision. Reopen the session before continuing.");
-      }
-    } catch (error) {
-      if (epoch !== state.epoch) return;
-      showError(error);
-      try { await refreshCurrentSession(sessionId, epoch); } catch (_) {}
-      return;
-    } finally {
-      if (epoch === state.epoch) { state.navigating = false; updateControls(); }
-    }
-  }
-  if (continueFromHere && epoch === state.epoch && state.session.active_revision_id === revisionId) {
-    showWorkspacePanel("conversation");
-    if (!element("utterance").value.trim()) element("utterance").value = "Continue from this result.";
-    element("utterance").focus();
-    element("utterance").scrollIntoView({ block: "center", behavior: "smooth" });
-    saveConveniences();
   }
 }
 
@@ -1455,6 +1203,7 @@ function renderAttachments() {
     });
     row.append(remove); return row;
   }));
+  if (state.session?.turns.at(-1)?.clarification_choices?.some((row) => row.action === "input_role")) renderHistory();
   element("chat-attachment-status").textContent = state.attachments.some((a) => a.status !== "uploaded")
     ? "Wait for uploads to finish, or retry/remove failed files before sending."
     : state.attachments.length ? "Files accompany this message. Uploading does not qualify a file or complete its analysis." : "";
@@ -1526,11 +1275,18 @@ async function uploadChatAttachment(a) {
   if (state.attachments.includes(a)) { saveAttachments(); renderAttachments(); inputContext(); updateControls(); }
 }
 
-element("attach-chat-files").addEventListener("click", () => element("chat-files").click());
+element("attach-chat-files").addEventListener("click", () => element("attachment-dialog").showModal());
+element("close-attachments").addEventListener("click", () => element("attachment-dialog").close());
+element("browse-chat-files").addEventListener("click", () => element("chat-files").click());
 element("chat-files").addEventListener("change", () => {
   if (!state.session || element("attach-chat-files").disabled) return;
   const files = Array.from(element("chat-files").files);
   element("chat-files").value = "";
+  if (element("upload-type").value !== "attachment") {
+    prepareDeclaredUpload(files[0]);
+    return;
+  }
+  element("attachment-dialog").close();
   if (state.attachments.length + files.length > 16) {
     showError(new Error("Attach at most 16 files to one message. Remove a file before adding more.")); return;
   }
@@ -1546,7 +1302,7 @@ function renderHistory() {
   const captured = captureConversationUi(history);
   const followLatest = history.scrollHeight - history.scrollTop - history.clientHeight < 80;
   const scrollTop = history.scrollTop;
-  const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response) : [];
+  const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response || turn.rerun_revision_id) : [];
   const visibleFileKeys = new Set(turns.map((turn) =>
     JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id])));
   for (const key of state.scientificFiles.keys()) {
@@ -1568,6 +1324,7 @@ function renderHistory() {
     article.className = "turn";
     article.dataset.turnId = turn.turn_id;
     if (turn.utterance) article.append(messageNode("You", turn.utterance, "user"));
+    else if (turn.rerun_revision_id) article.append(messageNode("You", "Run with changes", "user"));
     if (turn.attachments && turn.attachments.length) {
       const attachments = document.createElement("ul"); attachments.className = "message-attachments";
       for (const a of turn.attachments) {
@@ -1585,12 +1342,28 @@ function renderHistory() {
       if (turn.clarification_choices?.length) {
         const choices = document.createElement("div"); choices.className = "clarification-choices";
         for (const option of turn.clarification_choices) {
+          if (option.action === "input_role") {
+            const label = document.createElement("label"); label.textContent = option.label + " ";
+            const select = document.createElement("select"); select.setAttribute("aria-label", option.label + " file");
+            const files = new Map((option.sources || []).map((row) => [row.resource_id, row.label]));
+            state.attachments.filter((row) => row.status === "uploaded").forEach((row) => files.set(row.resource.resource_id, row.resource.label));
+            selectOptions(select, [["", "Choose file"], ...files]);
+            const apply = document.createElement("button"); apply.type = "button"; apply.className = "secondary"; apply.textContent = "Use this file";
+            apply.disabled = state.posting || !files.size;
+            apply.addEventListener("click", () => { if (select.value) submitRequest(files.get(select.value), null,
+              {question_turn_id: turn.turn_id, handle: option.handle + ":" + select.value}); });
+            label.append(select, apply); choices.append(label);
+            continue;
+          }
           const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
           button.textContent = option.description || option.label;
           button.dataset.actionKey = `clarification-choice:${option.handle}`;
           button.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
-          button.addEventListener("click", () => submitRequest(option.label, null,
-            {question_turn_id: turn.turn_id, handle: option.handle}));
+          button.addEventListener("click", () => {
+            if (option.action === "parameter") {
+              openRequestedParameter(option);
+            } else submitRequest(option.label, null, {question_turn_id: turn.turn_id, handle: option.handle});
+          });
           choices.append(button);
         }
         response.append(choices);
@@ -1662,6 +1435,17 @@ function renderHistory() {
         details.focus({ preventScroll: true });
       });
       (response || article).append(result);
+      if (turn.revision_id && ["activated", "stale", "succeeded"].includes(turn.status)) {
+        for (const [label, action, key] of [
+          ["Continue from this result", () => continueFromResult(resultRevision), "continue-result"],
+          ["Adjust parameters", () => openResultParameters(resultRevision), "adjust-parameters"],
+        ]) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "secondary result-action";
+          button.textContent = label; button.dataset.actionKey = key;
+          button.addEventListener("click", () => action().catch(showError));
+          (response || article).append(button);
+        }
+      }
     }
     article.append(status, metadata);
     const error = turn.error || turn.response && turn.response.error;
@@ -1694,14 +1478,14 @@ function renderHistory() {
 
 function updateControls() {
   const busy = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
-  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.navigating || state.restoringAttachments || state.attachments.some((a) => a.status !== "uploaded") || Boolean(state.upload) || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
+  const cannotSubmit = !state.session || !state.models.length || busy || state.opening || state.restoringAttachments || state.attachments.some((a) => a.status !== "uploaded") || Boolean(state.upload) || Boolean(state.fastqCompletion && state.fastqCompletion.pending);
   element("submit-turn").disabled = cannotSubmit;
   element("attach-chat-files").disabled = !state.session || !state.resourcesEnabled || busy || state.opening || state.restoringAttachments;
   document.querySelectorAll("#chat-attachments button").forEach((button) => { button.disabled = busy; });
   document.querySelectorAll(".guidance-select").forEach((button) => { button.disabled = cannotSubmit; });
-  element("activate-revision").disabled = !state.revision || busy || state.opening || state.navigating;
-  element("continue-revision").disabled = !state.revision || busy || state.opening || state.navigating;
   element("utterance").disabled = !state.session;
+  document.querySelectorAll(".result-action").forEach((button) => { button.disabled = cannotSubmit; });
+  element("request-result-choices").querySelectorAll("input").forEach((input) => { input.disabled = cannotSubmit; });
   element("new-session").disabled = state.opening || state.posting;
   element("reopen-session").disabled = state.opening;
   element("recent-sessions").disabled = state.opening || state.posting;
@@ -1714,7 +1498,7 @@ function updateControls() {
   element("resource-choice").disabled = !state.resourcesEnabled || !state.resources.length || uploading;
   element("add-scientific-input").disabled = !canAddScientificInput() || uploading;
   document.querySelectorAll(".remove-scientific-input").forEach((button) => { button.disabled = uploading; });
-  element("upload-file").disabled = !state.resourcesEnabled || uploading;
+  element("chat-files").disabled = !state.resourcesEnabled || uploading;
   element("upload-type").disabled = !state.resourcesEnabled || uploading;
   element("upload-index").disabled = !state.resourcesEnabled || uploading || !state.upload;
   element("clear-upload-index").hidden = !(state.upload && state.upload.index);
@@ -1824,15 +1608,11 @@ function displaySession(view, preferredRevisionId = null) {
     || !previous || previous.session_id !== view.session_id
     || (!state.revision.result && view.turns.some((turn) => turn.turn_id === state.revision.turn_id && turn.response));
   state.session = view;
+  refreshRequestOptions(view.session_id);
   rememberSession(view);
   if (state.attachmentSession !== view.session_id) restoreAttachments(view.session_id);
   state.durableTurnIds = new Set(view.turns.map((turn) => turn.turn_id));
-  element("current-session").textContent = view.session_id;
   element("session-input").value = view.session_id;
-  element("current-generation").textContent = String(view.generation);
-  element("current-revision").textContent = view.active_revision_id || "None";
-  element("session-context").textContent = `Session ${shortIdentity(view.session_id)} · ${view.active_revision_id ? resultLabel(view.active_revision_id) + " is current" : "No analysis yet"}`;
-  element("session-context").title = view.session_id;
   element("history-notice").hidden = !view.history_truncated;
   renderHistory();
   renderRevisionHistory();
@@ -1867,7 +1647,6 @@ function watchTurn(sessionId, turnId) {
       mergeTurn(turn);
       renderExecution();
       saveConveniences();
-      element("connection-state").textContent = "Connected";
       showError(turn.error || turn.response && turn.response.error || null);
       if (!terminal(turn) && turn.revision_id && state.session && !state.session.revisions.some((revision) => revision.revision_id === turn.revision_id)) {
         // Scientific acceptance can precede the immutable response. Refresh its
@@ -1899,7 +1678,6 @@ function watchTurn(sessionId, turnId) {
     } catch (error) {
       if (epoch !== state.epoch || pollEpoch !== state.pollEpoch) return;
       showError(error);
-      element("connection-state").textContent = "Status unavailable";
       if (state.submission) element("retry-turn").hidden = false;
       if (error.status && error.status !== 503) {
         stopPolling();
@@ -1923,7 +1701,6 @@ function watchTurn(sessionId, turnId) {
 
 async function openSession(sessionId, resumeTurnId = "", preferredRevisionId = null) {
   if (state.session?.session_id !== sessionId) {
-    state.resultChoice = null;
     element("utterance").value = "";
   }
   state.attachmentSession = null;
@@ -1932,7 +1709,6 @@ async function openSession(sessionId, resumeTurnId = "", preferredRevisionId = n
   state.scientificFiles.clear();
   stopPolling();
   state.opening = true;
-  state.navigating = false;
   state.submission = null;
   state.activeTurn = null;
   element("retry-turn").hidden = true;
@@ -1942,7 +1718,7 @@ async function openSession(sessionId, resumeTurnId = "", preferredRevisionId = n
     const view = await api(sessionPath(sessionId));
     if (epoch !== state.epoch) return;
     displaySession(view, preferredRevisionId);
-    const current = [...view.turns].reverse().find((turn) => (turn.utterance || turn.response) && !terminal(turn));
+    const current = [...view.turns].reverse().find((turn) => (turn.utterance || turn.response || turn.rerun_revision_id) && !terminal(turn));
     const requested = resumeTurnId && view.turns.find((turn) => turn.turn_id === resumeTurnId);
     const requestedConversation = requested && (requested.utterance || requested.response);
     const pendingId = requestedConversation && !terminal(requested) ? requested.turn_id : current ? current.turn_id : resumeTurnId && !requested ? resumeTurnId : "";
@@ -1977,6 +1753,8 @@ async function postSubmission(submission) {
     await api(`${sessionPath(submission.sessionId)}/turns`, "POST", submission.body);
     if (epoch !== state.epoch) return;
     if (element("utterance").value === submission.body.utterance) element("utterance").value = "";
+    closeParameters();
+    element("request-result-choices").querySelectorAll("input").forEach((input) => { input.checked = false; });
     watchTurn(submission.sessionId, submission.body.turn_id);
   } catch (error) {
     if (epoch !== state.epoch) return;
@@ -2000,8 +1778,8 @@ async function postSubmission(submission) {
 }
 
 function modelDescription() {
-  const choice = state.models.find((item) => item.profile_id === element("model-choice").value);
-  element("model-description").textContent = choice ? [choice.is_default ? "Configured default" : "", choice.provider_id, choice.model_id].filter(Boolean).join(" · ") : "";
+  const choice = state.models.find((m) => m.profile_id === element("model-choice").value);
+  element("model-choice").title = choice ? `${choice.provider_id} · ${choice.model_id}` : "";
   saveConveniences();
 }
 
@@ -2187,7 +1965,7 @@ function clearPendingUpload(keepFile = false) {
   const upload = state.upload;
   state.upload = null;
   if (upload && upload.request) upload.request.abort();
-  if (!keepFile) element("upload-file").value = "";
+  if (!keepFile) element("chat-files").value = "";
   element("upload-index").value = "";
   element("upload-progress").hidden = true;
   uploadStatus("No file awaiting upload. You can send a message without an attachment.");
@@ -2195,13 +1973,16 @@ function clearPendingUpload(keepFile = false) {
 }
 
 function renderUploadType() {
+  const automatic = element("upload-type").value === "attachment";
+  element("chat-files").multiple = automatic;
+  element("upload-file-button").hidden = automatic;
   const fasta = element("upload-type").value === "fasta";
   const fragments = element("upload-type").value === "external_fragments";
   const bam = element("upload-type").value === "bam";
   const fastq = element("upload-type").value === "fastq";
   const groups = element("upload-type").value === "groups";
-  element("upload-file-label").textContent = fasta ? "Attach the plain reference-genome FASTA for your pending task" : fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : groups ? "Attach exact ordered cell_id / group TSV" : "Attach an H5AD file";
-  element("upload-file").accept = fasta ? ".fa,.fasta,.fna" : fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad";
+  element("upload-file-label").textContent = automatic ? "Choose files, then describe their roles in your request." : fasta ? "Attach the plain reference-genome FASTA for your pending task" : fragments ? "Attach a fragments source (TSV, gzip or BGZF)" : bam ? "Attach a scATAC-seq BAM" : fastq ? "Attach one declared FASTQ member" : groups ? "Attach exact ordered cell_id / group TSV" : "Attach an H5AD file";
+  element("chat-files").accept = automatic ? "" : fasta ? ".fa,.fasta,.fna" : fragments ? ".tsv,.gz,.bgz,.bgzf" : bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad";
   element("upload-index-fields").hidden = !(fragments || fasta);
   document.querySelector('label[for="upload-index"]').textContent = fasta ? "FAI index (optional; generated if omitted)" : "Paired TBI index (optional)";
   element("upload-index").accept = fasta ? ".fai" : ".tbi";
@@ -2334,7 +2115,7 @@ async function uploadSelectedFile() {
         origin_turn_id: referencePending.origin_turn_id });
       if (state.upload !== upload) return;
       state.upload = null;
-      element("upload-file").value = "";
+      element("chat-files").value = "";
       element("upload-index").value = "";
       element("upload-progress").hidden = true;
       uploadStatus("Reference qualified for the original task. Send ‘Use the qualified reference and continue’ to resume.");
@@ -2350,7 +2131,7 @@ async function uploadSelectedFile() {
       state.resources = [...state.resources.filter((choice) => choice.resource_id !== resource.resource_id), resource];
     }
     state.upload = null;
-    element("upload-file").value = "";
+    element("chat-files").value = "";
     element("upload-index").value = "";
     element("upload-progress").hidden = true;
     if (resource.input_type === "fastq") {
@@ -2371,8 +2152,7 @@ async function uploadSelectedFile() {
   updateControls();
 }
 
-element("upload-file").addEventListener("change", () => {
-  const file = element("upload-file").files[0];
+function prepareDeclaredUpload(file) {
   clearPendingUpload(true);
   if (!file) return;
   // Selection creates a new transfer identity; Retry keeps this same File and ID.
@@ -2390,7 +2170,8 @@ element("upload-file").addEventListener("change", () => {
   inputContext();
   uploadStatus(`${file.name} · selected. Upload this file before sending your request.`);
   updateControls();
-});
+}
+
 element("upload-type").addEventListener("change", () => {
   clearPendingUpload();
   renderUploadType();
@@ -2466,11 +2247,9 @@ element("history-notice").addEventListener("click", async () => {
 
 async function createSession() {
   const epoch = ++state.epoch;
-  state.resultChoice = null;
   state.scientificFiles.clear();
   stopPolling();
   state.opening = true;
-  state.navigating = false;
   state.submission = null;
   state.activeTurn = null;
   element("retry-turn").hidden = true;
@@ -2480,6 +2259,7 @@ async function createSession() {
     const view = await api("/sessions", "POST", {});
     if (epoch !== state.epoch) return;
     element("utterance").value = "";
+    closeParameters();
     state.selectedResourceIds = [];
     element("resource-choice").value = "";
     element("input-choice").value = "";
@@ -2501,13 +2281,238 @@ element("reopen-form").addEventListener("submit", (event) => {
   if (id) openSession(id);
 });
 
-function submitRequest(utterance, predecessorTurnId = null, clarificationChoice = null) {
+
+function selectOptions(select, rows) {
+  select.replaceChildren(...rows.map(([value, label]) => {
+    const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+  }));
+}
+
+function closeParameters() {
+  element("parameter-dialog").close();
+  state.parameterEditor = null;
+  element("parameter-steps").replaceChildren();
+}
+
+async function continueFromResult(revisionId) {
+  const sessionId = state.session.session_id;
+  element("request-result-choices").querySelectorAll("input").forEach((input) => { input.checked = false; });
+  state.requestOptionsKey = null;
+  if (state.session.active_revision_id !== revisionId) {
+    const view = await api(`${sessionPath(sessionId)}/activate`, "POST", {
+      turn_id: newTurnId(), revision_id: revisionId, expected_generation: state.session.generation,
+    });
+    if (state.session?.session_id !== sessionId) return false;
+    displaySession(view, revisionId);
+  } else {
+    displaySession(state.session, revisionId);
+  }
+  element("utterance").value = "";
+  saveConveniences();
+  inputContext();
+  showWorkspacePanel("conversation");
+  element("utterance").focus();
+  return true;
+}
+
+async function openResultParameters(revisionId) {
+  const sessionId = state.session.session_id;
+  const view = await api(`${sessionPath(sessionId)}/revisions/${encodeURIComponent(revisionId)}/parameters`);
+  if (state.session?.session_id !== sessionId) return;
+  showParameters({sessionId, revisionId, generation: view.generation, steps: view.steps});
+}
+
+async function openRequestedParameter(option) {
+  try {
+    const view = await api(`/parameters?tool=${encodeURIComponent(option.tool)}`);
+    const tool = view.tools[0];
+    const spec = tool.parameters.find((p) => p.argument === option.argument);
+    if (!spec) throw new Error("Describe the missing native function parameters in your reply.");
+    showParameters({sessionId: state.session.session_id, generation: state.session.generation,
+      steps: [{tool: option.tool, native_function: option.native_function, functions: tool.functions, parameters: [spec]}]});
+  } catch (error) { showError(error); }
+}
+
+function showParameters(editor) {
+  editor.rows = [];
+  state.parameterEditor = editor;
+  element("parameter-heading").textContent = editor.revisionId ? "Adjust parameters" : "Supply requested parameter";
+  element("parameter-context").textContent = editor.revisionId
+    ? `Selected analysis ${editor.revisionId.slice(0, 12)} · Only changes are submitted. Unchanged steps are reused where supported.`
+    : "Supply the requested value to continue your pending request.";
+  element("run-parameters").textContent = editor.revisionId ? "Run with changes" : "Apply and continue";
+  element("parameter-error").textContent = "";
+  element("parameter-steps").replaceChildren(...editor.steps.map((step) => {
+    const section = document.createElement("section"), title = document.createElement("h3");
+    title.textContent = `${step.native_function || step.tool}${step.step_id ? " · " + step.step_id : ""}`;
+    section.append(title);
+    if (!editor.revisionId && step.functions?.length && !step.native_function) {
+      const label = document.createElement("label"); label.textContent = "Requested native function";
+      const select = document.createElement("select");
+      selectOptions(select, [["", "Choose the function for this value"], ...step.functions.map((name) => [name,name])]);
+      select.addEventListener("change", () => {
+        editor.rows.filter((row) => row.tool === step.tool).forEach((row) => { row.nativeFunction = select.value; });
+      });
+      label.append(select); section.append(label);
+    }
+    if (!step.parameters.length) {
+      const note = document.createElement("p"); note.className = "muted small";
+      note.textContent = "This step has no adjustable scientific parameters."; section.append(note);
+    }
+    for (const spec of step.parameters) {
+      if (spec.editable === false) {
+        const note = document.createElement("p"); note.textContent = `${spec.argument} (read only)`;
+        section.append(note, evidenceValueNode(spec.value)); continue;
+      }
+      const value = spec.value;
+      const valueType = spec.choices ? "choice" : value === null && spec.recorded ? "null" :
+        typeof value === "boolean" ? "boolean" : typeof value === "number" ? "number" :
+        Array.isArray(value) ? (value.every((v) => typeof v === "number") ? "numbers" : "strings") :
+        typeof value === "string" ? "string" : "auto";
+      const raw = !spec.recorded ? "" : spec.choices ? String(spec.choices.indexOf(value)) :
+        Array.isArray(value) ? value.join(", ") : value === null ? "" : String(value);
+      const row = {tool: step.tool, needsFunction: Boolean(step.functions?.length), nativeFunction: step.native_function, stepId: step.step_id, spec, valueType, raw};
+      editor.rows.push(row);
+      const field = document.createElement("div"); field.className = "parameter-row";
+      const label = document.createElement("label"); label.textContent = spec.argument;
+      const input = document.createElement(spec.choices || valueType === "boolean" ? "select" : "input");
+      input.setAttribute("aria-label", `${step.step_id || step.tool} ${spec.argument}`);
+      if (spec.choices) selectOptions(input, [["", "Choose value"], ...spec.choices.map((v,i) => [String(i), String(v)])]);
+      else if (valueType === "boolean") selectOptions(input, [["", "Choose value"], ["true", "true"], ["false", "false"]]);
+      else { input.type = valueType === "number" ? "number" : "text"; input.step = "any"; }
+      input.value = raw; row.input = input;
+      const typeInput = document.createElement("select"); row.typeInput = typeInput;
+      typeInput.setAttribute("aria-label", `${step.step_id || step.tool} ${spec.argument} value type`);
+      selectOptions(typeInput, spec.choices ? [["choice", "Choice"]] : [["auto", "Number or text"], ["string", "Text"], ["number", "Number"], ["boolean", "Boolean"], ["null", "null"], ["strings", "Text list"], ["numbers", "Number list"]]);
+      typeInput.value = valueType;
+      const help = document.createElement("p"); help.className = "muted small";
+      help.textContent = spec.description + (spec.recorded ? "" : " · Value not recorded; leave empty to preserve omission.");
+      label.append(input); field.append(label, typeInput, help); section.append(field);
+    }
+    if (step.recorded) {
+      const details = document.createElement("details"), summary = document.createElement("summary");
+      summary.textContent = "Recorded execution details (read only)";
+      details.append(summary, evidenceValueNode(step.recorded)); section.append(details);
+    }
+    return section;
+  }));
+  element("run-parameters").disabled = !editor.rows.length;
+  element("parameter-dialog").showModal();
+}
+
+function parameterValue(row) {
+  const raw = row.input.value, type = row.typeInput.value;
+  if (type === "null") return null;
+  if (!raw.trim()) throw new Error(`Enter ${row.spec.argument}, or keep its recorded value unchanged.`);
+  if (type === "choice") return row.spec.choices[Number(raw)];
+  if (type === "string") return raw;
+  if (type === "boolean") {
+    if (!["true", "false"].includes(raw)) throw new Error("Choose true or false.");
+    return raw === "true";
+  }
+  if (type === "strings") return raw.split(",").map((s) => s.trim());
+  if (type === "numbers") {
+    const values = raw.split(",").map((s) => Number(s.trim()));
+    if (values.some((v) => !Number.isFinite(v))) throw new Error("Enter comma-separated numbers.");
+    return values;
+  }
+  if (type === "auto") {
+    if (["true", "false"].includes(raw)) return raw === "true";
+    return Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || type === "integer" && !Number.isInteger(value)) throw new Error(`Parameter ${row.spec.argument} requires a ${type === "integer" ? "whole number" : "number"}.`);
+  return value;
+}
+
+function collectedParameters() {
+  const rows = new Map();
+  for (const row of state.parameterEditor.rows) {
+    if (row.input.value === row.raw && row.typeInput.value === row.valueType) continue;
+    if (row.needsFunction && !row.nativeFunction) throw new Error("Choose the requested native function for this parameter.");
+    const value = parameterValue(row);
+    if (row.spec.recorded && JSON.stringify(value) === JSON.stringify(row.spec.value)) continue;
+    const argument = row.spec.kwarg ? "kwargs" : row.spec.argument;
+    const key = JSON.stringify([row.stepId, row.tool, row.nativeFunction, argument]);
+    let setting = rows.get(key);
+    if (!setting) {
+      setting = {tool: row.tool, argument, value: row.spec.kwarg ? {} : null};
+      if (row.nativeFunction) setting.native_function = row.nativeFunction;
+      if (row.stepId) setting.step_id = row.stepId;
+      rows.set(key, setting);
+    }
+    if (row.spec.kwarg) setting.value[row.spec.argument] = value;
+    else setting.value = value;
+  }
+  return Array.from(rows.values());
+}
+
+async function refreshRequestOptions(sessionId = state.session?.session_id) {
+  if (!sessionId) return;
+  const query = new URLSearchParams();
+  const ids = [...new Set([...selectedResourceIds(), ...state.attachments.map((a) => a.resource.resource_id)])];
+  ids.forEach((id) => query.append("resource_ids", id));
+  const key = JSON.stringify([sessionId, state.session?.generation, ids]);
+  if (state.requestOptionsKey === key) return;
+  const epoch = ++state.optionsEpoch;
+  try {
+    const view = await api(`${sessionPath(sessionId)}/interaction-options?${query}`);
+    if (epoch !== state.optionsEpoch || state.session?.session_id !== sessionId) return;
+    const checkedResults = new Set(Array.from(element("request-result-choices").querySelectorAll("input:checked")).map((input) => input.value));
+    state.requestOptions = view;
+    state.requestOptionsKey = key;
+    element("request-results-panel").hidden = !view.results.length;
+    element("request-result-choices").replaceChildren(...view.results.map((result, index) => {
+      const label = document.createElement("label"), input = document.createElement("input");
+      input.type = "checkbox"; input.value = JSON.stringify(result.identity);
+      input.checked = checkedResults.has(input.value);
+      label.append(input, document.createTextNode(`${result.label} · ${result.tool}${result.current ? " · Current" : ""}`));
+      return label;
+    }));
+  } catch (error) { showError(error); }
+}
+
+element("cancel-parameters").addEventListener("click", closeParameters);
+element("parameter-dialog").addEventListener("cancel", closeParameters);
+element("parameter-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editor = state.parameterEditor;
+  try {
+    if (!editor || editor.sessionId !== state.session?.session_id || editor.generation !== state.session.generation)
+      throw new Error("The conversation changed. Reopen the parameter dialog for the result you want.");
+    const overrides = collectedParameters();
+    if (!overrides.length) throw new Error("Change at least one parameter before running.");
+    element("run-parameters").disabled = true;
+    if (editor.revisionId && !await continueFromResult(editor.revisionId)) return;
+    const body = {turn_id: newTurnId(), expected_generation: state.session.generation, utterance: "",
+      profile_id: element("model-choice").value, parameter_overrides: overrides};
+    if (editor.revisionId) body.rerun_revision_id = editor.revisionId;
+    closeParameters();
+    startSubmission(body);
+  } catch (error) {
+    element("parameter-error").textContent = error.message;
+    element("run-parameters").disabled = false;
+  }
+});
+
+function startSubmission(body) {
+  state.submission = Object.freeze({ sessionId: state.session.session_id, body: Object.freeze(body) });
+  state.activeTurn = { session_id: state.session.session_id, turn_id: body.turn_id, status: "submitted", steps: [] };
+  saveConveniences();
+  postSubmission(state.submission);
+}
+
+function submitRequest(utterance, predecessorTurnId = null, clarificationChoice = null, candidateSelection = null) {
   if (element("submit-turn").disabled || !state.session) return;
   if (!utterance.trim()) return;
   const body = {
     turn_id: newTurnId(), expected_generation: state.session.generation,
     utterance, profile_id: element("model-choice").value,
   };
+  if (candidateSelection !== null) body.candidate_selection = Object.freeze(candidateSelection);
+  const selectedResults = Array.from(element("request-result-choices").querySelectorAll("input:checked"))
+    .map((input) => JSON.parse(input.value));
+  if (selectedResults.length) body.selected_results = selectedResults;
   if (predecessorTurnId !== null) body.predecessor_turn_id = predecessorTurnId;
   if (clarificationChoice !== null) body.clarification_choice = Object.freeze(clarificationChoice);
   const selectedIds = selectedResourceIds();
@@ -2534,10 +2539,7 @@ function submitRequest(utterance, predecessorTurnId = null, clarificationChoice 
     if (selectedResourceType() === "h5ad" && element("epizoo-resource-choice").value) body.epizoo_resource_id = element("epizoo-resource-choice").value;
   }
   else if (element("input-choice").value) body.input_set_id = element("input-choice").value;
-  state.submission = Object.freeze({ sessionId: state.session.session_id, body: Object.freeze(body) });
-  state.activeTurn = { session_id: state.session.session_id, turn_id: body.turn_id, status: "submitted", steps: [] };
-  saveConveniences();
-  postSubmission(state.submission);
+  startSubmission(body);
 }
 
 element("turn-form").addEventListener("submit", (event) => {
@@ -2567,17 +2569,8 @@ element("cancel-turn").addEventListener("click", async () => {
   }
 });
 
-element("activate-revision").addEventListener("click", () => activateViewedRevision());
-element("continue-revision").addEventListener("click", () => activateViewedRevision(true));
 element("load-evidence").addEventListener("click", () => loadEvidence());
 element("evidence-output").addEventListener("change", () => loadEvidence());
-element("result-selection").addEventListener("change", () => {
-  state.evidenceEpoch += 1;
-  state.artifactPreview = false;
-  state.resultChoice = {revisionId: state.viewedRevisionId, selection: element("result-selection").value};
-  renderResultSelection();
-  saveConveniences();
-});
 element("evidence-panel").addEventListener("toggle", () => {
   if (element("evidence-panel").open && state.revision && !state.evidence) {
     element("evidence-content").textContent = "Choose an accepted field and select Show evidence to read its exact value.";
@@ -2610,12 +2603,8 @@ element("epizoo-resource-choice").addEventListener("change", () => {
 });
 element("show-conversation").addEventListener("click", () => showWorkspacePanel("conversation", true));
 element("show-results").addEventListener("click", () => showWorkspacePanel("results", true));
-element("view-current-result").addEventListener("click", () => {
-  if (state.session?.active_revision_id) showResult(state.session.active_revision_id);
-});
-element("show-current-result").addEventListener("click", () => {
-  if (state.session?.active_revision_id) showResult(state.session.active_revision_id);
-});
+
+
 element("result-choice").addEventListener("change", () => {
   if (element("result-choice").value) loadRevision(element("result-choice").value);
 });
@@ -2671,22 +2660,18 @@ async function initialize() {
     }));
     resources = loadResources();
     inputContext();
-    element("connection-state").textContent = "Connected";
     modelDescription();
     if (typeof conveniences.sessionId === "string" && conveniences.sessionId) {
       await openSession(conveniences.sessionId, typeof conveniences.polledTurnId === "string" ? conveniences.polledTurnId : "",
         typeof conveniences.viewedRevisionId === "string" ? conveniences.viewedRevisionId : null);
-      state.resultChoice = conveniences.resultChoice || null;
-      renderPresentationChoices();
-      if (state.revision) renderResultSelection();
+        if (state.revision) renderResultSelection();
       if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
-      if (conveniences.workspacePanel === "results" && state.viewedRevisionId) showWorkspacePanel("results");
+        if (conveniences.workspacePanel === "results" && state.viewedRevisionId) showWorkspacePanel("results");
     } else {
       await createSession();
       if (typeof conveniences.draft === "string") element("utterance").value = conveniences.draft.slice(0, 4096);
     }
   } catch (error) {
-    element("connection-state").textContent = "Connection unavailable";
     showError(error);
   }
   await resources;

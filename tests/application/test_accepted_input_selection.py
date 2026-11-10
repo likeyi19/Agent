@@ -21,7 +21,7 @@ def interaction(admitted=None):
 
 @pytest.mark.parametrize('context', ['none', 'current'])
 def test_exact_scientific_input_does_not_depend_on_coarse_context(context):
-    decision = Execute('current', 'plan', 'run_scanpy', None,
+    decision = Execute('run_scanpy',
         context=context, input_results=('g0',), references=('g0',))
     value = dict(kind='execute', tool='run_scanpy', context=context,
         **_research_intent(interaction(), decision))
@@ -30,7 +30,7 @@ def test_exact_scientific_input_does_not_depend_on_coarse_context(context):
 
 
 def test_metadata_and_visualization_never_become_scientific_inputs():
-    decision = Execute('current', 'plan', 'run_scanpy', None, references=('g0',),
+    decision = Execute('run_scanpy', references=('g0',),
         visualization=dict(coordinates='g0', labels='new', field='result:primary_annotation'))
     assert 'input_results' not in _research_intent(interaction(), decision)
 
@@ -38,7 +38,7 @@ def test_metadata_and_visualization_never_become_scientific_inputs():
 @pytest.mark.parametrize('handles', [('g1',), ('g0', 'g0'), ('ctx.0',)])
 def test_invalid_or_unoffered_scientific_inputs_are_rejected(handles):
     with pytest.raises((ValueError, IntentError)):
-        _research_intent(interaction(), Execute('current', 'plan', 'run_scanpy', None, input_results=handles))
+        _research_intent(interaction(), Execute('run_scanpy', input_results=handles))
 
 
 def test_new_annotation_schema_can_express_the_documented_context_and_input_selection():
@@ -63,11 +63,6 @@ def test_old_annotation_wire_stays_readable_with_no_new_implicit_inputs():
         annotation=asdict(AnnotationDeclaration())))
     parsed=parse_decision(json.dumps(wire))
     assert parsed.context == 'none' and parsed.input_results == ()
-
-
-def test_nonplanning_operation_cannot_gain_scientific_input_selection():
-    with pytest.raises(ValueError):
-        Execute('current', 'selection', 'selection', None, input_results=('g0',))
 
 
 @pytest.fixture

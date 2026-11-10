@@ -1,5 +1,5 @@
 """Bounded turn interpretation and exact, utterance-grounded scalar admission."""
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -37,14 +37,6 @@ class DeclarationGroundingError(IntentError):
     def __init__(self, reason, raw, parameters=()):
         super().__init__(reason, parameters=parameters)
         self.raw = raw
-
-
-@dataclass(frozen=True)
-class IntentDelta:
-    parameter: str
-    operation: str
-    literal: str
-    evidence: str
 
 
 @dataclass(frozen=True)
@@ -204,31 +196,52 @@ class NativeSourceStructuredArgument(NativeFunctionScope, SourceScopedStructured
     pass
 
 
+@dataclass(frozen=True)
+class ExplicitArgument:
+    """Researcher-entered value, with no invented utterance or text spans."""
+
+    tool: str
+    argument: str
+    value: object
+    native_function: str | None = None
+    step_id: str | None = None
+    port: str | None = None
+    source: str | None = None
+    resource_id: str | None = None
+    origin: str = 'structured'
+
+    def __post_init__(self):
+        if (self.origin != 'structured' or type(self.tool) is not str or type(self.argument) is not str
+                or not self.tool.isidentifier() or not self.argument.isidentifier()):
+            raise ValueError('Invalid explicit parameter identity.')
+        for value in (self.native_function, self.step_id):
+            if value is not None and (type(value) is not str or not value.strip()):
+                raise ValueError('Invalid explicit parameter scope.')
+        if self.resource_id is not None and (type(self.resource_id) is not str
+                or re.fullmatch(r'local-[0-9a-f]{64}', self.resource_id) is None):
+            raise ValueError('Invalid explicit source identity.')
+        if self.port is None and (self.source is not None or self.resource_id is not None):
+            raise ValueError('Incomplete explicit source scope.')
+        if self.port is not None:
+            if self.source is not None:
+                InputRole(self.tool, self.port, self.source)
+            elif self.resource_id is None or type(self.port) is not str or not self.port.isidentifier():
+                raise ValueError('Incomplete explicit source scope.')
+        # Reuse the ordinary bounded JSON representation; native owners validate science.
+        freeze_json_mapping({'value': self.value}, 'explicit parameter')
+
+
 def argument_identity(item):
-    return (item.tool, item.argument, getattr(item, 'port', None), getattr(item, 'source', None), getattr(item, 'native_function', None))
+    return (item.tool, item.argument, getattr(item, 'port', None), getattr(item, 'source', None), getattr(item, 'native_function', None), getattr(item, 'step_id', None), getattr(item, 'resource_id', None), isinstance(item, ExplicitArgument))
 
 
-def _validate_arguments(arguments, argument=None):
+def _validate_arguments(arguments):
     if (type(arguments) is not tuple or len(arguments) > MAX_SCIENTIFIC_ARGUMENTS
-            or any(not isinstance(item, ScopedArgument) for item in arguments)):
+            or any(not isinstance(item, (ScopedArgument, ExplicitArgument)) for item in arguments)):
         raise ValueError('Invalid bounded scientific arguments.')
     identities = [argument_identity(item) for item in arguments]
-    if argument is not None:
-        identities.append(argument_identity(argument))
-    if len(identities) > MAX_SCIENTIFIC_ARGUMENTS:
-        raise ValueError('Scientific argument declaration limit exceeded.')
     if len(identities) != len(set(identities)):
         raise ValueError('Duplicate scoped scientific argument.')
-
-
-def _normalize_arguments(decision):
-    """Read the historical singular declaration; all new writers use arguments."""
-    if decision.argument is not None:
-        if not isinstance(decision.argument, LeidenResolution):
-            raise ValueError('Invalid historical scientific argument.')
-        _validate_arguments(decision.arguments, decision.argument)
-        object.__setattr__(decision, 'arguments', (ScopedArgument(**asdict(decision.argument)),) + decision.arguments)
-        object.__setattr__(decision, 'argument', None)
 
 
 @dataclass(frozen=True)
@@ -400,7 +413,6 @@ class RequestRoles:
     target: str
     required_roles: tuple[RoleRequirement, ...]
     roles: tuple[InputRole, ...] = ()
-    argument: LeidenResolution | None = None
     arguments: tuple[ScopedArgument, ...] = ()
     context: str = 'none'
     fastq: 'FastqDeclaration | None' = None
@@ -417,7 +429,6 @@ class RequestRoles:
     retain_parameters: tuple[RetainedParameter, ...] = ()
 
     def __post_init__(self):
-        _normalize_arguments(self)
         _normalize_research_intent(self)
         if self.epizoo is not None:
             from .epizoo_handoff import EpiZooDeclaration, target
@@ -425,7 +436,7 @@ class RequestRoles:
             if (type(self.epizoo) is not EpiZooDeclaration or self.epizoo.operation is None
                     or any(v is not None for v in (self.fastq, self.bam, self.fragments, self.annotation))
                     or self.target != target(self.epizoo) or self.required_roles or self.roles
-                    or self.context != 'none' or self.argument is not None):
+                    or self.context != 'none'):
                 raise ValueError('Invalid EpiZoo task declaration.')
             _validate_arguments(self.arguments)
             validate_arguments(self.arguments, 'epizoo')
@@ -438,7 +449,7 @@ class RequestRoles:
             from .raw_handoff import AnnotationDeclaration, validate_arguments
             if (type(self.annotation) is not AnnotationDeclaration or any(v is not None for v in (self.fastq, self.bam, self.fragments))
                     or self.target != 'annotate_scATAC_cell_types' or self.required_roles or self.roles
-                    or self.context not in ('none', 'current') or self.argument is not None):
+                    or self.context not in ('none', 'current')):
                 raise ValueError('Invalid annotation task declaration.')
             _validate_arguments(self.arguments)
             validate_arguments(self.arguments, 'annotation')
@@ -447,7 +458,7 @@ class RequestRoles:
             from .raw_handoff import FragmentsDeclaration, validate_arguments
             if (type(self.fragments) is not FragmentsDeclaration or self.fastq is not None or self.bam is not None
                     or self.target != 'run_snapatac2' or self.required_roles or self.roles
-                    or self.context != 'none' or self.argument is not None):
+                    or self.context != 'none'):
                 raise ValueError('Invalid fragments task declaration.')
             _validate_arguments(self.arguments)
             validate_arguments(self.arguments, 'fragments')
@@ -460,14 +471,14 @@ class RequestRoles:
         if self.fastq is not None:
             from .raw_handoff import FastqDeclaration
             if (type(self.fastq) is not FastqDeclaration or self.target != 'run_chromap'
-                    or self.required_roles or self.roles or self.context != 'none' or self.argument is not None):
+                    or self.required_roles or self.roles or self.context != 'none'):
                 raise ValueError('Invalid FASTQ task declaration.')
             _validate_arguments(self.arguments)
             from .raw_handoff import validate_arguments
             validate_arguments(self.arguments)
             return
         if self.bam is not None:
-            if self.target != 'run_snapatac2' or self.required_roles or self.context != 'none' or self.argument is not None:
+            if self.target != 'run_snapatac2' or self.required_roles or self.context != 'none':
                 raise ValueError('Invalid BAM task request.')
             _validate_arguments(self.arguments)
             return
@@ -546,11 +557,7 @@ class RoleAnswer:
 
 @dataclass(frozen=True)
 class Execute:
-    base: str
-    operation: str
     target: str
-    delta: IntentDelta | None
-    argument: LeidenResolution | None = None
     arguments: tuple[ScopedArgument, ...] = ()
     context: str = 'none'
     roles: tuple[InputRole, ...] = ()
@@ -564,31 +571,27 @@ class Execute:
     missing_parameters: tuple[str, ...] = ()
 
     def __post_init__(self):
-        _normalize_arguments(self)
         _normalize_research_intent(self)
         if (len(self.missing_parameters)>8 or len(set(self.missing_parameters))!=len(self.missing_parameters)
-                or any(not isinstance(k,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',k) for k in self.missing_parameters)
-                or self.missing_parameters and self.operation!='plan'):
+                or any(not isinstance(k,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',k) for k in self.missing_parameters)):
             raise ValueError('Invalid missing scientific parameter identities.')
-        if self.context not in ('none', 'current') or (self.operation != 'plan' and self.context != 'none'):
+        if self.context not in ('none', 'current'):
             raise ValueError('Invalid bounded execution context.')
         _validate_arguments(self.arguments)
         _validate_roles(self.roles)
-        if self.roles and self.operation != 'plan':
-            raise ValueError('Scientific input roles require ordinary planning.')
-        if self.operation != 'plan' and (self.input_results or self.references or self.delivery or self.retain_parameters or self.unfulfilled):
-            raise ValueError('Invalid bounded research intention.')
 
 
 @dataclass(frozen=True)
 class ExecuteCandidate:
     candidate: str
     evidence: str
+    arguments: tuple = ()
 
     def __post_init__(self):
         if (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128
                 or type(self.evidence) is not str or not 0 < len(self.evidence) <= 4096):
             raise ValueError('Invalid explicit candidate selection.')
+        _validate_arguments(self.arguments)
 
 
 @dataclass(frozen=True)
@@ -597,11 +600,9 @@ class SpeciesAnswer:
 
     pending: str
     species: str
-    argument: LeidenResolution | None = None
     arguments: tuple[ScopedArgument, ...] = ()
 
     def __post_init__(self):
-        _normalize_arguments(self)
         if (type(self.pending) is not str or not 0 < len(self.pending) <= 128
                 or type(self.species) is not str or self.species not in ('human', 'mouse')):
             raise ValueError('Invalid pending species declaration.')
@@ -667,9 +668,7 @@ class Clarify:
     value_required: bool = False
 
 
-ANSWER_INTENTS = ('version', 'matrix', 'selection', 'thresholds', 'changes',
-                  'execution', 'reuse', 'comparison', 'provenance', 'verification', 'unsupported', 'scientific', 'guidance')
-
+ANSWER_INTENTS = ('scientific', 'guidance')
 
 @dataclass(frozen=True)
 class ScientificTarget:
@@ -736,16 +735,12 @@ class GuidanceQuestion:
 @dataclass(frozen=True)
 class Answer:
     intent: str
-    relation: str = 'current'
-    technical: bool = False
     scientific: ScientificQuestion | None = None
     guidance: GuidanceQuestion | None = None
 
     def __post_init__(self):
-        if self.intent not in ANSWER_INTENTS or self.relation not in RELATIONS or type(self.technical) is not bool:
+        if self.intent not in ANSWER_INTENTS:
             raise ValueError('Invalid bounded answer request.')
-        if self.intent == 'comparison' and self.relation == 'current':
-            raise ValueError('Comparison requires a historical relation.')
         if (self.intent == 'scientific') != isinstance(self.scientific, ScientificQuestion):
             raise ValueError('Scientific answers require a structured question.')
         if (self.intent == 'guidance') != isinstance(self.guidance, GuidanceQuestion):
@@ -760,15 +755,6 @@ REASONS = ('missing_parameter_value', 'ambiguous_parameter', 'ambiguous_revision
            'ambiguous_predecessor', 'incompatible_comparison', 'requires_execution',
            'missing_species', 'ambiguous_species', 'unsupported_species',
            'conflicting_species', 'invalid_reference', 'missing_reference', 'missing_resources', 'invalid_prerequisite', 'conflicting_scientific_parameter')
-# These are language aliases, not scientific types/ranges/defaults. Those stay
-# exclusively in the registered ArgumentSpecs. Initial interaction scope is QC selection.
-ALIASES = {
-    'min_tss_enrichment': ('tss', 'tss threshold', 'min tss', 'min tss enrichment', 'minimum tss enrichment'),
-    'min_qc_fragment_records': ('min fragments', 'fragment threshold', 'minimum fragments', 'min qc fragment records', 'minimum depth'),
-    'min_tss_flank_evidence': ('min tss flank evidence', 'minimum flank evidence', 'flank evidence'),
-    'max_qc_fragment_records': ('max qc fragment records', 'maximum depth', 'max fragments'),
-    'max_nucleosome_signal': ('max nucleosome signal', 'maximum nucleosome signal', 'nucleosome threshold'),
-}
 
 
 def _shape(value, keys):
@@ -776,18 +762,14 @@ def _shape(value, keys):
         raise IntentError('invalid_decision')
 
 
-def _leiden_argument(value):
-    if value is None:
-        return None
-    _shape(value, ('tool', 'argument', 'literal', 'start', 'end'))
-    return LeidenResolution(**value)
-
-
 def _scientific_arguments(value):
     if type(value) is not list or len(value) > MAX_SCIENTIFIC_ARGUMENTS:
         raise IntentError('invalid_decision')
     result = []
     for item in value:
+        if item.get('origin') == 'structured':
+            result.append(ExplicitArgument(**item))
+            continue
         cls, keys = _argument_shape(item)
         _shape(item, keys + ('start', 'end'))
         if 'members' in item:
@@ -970,8 +952,6 @@ def parse_decision(raw, *, utterance=None):
                             start=0, end=1)
                             for m in placeholder['members']]
                     return placeholder
-            if 'argument' in value:
-                value['argument'] = ground(value['argument'])
             if 'arguments' in value:
                 if type(value['arguments']) is not list or len(value['arguments']) > MAX_SCIENTIFIC_ARGUMENTS:
                     raise IntentError('invalid_decision')
@@ -995,15 +975,16 @@ def parse_decision(raw, *, utterance=None):
             if failure:
                 raise DeclarationGroundingError(failure, raw, tuple(dict.fromkeys(failed_parameters)))
             return parsed
+        if any(item.get('origin') == 'structured' for item in value.get('arguments', ())):
+            raise IntentError('invalid_decision')
         kind = value.get('kind')
         if kind == 'execute_candidate':
             _shape(value, ('kind', 'candidate', 'evidence'))
             return ExecuteCandidate(value['candidate'], value['evidence'])
         if kind == 'answer_prerequisite':
             _shape(value, ('kind', 'pending', 'species') + tuple(
-                key for key in ('argument', 'arguments') if key in value))
+                key for key in ('arguments',) if key in value))
             return SpeciesAnswer(value['pending'], value['species'],
-                                 _leiden_argument(value.get('argument')),
                                  _scientific_arguments(value.get('arguments', [])))
         if kind == 'request_resources':
             _shape(value, ('kind', 'target', 'arguments') + tuple(k for k in ('roles', 'reference_category', 'context', 'input_results') if k in value))
@@ -1020,14 +1001,14 @@ def parse_decision(raw, *, utterance=None):
             return ParameterAnswer(value['pending'], _scientific_arguments(value['arguments']))
         if kind == 'request_roles':
             _shape(value, ('kind', 'target', 'required_roles', 'roles') + tuple(
-                key for key in ('argument', 'arguments', 'context', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo',
+                key for key in ('arguments', 'context', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo',
                                 'input_results', 'references', 'delivery', 'unfulfilled', 'visualization', 'comparison', 'retain_parameters') if key in value))
             if any(type(value[k]) is not list for k in ('input_results', 'references', 'delivery', 'unfulfilled', 'retain_parameters') if k in value):
                 raise IntentError('invalid_decision')
             from .raw_handoff import declaration
             return RequestRoles(value['target'], (() if (value.get('fastq') is not None or value.get('bam') is not None or value.get('fragments') is not None or value.get('annotation') is not None or value.get('epizoo') is not None) and value['required_roles'] == []
                                                     else _role_requirements(value['required_roles'])),
-                                _input_roles(value['roles']), _leiden_argument(value.get('argument')),
+                                _input_roles(value['roles']),
                                 _scientific_arguments(value.get('arguments', [])), value.get('context', 'none'),
                                 declaration(value['fastq']) if 'fastq' in value else None,
                                 declaration(value['bam'], 'bam') if 'bam' in value else None,
@@ -1069,25 +1050,19 @@ def parse_decision(raw, *, utterance=None):
             value = dict(value, kind='answer', intent='scientific')
             kind = 'answer'
         elif kind == 'execute_plan':
-            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'argument', 'arguments', 'context', 'roles', 'input_results', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison', 'missing_parameters'}:
+            if {'kind', 'target'} <= set(value) <= {'kind', 'target', 'arguments', 'context', 'roles', 'input_results', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'visualization', 'comparison', 'missing_parameters'}:
                 if type(value['target']) is not str:
                     raise IntentError('invalid_decision')
                 if any(type(value[k]) is not list for k in ('input_results', 'references', 'delivery', 'retain_parameters', 'unfulfilled', 'missing_parameters') if k in value):
                     raise IntentError('invalid_decision')
-                return Execute('current', 'plan', value['target'], None,
-                               _leiden_argument(value.get('argument')),
+                return Execute(value['target'],
                                _scientific_arguments(value.get('arguments', [])),
                                value.get('context', 'none'), _input_roles(value.get('roles', [])),
                                tuple(value.get('references', [])), tuple(value.get('delivery', [])),
                                tuple(RetainedParameter(**item) for item in value.get('retain_parameters', [])),
                                tuple(value.get('unfulfilled', [])), value.get('visualization'), value.get('comparison'),
                                tuple(value.get('missing_parameters', [])), input_results=tuple(value.get('input_results', [])))
-            else:
-                _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
-                if value['operation'] != 'plan' or value['base'] != 'current' or value['delta'] is not None:
-                    raise IntentError('invalid_decision')
-            value = dict(value, kind='execute', operation='plan', base='current', delta=None)
-            kind = 'execute'
+            raise IntentError('invalid_decision')
         if kind == 'clarify':
             _shape(value, ('kind', 'reason') + (('choices',) if 'choices' in value else ()))
             if value['reason'] not in REASONS: raise IntentError('invalid_decision')
@@ -1107,24 +1082,12 @@ def parse_decision(raw, *, utterance=None):
                 return Answer('scientific', scientific=ScientificQuestion(target(value['target']),
                     None if value['comparison'] is None else target(value['comparison']), value['focus'],
                     value.get('detail'), value.get('visualization'), value.get('export')))
-            _shape(value, ('kind', 'intent', 'relation', 'technical'))
-            return Answer(value['intent'], value['relation'], value['technical'])
+            raise IntentError('invalid_decision')
         if kind == 'navigate':
             _shape(value, ('kind', 'relation'))
             if value['relation'] not in RELATIONS: raise IntentError('invalid_decision')
             return Navigate(value['relation'])
-        _shape(value, ('kind', 'base', 'operation', 'target', 'delta'))
-        if (kind != 'execute' or value['base'] not in RELATIONS
-                or type(value['target']) is not str or type(value['operation']) is not str
-                or value['operation'] != 'plan' and value['target'] not in ('selection', 'matrix')):
-            raise IntentError('invalid_decision')
-        delta = value['delta']
-        if delta is not None:
-            _shape(delta, ('parameter', 'operation', 'literal', 'evidence'))
-            if any(type(v) is not str for v in delta.values()) or delta['operation'] not in ('set', 'add', 'subtract'):
-                raise IntentError('invalid_decision')
-            delta = IntentDelta(**delta)
-        return Execute(value['base'], value['operation'], value['target'], delta)
+        raise IntentError('invalid_decision')
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         if isinstance(exc, IntentError): raise
         raise IntentError('invalid_decision') from exc
@@ -1178,7 +1141,6 @@ def decision_schema():
     definitions['export'] = _object(dict(measurement=text(), observations=array(ref('export_field'), 32),
                                         representations=array(ref('export_field'), 32)))
     definitions['retained'] = _object(dict(result=text(), argument=text()))
-    definitions['delta'] = _object(dict(parameter=text(), operation=enum(('set', 'add', 'subtract')), **quote))
     delivery = dict(input_results=array(text(), 32), references=array(text(), 32),
         delivery=array(enum(('explanation', 'comparison', 'visualization')), 3),
         unfulfilled=array(text(512), 8), visualization=optional(ref('visualization')),
@@ -1186,15 +1148,11 @@ def decision_schema():
     execution = dict(target=text(), arguments=declarations, roles=array(ref('role'), 8),
                      context=enum(('none', 'current')), **delivery)
     variants = [
-        _object(dict(kind=enum(('answer',)), intent=enum(i for i in ANSWER_INTENTS if i not in ('scientific', 'guidance')),
-                     relation=enum(RELATIONS), technical=dict(type='boolean'))),
         _object(dict(kind=enum(('clarify',)), reason=enum(PARAMETER_CLARIFICATION_REASONS),
                      choices=array(dict(text(256), pattern=r'^[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*$'), 8))),
         _object(dict(kind=enum(('clarify',)), reason=enum(r for r in REASONS if r not in PARAMETER_CLARIFICATION_REASONS),
                      choices=array(text(256), 0))),
         _object(dict(kind=enum(('navigate',)), relation=enum(RELATIONS))),
-        _object(dict(kind=enum(('execute',)), base=enum(RELATIONS), operation=text(),
-                     target=enum(('selection', 'matrix')), delta=optional(ref('delta')))),
         _object(dict(kind=enum(('answer_scientific',)), target=ref('target'), comparison=optional(ref('target')),
                      focus=enum(('question', 'continue')), detail=optional(ref('detail')),
                      visualization=optional(ref('visualization')), export=optional(ref('export')))),
@@ -1296,8 +1254,8 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'For explicit execution of an offered execution_candidate use execute_candidate with its exact candidate ID and an exact complete command clause from this utterance as evidence. Never translate an option into execute_plan or construct a workflow here.',
             'Resolve ordinal or named candidate references against the offered stable options and objective. Clarify ambiguous other/that references, stale references, conflicting subject/revision refinements, or missing execution intent. Interest or agreement alone is not execution authorization. Why/evidence questions remain answer_guidance.',
             'Current-turn refinements remain user planning intent, not edits to the original candidate. Keep its captured subjects/revision fixed; an additional comparison may refine the objective but must not silently replace its subject.',
-            'First distinguish discussing an existing scientific result from asking about workflow state or requesting new computation.',
-            'For what a result shows, means, establishes, why an assignment occurred, or what changed scientifically, choose answer_scientific. Operational selection/matrix/version answers only describe workflow state; they do not explain scientific results.',
+            'Distinguish read-only discussion of accepted work from a request for new computation.',
+            'Read-only questions about accepted results, methods, recorded parameters, versions, execution, reuse, provenance and verification use answer_scientific with exact accepted targets. The response owner reads their scientific evidence and Session/Revision/RunStore records; missing recorded values remain unknown.',
             'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
             *(['For a reusable H5AD composed only from existing accepted results, choose answer_scientific.export. Select measurement as the exact accepted result g whose original measurements are requested, an accepted matrix g, or an explicitly offered source.N. Select observations and representations individually with their exact accepted output g, field and intended destination name. Observation fields use the exact result:/source: names offered in that result group\'s export_fields or categorical.fields; representations select the exact obsm: field in that group\'s export_fields, describing its actual accepted embedding representation or X_umap. Select 1 to 32 fields in total; include only requested fields, never every retained result. Destinations must be distinct within each slot and must not overwrite existing original fields; clarify missing or ambiguous destination choices. No new output, arbitrary obsm field, recency choice or scientific computation is authorized. Exact source lineage and ordered cells remain required at the export owner; an eligible figure or equal cell counts do not qualify original measurements. When sources or fields are unresolved, clarify rather than substituting a result or creating a scientific plan. Inventory describes a preparation recipe; it does not mean downloadable bytes have already been prepared or delivered.'] if groups else []),
             'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values. evidence_from references the exact cooutput carrying identical available_fields, fields_omitted and subjects; all output handles retain their own identities.',
@@ -1324,10 +1282,9 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             *(['Use answer_scientific.detail section=categorical_fields to discover eligible field names; field=null and offset/limit page field names, independently of category-record pages. A named field can be requested by its exact source:/result: handle even beyond the displayed page: Agent resolves it against the actual authorized source. Copy the exact field name, never guess, rename or supply an HDF5 path. Clarify genuinely ambiguous field/source choices. The predecessor records a prior selected page.'] if any('categorical' in g for g in groups) else []),
             *(['Use section=category_counts for distributions. field belongs to target; to request independent distributions from two accepted results, select comparison and its exact other_field. These are separate cited statistics, requiring no attempted association. With other_field=null only the target distribution is requested. Use section=category_association only for a requested contingency table: other_field belongs to comparison when selected, otherwise target. Counts and association have category-record offset/limit. Missing correspondence limits association, not independent facts. Source observations are not biological ground truth; method questions need no categorical detail.'] if any('categorical' in g for g in groups) else []),
             'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',
-            'Operational answer intents: version, matrix, selection, thresholds, changes (originating revision versus parent), execution, reuse, comparison, provenance, verification. Use unsupported only outside the offered operational, scientific-result and guidance capabilities; missing empirical evidence does not make tool-applicability guidance unsupported.',
-            'Operational comparison needs parent, previous_active, or previous. Scientific comparison selects exact offered result handles, including explicitly identified historical versions or branches. history_complete=false means older results may be omitted from this bounded inventory; ask for navigation to an unavailable version, never substitute another result. Other answers normally use current.',
+            'Comparisons select exact offered accepted result handles, including explicitly identified historical versions or branches. history_complete=false means older results may be omitted from this bounded inventory; ask for navigation to an unavailable version, never substitute another result.',
             'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
-            'For a new scientific command outside the offered threshold operations use kind=execute_plan, target=one requested registered tool; the Planner composes the entire supported task across multiple operations, including repeated package tools. The Agent derives the plan operation on the current revision without a parameter delta. Never answer a computation request as if it was already computed.',
+            'For a new scientific command use kind=execute_plan, target=one requested registered tool; the Planner composes the entire supported task across multiple operations, including repeated package tools. Agent binds the plan to the captured scientific context. Never answer a computation request as if it was already computed.',
             *(['For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. input_results separately selects exact captured result_groups for new scientific computation. Its qualified planning_context ports may supply executable inputs independently of context. context=current supplies broad captured-current reuse only when no exact scientific inputs are selected. A presentation reference alone grants no scientific input selection. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.'] if groups else []),
             'execute_plan and request_roles retain requested downstream outcomes alongside scientific computation. Use delivery=explanation for requested scientific interpretation. An exact comparison selects comparison.left and comparison.right from captured g handles or new for one explicitly selected planned result. Selecting the same result twice, including new/new, requires two distinct exact fields such as result:leiden and source:cell_type. detail=null requests recorded summary/method comparison of distinct results; category_counts requests independent distributions with exact field and other_field, while category_association requests a source-qualified contingency table. Use existing detail offset/limit bounds. Missing correspondence limits association, not independent facts. Precise comparison and visualization operands already declare those delivery intentions; redundant flags or references are unnecessary. Coarse flags without exact operands do not establish completed outcomes. Original-versus-candidate comparisons that are intrinsic outputs of a scientific tool are its result facts: request explanation for their interpretation, not a separate comparison with missing operands. Native tool figures may use delivery visualization with visualization=null. Do not invent Registry tools or promise fulfillment. A visualization requiring new scientific calculation must still be planned as science. Preserve the same precise operands in request_roles when files or declarations are missing.',
             'For representative marker activity on accepted UMAP, use answer_scientific with visualization={kind:marker_activity_umap,coordinates:g,activity:g}, selecting the exact accepted UMAP and native annotate_scATAC_cell_types result. It reads saved per-cell MAESTRO RP and native marker evidence, aligns exact cell identities within the qualified original source, and plots log1p(raw RP) without additional normalization. RP is accessibility-derived activity, not measured RNA expression or independent validation. No UMAP refit, marker testing or reannotation is needed; unavailable or unrelated sources cannot supply this figure.',
@@ -1360,15 +1317,10 @@ def interpret(model, utterance, public, *, diagnostic_context=None):
             'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',
             'Scientific comparison uses two explicit targets; do not infer correspondence between clusters from different results. Ambiguous other/previous requires clarification.',
             'A biggest/most important difference needs an explicit comparison dimension or reviewed criterion. Clarify when it is missing; do not invent a ranking. New markers, significance tests or reannotation require scientific execution, not interpretation.',
-            'technical=true only for an explicit request for technical provenance, IDs or hashes.',
-            'Select only offered operation, parameter and revision relations. Never emit internal IDs.',
-            'For one parameter change, quote the exact complete user command clause as evidence and its numeric literal verbatim.',
-            'set requires assignment; add requires increase by; subtract requires decrease by. Never invent an amount.',
+            'Questions about parameters, methods, versions, changes, execution, reuse, provenance or verification use answer_scientific with exact offered accepted targets, irrespective of the tool or question vocabulary. General advice and questions without accepted results use answer_guidance. Unsupported computation uses clarify/unsupported_intent. Never route scientific questions through historical workflow roles.',
             'Stricter without an amount requires missing_parameter_value. Ambiguous thresholds require ambiguous_parameter.',
             'Previous is ambiguous when parent and previous-active differ. Do not choose one silently.',
             'Use relation previous for earlier/previous version or go back one version; parent requires the word parent.',
-            'Default parameter changes to selection only. Matrix requires an explicit rebuild request.',
-            'Keep selection and rebuild matrix uses delta=null and target=matrix.',
         ] + ([
             'dialogue.planning_context offers opaque, recorded owner-qualified artifacts from the captured current Revision, not present-day integrity or unrestricted memory. Only scientific execution revalidates their authority and bytes.',
             'For execute_plan choose context=current only when the requested new computation explicitly uses or modifies that captured analysis. The Planner selects exact compatible offered artifacts; clarify an unresolved historical subject rather than choosing the first item.',
@@ -1587,13 +1539,6 @@ def admit_scientific_argument(declaration, utterance, argument_spec, *, observat
     return value
 
 
-def admit_leiden_resolution(declaration, utterance, argument_spec):
-    """Keep the historical narrow admission surface on the shared binder."""
-    if not isinstance(declaration, LeidenResolution):
-        raise IntentError('invalid_decision')
-    return admit_scientific_argument(declaration, utterance, argument_spec)
-
-
 def clauses(utterance):
     if re.search(r"\b(?:not|never|don['’]t|if|unless|maybe|instead|rather|except)\b", utterance, re.I):
         raise IntentError('unsupported_intent')
@@ -1619,40 +1564,3 @@ def resolve_relation(relation, snapshot, utterance):
         return candidates.pop()
     if relation not in mapping: raise IntentError('unavailable_context')
     return mapping[relation]
-
-
-def admit_delta(delta, utterance, offered, argument_specs, focus=None):
-    if delta.parameter not in offered: raise IntentError('ambiguous_parameter')
-    segments = clauses(utterance)
-    if delta.evidence not in segments or segments.count(delta.evidence) != 1:
-        raise IntentError('ungrounded_operand')
-    number = r'[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]+|/[1-9][0-9]*)?'
-    match = re.fullmatch(r'(set|try|increase|decrease)\s+(.+?)\s*(to|by|=)\s*(' + number + r')', delta.evidence, re.I)
-    if match is None: raise IntentError('missing_parameter_value')
-    verb, label, connector, literal = match.groups()
-    operation = {'set':'set', 'try':'set', 'increase':'add', 'decrease':'subtract'}[verb.lower()]
-    if (operation != delta.operation or literal != delta.literal or len(literal) > 80
-            or connector.lower() not in (('to','=') if operation == 'set' else ('by',))):
-        raise IntentError('ungrounded_operand')
-    label = re.sub(r'\s+', ' ', label.lower().replace('_', ' ')).removeprefix('the ')
-    if label == 'it':
-        if focus != delta.parameter: raise IntentError('ambiguous_parameter')
-    elif label not in ALIASES.get(delta.parameter, ()):
-        raise IntentError('ambiguous_parameter')
-    operand = Fraction(literal)
-    if operation != 'set' and operand < 0: raise IntentError('ungrounded_operand')
-    spec = argument_specs[delta.parameter]
-    current = offered[delta.parameter]
-    if operation != 'set' and current is None: raise IntentError('invalid_parameter_value')
-    value = operand if operation == 'set' else Fraction(current) + (operand if operation == 'add' else -operand)
-    # Numeric representation follows admitted ArgumentSpec types; its owner
-    # remains responsible for integer/rational bounds and optional semantics.
-    if value.denominator == 1:
-        result = value.numerator
-    elif str in spec.accepted_types:
-        result = f'{value.numerator}/{value.denominator}'
-    else:
-        raise IntentError('invalid_parameter_value')
-    try: spec.validate(delta.parameter, result)
-    except ValueError as exc: raise IntentError('invalid_parameter_value') from exc
-    return result

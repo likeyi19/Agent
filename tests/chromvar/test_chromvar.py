@@ -156,13 +156,10 @@ def test_task_genome_uses_private_index_and_exact_contigs(tmp_path,monkeypatch):
 
 def test_named_clarification_uses_existing_contract_and_plain_scientific_wording():
     from agent.application.turn_decisions import parse_decision,Clarify,IntentError
-    from agent.application.responses import clarification_text
     names=['compute_motif_accessibility.matrix_semantics','compute_motif_accessibility.coordinate_system']
     raw=json.dumps(dict(turn_schema_version=1,decision=dict(kind='clarify',reason='missing_parameter_value',choices=names)))
     value=parse_decision(raw)
     assert value==Clarify('missing_parameter_value',tuple(names),True)
-    text=clarification_text(value)
-    assert 'cut-site' in text and 'zero-based half-open' in text and owner.TOOL not in text
     old=json.dumps(dict(turn_schema_version=1,decision=dict(kind='clarify',reason='missing_parameter_value')))
     assert parse_decision(old)==Clarify('missing_parameter_value',(),True)
     with pytest.raises(IntentError):parse_decision(raw.replace('compute_motif_accessibility.matrix_semantics','/untrusted/path'))

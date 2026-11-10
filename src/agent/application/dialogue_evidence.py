@@ -472,8 +472,8 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
             or admitted.get('request_id') != run.request_id):
         return ()
-    from .dialogue_execution import _argument_fields, _parameter_input, _check_parameter_plan
-    from .turn_decisions import _scientific_arguments, admit_scientific_argument
+    from .dialogue_execution import _argument_fields, _parameter_input, _check_parameter_plan, _bind_arguments
+    from .turn_decisions import _scientific_arguments, ExplicitArgument
     from agent.orchestration.native_parameters import declaration_input
     indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
     linked, current = [], interaction
@@ -494,6 +494,8 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
         current = parent
     linked.reverse()
     declarations = {}
+    structured = False
+    scope_origins = []
     try:
         for current in linked:
             record = current.admitted or {}
@@ -501,26 +503,38 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
             arguments += list(record.get('arguments', ()))
             arguments = _scientific_arguments(_serialize(arguments))
             fields = _argument_fields(sessions._application.registry, current, declarations=arguments)
+            source = current
+            while (source.admitted or {}).get('scope_selection') is not None:
+                source = _one([i for i in state.interactions if i.turn_id == source.admitted['scope_selection']])
+                if source not in scope_origins:
+                    scope_origins.append(source)
+            values = _bind_arguments(sessions._application.registry, source.utterance,
+                _serialize(record.get('inputs', {})), arguments, field_choices=fields, historical=True)
+            if values != _serialize(record.get('inputs', {})):
+                raise ValueError('Declarations differ from their admitted binding.')
             for declaration in arguments:
-                name, specification = _parameter_input(sessions._application.registry,
-                    declaration.tool, declaration.argument)
+                name, _ = _parameter_input(sessions._application.registry, declaration.tool, declaration.argument)
                 name = declaration_input(sessions._application.registry, declaration, name)
-                argument = admit_scientific_argument(declaration, current.utterance, specification,
-                    observation_fields=fields.get((declaration.tool, declaration.argument)))
-                if (name not in record.get('inputs', {})
-                        or _bytes(record['inputs'][name]) != _bytes(argument)):
-                    raise ValueError('Declaration differs from its admitted binding.')
+                typed = _serialize(vars(declaration)) if isinstance(declaration, ExplicitArgument) else None
+                structured = structured or typed is not None
                 declarations[declaration.tool, declaration.argument,
-                    getattr(declaration, 'native_function', None)] = (name, argument)
+                    getattr(declaration, 'native_function', None), getattr(declaration, 'step_id', None),
+                    getattr(declaration, 'source', None)] = (name, values[name], typed)
         # Share the admission owner: exact source-scoped consumers, no second
         # single-instance interpretation during accepted-evidence presentation.
         consumers = _check_parameter_plan(sessions._application.registry, run.plan, admitted, state.interactions)
         names = {}
-        for (tool, argument_name, function), (input_name, argument) in declarations.items():
+        for (tool, argument_name, function, _, _), (input_name, argument, typed) in declarations.items():
             if tool != step.tool_name or (step.step_id, argument_name) not in consumers:
                 continue
             if function is not None and planned.arguments.get('function_name') != function:
                 continue
+            if typed is not None:
+                from .structured_parameters import matches
+                if step.step_id in {candidate.step_id for candidate in matches(run.plan, typed,
+                        sessions._application.registry, admitted)}:
+                    names[argument_name] = 'explicit_user_instruction'
+                continue  # The shared plan check above already verified exact typed values.
             if (input_name not in admitted.get('inputs', {})
                     or _bytes(admitted['inputs'][input_name]) != _bytes(argument)
                     or argument_name not in planned.arguments
@@ -535,12 +549,15 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
         return ()
     # Presentation/status completion does not change an admitted declaration.
     # Pin only the immutable received text, admitted binding and captured scope.
+    captured = linked + [i for i in scope_origins if i not in linked]
     records = {'interactions': [dict(turn_id=i.turn_id, utterance=i.utterance,
         base_revision_id=i.base_revision_id, base_generation=i.base_generation,
-        admitted=_serialize(i.admitted)) for i in linked]}
+        admitted=_serialize(i.admitted), **({} if not structured else dict(
+            structured_submission={k: _serialize(i.submission[k]) for k in ('parameter_overrides', 'clarification_choice')
+                                   if k in (i.submission or {})}))) for i in captured]}
     return (EvidenceFact('explicit_user_parameters', 'available',
         dict(tool=step.tool_name, step_id=step.step_id, parameters=names), '/interactions',
-        reason='accepted_utterance_bound_session_declarations',
+        reason='accepted_structured_session_declarations' if structured else 'accepted_utterance_bound_session_declarations',
         artifact_sha256=digest(records), artifact_name='accepted_session_interactions'),)
 
 
@@ -826,11 +843,26 @@ def annotation_field_semantics(field):
     }.get(field)
 
 
+# Recorded method/settings fields in the reviewed accepted projections. These
+# support descriptive comparison, never common cells or biological equivalence.
+METHOD_FIELDS = frozenset(('parameters', 'function_name', 'software_versions',
+    'method', 'representation', 'embedding_dim', 'embedding_dtype', 'device',
+    'species', 'target_model_method', 'target_assembly', 'target_matrix_semantics',
+    'n_neighbors', 'metric', 'neighbors_method', 'transformer', 'random_seed',
+    'resolution', 'algorithm', 'clustering_parameters.resolution',
+    'clustering_parameters.random_seed', 'clustering_resolution_origin',
+    'min_dist', 'spread', 'n_components', 'coordinate_dtype', 'clustering_present'))
+
+
 def field_semantics(registry, tool, field):
     """Shared reviewed meanings for R5 and interactive evidence; no new facts."""
     from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
     spec = registry.accepted(tool)
     semantics = {}
+    if field in METHOD_FIELDS:
+        semantics.update(kind='recorded_method_configuration',
+            description_source='accepted_method_record',
+            description='Recorded method, configuration or output representation of this exact accepted step. Compare settings descriptively with attribution; this does not establish common cells, comparable biological measurements or equivalence. Omitted historical values remain unknown; current installed defaults are not evidence.')
     if tool in ('adapt_epizoo_species', 'posttrain_epizoo_model') and field in (
             'model_state', 'strategy', 'transfer_assessment', 'training_configuration'):
         semantics.update(kind='scientific_method', description_source='reviewed_model_lifecycle',

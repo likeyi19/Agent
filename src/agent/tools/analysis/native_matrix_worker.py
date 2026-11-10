@@ -172,5 +172,47 @@ def main(request_path):
     return 0
 
 
+def parameter_metadata(package, name):
+    """Signature/default introspection only; never loads researcher data."""
+    import importlib
+    fn = importlib.import_module(package)
+    for component in name.split('.'):
+        fn = getattr(fn, component)
+    metadata = {}
+    import typing
+    try:
+        annotations = typing.get_type_hints(fn)
+    except (NameError, TypeError, AttributeError):
+        annotations = {}
+    for key, parameter in inspect.signature(fn).parameters.items():
+        item = {}
+        annotation = annotations.get(key, parameter.annotation)
+        if isinstance(annotation, str):
+            if annotation in ('bool', 'int', 'float', 'str'):
+                item['types'] = [annotation]
+            # Native forward annotations may be Literal strings. Resolve only
+            # the installed package's own type annotations, never user code.
+        else:
+            if typing.get_origin(annotation) is typing.Literal:
+                item['choices'] = list(typing.get_args(annotation))
+            if annotation in (bool, int, float, str):
+                item['types'] = [annotation.__name__]
+        default = parameter.default
+        if default is not inspect.Parameter.empty:
+            try:
+                serialized = json.loads(json.dumps(default, allow_nan=False))
+            except (TypeError, ValueError):
+                pass
+            else:
+                item['default_when_omitted'] = serialized
+                if 'types' not in item and type(default) in (bool, int, float, str):
+                    item['types'] = [type(default).__name__]
+        metadata[key] = item
+    return metadata
+
+
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1]))
+    if sys.argv[1] == '--parameters':
+        print(json.dumps(parameter_metadata(sys.argv[2], sys.argv[3])))
+    else:
+        sys.exit(main(sys.argv[1]))

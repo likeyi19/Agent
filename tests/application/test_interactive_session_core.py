@@ -57,8 +57,6 @@ def test_empty_first_request_uses_interpreter_planner_compiler_and_runtime(tmp_p
 @pytest.mark.parametrize('decision,expected', [
     (dict(kind='clarify', reason='missing_parameter_value'), 'missing_parameter_value'),
     (dict(kind='navigate', relation='current'), 'unavailable_context'),
-    (dict(kind='execute', base='current', operation='op.0', target='selection', delta=None), 'unavailable_context'),
-    (dict(kind='answer', intent='version', relation='current', technical=False), 'unavailable_context'),
     (dict(kind='answer_scientific', target=dict(output='@focus', subject=None), comparison=None, focus='question'), 'unavailable_context'),
 ])
 def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, decision, expected):
@@ -81,8 +79,8 @@ def test_empty_nonexecuting_context_is_persisted_without_revision(tmp_path, deci
     assert state.generation == 0 and state.active_revision_id is None and not state.revisions
     assert not state.turns and state.interactions[0].status == interaction_status
     assert not list(application.run_store.root.glob('*.json'))
-    assert state.interactions[0].base_revision_id is None and len(model.calls) == 1
-    assert model.calls[0]['bases'] == {} and model.calls[0]['dialogue']['outputs'] == []
+    assert state.interactions[0].base_revision_id is None and sum('turn_schema_version' in c for c in model.calls) == 1
+    assert model.calls[0]['relations'] == ['current'] and model.calls[0]['dialogue']['outputs'] == []
     assert 'inspect_scATAC' in model.calls[0]['dialogue']['capabilities']
 
 
@@ -100,17 +98,17 @@ def test_empty_guidance_uses_supported_advice_without_creating_scientific_state(
     assert state.generation == 0 and state.active_revision_id is None
     assert not state.turns and not state.revisions and not list(application.run_store.root.glob('*.json'))
     assert state.interactions[0].status == 'answered' and state.interactions[0].base_revision_id is None
-    assert len(model.calls) == 2 and model.calls[0]['bases'] == {}
+    assert len(model.calls) == 2 and model.calls[0]['relations'] == ['current']
     assert model.calls[0]['dialogue']['outputs'] == []
 
 
-def test_empty_unsupported_answer_and_exact_presentation_survive_process(tmp_path):
+def test_empty_clarification_and_exact_presentation_survive_process(tmp_path):
     application = ResearchAgentApplication(tmp_path / 'workspace')
     application.sessions.create('empty')
-    model = Model(dict(kind='answer', intent='unsupported', relation='current', technical=False))
+    model = Model(dict(kind='clarify', reason='unsupported_intent'))
     outcome = application.sessions.respond('empty', 'first', 'Hello.', interpreter=model,
         expected_generation=0, submission={'profile_id': 'offered', 'inputs': {}})
-    assert (outcome.kind, outcome.status) == ('answer', 'unsupported')
+    assert (outcome.kind, outcome.status) == ('clarify', 'clarification')
     view = presentation(outcome)
     view['text'] = outcome.text + ' Exactly displayed Unicode: λ.'
     application.sessions.store_presentation('empty', 'first', view)
@@ -128,7 +126,7 @@ print(json.dumps(_serialize(state.interactions[0].presentation), ensure_ascii=Fa
     result = subprocess.run([sys.executable, '-B', '-c', script, str(application.workspace_root)],
                             env=os.environ.copy(), capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == view and len(model.calls) == 1
+    assert json.loads(result.stdout) == view and sum('turn_schema_version' in c for c in model.calls) == 1
 
 
 def test_submission_capture_is_immutable_and_not_visible_to_interpreter(tmp_path):
@@ -145,7 +143,7 @@ def test_submission_capture_is_immutable_and_not_visible_to_interpreter(tmp_path
         state.interactions[0].submission['profile_id'] = 'other'
     with pytest.raises(SessionConflictError, match='submission'):
         application.sessions.respond('empty', 'first', 'Start.', interpreter=model, submission=submission)
-    assert len(model.calls) == 1
+    assert sum('turn_schema_version' in c for c in model.calls) == 1
     with pytest.raises(SessionConflictError, match='Captured interaction'):
         application.sessions._store._update('empty', lambda current: replace(current,
             interactions=(replace(current.interactions[0], submission={'profile_id': 'changed'}),)))

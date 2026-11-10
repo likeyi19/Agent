@@ -76,3 +76,45 @@ def declaration_input(registry, declaration, ordinary):
                for source in port.request_sources):
         raise ValueError('Native function scope requires a registered scalar port')
     return name
+
+
+def bind_structured_parameters(selected, settings, registry, request_inputs):
+    """Bind captured scalar values before selected-method input preparation.
+
+    This edits arguments of already selected operations, never selects operations.
+    Repeated unresolved consumers defer materialization to the application's
+    existing captured-plan scope choice; they grant no execution authority.
+    """
+    bound = {step: (tool, dict(arguments)) for step, (tool, arguments) in selected.items()}
+    applied, ambiguous = {}, False
+    for row in settings:
+        candidates = [step for step, (tool, arguments) in bound.items() if tool == row['tool']
+            and (row.get('native_function') is None or arguments.get('function_name') == row['native_function']
+                 or row['argument'] == 'function_name')
+            and (row.get('step_id') is None or step == row['step_id'])]
+        if len(candidates) != 1:
+            ambiguous = ambiguous or bool(candidates)
+            continue
+        step = candidates[0]
+        tool_name, arguments = bound[step]
+        tool = registry.get(tool_name)
+        name = row['argument']
+        spec = {**tool.required_arguments, **tool.optional_arguments}[name]
+        if not spec.planning.scientific_parameter or not any(
+                len(port.members) == 1 and port.members[0].field_name == name
+                for port in tool.semantic_planning.consumer_ports):
+            raise ValueError('Structured values require a registered scalar port.')
+        from agent.schemas.orchestration import _serialize
+        value = _serialize(row['value'])
+        if name == 'kwargs':
+            value = {**_serialize(arguments.get(name, {})), **value}
+            for key in value:
+                scalar = tool.optional_arguments.get(key)
+                explicit = key in request_inputs or input_name(tool_name, row.get('native_function') or '', key) in request_inputs
+                if (scalar and scalar.planning and scalar.planning.planner_choice and not explicit
+                        and key in arguments and arguments[key] != value[key]):
+                    arguments.pop(key)
+        spec.validate(name, value)
+        arguments[name] = value
+        applied.setdefault(step, set()).add(name)
+    return bound, applied, ambiguous

@@ -39,7 +39,6 @@ def test_strict_union_retains_closed_intent_and_delivery_forms():
 
 @pytest.mark.parametrize('tag,decision', [
     ('answer_scientific', dict(kind='answer',intent='scientific',target=dict(output='r0',subject='7'),comparison=None,focus='question')),
-    ('execute_plan', dict(kind='execute',base='current',operation='plan',target='inspect_scATAC',delta=None)),
 ])
 def test_wire_tags_preserve_existing_decisions_and_closed_validation(tag, decision):
     def parse(d):
@@ -96,7 +95,7 @@ def test_minimal_wire_does_not_bypass_semantic_admission(app, monkeypatch, wire,
     model = Model(wire)
     result = ask(forbid_work(app,monkeypatch),'invalid',utterance,model)
     assert result.status == 'failed'
-    assert len(model.calls) == 1
+    assert sum('turn_schema_version' in c for c in model.calls) == 1
 
 
 def test_minimal_execution_cannot_handoff_guidance_candidate(app, monkeypatch):

@@ -18,6 +18,14 @@
         <div class="model-controls">
           <label for="recent-sessions">Recent conversations · this browser</label>
           <select id="recent-sessions"><option value="">Open a conversation…</option></select>
+          <details class="conversation-navigation"><summary>Open by ID</summary>        <form id="reopen-form" class="reopen-form">
+          <label for="session-input">Reopen session ID</label>
+          <div class="inline-fields">
+            <input id="session-input" name="session_id" autocomplete="off" maxlength="256" placeholder="Enter a known session ID" required>
+            <button id="reopen-session" type="submit">Reopen</button>
+          </div>
+        </form>
+</details>
         </div>
         <div class="model-controls">
           <label for="model-choice">Conversation model</label>
@@ -26,39 +34,6 @@
         <button id="new-session" type="button" class="secondary">New conversation</button>
       </div>
     </header>
-
-    <details id="advanced-controls" class="advanced-controls">
-      <summary>Session settings <span id="connection-state" class="connection-state" role="status">Connecting…</span></summary>
-    <section class="controls" aria-label="Session and model controls">
-      <div class="session-controls">
-        <p id="session-context" class="muted small">No session open</p>
-        <form id="reopen-form" class="reopen-form">
-          <label for="session-input">Reopen session ID</label>
-          <div class="inline-fields">
-            <input id="session-input" name="session_id" autocomplete="off" maxlength="256" placeholder="Enter a known session ID" required>
-            <button id="reopen-session" type="submit">Reopen</button>
-          </div>
-        </form>
-        <details id="session-identities" class="identity-details">
-          <summary>Session details</summary>
-          <dl class="session-summary">
-            <dt>Current session</dt><dd id="current-session">No session open</dd>
-            <dt>Generation</dt><dd id="current-generation">—</dd>
-            <dt>Active revision</dt><dd id="current-revision">—</dd>
-          </dl>
-        </details>
-      </div>
-      <details id="shared-reference-controls">
-        <summary>Reusable references</summary>
-        <p class="muted small">Uploaded references stay private. Share only references you intend others in this laboratory to use for future analyses. Experimental datasets are never added to the shared library.</p>
-        <div id="private-reference-choices"></div>
-      </details>
-      <div class="model-diagnostics">
-        <h2>Configured model</h2>
-        <p id="model-description" class="muted small"></p>
-      </div>
-    </section>
-    </details>
 
     <p id="client-error" class="error-banner" role="alert" hidden></p>
 
@@ -76,58 +51,30 @@
           <select id="result-choice" disabled><option>No results yet</option></select>
         </div>
       </div>
-      <div id="result-update" class="result-update" role="status" hidden>
-        <span id="result-update-text"></span>
-        <button id="view-current-result" class="secondary" type="button">View current result</button>
-      </div>
       <p id="scientific-empty" class="muted small">Your accepted results will appear here. Start with a question or attach data in the conversation.</p>
       <div id="revision-view" hidden>
         <p id="result-heading" class="result-heading"></p>
         <section id="result-panel" aria-labelledby="result-panel-heading">
           <h3 id="result-panel-heading">Scientific summary</h3>
-          <div class="summary-choice">
-            <label for="result-selection">Result</label>
-            <select id="result-selection"></select>
-          </div>
         </section>
         <div id="result-facts" aria-live="polite"></div>
         <div id="result-figures"></div>
         <div id="artifact-viewer" hidden>
           <h3 id="artifact-title"></h3>
-          <p id="report-description" class="muted small" hidden>Execution and verification details from the accepted evidence. This privacy-safe text is not a biological interpretation; the scientific summary and limitations are shown separately.</p>
-          <details id="technical-report-record" hidden>
-            <summary>Full execution &amp; verification record</summary>
-            <pre id="report-content" class="report-content" hidden></pre>
-          </details>
           <p id="figure-description" class="muted small" hidden></p>
           <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
           <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
         </div>
         <details id="artifact-panel" open>
-          <summary>Results &amp; downloads</summary>
+          <summary>Downloads</summary>
           <ul id="artifact-inventory" class="compact-list"></ul>
-          <p class="muted small">Privacy-safe exports may differ from source size. Accepted source files remain unchanged.</p>
         </details>
-        <section id="result-limitations-panel" aria-labelledby="limitations-heading" hidden>
-          <h3 id="limitations-heading">Interpretation &amp; limitations</h3>
-          <div id="result-limitations"></div>
-        </section>
-        <section id="native-results-panel" aria-labelledby="native-results-heading">
-          <h3 id="native-results-heading">Native execution details &amp; provenance</h3>
-          <div id="native-results"></div>
-        </section>
         <details id="result-methods">
-          <summary>Methods &amp; execution details</summary>
-          <p id="result-origin" class="muted small"></p>
-          <p id="result-presentation" class="message-text small"></p>
-          <h3>Analysis steps</h3>
+          <summary>Methods &amp; parameters</summary>
           <ul id="result-operations" class="compact-list"></ul>
-          <h3>Accepted outputs</h3>
-          <p id="result-output-summary" class="muted small"></p>
-          <ul id="revision-outputs" class="compact-list"></ul>
-        </details>
+          <div id="native-results"></div>
         <details id="evidence-panel">
-          <summary>Evidence &amp; provenance</summary>
+          <summary>Detailed scientific evidence</summary>
           <button id="load-evidence" class="secondary" type="button">Show evidence</button>
           <label for="evidence-output">Accepted field (details)</label>
           <select id="evidence-output"></select>
@@ -152,32 +99,14 @@
           </form>
           <div id="detail-content"></div>
         </details>
-        <div class="result-continuation">
-          <h3>Work with this result</h3>
-          <p id="result-context-help" class="muted small"></p>
-          <div class="revision-actions">
-            <button id="activate-revision" class="secondary" type="button">Make current</button>
-            <button id="continue-revision" type="button">Continue from this result</button>
-          </div>
-          <p class="muted small">Make current changes the context for your next question. Continue also opens a draft for your next request; nothing runs until you send it. Ask in chat to compare results.</p>
-        </div>
-        <details id="revision-identities" class="identity-details">
-          <summary>Revision details</summary>
-          <p class="small">Viewing <strong id="viewed-revision"></strong></p>
-          <dl id="revision-summary" class="revision-summary"></dl>
         </details>
       </div>
-      <details id="revision-history-panel">
-        <summary>Result history &amp; branches</summary>
-        <ol id="revision-history" class="revision-history"></ol>
-      </details>
     </aside>
     </section>
     <section id="conversation-panel" class="conversation-workspace" aria-label="Conversation and message composer">
     <section class="conversation panel" aria-labelledby="conversation-heading">
       <div class="section-heading">
         <h2 id="conversation-heading">Conversation</h2>
-        <button id="show-current-result" class="secondary" type="button" hidden>Results &amp; downloads</button>
         <button id="history-notice" class="secondary small" type="button" hidden>Load earlier messages</button>
       </div>
       <div id="conversation-history" role="log" aria-label="Conversation messages" tabindex="0" aria-live="polite" aria-relevant="additions text">
@@ -196,13 +125,6 @@
         <ol id="selected-scientific-inputs" class="selected-scientific-inputs" aria-label="Selected input order" hidden></ol>
         <label for="utterance" class="visually-hidden">Ask Agent</label>
         <textarea id="utterance" name="utterance" rows="3" maxlength="4096" placeholder="Describe an analysis, ask about a result, or answer Agent’s question…" aria-describedby="composer-help" required disabled></textarea>
-        <input id="chat-files" type="file" multiple hidden aria-label="Attach scientific files">
-        <ul id="chat-attachments" class="chat-attachments" aria-label="Message attachments" aria-live="polite"></ul>
-        <p id="chat-attachment-status" class="muted small" role="status"></p>
-        <p class="muted small">Generate synthetic regulatory DNA by naming K562, GM12878, HepG2 or hESCT0 and a candidate count; no upload is needed. For human DNase sequence prediction, attach FASTA or BED with its genome assembly, or paste one DNA sequence. Attach an H5AD for cell analysis, or scATAC FASTQ/BAM files for preprocessing with the required library information and references. Cell Ranger .h5 matrices need conversion with scientific software, preserving cells × features, counts and identifiers; renaming the extension is not a conversion.</p>
-
-        <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
-        <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
         <div class="composer-actions">
           <div class="input-actions">
             <button id="attach-chat-files" class="secondary" type="button" disabled>Attach files</button>
@@ -213,15 +135,25 @@
             <button id="submit-turn" type="submit" disabled>Send</button>
           </div>
         </div>
-        <details id="attachment-panel" class="composer-disclosure">
-          <summary>Advanced inputs</summary>
-          <p class="muted small">Usually, attach files and describe your task above. These controls support explicitly configured inputs and declared library uploads.</p>
+        <input id="chat-files" type="file" multiple hidden aria-label="Attach scientific files">
+        <ul id="chat-attachments" class="chat-attachments" aria-label="Message attachments" aria-live="polite"></ul>
+        <p id="chat-attachment-status" class="muted small" role="status"></p>
+
+        <details id="request-results-panel" class="composer-disclosure" hidden>
+          <summary>Use accepted results as inputs</summary>
+          <p class="muted small">Select the accepted results needed for this request. Then describe your task.</p>
+          <div id="request-result-choices"></div>
+        </details>
+        <dialog id="attachment-dialog" aria-labelledby="attachment-heading">
+          <div class="section-heading"><h2 id="attachment-heading">Attach data</h2><button id="close-attachments" type="button" class="secondary">Done</button></div>
+          <button id="browse-chat-files" type="button">Choose files</button>
+
         <div class="attachment-controls" aria-label="Scientific attachment">
-          <h3>Upload a new file</h3>
-          <label for="upload-type">Scientific file type</label>
+          <label for="upload-type">Input declaration</label>
           <select id="upload-type" disabled>
             <option value="fasta">Reference genome FASTA (pending task)</option>
-            <option value="h5ad" selected>H5AD matrix</option>
+            <option value="attachment" selected>Files for this request</option>
+            <option value="h5ad">H5AD matrix</option>
             <option value="groups">Cell grouping TSV (cell_id, group)</option>
             <option value="external_fragments">External fragments</option>
             <option value="bam">scATAC-seq BAM</option>
@@ -239,13 +171,12 @@
             <p class="muted small">Declare each file's role and encoding before uploading. Filenames do not assign roles. Upload every required role for each lane/chunk; optional I1 is supported. To replace a registered file, declare a new library name.</p>
           </div>
           <div class="attachment-upload">
-            <div class="attachment-file">
-              <label id="upload-file-label" for="upload-file">Attach an H5AD file</label>
-              <input id="upload-file" type="file" accept=".h5ad" disabled aria-describedby="upload-status">
-            </div>
+            <p id="upload-file-label" class="muted small"></p>
             <button id="upload-file-button" class="secondary" type="button" disabled>Upload</button>
             <button id="clear-upload" class="secondary" type="button" hidden>Remove file</button>
           </div>
+        <progress id="upload-progress" max="100" value="0" aria-label="File transfer progress" hidden></progress>
+        <p id="upload-status" class="muted small" role="status" aria-live="polite">Loading uploaded inputs…</p>
           <div id="upload-index-fields" class="attachment-upload" hidden>
             <div class="attachment-file">
               <label for="upload-index">Paired TBI index (optional)</label>
@@ -271,7 +202,11 @@
             <p class="muted small">Select inputs in order, then describe their roles in your message. Select up to 8 H5AD or exact grouping TSV files. Selecting inputs does not start an analysis.</p>
           </div>
         </div>
-        </details>
+      <details id="shared-reference-controls">
+        <summary>Reusable references</summary>
+        <p class="muted small">Uploaded references stay private. Share only references you intend others in this laboratory to use for future analyses. Experimental datasets are never added to the shared library.</p>
+        <div id="private-reference-choices"></div>
+      </details>
         <details id="scientific-input-settings" class="composer-disclosure" hidden>
           <summary>Configured scientific resources</summary>
           <div id="configured-input-controls">
@@ -284,6 +219,7 @@
             <select id="epizoo-resource-choice" disabled><option value="">Use applicable configured default</option></select>
           </div>
         </details>
+        </dialog>
         <p class="muted small saved-note"><span id="composer-help">Enter for a new line · Ctrl / ⌘ + Enter to send</span></p>
       </form>
     </section>
@@ -292,5 +228,14 @@
 
     </div>
   </main>
+<dialog id="parameter-dialog" aria-labelledby="parameter-heading">
+  <form id="parameter-form">
+    <div class="section-heading"><h2 id="parameter-heading">Adjust parameters</h2><button id="cancel-parameters" type="button" class="secondary">Cancel</button></div>
+    <p id="parameter-context" class="muted small"></p>
+    <div id="parameter-steps"></div>
+    <p id="parameter-error" role="alert"></p>
+    <button id="run-parameters" type="submit">Run with changes</button>
+  </form>
+</dialog>
 </body>
 </html>

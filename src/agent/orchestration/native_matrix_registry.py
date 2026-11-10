@@ -135,7 +135,7 @@ def tool_spec(owner):
         'Use optional native reference ports only for the function that consumes them. '
     ) if owner.package == 'snapatac2' else 'No genome is required for these matrix functions. '
     notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
-    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication/file; null outputs are unavailable for this function.', bindable=True, artifact=A.RAW_SCATAC)

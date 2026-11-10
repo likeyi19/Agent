@@ -20,6 +20,14 @@ ROLE = dict(tool='inspect_scATAC', port='dataset', source='source.0')
 class RoleModel(ScriptedModel):
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
+        if value.get('focus') == 'outcome':
+            self.calls.append(value)
+            return json.dumps(dict(support='supported', paragraphs=[dict(kind='limitation',
+                text='Please provide the requested scientific inputs.', citations=[], comparisons=[])]))
+        if 'grounding_review_version' in value and value['evidence'].get('scope') == 'recorded_interaction_outcome':
+            self.calls.append(value)
+            return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed', independent=True)
+                for p in value['paragraphs']}))
         if 'turn_schema_version' in value:
             self.calls.append(value)
             if value['utterance'] == OBJECTIVE:
@@ -65,14 +73,14 @@ def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_
                     and value['utterance'] == OBJECTIVE):
                 self.calls.append(value)
                 return json.dumps(dict(turn_schema_version=1, decision=dict(
-                    kind='execute_plan', target='inspect_scATAC', argument=None)))
+                    kind='execute_plan', target='inspect_scATAC')))
             return super().complete(prompt=prompt, response_schema=response_schema)
     backend, uploads = role_web(tmp_path, model_type=MissingFileModel)
     with TestClient(create_app(backend.service, uploads=uploads)) as client:
         client.post('/api/v1/sessions', json=dict(session_id='session'))
         pending, original = send(client)
         assert pending['status'] == 'clarification', pending
-        assert 'dataset to inspect' in pending['response']['text']
+        assert pending['response']['text'] == 'Input required: missing_input_roles'
         state = backend.service._application.sessions.load('session')
         assert not state.turns and not state.revisions and not backend.science_calls
         assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
@@ -80,7 +88,7 @@ def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_
         assert state.interactions[0].prerequisite['field'] == 'roles'
         prompt = backend.models[0].calls[0]
         assert prompt['dialogue']['selected_sources'] == []
-        assert len(backend.models[0].calls) == 1
+        assert sum('turn_schema_version' in c for c in backend.models[0].calls) == 1
         matrix = upload(client, 'matrix.h5ad', backend.source.read_bytes(), kind='h5ad').json()['resource_id']
         accepted, body = send(client, turn='answer', text='Here is the file.', ids=(matrix,))
         assert accepted['status'] == 'succeeded', accepted
@@ -117,6 +125,8 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
     class EmptySourceModel(RoleModel):
         def complete(self, *, prompt, response_schema):
             value = json.loads(prompt)
+            if 'dialogue_schema_version' in value or 'grounding_review_version' in value:
+                return super().complete(prompt=prompt, response_schema=response_schema)
             assert 'turn_schema_version' in value, 'Missing files entered planning'
             valid_enums(response_schema)
             declared = empty(field)
@@ -134,7 +144,7 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
         state = backend.service._application.sessions.load('session')
         assert state.interactions[0].prerequisite['field'] == field
         assert not state.turns and not state.revisions and not backend.science_calls
-        assert len(backend.models[0].calls) == 1
+        assert sum('turn_schema_version' in c for c in backend.models[0].calls) == 1
         assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
         assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
 
@@ -165,6 +175,8 @@ def test_raw_declaration_arguments_continue_without_science(tmp_path, field, tar
     class DeclarationModel(RoleModel):
         def complete(self, *, prompt, response_schema):
             value = json.loads(prompt)
+            if 'dialogue_schema_version' in value or 'grounding_review_version' in value:
+                return super().complete(prompt=prompt, response_schema=response_schema)
             assert 'turn_schema_version' in value, 'Incomplete declarations entered planning'
             self.calls.append(value)
             continuation = bool(value['dialogue'].get('pending_prerequisite'))
@@ -207,7 +219,7 @@ def test_raw_declaration_arguments_continue_without_science(tmp_path, field, tar
         assert state.interactions[-1].admitted['continuation']['binding_turn_id'] == 'answer'
         assert uploads.resources.load(attachment) == record
         assert not state.turns and not state.revisions and not backend.science_calls
-        assert sum(len(model.calls) for model in backend.models) == 3
+        assert sum('turn_schema_version' in c for model in backend.models for c in model.calls) == 3
         assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
         assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
 
@@ -221,7 +233,7 @@ def test_candidate_roles_continue_original_objective_and_only_accept_bound_sourc
         before = {rid: uploads.resources.load(rid).to_dict() for rid in (matrix, notes)}
         pending, original_body = send(client, ids=(matrix, notes))
         assert pending['status'] == 'clarification' and pending['revision_id'] is None, pending
-        assert 'dataset to inspect' in pending['response']['text']
+        assert pending['response']['text'] == 'Input required: missing_input_roles'
         assert not backend.science_calls
         prompt = backend.models[0].calls[0]
         assert prompt['dialogue']['attachment_candidates'] is True

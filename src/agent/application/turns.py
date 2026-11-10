@@ -1,22 +1,17 @@
 """Small interaction adapter above the existing Planner, sessions and executor."""
 from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
-from .response_facts import TurnResponseFacts
 import re
 import logging
 
-from agent.schemas import AgentRequest, PriorOutputRef, StepOutputRef
 from agent.schemas.orchestration import _serialize
-from agent.orchestration.active_context import ActiveContextItem, ActivePlanningContext, planning_context
-from agent.orchestration.prior_outputs import binding_for_locator, validate_binding
-from agent.orchestration.planner import PlannerError
 from agent.orchestration.planning_model import PlanningModelError
 from agent.orchestration.error_policy import BUILTIN_ERROR_CODES, safe_message_for
-from .session_state import Interaction, OutputLocator, OutputSelection, SessionTurn, SessionConflictError, digest
-from .turn_context import snapshot, public_context, parameter_specs, stored_step, SELECTION, MATRIX
+from .session_state import Interaction, SessionConflictError, digest
+from .turn_context import snapshot, public_context
 from agent.orchestration.planning_diagnostics import log_operation_event
-from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer, IntentDelta, IntentError, interpret, clauses,
-                             resolve_relation, admit_delta)
+from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer, IntentError, interpret, clauses,
+                             resolve_relation)
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +22,6 @@ class TurnOutcome:
     status: str
     clarification: Clarify | None = None
     text: str = ""
-    facts: "TurnResponseFacts | None" = None
     scientific: object = None
     guidance: object = None
     error: object = None
@@ -90,14 +84,6 @@ def _terminal(sessions, interaction, clarification):
             choices = ('human', 'mouse')
     if clarification.reason == 'ambiguous_revision':
         choices = tuple(k for k in ('parent', 'previous_active') if k in captured['relations'])
-    elif clarification.reason in {'ambiguous_parameter', 'missing_parameter_value'} and prerequisite is None and not choices:
-        base = captured['bases'].get(interaction.base_revision_id, {'operations': []})
-        choices = tuple(dict.fromkeys(k for o in base['operations'] for k in o['parameters']))
-    if clarification.reason == 'missing_parameter_value' and prerequisite is None:
-        from .turn_decisions import ALIASES
-        mentioned = tuple(k for k in choices if any(re.search(r'\b' + re.escape(a) + r'\b',
-            interaction.utterance, re.I) for a in ALIASES.get(k, ())))
-        if len(mentioned) == 1: choices = mentioned
     clarification = replace(clarification, choices=choices,
                             value_required=clarification.reason in {'missing_parameter_value', 'missing_species', 'ambiguous_species',
                                                                    'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand', 'missing_input_roles', 'missing_resources', 'missing_fastq_declarations', 'missing_bam_declarations', 'missing_fragments_declarations', 'missing_annotation_declarations', 'missing_epizoo_declarations'})
@@ -122,23 +108,22 @@ def _outcome(sessions, interaction, answerer=None):
     admitted = {} if interaction.admitted is None else _serialize(interaction.admitted)
     if (interaction.submission is not None and admitted.get('kind') == 'answer'):
         # Interactive retries never regenerate a missing historical response.
-        return TurnOutcome('answer', 'unavailable', text='No stored displayed response is available for this turn.')
+        return TurnOutcome('answer', 'unavailable', text='Response unavailable: HISTORICAL_PRESENTATION_MISSING')
     if admitted.get('kind') == 'answer':
         if admitted.get('intent') == 'guidance':
             from .scientific_guidance import answer
             if interaction.status == 'failed':
-                return TurnOutcome('answer', 'unavailable', text='The previous guidance could not be grounded.')
+                return TurnOutcome('answer', 'unavailable', text='Response unavailable: PREVIOUS_RESPONSE_FAILED')
             return answer(sessions, sessions_id(sessions), interaction, answerer)
         if admitted.get('intent') == 'scientific':
             from .scientific_dialogue import answer
             if interaction.status == 'failed':
-                return TurnOutcome('answer', 'unavailable', text='The previous response could not be grounded in accepted evidence.')
+                return TurnOutcome('answer', 'unavailable', text='Response unavailable: PREVIOUS_RESPONSE_FAILED')
             result = answer(sessions, sessions_id(sessions), interaction, answerer)
             if interaction.status == 'admitted':
                 _update(sessions, interaction.turn_id, status='answered' if result.status == 'answered' else 'failed')
             return result
-        from .responses import admitted_answer
-        return admitted_answer(sessions, sessions_id(sessions), admitted)
+        return TurnOutcome('answer', 'unavailable', text='Response unavailable: HISTORICAL_PRESENTATION_MISSING')
     if interaction.status == 'clarification':
         if admitted.get('kind') == 'request_resources':
             from .resource_continuation import offers
@@ -152,6 +137,8 @@ def _outcome(sessions, interaction, answerer=None):
                             if (r['tool'], r['port']) not in assigned)
             return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
         if admitted.get('kind') == 'execute' and interaction.prerequisite is None:
+            if 'parameter_scope' in admitted:
+                return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter'))
             from .dialogue_execution import parameter_scope_choices
             state = sessions.load(sessions_id(sessions))
             run = sessions._application.run_store.load(admitted['request_id'] + ':run')
@@ -183,125 +170,15 @@ def _outcome(sessions, interaction, answerer=None):
 
 
 NAVIGATION = re.compile(r'(?:use|go back to|switch back to|switch to) (?:the )?(?:parent|previous|earlier|previously active) version|go back one version|(?:use|switch back to) the version i was using before', re.I)
-MATRIX_CLAUSE = re.compile(r'(?:rebuild|build)(?: the)? matrix', re.I)
-SELECTION_CLAUSE = re.compile(r'(?:only (?:redo|run) cell selection|(?:redo|run) cell selection only|keep (?:this|the) selection)', re.I)
 
 
 def admit(sessions, interaction, decision):
     captured = _serialize(interaction.snapshot)
     parts = clauses(interaction.utterance)
-    relation = decision.relation if isinstance(decision, Navigate) else decision.base
-    rid = resolve_relation(relation, captured, interaction.utterance)
-    if isinstance(decision, Navigate):
-        if not parts or not all(NAVIGATION.fullmatch(p) for p in parts): raise IntentError('unsupported_intent')
-        return dict(kind='navigate', revision_id=rid)
-    base = captured['bases'][rid]
-    candidates = [o for o in base['operations'] if o['handle'] == decision.operation]
-    if len(candidates) != 1: raise IntentError('unavailable_context')
-    operation = candidates[0]
-    parameters = dict(operation['parameters'])
-    delta_clause = None if decision.delta is None else decision.delta.evidence
-    for part in parts:
-        if part != delta_clause and not any(p.fullmatch(part) for p in (NAVIGATION, MATRIX_CLAUSE, SELECTION_CLAUSE)):
-            raise IntentError('unsupported_intent')
-    wants_matrix = any(MATRIX_CLAUSE.fullmatch(p) for p in parts)
-    selection_only = any(SELECTION_CLAUSE.fullmatch(p) and not p.lower().startswith('keep') for p in parts)
-    if wants_matrix and selection_only: raise IntentError('unsupported_intent')
-    if (decision.target == 'matrix') != wants_matrix: raise IntentError('unsupported_intent')
-    if decision.delta is None:
-        if not wants_matrix or not any(p.lower().startswith('keep ') for p in parts):
-            raise IntentError('missing_parameter_value')
-    else:
-        value = admit_delta(decision.delta, interaction.utterance, parameters,
-                            parameter_specs(sessions._application.registry), base['focus'])
-        parameters[decision.delta.parameter] = value
-    if wants_matrix and base['matrix_source'] is None: raise IntentError('unavailable_context')
-    return dict(kind='execute', revision_id=rid, operation=operation, parameters=parameters,
-        request_id='turn-' + digest(dict(session=sessions_id(sessions), turn=interaction.turn_id)),
-        target=decision.target, delta=None if decision.delta is None else asdict(decision.delta),
-        parameter=None if decision.delta is None else decision.delta.parameter,
-        matrix_source=base['matrix_source'])
-
-
-def _context(sessions, interaction, admitted, generation):
-    base = _serialize(interaction.snapshot)['bases'][admitted['revision_id']]
-    app = sessions._application
-    items = []
-    locators = {}
-    for raw in base['outputs']:
-        locator = OutputLocator(**raw)
-        binding = binding_for_locator(locator, app.run_store, app.registry)
-        validate_binding(binding, store=app.run_store, registry=app.registry, integrity=True)
-        if binding not in locators:
-            items.append(ActiveContextItem(f'ctx.{len(items)}', binding))
-            locators[binding] = locator
-    return ActivePlanningContext(sessions_id(sessions), admitted['revision_id'], generation, tuple(items)), locators
-
-
-def _execution_inputs(sessions, admitted, context, utterance):
-    app = sessions._application
-    source = stored_step(sessions, admitted['operation']['source'])
-    from .turn_context import selection_parameters
-    original = selection_parameters(source, parameter_specs(app.registry))
-    expected = dict(original)
-    if admitted['delta'] is not None:
-        delta = IntentDelta(**admitted['delta'])
-        expected[delta.parameter] = admit_delta(delta, utterance, original,
-            parameter_specs(app.registry), focus=admitted['parameter'])
-    if expected != admitted['parameters']:
-        raise IntentError('invalid_parameter_value')
-    def exact(path, sha):
-        matches = []
-        for item in context.items:
-            step = validate_binding(item.binding, store=app.run_store, registry=app.registry)
-            if step.result.get('manifest_path') == path and step.result.get('manifest_sha256') == sha:
-                matches.append(item.binding)
-        if len(matches) != 1: raise IntentError('unavailable_context')
-        return matches[0]
-    qc = exact(source.resolved_arguments['barcode_qc_manifest_path'], source.resolved_arguments['barcode_qc_manifest_sha256'])
-    qc_step = validate_binding(qc, store=app.run_store, registry=app.registry)
-    fragments = exact(qc_step.resolved_arguments['fragments_manifest_path'], qc_step.resolved_arguments['fragments_manifest_sha256'])
-    selection = exact(source.result['manifest_path'], source.result['manifest_sha256'])
-    inputs = dict(admitted['parameters']) if admitted['delta'] is not None else {}
-    if admitted['target'] == 'matrix':
-        recipe = stored_step(sessions, admitted['matrix_source'])
-        inputs.update({k:recipe.resolved_arguments[k] for k in ('reference_manifest_path','reference_manifest_sha256')})
-    return inputs, dict(qc=qc, fragments=fragments, selection=selection)
-
-
-def _check_plan(plan, admitted, inputs, bindings, registry):
-    """Enforce admitted effects; never create, rewrite, or complete a workflow."""
-    expected = ([SELECTION] if admitted['delta'] is not None else []) + ([MATRIX] if admitted['target'] == 'matrix' else [])
-    if sorted(s.tool_name for s in plan.steps) != sorted(expected):
-        raise PlannerError('TURN_EFFECT_MISMATCH', 'Plan differs from the admitted scientific effects.')
-    by_tool = {s.tool_name:s for s in plan.steps}
-    output = []
-    def pair(step, prefix, binding):
-        for suffix in ('path','sha256'):
-            if step.arguments.get(prefix+suffix) != PriorOutputRef(binding, 'manifest_'+suffix):
-                raise PlannerError('TURN_SOURCE_MISMATCH', 'Plan differs from the admitted historical source.')
-    if SELECTION in by_tool:
-        step = by_tool[SELECTION]
-        if {k for k in step.arguments if k in parameter_specs(registry)} != set(admitted['parameters']):
-            raise PlannerError('TURN_PARAMETER_MISMATCH', 'Plan added or removed an admitted parameter.')
-        for name, value in admitted['parameters'].items():
-            if step.arguments.get(name) != value:
-                raise PlannerError('TURN_PARAMETER_MISMATCH', 'Plan changed an admitted scientific parameter.')
-        pair(step, 'barcode_qc_manifest_', bindings['qc'])
-        output.append(OutputSelection(admitted['operation']['source']['name'], step.step_id, 'manifest_path'))
-    if MATRIX in by_tool:
-        step = by_tool[MATRIX]
-        pair(step, 'fragments_manifest_', bindings['fragments'])
-        for key in ('reference_manifest_path','reference_manifest_sha256'):
-            if step.arguments.get(key) != inputs[key]: raise PlannerError('TURN_SOURCE_MISMATCH', 'Matrix reference changed.')
-        if SELECTION in by_tool:
-            for suffix in ('path','sha256'):
-                if step.arguments.get('selected_cells_manifest_'+suffix) != StepOutputRef(by_tool[SELECTION].step_id,'manifest_'+suffix):
-                    raise PlannerError('TURN_SOURCE_MISMATCH', 'Matrix must consume the new selection.')
-        else:
-            pair(step, 'selected_cells_manifest_', bindings['selection'])
-        output.append(OutputSelection(admitted['matrix_source']['name'], step.step_id, 'manifest_path'))
-    return tuple(output)
+    rid = resolve_relation(decision.relation, captured, interaction.utterance)
+    if not parts or not all(NAVIGATION.fullmatch(p) for p in parts):
+        raise IntentError('unsupported_intent')
+    return dict(kind='navigate', revision_id=rid)
 
 
 class _AdmittedPlanner:
@@ -330,61 +207,18 @@ class _AdmittedPlanner:
         return delegated
 
 
-def execute(sessions, interaction, admitted):
-    app = sessions._application
-    generation = interaction.base_generation
-    if admitted['revision_id'] != interaction.base_revision_id:
-        # An explicit combined navigation/change is two authorized operations.
-        state = sessions.switch(sessions_id(sessions), interaction.turn_id + ':base', admitted['revision_id'],
-                                expected_generation=generation)
-        generation = state.generation
-    context, locators = _context(sessions, interaction, admitted, generation)
-    inputs, bindings = _execution_inputs(sessions, admitted, context, interaction.utterance)
-    request_id = admitted['request_id']
-    goal = ('Using the offered current QC result, select cells with exactly the supplied parameters.'
-            if admitted['delta'] is not None else 'Keep the offered current selection.')
-    if admitted['target'] == 'matrix': goal += ' Rebuild the matrix using the offered fragments and selected cells.'
-    request = AgentRequest(request_id, goal, inputs)
-    def accept(effective, plan):
-        selections = _check_plan(plan, admitted, inputs, bindings, app.registry)
-        retained = tuple(locators[b] for b in (bindings['fragments'], bindings['qc']))
-        if admitted['delta'] is None: retained += (locators[bindings['selection']],)
-        def change(state):
-            if any(t.turn_id == interaction.turn_id for t in state.turns):
-                raise SessionConflictError('Turn already submitted.')
-            turn = SessionTurn(interaction.turn_id, admitted['revision_id'], generation, request_id,
-                digest(effective.to_dict()), request_id+':run', 'linked', selections, retained_outputs=retained)
-            return replace(state, turns=state.turns+(turn,), interactions=tuple(
-                replace(i, status='submitted') if i.turn_id == interaction.turn_id else i
-                for i in state.interactions))
-        sessions._store._update(sessions_id(sessions), change)
-    from .service import ResearchAgentApplication
-    execution_app = ResearchAgentApplication(app.workspace_root,
-        planner=_AdmittedPlanner(app.runtime.planner, accept), registry=app.registry, executor=app.runtime.executor)
-    with planning_context(context):
-        result = execution_app.run(request)
-    state = sessions.load(sessions_id(sessions))
-    if any(t.turn_id == interaction.turn_id for t in state.turns):
-        sessions._record_result(state.session_id, interaction.turn_id, result)
-        state = sessions.recover(state.session_id, interaction.turn_id)
-        return TurnOutcome('execute', state.turn(interaction.turn_id).status, error=result.error)
-    _update(sessions, interaction.turn_id, status='failed')
-    return TurnOutcome('execute', 'failed')
-
-
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
             answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
             epizoo_resources=(), input_sets=(), reference_resources=None):
     # AnalysisSessions.respond supplies a per-call facade over the shared store.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
-    if type(utterance) is not str or not utterance.strip() or len(utterance) > 4096:
+    if type(utterance) is not str or (not utterance.strip() and not (submission or {}).get('rerun_revision_id') and not (submission or {}).get('parameter_overrides')) or len(utterance) > 4096:
         raise ValueError('A bounded nonempty utterance is required.')
     try:
         state = sessions.load(session_id)
     except (ValueError, RuntimeError, OSError):
-        from .responses import UNAVAILABLE
-        return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
+        return TurnOutcome('answer', 'unavailable', text='Response unavailable: EVIDENCE_UNAVAILABLE')
     existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
     if existing is not None:
         if existing.utterance != utterance: raise SessionConflictError('Interaction identity changed.')
@@ -432,8 +266,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     except SessionConflictError:
         raise
     except (ValueError, RuntimeError, OSError, KeyError):
-        from .responses import UNAVAILABLE
-        return TurnOutcome('answer', 'unavailable', text=UNAVAILABLE)
+        return TurnOutcome('answer', 'unavailable', text='Response unavailable: EVIDENCE_UNAVAILABLE')
     interaction = Interaction(turn_id, utterance, state.active_revision_id, generation, captured,
                               submission=submission)
     def capture(current):
@@ -442,6 +275,16 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             raise SessionConflictError('Interaction capture raced with another turn.')
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
+    if (submission or {}).get('rerun_revision_id'):
+        from .structured_parameters import prepare_result_edit, ParameterEditUnavailable
+        from .dialogue_execution import execute as execute_request
+        try:
+            admitted = prepare_result_edit(sessions, interaction)
+            _update(sessions, turn_id, admitted=admitted, status='admitted')
+            return execute_request(sessions, interaction, admitted, interpreter)
+        except ParameterEditUnavailable as exc:
+            _update(sessions, turn_id, status='failed')
+            return TurnOutcome('execute', 'failed', text=str(exc))
     decision = None
     diagnostic_context = (session_id, turn_id)
     diagnostic_stage = 'preparation'
@@ -542,18 +385,52 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                     pass
             if motif_requirements:
                 visible['dialogue']['motif_input_declarations'] = motif_requirements
+        settings = (submission or {}).get('parameter_overrides', ())
+        if settings:
+            visible['dialogue']['structured_parameters'] = [
+                {k: _serialize(row[k]) for k in ('tool', 'argument', 'native_function', 'port', 'source') if row.get(k) is not None}
+                for row in settings]
+            visible['dialogue']['structured_parameter_instruction'] = (
+                'These are explicit researcher settings already captured by the application. '
+                'Use the selected tool/function scope to understand the task. Do not reconstruct '
+                'these settings as text declarations or ask for their values; application binding owns them.')
+        from .structured_parameters import selected_groups
+        chosen_groups = selected_groups(captured, state, (submission or {}).get('selected_results', ()))
+        if chosen_groups:
+            visible['dialogue']['selected_input_results'] = [row['handle'] for row in chosen_groups]
+            visible['dialogue']['selected_input_instruction'] = (
+                'The researcher selected these exact accepted results through the interface. '
+                'Their identities are already resolved. Use them for the current task; do not guess another result.')
         diagnostic_stage = 'interpretation'
+        from .structured_parameters import selected_scope
+        scoped_admitted = selected_scope(sessions, interaction, state.interactions)
         from .resource_continuation import selected_answer
-        decision = selected_answer(interaction, state.interactions)
+        from .guidance_selection import selected_candidate
+        decision = (Execute(scoped_admitted['tool']) if scoped_admitted is not None else
+                    selected_candidate(interaction) or selected_answer(interaction, state.interactions))
         if decision is None:
             decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
+        from .structured_parameters import merge_decision
+        if scoped_admitted is None:
+            decision = merge_decision(decision, interaction, sessions._application.registry)
+        if chosen_groups:
+            if isinstance(decision, (Execute, RequestRoles, RequestResources)):
+                decision = replace(decision, input_results=tuple(g['handle'] for g in chosen_groups), context='current')
+            elif isinstance(decision, Answer) and decision.intent == 'scientific' and len(chosen_groups) == 1:
+                from .turn_decisions import ScientificTarget
+                decision = replace(decision, scientific=replace(decision.scientific,
+                    target=ScientificTarget(chosen_groups[0]['canonical']['handle'], decision.scientific.target.subject)))
+            elif isinstance(decision, Answer) and decision.intent == 'guidance':
+                from .turn_decisions import ScientificTarget
+                decision = replace(decision, guidance=replace(decision.guidance,
+                    targets=tuple(ScientificTarget(g['canonical']['handle']) for g in chosen_groups)))
+            else:
+                raise IntentError('unsupported_intent')
         diagnostic_stage = 'admission'
-        if isinstance(decision, Execute) and decision.arguments and decision.operation != 'plan':
-            raise IntentError('unsupported_intent')
         if interaction.base_revision_id is None:
-            if not (isinstance(decision, (Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
-                    or isinstance(decision, Execute) and decision.operation == 'plan'
-                    or isinstance(decision, Answer) and decision.intent in {'unsupported', 'guidance'}):
+            if not (isinstance(decision, (ExecuteCandidate, Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
+                    or isinstance(decision, Execute)
+                    or isinstance(decision, Answer) and decision.intent == 'guidance'):
                 raise IntentError('unavailable_context')
         if isinstance(decision, (Execute, RequestRoles, RequestResources)):
             from .scientific_guidance import references_candidate
@@ -574,7 +451,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                                    for model in visible['dialogue'].get('sequence_models', ()))
                 decision = Clarify(decision.reason, conditions)
             return _terminal(sessions, interaction, decision)
-        if isinstance(decision, RequestResources):
+        if scoped_admitted is not None:
+            admitted = scoped_admitted
+        elif isinstance(decision, RequestResources):
             from .resource_continuation import request, offers
             admitted, prerequisite = request(sessions, interaction, decision, input_sets)
             options = offers(submission, input_sets)
@@ -630,15 +509,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             elif decision.intent == 'scientific':
                 from .scientific_dialogue import admit as admit_scientific
                 admitted = admit_scientific(sessions, interaction, decision.scientific)
-            else:
-                from .responses import admit_answer
-                admitted = (dict(kind='answer', intent='unsupported', relation=decision.relation,
-                                 technical=decision.technical, revision_id=None, comparison_id=None)
-                            if interaction.base_revision_id is None else admit_answer(interaction, decision))
         elif isinstance(decision, ExecuteCandidate):
             from .guidance_selection import admit as admit_candidate
             admitted = admit_candidate(sessions, interaction, decision, execution_inputs)
-        elif isinstance(decision, Execute) and decision.operation == 'plan':
+        elif isinstance(decision, Execute):
             from .dialogue_execution import admit as admit_execution, missing_file_request, admit_role_request
             pending_request = missing_file_request(sessions._application.registry, interaction, decision, execution_inputs)
             if pending_request is not None:
@@ -655,7 +529,9 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             with scientific_resource_scope(None if reference_owner is None else reference_owner.library):
                 owner_missing = (() if selected_tool.parameter_prerequisites is None or prerequisite_values is None else
                                  selected_tool.parameter_prerequisites(prerequisite_values))
-            missing_parameters = tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters)))
+            from .dialogue_execution import _missing_parameter_inputs
+            missing_parameters = tuple(_missing_parameter_inputs(sessions._application.registry, admitted['tool'],
+                tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters))), admitted['inputs']))
             if missing_parameters:
                 from .dialogue_execution import request_parameters
                 admitted, prerequisite = request_parameters(sessions, interaction, admitted,
@@ -668,13 +544,18 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 admitted['resource_catalog'] = catalog(input_sets)
         else:
             admitted = admit(sessions, interaction, decision)
+        from .structured_parameters import explicit_records
         if (any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam'))
-                or admitted.get('kind') == 'execute' and admitted.get('tool') == 'annotate_scATAC_cell_types'):
+                or admitted.get('kind') == 'execute' and (admitted.get('tool') == 'annotate_scATAC_cell_types'
+                    or explicit_records(admitted, state.interactions))):
             from .dialogue_execution import prepare_native_task
             admitted, pending, error = prepare_native_task(sessions, interaction, admitted)
             if pending is not None:
                 _update(sessions, turn_id, admitted=admitted, status='clarification', prerequisite=pending)
                 return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', tuple(admitted['choices']), True))
+            if 'parameter_scope' in admitted:
+                _update(sessions, turn_id, admitted=admitted, status='clarification')
+                return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter'))
             if 'native_plan' not in admitted:
                 _update(sessions, turn_id, admitted=admitted, status='failed')
                 return TurnOutcome('execute', 'failed', error=error, text='' if error is None else error.message)
@@ -705,7 +586,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         raw_rejection = exc.raw if isinstance(exc, DeclarationGroundingError) else None
         candidate = decision
         if (reason in {'invalid_parameter_value', 'ungrounded_operand'}
-                and isinstance(candidate, Execute) and candidate.operation == 'plan'):
+                and isinstance(candidate, Execute)):
             import json
             value = dict(kind='execute_plan', target=candidate.target,
                 arguments=[asdict(d) for d in candidate.arguments])
@@ -766,9 +647,6 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             elif decision.intent == 'scientific':
                 from .scientific_dialogue import answer
                 result = answer(sessions, session_id, replace(interaction, admitted=admitted), answerer)
-            else:
-                from .responses import admitted_answer
-                result = admitted_answer(sessions, session_id, admitted)
             _update(sessions, turn_id, status='answered' if result.status in {'answered','unsupported'} else 'failed')
             return result
         if isinstance(decision, Navigate):
@@ -780,7 +658,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             if epizoo_resources:
                 return execute_request(sessions, interaction, admitted, interpreter, epizoo_resources=epizoo_resources)
             return execute_request(sessions, interaction, admitted, interpreter)
-        return execute(sessions, interaction, admitted)
+        raise IntentError('unsupported_intent')
     except Exception:
         _update(sessions, turn_id, status='failed')
         raise

@@ -7,7 +7,30 @@ and UMAP; EpiZoo remains separate. Uncalled single-sample fragments use document
 Otsu selection with all observed barcodes initially retained and explicit thresholds
 respected. OrdMag is explicit only. Dedicated PCA is read-only accepted history;
 explicit native PCA remains. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
-owns these methods. No Stage 2 work, commit or push is authorized.
+owns these methods. Stage 1 did not authorize Stage 2 work. The separate Stage 2
+request authorizes deterministic interaction and structured parameter implementation
+through the existing owners.
+The [Stage 2 report](../agent-data/acceptance/scientific-results/stage2-deterministic-interaction-2026-11-10/REPORT.md)
+owns the bounded structured-selection, parameter-binding, Firefox/native evidence
+and remaining limitations. Stage 1 scientific methods and CONDITIONAL GO remain
+unchanged. Stage 2R-A is approved within its documented scope. The
+[Stage 2R-B report](../agent-data/acceptance/scientific-results/stage2rb-results-2026-11-10/REPORT.md)
+owns result-scoped parameter editing, exact Revision continuation, prepared-plan
+reuse, real Firefox/native rerun evidence and the live follow-up rate-limit
+limitation. The global parameter editor is retired. Combined Stage 2 changes
+have passed final review within the documented bounded scope.
+
+The [Stage 2 consolidated report](../agent-data/acceptance/scientific-results/stage2-consolidation-2026-11-10/REPORT.md)
+owns the final response consolidation, active-code retirement audit and renewed
+Firefox acceptance. Current questions use scientific_dialogue's grounded
+response/review infrastructure, including structured clarification and execution
+outcomes. The operational answer intents/renderer and custom selection/matrix
+interaction executor are retired; historical acceptance readers remain read-only.
+Exact UI choices and result edits retain deterministic binding. The user's
+approved Git closeout authorizes one reviewed Stage 2 commit and normal push to
+`origin/main`. Earlier no-commit statements in acceptance reports record the
+pre-closeout stages. Dual-Mode Architecture Consolidation and Stage 3 are not
+authorized by this closeout.
 
 The [fresh PBMC10k acceptance](../agent-data/acceptance/scientific-results/pbmc10k-fresh-2026-11-09/REPORT.md)
 retains **CONDITIONAL GO**: genuine Firefox/official OpenAI raw-to-MAESTRO

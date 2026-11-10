@@ -20,12 +20,8 @@ h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 650; }
 p { margin: 4px 0 12px; }
 .muted { color: #586b79; }
 .small { font-size: 13px; }
-.connection-state { color: #586b79; font-size: 13px; }
 .panel { background: #fff; border: 1px solid #dce3e8; border-radius: 12px; padding: 24px; margin-bottom: 18px; }
 .controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; padding: 16px 0; }
-.advanced-controls { flex-shrink: 0; max-height: 35vh; overflow: auto; margin-bottom: 12px; border-bottom: 1px solid #dce3e8; }
-.advanced-controls > summary { padding: 8px 0; color: #586b79; }
-.advanced-controls .connection-state { float: right; margin-left: 12px; }
 .controls .section-heading h2 { margin: 0; }
 #session-context { margin: 8px 0 0; overflow-wrap: anywhere; }
 .reopen-form { margin-top: 16px; }
@@ -54,8 +50,6 @@ button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .
 .model-controls { width: 340px; max-width: 100%; }
 .model-controls label { font-size: 12px; margin-bottom: 4px; }
 .model-controls select { font-size: 14px; }
-.model-diagnostics { min-width: 0; }
-#model-description { overflow-wrap: anywhere; }
 .error-banner { padding: 12px 16px; color: #862e31; background: #fff1f1; border: 1px solid #e8baba; border-radius: 6px; overflow-wrap: anywhere; }
 .section-heading h2 { margin-bottom: 0; }
 .conversation { display: flex; flex-direction: column; flex: 1 1 0; min-height: 110px; margin: 0; border: 0; border-radius: 0; padding: 18px 16px 0; }
@@ -68,8 +62,6 @@ button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .
 .results-heading h2 { margin: 0; }
 #result-navigation { flex: 0 1 230px; }
 #result-choice { margin: 0; }
-.result-update { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 12px; background: #edf4f2; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
-.result-update button { display: block; }
 .workspace-switch { display: none; }
 .research-layout:not(.has-results) { display: flex; flex-direction: column; width: 100%; max-width: 860px; align-self: center; }
 .research-layout:not(.has-results) .conversation-workspace { order: 0; flex: 1 1 0; }
@@ -84,12 +76,9 @@ button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .
 .result-figures h4 { margin: 0 0 8px; font-size: 14px; }
 .result-figures figcaption { margin: 8px 0; }
 .result-caution { padding: 10px 12px; border-left: 3px solid #bdcbd5; background: #f6f8f8; }
-#result-output-summary { overflow-wrap: anywhere; }
 .revision-summary { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; }
 .revision-summary dt { color: #586b79; }
 .revision-summary dd { margin: 0; overflow-wrap: anywhere; }
-.revision-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.revision-actions button { font-size: 12px; padding: 7px 9px; }
 .scientific-state details { border-top: 1px solid #e2e8ed; padding-top: 10px; margin-top: 12px; }
 summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .identity-details { margin-top: 12px; }
@@ -98,7 +87,6 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .scientific-state label { margin-top: 10px; }
 .scientific-state select, .scientific-state input { font-size: 14px; }
 .scientific-state button { margin-top: 8px; }
-.compact-list, .revision-history { padding: 0; list-style: none; font-size: 12px; }
 .compact-list li { margin: 8px 0; overflow-wrap: anywhere; }
 .artifact-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 3px; }
 .artifact-actions a { color: #246b65; }
@@ -120,9 +108,6 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .factual-report { overflow-wrap: anywhere; font: inherit; line-height: 1.65; padding: 16px; background: #f6f8f8; border-radius: 6px; }
 .factual-report .scientific-table { margin: 12px 0; }
 .analysis-figure { display: block; max-width: 100%; max-height: min(560px, 48vh); width: auto; height: auto; margin: 12px auto 20px; object-fit: contain; }
-.revision-history li { padding: 10px 0; border-top: 1px solid #edf0f2; }
-.revision-history button { text-align: left; white-space: normal; overflow-wrap: anywhere; background: #fff; color: #36576a; border-color: #bdcbd5; width: 100%; font-size: 12px; }
-.revision-history button[aria-current="true"] { background: #edf4f8; border-color: #36718e; }
 .revision-metadata, .candidate-metadata { display: block; color: #586b79; font-size: 11px; margin-top: 6px; overflow-wrap: anywhere; }
 .guidance { margin-top: 14px; }
 .guidance-candidate { padding: 12px; margin: 10px 0; border: 1px solid #cfdfe8; border-radius: 6px; }
@@ -241,9 +226,6 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 #result-panel { border-top: 0; padding-top: 0; }
 #result-panel > summary { font-size: 16px; }
 #result-method { font-size: 18px; }
-.summary-choice { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
-.summary-choice label { flex: 0 0 auto; margin: 0; }
-.summary-choice select { flex: 1 1 0; }
 #result-facts { margin-bottom: 20px; }
 #artifact-viewer { padding-top: 4px; }
 #artifact-inventory > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid #e4eae9; }
@@ -257,7 +239,6 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .file-description { display: block; margin-top: 4px; font-size: 12px; color: #586b79; }
 #result-limitations-panel { border-left: 3px solid #9abeb8; padding-left: 14px; margin: 20px 0; }
 #result-limitations .compact-list { font-size: 13px; line-height: 1.7; }
-.result-continuation { margin: 20px 0; }
 #upload-limit { max-width: 260px; margin: 0; }
 .composer-actions { align-items: center; }
 .composer-actions .input-actions { align-items: center; }
@@ -294,7 +275,6 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
   .header-actions { flex-wrap: nowrap; align-items: flex-end; }
   .header-actions button { padding: 8px; font-size: 12px; }
   .model-controls select { font-size: 13px; }
-  .advanced-controls { margin-bottom: 8px; }
   .scientific-file > span { flex-basis: 180px; }
   .results-heading { align-items: stretch; }
   #result-navigation { flex: 1 1 100%; }
@@ -318,11 +298,10 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 /* Researcher result hierarchy and authoritative step-count progress. */
 #result-panel-heading, #native-results-heading { font-size: 1.2rem; border-bottom: 2px solid var(--border, #d6e0e4); padding-bottom: .55rem; margin-top: 1.4rem; }
 #artifact-panel > summary { font-size: 1.2rem; font-weight: 700; padding: .6rem 0; }
-#result-figures, #native-results-panel { margin-top: 1.5rem; }
+#result-figures { margin-top: 1.5rem; }
 .scientific-result { border: 1px solid #d6e0e4; border-radius: .5rem; padding: .7rem; margin: .6rem 0; }
 .scientific-result > summary { font-weight: 600; overflow-wrap: anywhere; }
 .primary-downloads { border-left: 3px solid #237a76; padding-left: .8rem; }
-.supporting-downloads, .advanced-downloads { margin: .7rem 0; }
 .execution-progress { width: 100%; padding: .5rem 0; }
 .step-progress-summary { margin: 0 0 .35rem; font-size: .85rem; overflow-wrap: anywhere; }
 .step-segments { display: grid; grid-template-columns: repeat(auto-fit, minmax(1.1rem, 1fr)); gap: .2rem; list-style: none; padding: 0; margin: .4rem 0; }
@@ -335,8 +314,34 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .step-detail-list { font-size: .85rem; padding-left: 1.5rem; max-height: 15rem; overflow: auto; }
 @media (max-width: 700px) { .scientific-file { flex-wrap: wrap; gap: .5rem; } .step-segments { gap: .12rem; } }
 
-.result-figures .figure-download { display: inline-block; margin: .6rem 0; font-weight: 600; }
-.result-figures figure > details { font-size: .85rem; margin-top: .3rem; }
 .workflow-summary { margin: 1.2rem 0; }
 .clarification-choices { display: grid; gap: .55rem; margin: .8rem 0; }
 .clarification-choices button { text-align: left; white-space: normal; }
+
+#request-result-choices label { display: flex; align-items: center; gap: .5rem; }
+#request-result-choices input[type="checkbox"] { width: auto; margin: 0; }
+/* Contextual navigation and attachment controls use native disclosures/dialogs. */
+.conversation-navigation { position: relative; font-size: 12px; margin-top: 4px; }
+.conversation-navigation .reopen-form { position: absolute; z-index: 5; top: 1rem; left: 0; width: min(360px, 85vw); padding: 16px; background: white; border: 1px solid #bdcbd5; border-radius: 8px; box-shadow: 0 8px 30px #20363922; }
+#attachment-dialog { width: min(720px, 94vw); max-height: 85dvh; overflow-y: auto; border: 1px solid #bdcbd5; border-radius: 12px; padding: 24px; color: inherit; }
+#attachment-dialog::backdrop { background: #20363966; }
+#attachment-dialog .section-heading { margin-bottom: 18px; }
+#attachment-dialog .attachment-controls label { margin-top: 12px; }
+#attachment-dialog button { margin-top: 8px; }
+#result-methods > summary { font-size: 15px; }
+#native-results > details { border-top: 0; }
+#artifact-inventory .additional-downloads > summary { font-size: 13px; font-weight: 600; }
+.scientific-result > h3 { margin-top: 0; }
+.compact-list { padding: 0; list-style: none; font-size: 12px; }
+
+#parameter-dialog { width: min(720px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; }
+#parameter-dialog section { margin-block: 1rem; }
+#parameter-dialog .parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) 9rem; gap: .5rem; padding: .6rem 0; }
+#parameter-dialog .parameter-row p { grid-column: 1 / -1; margin: 0; }
+#parameter-dialog input, #parameter-dialog select { width: 100%; min-width: 0; }
+#parameter-error { color: var(--danger, #a52828); }
+.result-action, .view-result { margin: .4rem .35rem .2rem 0; }
+@media (max-width: 600px) { #parameter-dialog .parameter-row { grid-template-columns: minmax(0, 1fr); } }
+
+#parameter-dialog .parameter-row { align-items: end; }
+#parameter-dialog { border: 1px solid #ccd2d8; border-radius: .6rem; }

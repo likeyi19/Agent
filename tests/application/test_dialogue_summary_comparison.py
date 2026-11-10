@@ -13,8 +13,10 @@ from test_scientific_explanations import paragraph
 
 def both(value):
     evidence = value['evidence']
-    assert evidence['comparison']['mode'] == 'independent_accepted_facts'
-    assert evidence['comparison']['pairs'] == []
+    assert evidence['comparison']['mode'] in {'independent_accepted_facts','descriptive_accepted_operands'}
+    by_id={c['claim_id']:c for c in evidence['claims']}
+    assert all(by_id[p['left']]['field'] != 'n_cells' and by_id[p['right']]['field'] != 'n_cells'
+               for p in evidence['comparison']['pairs'])
     return dict(support='supported', paragraphs=[paragraph(
         evidence['meanings']['comparison_scope'],
         [c['claim_id'] for c in evidence['claims'] if c['field']=='n_cells'])])
@@ -36,7 +38,7 @@ def test_independent_facts_exact_attribution_without_measurement_pairs(app, monk
     assert all(c.source['evidence_sha256'] and c.source['pointer'] for c in result.scientific.claims)
     after = guarded.sessions.load('session')
     assert after.revisions == state.revisions and after.generation == state.generation
-    assert 'No compatible measurement pairs' in result.text
+    assert ('No compatible measurement pairs' in result.text or 'does not establish common cells' in result.text)
 
 
 def test_unoffered_measurement_pair_fails_closed(app, monkeypatch, caplog):

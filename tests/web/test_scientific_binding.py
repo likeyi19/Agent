@@ -25,7 +25,7 @@ def test_generic_species_reply_preserves_or_corrects_parameters_then_runs_existi
     initial = EXPLICIT.replace('0.7', '0.6') if original_explicit else OMITTED
     decisions = {ANSWER: species_answer()}
     if original_explicit:
-        decisions[initial] = dict(kind='execute_plan', target='compute_cell_umap', argument=argument(initial, '0.6'))
+        decisions[initial] = dict(kind='execute_plan', target='compute_cell_umap', arguments=[argument(initial, '0.6')])
     harness, inputs = resolution_harness(tmp_path, monkeypatch, missing_species=True,
         decisions=decisions)
     with TestClient(web(harness, inputs)) as client:

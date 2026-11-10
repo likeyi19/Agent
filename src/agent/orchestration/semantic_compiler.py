@@ -642,6 +642,18 @@ def compile_semantic_plan(
     _nonempty(planner_name, "planner_name")
     _validate_contract(registry, contract)
 
+    from .active_context import current_context
+    context = current_context()
+    settings = () if context is None else context.task.get('parameter_overrides', ())
+    original_inputs = request.inputs
+    owned_inputs = {row['input_name'] for row in settings}
+    if settings:
+        # Structured values already have researcher authority. The model's
+        # source spelling cannot remove, change or duplicate their binding.
+        request = replace(request, inputs={k: v for k, v in request.inputs.items() if k not in owned_inputs})
+        candidate = replace(candidate, steps=tuple(replace(step, sources=tuple(source for source in step.sources
+            if not isinstance(source, SemanticRequestInputSource) or source.input_name not in owned_inputs))
+            for step in candidate.steps))
     semantic_steps = {step.step_id: step for step in candidate.steps}
     states = {step.step_id: _StepCompilation() for step in candidate.steps}
     explicit_optional_inputs: set[str] = set()
@@ -938,6 +950,17 @@ def compile_semantic_plan(
                     diagnostic_fields={'step_id': step.step_id, 'tool_name': step.tool_name,
                                        'input_name': name})
 
+    from .native_parameters import bind_structured_parameters
+    selected, explicit_arguments, deferred_preparation = bind_structured_parameters(
+        {step.step_id: (step.tool_name, states[step.step_id].arguments) for step in candidate.steps},
+        settings, registry, original_inputs)
+    for step_id, (_, arguments) in selected.items():
+        states[step_id].arguments = arguments
+    from agent.schemas import RunMode
+    if deferred_preparation and request.mode is not RunMode.PLAN_ONLY:
+        raise SemanticPlanCompileError('AMBIGUOUS_PARAMETER_SCOPE',
+            'Select one actual operation for the explicit parameter before execution.')
+
     selected_argument_names = {
         argument_name
         for step in candidate.steps
@@ -969,9 +992,10 @@ def compile_semantic_plan(
         tool = registry.get(step.tool_name)
         state = states[step.step_id]
         from .active_context import prepare_selected_inputs
-        state.arguments = prepare_selected_inputs(tool, state.arguments,
-            {selected.step_id: (selected.tool_name, dict(states[selected.step_id].arguments))
-             for selected in candidate.steps})
+        if not deferred_preparation:
+            state.arguments = prepare_selected_inputs(tool, state.arguments,
+                {selected.step_id: (selected.tool_name, dict(states[selected.step_id].arguments))
+                 for selected in candidate.steps})
         if tool.native_functions is not None:
             # Check after request binding so source order cannot hide explicit
             # native function intent or kwargs. Omitted native defaults stay
@@ -982,7 +1006,7 @@ def compile_semantic_plan(
                 for source in step.sources if isinstance(source, SemanticRegisteredChoiceSource)
             }
             for name, value in choices.items():
-                if name == 'function_name':
+                if name == 'function_name' or name in explicit_arguments.get(step.step_id, ()) or name not in state.arguments:
                     continue
                 if 'function_name' not in choices:
                     _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
@@ -992,6 +1016,8 @@ def compile_semantic_plan(
                     _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
                         'A registered native choice conflicts with supplied native kwargs.')
         missing = sorted(set(tool.required_arguments).difference(state.arguments))
+        if deferred_preparation:
+            missing = [name for name in missing if name not in tool.application_inputs]
         if missing:
             port_arguments: dict[str, set[str]] = defaultdict(set)
             for rule in contract.request_bindings:
@@ -1026,7 +1052,11 @@ def compile_semantic_plan(
                 },
             )
         try:
-            registry.validate_arguments(step.tool_name, state.arguments)
+            if deferred_preparation and set(tool.required_arguments) - set(state.arguments) <= tool.application_inputs:
+                for name, value in state.arguments.items():
+                    (tool.required_arguments.get(name) or tool.optional_arguments[name]).validate(name, value)
+            else:
+                registry.validate_arguments(step.tool_name, state.arguments)
         except ValueError as exc:
             raise SemanticPlanCompileError(
                 "INVALID_COMPILED_ARGUMENTS",

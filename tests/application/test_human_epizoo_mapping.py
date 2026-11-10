@@ -94,6 +94,14 @@ class MappingWitness:
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
         self.calls.append(value)
+        if value.get('focus') == 'outcome':
+            facts=value['evidence']['outcome']
+            code=(facts.get('error') or {}).get('code') or (facts.get('clarification') or {}).get('reason')
+            return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(
+                text='Recorded outcome: '+str(code),kind='limitation',citations=[],comparisons=[])]))
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed',independent=True)
+                for p in value['paragraphs']}))
         if 'turn_schema_version' in value:
             target = 'epizoo_embed_cells' if self.embedding_only else 'compute_cell_umap'
             decision = (dict(kind='execute_plan', target=target)

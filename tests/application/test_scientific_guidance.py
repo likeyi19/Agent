@@ -41,6 +41,9 @@ class Model:
         self.calls.append(p)
         if 'turn_schema_version' in p:
             return json.dumps(dict(turn_schema_version=1, decision=self.choice))
+        if p.get('focus') == 'outcome':
+            return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(
+                text='Please identify the intended result.',kind='limitation',citations=[],comparisons=[])]))
         assert p['guidance_schema_version'] == 2
         if self.callback: self.callback()
         claims = p['context']['evidence']['claims']
@@ -123,6 +126,8 @@ def test_general_guidance_exact_references_and_no_science(app, monkeypatch):
     outcome = ask(app, model=model)
     assert outcome.status == 'answered', outcome.text
     assert len(outcome.guidance.candidates) == 2
+    assert outcome.text == ''  # Explanations are delivered once in structured cards.
+    assert outcome.guidance.limitations == ()
     c = outcome.guidance.candidates[0]
     assert c.reference['capability'] == 'cluster_cells'
     assert c.reference['targets'][0]['revision_id'] == rid
@@ -192,8 +197,8 @@ def test_heterogeneous_context_is_not_comparison(app, monkeypatch):
     assert {c.source['revision_id'] for c in claims} == {old,new}
     evidence = model.calls[-1]['context']['evidence']
     assert len(evidence['targets']) == 2 and 'comparison' not in evidence
-    assert 'historical' in result.text
-    assert any('correspondence' in x for x in result.guidance.limitations)
+    assert result.guidance.candidates[0].reference['targets']  # Exact historical targets remain captured.
+    assert any('correspondence' in x for x in model.calls[-1]['context']['limitations'])
 
 
 @pytest.mark.parametrize('choice,text,status', [
@@ -208,7 +213,7 @@ def test_invalid_references_fail_closed(app, monkeypatch, choice, text, status):
     model = Model(choice)
     result = ask(guard(app, monkeypatch), utterance=text, model=model)
     assert result.status == status
-    assert len(model.calls) == 1
+    assert sum('turn_schema_version' in c for c in model.calls) == 1
 
 
 def test_offered_subject_choice_is_semantic_not_a_second_language_parser(app, monkeypatch):
@@ -246,7 +251,7 @@ def test_empty_evidence_is_unknown_not_impossible(app, monkeypatch):
     assert not candidate.explanation.claims
     assert candidate.explanation.support == 'insufficient_evidence'
     assert 'group_value' in candidate.readiness['required_ports_without_supplied_request_source']
-    assert 'not global impossibility' in result.text
+    assert result.text == '' and candidate.readiness['request_scope'] == 'no_execution_inputs_bound'
     assert model.calls[-1]['context']['captured_output_count'] == 1
 
 
@@ -300,7 +305,7 @@ def test_navigation_does_not_rebase_candidate(app, monkeypatch):
     accepted(app,'inspect_scATAC',name='second')
     m=Model(decision(candidate='first option'))
     result=ask(app,'stale','Why would the first option help?',m,predecessor_turn_id='guide')
-    assert result.status=='clarification' and len(m.calls)==1
+    assert result.status=='clarification' and sum('turn_schema_version' in c for c in m.calls)==1
     assert app.sessions.load('session').active_revision_id!=original
 
 
@@ -348,7 +353,7 @@ def test_navigation_during_generation_marks_captured_result_historical(app,monke
         app.sessions.switch('session','nav',old,expected_generation=2)
     result=ask(app,model=Model(callback=navigate))
     assert result.status=='answered',result.text
-    assert 'historical revision' in result.text
+    assert result.guidance.candidates[0].reference['base_revision_id'] == new
     assert result.guidance.candidates[0].reference['base_revision_id']==new
     assert app.sessions.load('session').active_revision_id==old
 

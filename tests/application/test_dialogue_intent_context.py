@@ -4,7 +4,6 @@ import json
 import pytest
 
 from agent.application import scientific_dialogue as sd
-from agent.application import turns
 from test_dialogue_evidence import app, accepted
 from test_scientific_dialogue import Model, question, ask, annotation
 
@@ -22,8 +21,8 @@ def test_generic_available_result_visibility_and_scientific_admission(app, tool,
         assert item['is_active'] and item['evidence_status']=='available'
         assert field in item['available_fields']
         assert 'value' not in item and 'facts' not in item
-        spec=app.registry.get(tool)
-        assert d['semantics'][tool]['description']==spec.planning.description
+        spec=app.registry.accepted(tool)
+        assert d['semantics'][tool]['description']==('' if spec.planning is None else spec.planning.description)
         assert d['semantics'][tool]['result_contract']==spec.result_contract.name
         assert 'unavailable_context only' in ' '.join(prompt['instructions'])
         return dict(question(item['handle']),kind='answer_scientific')
@@ -84,24 +83,3 @@ def test_missing_evidence_is_visible_without_fabricating_availability(app):
         assert prompt['dialogue']['outputs'][0]['evidence_status']=='unavailable'
         return dict(kind='clarify',reason='unavailable_context')
     assert ask(app,'missing','What does this result show?',Model(decide)).status=='clarification'
-
-
-def test_operational_version_stays_operational(app):
-    accepted(app,'inspect_scATAC')
-    result=ask(app,'version','Which revision is currently active?',
-        Model(dict(kind='answer',intent='version',relation='current',technical=False)))
-    assert result.kind=='answer' and result.scientific is None
-    assert app.sessions.load('session').interactions[-1].admitted['intent']=='version'
-
-
-def test_explicit_threshold_stays_execute(app,monkeypatch):
-    accepted(app,'select_scATAC_cells',arguments={'min_qc_fragment_records':1,'min_tss_enrichment':'4'})
-    seen=[]
-    def execute(sessions,interaction,admitted):
-        seen.append(admitted)
-        return turns.TurnOutcome('execute','failed')
-    monkeypatch.setattr(turns,'execute',execute)
-    text='Set the TSS threshold to 5'
-    result=ask(app,'execute',text,Model(dict(kind='execute',base='current',operation='op.0',target='selection',
-        delta=dict(parameter='min_tss_enrichment',operation='set',literal='5',evidence=text))))
-    assert result.kind=='execute' and seen[0]['parameters']['min_tss_enrichment']==5

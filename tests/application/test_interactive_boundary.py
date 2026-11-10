@@ -364,7 +364,7 @@ def test_display_ack_failure_and_explicit_recovery_never_repeat_science(tmp_path
     assert retry.status=='interrupted' and retry.response is None
     assert retry.error.code=='INTERACTIVE_PROCESSING_INTERRUPTED'
     recovered=service.recover_turn('session','first')
-    assert recovered.response.status=='activated' and 'available in Results' in recovered.response.text
+    assert recovered.response.status=='activated' and recovered.response.text == 'Analysis accepted.'
     assert service.revision('session',recovered.revision_id).is_active
     assert first(service,source)==recovered and len(models)==1 and calls==['inspect_scATAC']
     with pytest.raises(InteractiveBoundaryError) as caught:
@@ -386,7 +386,7 @@ def test_execution_recovery_preserves_parent_and_historical_active_distinction(t
     next_turn=service.submit_turn('session','second','Inspect the supplied matrix.',expected_generation=1,
         execution_inputs={'input_path':str(source)})
     recovered=service.recover_turn('session','first')
-    assert 'available in Results' in recovered.response.text
+    assert recovered.response.text == 'Analysis accepted.'
     assert not service.revision('session',recovered.revision_id).is_active
     assert service.reopen_session('session').active_revision_id==next_turn.revision_id
     assert calls==['inspect_scATAC']*2 and len(models)==2
@@ -419,12 +419,12 @@ def test_guidance_subset_display_retains_original_option_identity():
           dict(candidate_id='candidate-two',origin_turn_id='origin',capability='inspect_scATAC')]
     response=ScientificResponse((), 'insufficient_evidence', 'Conditional guidance.', ())
     selected=GuidanceCandidate(refs[1],{},response)
-    outcome=TurnOutcome('answer','answered',text='Option 1: inspect_scATAC\nConditional guidance.',
+    outcome=TurnOutcome('answer','answered',text='',
         guidance=GuidanceResponse((selected,)))
     state=SimpleNamespace(interactions=(SimpleNamespace(turn_id='origin',guidance_candidates=refs),))
     shown=_present(outcome,state)
     assert shown.guidance['candidates'][0]['option']==2
-    assert shown.text=='Option 2: inspect_scATAC\nConditional guidance.'
+    assert shown.text=='' and shown.guidance['candidates'][0]['text']=='Conditional guidance.'
 
 
 def test_application_composition_failure_is_safe_and_explicit(tmp_path,monkeypatch):

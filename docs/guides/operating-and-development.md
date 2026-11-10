@@ -84,6 +84,51 @@ short value-only answers retain their conversation context. Scientific identifie
 historical displayed text and precise error codes remain unchanged. Static technical
 UI/status labels are not translated through additional model calls.
 
+Accepted analysis messages offer **View result details**, **Continue from this
+result**, and **Adjust parameters**. Viewing is read only. Continuing activates
+that exact Revision through existing Session navigation, clears the composer,
+and runs no science. Ordinary natural-language requests use this active context.
+
+**Adjust parameters** opens the selected analysis's actual accepted steps, with
+recorded effective settings and separate read-only execution details. Repeated
+functions retain their exact step identities. Change one or more settings and
+select **Run with changes**; no accompanying sentence is required. The existing
+structured declarations bind those values to the saved plan. Only changed steps
+and their dependent steps execute; supported accepted-output bindings reuse
+unchanged work. Output locations belong to the new Run, and successful execution
+creates a new immutable Revision. Unsupported recorded dependency bindings are
+reported without substituting a method. Defaults unavailable in the execution
+record are not guessed from prose or a current installation.
+
+Attach files has no general parameter editor. Explicit native-function requests
+remain conversational. Genuine missing-parameter questions may open contextual
+controls; an unresolved native function scope requires an explicit choice.
+Numeric, boolean, enum, string, list and null values use the existing Registry
+and native metadata. Unchanged settings remain omitted from the edit submission.
+There is no independent settings history, planner, cache or execution lifecycle.
+
+Known reference, species, input-role and scientific-candidate choices submit
+captured identities directly. File-role controls can use a newly uploaded file
+for the original pending request. Structured source declarations retain stable registered file identities,
+which the application binds to the current captured source order. Optional accepted
+result checkboxes likewise submit exact Revision/output/accepted-step identities.
+Choosing a result for a new open task does not eliminate that task's ordinary
+interpretation/planning. Exact offered controls and their status labels remain
+application-owned. Scientific clarification and failure explanations use the same
+scientific response generator and factual reviewer as accepted-result questions;
+there is no separate clarification rewrite or operational answer engine. An
+already reviewed answer or guidance card is not generated again. Provider failure
+leaves a short coded status, with accepted results and downloads still available.
+No automatic response retry, translation chain or alternate provider is used.
+
+Questions about methods, parameters, changes, execution and provenance use exact
+captured results and recorded RunStore facts. Repeated native steps retain their
+step identities; missing historical values are never filled from installed
+defaults. Method comparisons describe settings without asserting shared cells or
+biological equivalence. Completed analyses without requested explanation use a
+short application status; scientific explanations use the common response owner.
+Historical displayed responses remain immutable.
+
 Execution progress has one segment per planned step, its stored state, the
 completed count and the actual running function where supplied. Symbols and
 accessible labels accompany colors. Expand the details for errors and all steps;

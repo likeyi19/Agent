@@ -14,13 +14,13 @@ def section(start, end):
 def test_attachment_is_optional_single_file_and_lives_in_the_chat_composer():
     page = HierarchyPage((STATIC / 'index.html').read_text())
     tags = {attrs['id']: (tag, attrs) for tag, attrs in page.tags if 'id' in attrs}
-    tag, picker = tags['upload-file']
-    assert tag == 'input' and picker['type'] == 'file' and picker['accept'] == '.h5ad'
-    assert 'multiple' not in picker and 'required' not in picker
-    assert 'turn-form' in page.ancestors['upload-file']
+    tag, picker = tags['chat-files']
+    assert tag == 'input' and picker['type'] == 'file'
+    assert 'multiple' in picker and 'required' not in picker
+    assert 'turn-form' in page.ancestors['chat-files']
     assert 'turn-form' in page.ancestors['resource-choice']
     ids = [attrs['id'] for _, attrs in page.tags if 'id' in attrs]
-    assert ids.index('turn-form') < ids.index('utterance') < ids.index('upload-file')
+    assert ids.index('turn-form') < ids.index('utterance') < ids.index('chat-files')
     assert tags['upload-file-button'][1]['type'] == 'button'
     assert tags['clear-upload'][1]['type'] == 'button'
     assert tags['upload-status'][1]['role'] == 'status'
@@ -66,12 +66,12 @@ def test_binary_transfer_never_submits_science_or_buffers_the_file_in_json():
 
 def test_upload_retry_preserves_file_identity_and_selection_creates_a_new_identity():
     upload = section('async function uploadSelectedFile()', 'element("new-session")')
-    retry = upload[:upload.index('element("upload-file").addEventListener')]
+    retry = upload[:upload.index('function prepareDeclaredUpload')]
     assert 'const upload = state.upload' in retry and 'await transferUpload(upload)' in retry
     assert 'upload.status = "failed"' in retry
     assert 'newTurnId()' not in retry
-    picker = upload[upload.index('element("upload-file").addEventListener'):]
-    assert 'const file = element("upload-file").files[0]' in picker
+    picker = upload[upload.index('function prepareDeclaredUpload'):]
+    assert 'function prepareDeclaredUpload(file)' in picker
     assert 'uploadId: newTurnId(), file' in picker
     assert 'state.upload !== upload' in retry
     assert 'Retry upload' in source()
@@ -85,7 +85,8 @@ def test_turn_resource_binding_admits_only_declared_companions_and_retry_keeps_t
     assert 'else if (element("input-choice").value) body.input_set_id' in request
     assert 'if (selectedCompanion()) body.input_set_id' in request
     assert 'body.epizoo_resource_id = element("epizoo-resource-choice").value' in request
-    assert 'Object.freeze(body)' in request
+    assert 'startSubmission(body)' in request
+    assert 'Object.freeze(body)' in section('function startSubmission(', 'function submitRequest(')
     assert 'predecessor_turn_id = predecessorTurnId' in request
     assert 'expected_generation: state.session.generation' in request
     assert 'profile_id: element("model-choice").value' in request
@@ -128,7 +129,7 @@ def test_pending_upload_has_separate_status_and_can_be_removed_for_text_only_cha
     controls = section('function updateControls()', 'function renderExecution()')
     assert 'cannotSubmit' in controls and 'Boolean(state.upload)' in controls
     assert 'element("resource-choice").disabled' in controls
-    assert 'element("upload-file").disabled' in controls
+    assert 'element("chat-files").disabled' in controls
     assert 'element("clear-upload").hidden = !state.upload' in controls
     status = section('function uploadStatus(', 'function renderResources(')
     assert 'element("upload-status").textContent = text' in status
@@ -137,7 +138,7 @@ def test_pending_upload_has_separate_status_and_can_be_removed_for_text_only_cha
 
 
 def test_fragment_role_and_pair_are_explicit_and_never_infer_a_scientific_workflow():
-    picker = section('element("upload-file").addEventListener', 'element("upload-file-button").addEventListener')
+    picker = section('function prepareDeclaredUpload', 'element("upload-file-button").addEventListener')
     assert 'inputType: element("upload-type").value' in picker
     assert 'index: null' in picker
     assert 'clearPendingUpload(true)' in picker
@@ -209,7 +210,7 @@ def test_fastq_attribution_and_completion_stay_in_the_existing_composer():
 def test_fastq_completed_members_are_separate_from_selectable_libraries():
     catalog = section('async function loadResources()', 'function clearPendingUpload')
     assert 'catalog.fastq_members' in catalog and 'renderFastqMembers()' in catalog
-    uploaded = section('async function uploadSelectedFile()', 'element("upload-file").addEventListener')
+    uploaded = section('async function uploadSelectedFile()', 'function prepareDeclaredUpload')
     assert 'resource.input_type === "fastq"' in uploaded
     assert 'state.fastqMembers =' in uploaded and 'renderFastqMembers(resource.resource_id)' in uploaded
     assert 'Upload the remaining declared roles, then complete the FASTQ library.' in uploaded

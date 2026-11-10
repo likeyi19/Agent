@@ -1,40 +1,9 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from fractions import Fraction
 import pytest
 from agent.application.turn_decisions import *
-from agent.application.turn_context import parameter_specs
 from agent.orchestration import build_default_tool_registry
-
-
-@pytest.mark.parametrize('utterance,operation,literal,current,expected', [
-    ('Set the TSS threshold to 7','set','7',6,7),
-    ('Increase the TSS threshold by 1','add','1',6,7),
-    ('Decrease it by 1','subtract','1',7,6),
-    ('Increase TSS by 0.1','add','0.1','1/3','13/30'),
-    ('try min_tss = 7','set','7',6,7),
-])
-def test_exact_grounded_arithmetic(utterance, operation, literal, current, expected):
-    delta=IntentDelta('min_tss_enrichment',operation,literal,utterance)
-    result=admit_delta(delta,utterance,{'min_tss_enrichment':current},
-        parameter_specs(build_default_tool_registry()),focus='min_tss_enrichment')
-    assert result == expected
-
-
-@pytest.mark.parametrize('utterance,delta', [
-    ('Make TSS stricter',IntentDelta('min_tss_enrichment','set','7','Make TSS stricter')),
-    ('Set TSS to 7',IntentDelta('min_tss_enrichment','set','8','Set TSS to 7')),
-    ('Increase TSS by 1',IntentDelta('min_tss_enrichment','set','1','Increase TSS by 1')),
-    ('Decrease TSS by 9',IntentDelta('min_tss_enrichment','subtract','9','Decrease TSS by 9')),
-    ('Do not set TSS to 7',IntentDelta('min_tss_enrichment','set','7','set TSS to 7')),
-    ('Set threshold to 7',IntentDelta('min_tss_enrichment','set','7','Set threshold to 7')),
-    ('Set foo_threshold to 7',IntentDelta('min_tss_enrichment','set','7','Set foo_threshold to 7')),
-    ('Decrease it by 1',IntentDelta('min_tss_enrichment','subtract','1','Decrease it by 1')),
-    ('Increase TSS by 10%',IntentDelta('min_tss_enrichment','add','10','Increase TSS by 10%')),
-])
-def test_unadmitted_changes(utterance,delta):
-    with pytest.raises(IntentError):
-        admit_delta(delta,utterance,{'min_tss_enrichment':6},parameter_specs(build_default_tool_registry()))
 
 
 def test_strict_decision_parser_and_bounded_schema():
@@ -100,7 +69,7 @@ def test_species_clarifications_use_existing_clarify_contract(reason):
 
 def leiden_declaration(utterance, literal='0.7', *, occurrence=0):
     start = utterance.index(literal, occurrence)
-    return LeidenResolution('cluster_cells', 'resolution', literal, start, start + len(literal))
+    return ScopedArgument('cluster_cells', 'resolution', literal, start, start + len(literal))
 
 
 def decision_wire(decision):
@@ -108,47 +77,30 @@ def decision_wire(decision):
 
 
 @pytest.mark.parametrize('kind', ['execute_plan', 'answer_prerequisite'])
-def test_explicit_leiden_resolution_is_one_closed_typed_argument(kind):
+def test_explicit_resolution_uses_shared_typed_arguments(kind):
     utterance = 'Cluster the selected cells using Leiden at resolution 0.7.'
     declaration = leiden_declaration(utterance)
-    value = dict(kind=kind, argument=asdict(declaration))
+    value = dict(kind=kind, arguments=[asdict(declaration)])
     if kind == 'execute_plan':
         value['target'] = 'cluster_cells'
-        expected = Execute('current', 'plan', 'cluster_cells', None, declaration)
+        expected = Execute('cluster_cells', arguments=(declaration,))
     else:
         value.update(pending='@species', species='mouse')
-        expected = SpeciesAnswer('@species', 'mouse', declaration)
+        expected = SpeciesAnswer('@species', 'mouse', arguments=(declaration,))
     assert parse_decision(decision_wire(value)) == expected
 
 
 @pytest.mark.parametrize('value,expected', [
-    (dict(kind='execute_plan', target='cluster_cells'), Execute('current', 'plan', 'cluster_cells', None)),
-    (dict(kind='execute_plan', target='cluster_cells', argument=None), Execute('current', 'plan', 'cluster_cells', None)),
-    (dict(kind='execute_plan', base='current', operation='plan', target='cluster_cells', delta=None),
-     Execute('current', 'plan', 'cluster_cells', None)),
-    (dict(kind='execute', base='current', operation='plan', target='cluster_cells', delta=None),
-     Execute('current', 'plan', 'cluster_cells', None)),
+    (dict(kind='execute_plan', target='cluster_cells'), Execute('cluster_cells')),
     (dict(kind='answer_prerequisite', pending='@species', species='mouse'), SpeciesAnswer('@species', 'mouse')),
-    (dict(kind='answer_prerequisite', pending='@species', species='mouse', argument=None), SpeciesAnswer('@species', 'mouse')),
 ])
-def test_historical_and_omitted_argument_wires_keep_their_existing_meaning(value, expected):
+def test_omitted_arguments_keep_their_existing_meaning(value, expected):
     assert parse_decision(decision_wire(value)) == expected
 
 
-@pytest.mark.parametrize('changes', [
-    {'tool': 'compute_cell_umap'}, {'argument': 'min_dist'}, {'literal': ''},
-    {'literal': '7' * 81}, {'start': True}, {'end': False}, {'start': -1},
-    {'start': 3, 'end': 2}, {'end': 4097}, {'start': 0.5}, {'end': '3'},
-    {'unexpected': 1}, {'literal': None}, {'tool': True},
-])
-def test_parameter_wire_rejects_unsupported_identity_shape_and_spans(changes):
-    argument = asdict(leiden_declaration('Use Leiden 0.7.')) | changes
-    with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=argument)))
-
-
-@pytest.mark.parametrize('argument', [[], [{'tool': 'cluster_cells'}], True, 'resolution=0.7'])
-def test_parameter_wire_never_admits_arbitrary_input_dictionaries_or_multiple_arguments(argument):
+@pytest.mark.parametrize('argument', [None, {}, [], True, 'resolution=0.7',
+    dict(tool='cluster_cells', argument='resolution', literal='0.7', start=0, end=3)])
+def test_interpreter_rejects_retired_singular_parameter_adapter(argument):
     with pytest.raises(IntentError, match='invalid_decision'):
         parse_decision(decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=argument)))
 
@@ -172,7 +124,7 @@ def test_parameter_schema_retires_the_singular_writer():
 def test_exact_decimal_source_span_delegates_value_validation_to_the_owner(utterance, literal, expected):
     argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     declaration = leiden_declaration(utterance, literal)
-    value = admit_leiden_resolution(declaration, utterance, argument)
+    value = admit_scientific_argument(declaration, utterance, argument)
     assert type(value) is float and value == expected
 
 
@@ -189,7 +141,7 @@ def test_exact_decimal_source_span_delegates_value_validation_to_the_owner(utter
 def test_numeric_source_grounding_rejects_partial_values_units_and_numeric_suffixes(utterance, literal):
     argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='ungrounded_operand'):
-        admit_leiden_resolution(leiden_declaration(utterance, literal), utterance, argument)
+        admit_scientific_argument(leiden_declaration(utterance, literal), utterance, argument)
 
 
 @pytest.mark.parametrize('literal', ['0', '-0.7', '1e309', 'NaN', 'Infinity', '0.7%', '7/10', '0_7', '0,7', 'seven'])
@@ -197,7 +149,7 @@ def test_explicit_invalid_value_never_becomes_a_default(literal):
     utterance = 'Cluster at resolution ' + literal + '.'
     argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='invalid_parameter_value'):
-        admit_leiden_resolution(leiden_declaration(utterance, literal), utterance, argument)
+        admit_scientific_argument(leiden_declaration(utterance, literal), utterance, argument)
 
 
 def test_numeric_source_grounding_rejects_changed_text_and_out_of_utterance_spans():
@@ -208,7 +160,7 @@ def test_numeric_source_grounding_rejects_changed_text_and_out_of_utterance_span
                           (replace(declaration, end=100), utterance),
                           (declaration, 'Use resolution 0.8.')):
         with pytest.raises(IntentError, match='ungrounded_operand'):
-            admit_leiden_resolution(invalid, text, argument)
+            admit_scientific_argument(invalid, text, argument)
 
 
 def test_assignment_association_and_execution_intent_belong_to_the_interpreter():
@@ -221,14 +173,13 @@ def test_assignment_association_and_execution_intent_belong_to_the_interpreter()
             assert any('A number alone does not request an operation' in i for i in value['instructions'])
             assert any('default_when_omitted' in i for i in value['instructions'])
             if value['utterance'] == question:
-                return decision_wire(dict(kind='answer', intent='unsupported', relation='current', technical=False))
-            return decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=asdict(declaration)))
+                return decision_wire(dict(kind='answer_guidance',targets=[],candidate=None))
+            return decision_wire(dict(kind='execute_plan', target='cluster_cells', arguments=[asdict(declaration)]))
     public = pending_public()
     public['dialogue']['tools'].append('cluster_cells')
     from agent.application.dialogue_execution import scientific_parameters
     public['dialogue']['scientific_parameters'] = scientific_parameters(build_default_tool_registry())
     interpreted = interpret(Model(), utterance, public)
-    assert interpreted.argument is None
     assert [asdict(d) for d in interpreted.arguments] == [asdict(declaration)]
     assert isinstance(interpret(Model(), question, pending_public()), Answer)
 
@@ -248,24 +199,6 @@ def test_additive_session_format_stays_closed_and_empty_compatible():
     state=AnalysisSession('session')
     assert 'interactions' not in state.to_dict()
     assert AnalysisSession.from_dict(json.loads(json.dumps(state.to_dict()))) == state
-
-
-def test_planner_effect_guard_preserves_parameters_sources_and_arbitrary_step_ids():
-    from agent.application.turns import _check_plan
-    from agent.schemas import AgentPlan, PlanStep, PriorOutputBinding, PriorOutputRef
-    from agent.orchestration.planner import PlannerError
-    binding=PriorOutputBinding('r','q','compute_scATAC_qc','barcode_qc','scatac_barcode_qc.v1','1'*64,'2'*64,'3'*64)
-    parameters={'min_qc_fragment_records':3000,'min_tss_enrichment':7}
-    admitted=dict(delta={},parameters=parameters,target='selection',operation={'source':{'name':'chosen'}})
-    args=dict(parameters,barcode_qc_manifest_path=PriorOutputRef(binding,'manifest_path'),
-        barcode_qc_manifest_sha256=PriorOutputRef(binding,'manifest_sha256'),output_dir='/tmp/test-intent')
-    plan=AgentPlan('p','r','fixture',(PlanStep('arbitrary-output-step','select_scATAC_cells',args),))
-    registry=build_default_tool_registry()
-    assert _check_plan(plan,admitted,parameters,{'qc':binding},registry)[0].step_id=='arbitrary-output-step'
-    for changed in (args|{'min_qc_fragment_records':3001},args|{'max_qc_fragment_records':9000},
-                    args|{'barcode_qc_manifest_path':PriorOutputRef(replace(binding,run_id='other'),'manifest_path')}):
-        with pytest.raises(PlannerError):
-            _check_plan(replace(plan,steps=(replace(plan.steps[0],arguments=changed),)),admitted,parameters,{'qc':binding},registry)
 
 
 def string_public(*, pending=False):
@@ -305,7 +238,7 @@ def test_interpreter_owns_operation_and_source_role_association_for_exact_string
             return decision_wire(dict(kind='execute_plan', target=tool, arguments=[asdict(argument)]))
 
     parsed = interpret(Model(), utterance, string_public())
-    assert parsed == Execute('current', 'plan', tool, None, arguments=(argument,))
+    assert parsed == Execute(tool, arguments=(argument,))
 
 
 def test_pending_string_answer_uses_the_same_interpreter_and_keeps_original_scope_constraints():

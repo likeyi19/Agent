@@ -32,7 +32,8 @@ def test_multi_source_retry_freezes_captured_selection_and_singles_keep_the_old_
     submitted = section('function submitRequest(', 'element("turn-form").addEventListener')
     assert 'body.resource_ids = Object.freeze(selectedIds)' in submitted
     assert 'body.resource_id = element("resource-choice").value' in submitted
-    assert 'Object.freeze(body)' in submitted
+    assert 'startSubmission(body)' in submitted
+    assert 'Object.freeze(body)' in section('function startSubmission(', 'function submitRequest(')
     assert 'expected_generation: state.session.generation' in submitted
     assert 'predecessor_turn_id = predecessorTurnId' in submitted
     assert not any(term in submitted for term in ('source_sha256', 'record_sha256', 'body.roles', 'tool_name'))
@@ -70,12 +71,12 @@ def test_incompatible_new_registration_does_not_replace_or_extend_queued_h5ad_se
     assert 'state.selectedResourceIds = []' not in rendered and '.sort(' not in rendered
     loaded = section('async function loadResources()', 'function clearPendingUpload')
     assert ': selectedId, true)' in loaded
-    uploaded = section('async function uploadSelectedFile()', 'element("upload-file").addEventListener')
+    uploaded = section('async function uploadSelectedFile()', 'function prepareDeclaredUpload')
     assert 'const selected = renderResources(resource.resource_id)' in uploaded
     assert 'registered, not selected' in uploaded
     completed = section('async function completeFastqCollection()', 'function transferUpload(')
     assert 'const selected = renderResources(collection.resource_id)' in completed
     assert 'library registered, not selected' in completed
-    picker = section('element("upload-file").addEventListener', 'element("upload-type").addEventListener')
+    picker = section('function prepareDeclaredUpload', 'element("upload-type").addEventListener')
     assert 'state.selectedResourceIds.length && state.upload.inputType !== "h5ad"' in picker
     assert picker.index('state.selectedResourceIds = selectedResourceIds()') < picker.index('element("resource-choice").value = ""')

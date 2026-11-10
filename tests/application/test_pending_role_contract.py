@@ -246,8 +246,7 @@ def test_existing_complete_group_binding_does_not_accept_partial_pending_associa
     with pytest.raises(ResourceAdmissionError) as rejected:
         group_role_inputs(group, roles()[:1], registry)
     assert rejected.value.code == 'MULTI_INPUT_ROLE_INVALID'
-    assert parse_decision(wire(dict(kind='execute_plan', target='evaluate_cell_clustering'))) == Execute(
-        'current', 'plan', 'evaluate_cell_clustering', None)
+    assert parse_decision(wire(dict(kind='execute_plan', target='evaluate_cell_clustering'))) == Execute('evaluate_cell_clustering')
 
 
 @pytest.mark.parametrize('association_stage', ['initial', 'answer'])
@@ -349,4 +348,4 @@ def test_role_request_cannot_bypass_existing_candidate_selection_guard(tmp_path,
     assert state.interactions[-1].prerequisite is None
     assert all(turn.request_id is None and turn.run_id is None for turn in state.turns)
     assert not state.revisions and not executor.plans
-    assert len(calls) == 1
+    assert sum('turn_schema_version' in (json.loads(c['prompt']) if 'prompt' in c else c) for c in calls) == 1

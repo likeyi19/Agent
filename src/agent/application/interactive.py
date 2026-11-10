@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from agent.orchestration import PlanningModelProfile, PlanningRecoveryPolicy, PlanningWireMode
-from agent.orchestration.error_policy import safe_message_for, public_error_message
+from agent.orchestration.error_policy import public_error_message
 from agent.orchestration.run_store import RunNotFoundError
 from agent.providers import PlanningModelFactoryRegistry, build_default_planning_model_factory_registry
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
@@ -166,11 +166,6 @@ def _present(outcome, state=None, *, turn_id=None):
             support=c.explanation.support, limitations=c.explanation.limitations)
             for n, c in enumerate(outcome.guidance.candidates)],
             limitations=outcome.guidance.limitations)
-        # Rationale follow-ups can contain a subset. Their display headings use
-        # the original inventory ordinals, just like explicit selection does.
-        for n, candidate in enumerate(outcome.guidance.candidates):
-            text = text.replace(f'Option {n + 1}: {candidate.reference["capability"]}\n',
-                f'Option {ordinal(candidate, n + 1)}: {candidate.reference["capability"]}\n')
     artifacts = outcome.artifacts
     status = 'answered' if outcome.kind == 'answer' and artifacts else outcome.status
     return PresentedResponse(kind=outcome.kind, status=status, text=text,
@@ -372,7 +367,9 @@ class InteractiveAgentApplication:
                         group['tool'], _REPORT_FIELDS.get(group['tool'], ()))
                         if (group['tool'] in RESULT_SUMMARY_FIELDS
                             or field not in _METHOD_FIELDS.get(group['tool'], ()))
-                        and not field.endswith(('_sha256', '_path')) and 'contract' not in field],
+                        and not field.endswith(('_sha256', '_path')) and 'contract' not in field
+                        and field not in {'parameters', 'source_identity', 'software_versions',
+                                          'native_output_type', 'result_slots'}],
                     summary_limitations=[RESULT_LIMITATIONS[group['tool']]]
                         if included and group['tool'] in RESULT_LIMITATIONS else [],
                     evidence=evidence if included else None))
@@ -522,10 +519,10 @@ class InteractiveAgentApplication:
 
     def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, attachment_ids=(), clarification_choice=None):
+                            registered_input=None, attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
-                or type(utterance) is not str or not utterance.strip() or len(utterance) > 4096):
+                or type(utterance) is not str or (not utterance.strip() and not rerun_revision_id and not parameter_overrides) or len(utterance) > 4096):
             raise _fail('INTERACTIVE_INPUT_INVALID')
         if predecessor_turn_id is not None:
             _identifier(predecessor_turn_id)
@@ -551,6 +548,31 @@ class InteractiveAgentApplication:
                 _identifier(value)
             submission['clarification_choice'] = dict(clarification_choice)
 
+        from .structured_parameters import declarations
+        try:
+            settings = declarations(parameter_overrides, self._application.registry)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise _fail('INTERACTIVE_INPUT_INVALID') from exc
+        if rerun_revision_id is not None:
+            _identifier(rerun_revision_id)
+            if utterance or not settings or candidate_selection or clarification_choice or selected_results or attachment_ids or registered_input or inputs:
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            submission['rerun_revision_id'] = rerun_revision_id
+        if settings:
+            from dataclasses import asdict
+            submission['parameter_overrides'] = [asdict(d) for d in settings]
+        if candidate_selection is not None:
+            if clarification_choice is not None:
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            if not isinstance(candidate_selection, Mapping) or set(candidate_selection) != {'origin_turn_id', 'candidate_id'}:
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            for value in candidate_selection.values():
+                _identifier(value)
+            submission['candidate_selection'] = dict(candidate_selection)
+        if selected_results:
+            if len(selected_results) > 32 or any(not isinstance(row, Mapping) or set(row) != {'revision_id', 'output_name', 'accepted_step_sha256'} for row in selected_results):
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            submission['selected_results'] = _serialize(list(selected_results))
         attachments = self._attachment_records(session_id, attachment_ids, registered_input)
         if attachments:
             submission['attachments'] = attachments
@@ -561,6 +583,12 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
         existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
+        if existing is None and not utterance.strip() and not rerun_revision_id:
+            from .dialogue_execution import capture_prerequisite
+            pending = capture_prerequisite(state.interactions, state.active_revision_id,
+                state.generation, submission, predecessor_turn_id)
+            if pending is None or pending['field'] != 'parameters':
+                raise _fail('INTERACTIVE_INPUT_INVALID')
         single_h5ad = (type(registered_input) is RegisteredInput and registered_input.tool_name == 'inspect_scATAC'
             and set(inputs) == {'input_path'} and registered_input.resource_choice is None)
         candidate_group = (type(registered_input) is RegisteredInputGroup
@@ -626,7 +654,7 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None):
+                            registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
@@ -635,7 +663,7 @@ class InteractiveAgentApplication:
         """
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
-            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice)
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id)
         if not duplicate and registered_input is not None:
             self.resources.validate_binding(registered_input)
         return digest(dict(session_id=session_id, turn_id=turn_id,
@@ -643,11 +671,11 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None):
+                    registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
-            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice)
+            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id)
         if duplicate:
             return self.turn(session_id, turn_id)
         sessions = self._application.sessions
@@ -697,12 +725,10 @@ class InteractiveAgentApplication:
                     completed = next((t for t in latest.turns if t.turn_id == turn_id
                                       and t.status in {'activated', 'stale'}), None)
                     if completed is not None:
-                        from .scientific_dialogue import ScientificResponse
+                        from .scientific_dialogue import status_outcome
                         from .turns import TurnOutcome
-                        message = 'Scientific computation completed. Accepted results and downloads remain available; the explanation is unavailable.'
-                        fallback = TurnOutcome('execute', completed.status, text=message,
-                            scientific=ScientificResponse((), 'insufficient_evidence', message, (),
-                                                          'accepted_execution_state', 'unavailable'))
+                        fallback = status_outcome(TurnOutcome('execute', completed.status),
+                            'INTERACTIVE_APPLICATION_FAILED')
                         presentation = _present(fallback, latest, turn_id=turn_id)
                     else:
                         error = _fail('INTERACTIVE_APPLICATION_FAILED').error
@@ -837,6 +863,9 @@ class InteractiveAgentApplication:
         choices = (pending_choices(interaction.prerequisite, state.interactions)
             if interaction is not None and interaction.prerequisite is not None
             and state.interactions[-1].turn_id == turn_id and status == 'clarification' else ())
+        if interaction is not None and state.interactions[-1].turn_id == turn_id and status == 'clarification':
+            from .structured_parameters import scope_choices
+            choices = scope_choices(interaction) or choices
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,
@@ -845,6 +874,7 @@ class InteractiveAgentApplication:
             run_id=run_id, revision_id=None if turn is None else turn.revision_id,
             status=status, response=response, error=error, steps=steps, state_revision=state_revision,
             attachments=tuple(attachments), export_requested=True if admitted.get('export') else None,
+            rerun_revision_id=None if interaction is None else (interaction.submission or {}).get('rerun_revision_id'),
             clarification_choices=choices or None)
 
     def turn(self, session_id, turn_id):
@@ -957,8 +987,7 @@ class InteractiveAgentApplication:
                 or interaction.admitted.get('request_id') != turn.request_id):
             return ()
         response = PresentedResponse.from_dict(_serialize(interaction.presentation))
-        if (response.kind != 'execute' or response.error is not None
-                or response.status not in {'activated', 'stale'}):
+        if (response.kind != 'execute' or response.status not in {'activated', 'stale'}):
             return ()
         revisions = [r for r in state.revisions if r.revision_id == turn.revision_id]
         if (len(revisions) != 1 or revisions[0].turn_id != turn_id

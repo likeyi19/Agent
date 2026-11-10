@@ -102,7 +102,7 @@ def test_interest_questions_and_invented_command_do_not_execute(app,monkeypatch,
     model=Selection(cid,evidence)
     result=ask(app,'select',utterance,model)
     assert_binding_rejection(app,result,before,runs)
-    assert len(model.calls)==1
+    assert sum('turn_schema_version' in c for c in model.calls)==1
 
 
 @pytest.mark.parametrize('bad', ['unknown','stale','weak','evidence','catalog'])
@@ -127,7 +127,7 @@ def test_invalid_selection_fails_before_planner(app,monkeypatch,bad):
         state=app.sessions.load('session')
         assert state.turns==before.turns and state.revisions==before.revisions
         assert set(app.run_store.root.glob('*.json'))==runs
-    assert len(model.calls)==1
+    assert sum('turn_schema_version' in c for c in model.calls)==1
 
 
 @pytest.mark.parametrize('failure',['planner','preflight'])
@@ -219,7 +219,7 @@ def test_semantic_ambiguity_and_conflicting_refinement_clarify(app,monkeypatch,u
     model=Dialogue(dict(kind='clarify',reason='ambiguous_subject'))
     result=ask(forbid_work(app,monkeypatch),'select',utterance,model)
     assert result.status=='clarification'
-    assert len(model.calls)==1
+    assert sum('turn_schema_version' in c for c in model.calls)==1
 
 
 def test_ordinary_execution_cannot_bypass_selection_after_discussion(app,monkeypatch):
@@ -261,7 +261,7 @@ def test_capability_removed_after_guidance(app,monkeypatch):
     model=Selection(cid,'Run option 1.')
     result=ask(app,'select','Run option 1.',model)
     assert_binding_rejection(app,result,before,runs)
-    assert len(model.calls)==1
+    assert sum('turn_schema_version' in c for c in model.calls)==1
 
 
 def test_state_change_during_output_selection_prevents_submission(app,tmp_path,monkeypatch):

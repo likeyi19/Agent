@@ -33,12 +33,12 @@ def raw_binding(request, tmp_path):
 
 def test_raw_task_accepts_explicit_analysis_parameters(raw_binding):
     kind, compose = raw_binding
-    values = dict(pca_preprocessing='tfidf_l2', n_components=30, n_neighbors=15,
-        resolution=0.6, pca_random_seed=0)
+    values = dict(run_snapatac2__tl_spectral__kwargs={'n_comps':30},
+        run_snapatac2__pp_knn__kwargs={'n_neighbors':15}, run_snapatac2__tl_leiden__kwargs={'resolution':0.6})
     binding = compose(values)
     assert all(binding.execution_inputs[k] == v for k, v in values.items())
     validate_arguments(tuple(SimpleNamespace(tool=tool) for tool in (
-        'pca_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')), kind)
+        'run_snapatac2', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')), kind)
 
 
 @pytest.mark.parametrize('values', [dict(input_path='/foreign.h5ad'), dict(embedding_path='/foreign.npy'),

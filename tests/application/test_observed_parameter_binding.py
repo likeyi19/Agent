@@ -11,6 +11,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 from scipy import sparse
 
 from agent.application import InteractiveAgentApplication
@@ -158,7 +161,7 @@ OBJECTIVE = ('I will attach an accessibility matrix. Use 2 principal components 
              'compare the groups with the supplied annotations, and make a UMAP. '
              'The comparison is required; it should not determine the UMAP coordinates.')
 REPLY = 'Use the attached matrix and its supplied annotations; continue the original analysis.'
-COMPOUND_ROLES = [dict(tool='pca_embed_cells', port='dataset', source='source.0'),
+COMPOUND_ROLES = [dict(tool='mock_embed_cells', port='dataset', source='source.0'),
                   dict(tool='evaluate_cell_clustering', port='ground_truth_dataset', source='source.0')]
 
 
@@ -174,9 +177,9 @@ class ObservedContinuationModel:
         if 'turn_schema_version' in value:
             if value['utterance'] == OBJECTIVE:
                 start = OBJECTIVE.index('2')
-                decision = dict(kind='request_roles', target='pca_embed_cells', roles=[],
+                decision = dict(kind='request_roles', target='mock_embed_cells', roles=[],
                     required_roles=[{k:r[k] for k in ('tool', 'port')} for r in COMPOUND_ROLES],
-                    arguments=[dict(tool='pca_embed_cells', argument='n_components', literal='2',
+                    arguments=[dict(tool='mock_embed_cells', argument='n_components', literal='2',
                                     start=start, end=start + 1)])
             else:
                 assert value['dialogue']['pending_prerequisite']['objective'] == OBJECTIVE
@@ -190,7 +193,7 @@ class ObservedContinuationModel:
             return json.dumps(dict(outputs=[dict(name='comparison', step_id='score', output_key='report_path'),
                                            dict(name='map', step_id='view', output_key='analysis_path')]))
         assert value['user_request'] == OBJECTIVE
-        steps = [dict(step_id='reduce', tool='pca_embed_cells', sources=[], control_dependencies=[]),
+        steps = [dict(step_id='reduce', tool='mock_embed_cells', sources=[], control_dependencies=[]),
                  dict(step_id='links', tool='build_cell_neighbors', sources=[dict(kind='step', target='embedding', step='reduce')], control_dependencies=[]),
                  dict(step_id='partition', tool='cluster_cells', sources=[dict(kind='step', target='analysis', step='links')], control_dependencies=[]),
                  dict(step_id='score', tool='evaluate_cell_clustering', sources=[dict(kind='step', target='analysis',
@@ -287,13 +290,13 @@ def test_rejected_restatement_retains_inherited_upload_for_parameter_repair(tmp_
     decisions = {}
     for index, (text, literal) in enumerate(zip(texts, ('2', 'three', '2'))):
         start = text.index(literal)
-        declaration = dict(tool='pca_embed_cells', argument='n_components',
+        declaration = dict(tool='mock_embed_cells', argument='n_components',
                            literal=literal, start=start, end=start + len(literal))
         if index == 1:
             declaration['literal'] = '999'  # Model supplied an ungrounded value.
         decisions[text] = (dict(kind='answer_parameters', pending='@parameters', arguments=[declaration])
-                           if index == 2 else dict(kind='execute_plan', target='pca_embed_cells', arguments=[declaration],
-                               roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')]))
+                           if index == 2 else dict(kind='execute_plan', target='mock_embed_cells', arguments=[declaration],
+                               roles=[dict(tool='mock_embed_cells', port='dataset', source='source.0')]))
 
     class Model:
         model_id = PROFILE.model_id
@@ -304,7 +307,7 @@ def test_rejected_restatement_retains_inherited_upload_for_parameter_repair(tmp_
             if 'output_selection_schema_version' in value:
                 return json.dumps(dict(outputs=[dict(name='pca', step_id='pca', output_key='embedding_path')]))
             return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=[dict(
-                step_id='pca', tool='pca_embed_cells', sources=[], control_dependencies=[])])))
+                step_id='pca', tool='mock_embed_cells', sources=[], control_dependencies=[])])))
 
     app = InteractiveAgentApplication(tmp_path/'workspace', model_profiles=(PROFILE,),
         default_profile_id=PROFILE.profile_id, registry=registry, executor=executor,

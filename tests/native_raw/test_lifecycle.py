@@ -59,14 +59,15 @@ def test_native_matrix_acceptance_restart_reuse_and_integrity(tmp_path,monkeypat
         assert sorted(shapes)==[(2,0),(2,2)]
     from agent.schemas.prior_output import PriorOutputRef
     binding=bind_output(restarted.run_store,restarted.registry,'first:run','matrix','dataset')
-    class PCAPlanner:
+    class NativePlanner:
         def plan(self,request,registry):
-            return AgentPlan('pca','pca','Existing PCA consumes the accepted native matrix',(
-                PlanStep('pca','pca_embed_cells',dict(input_path=PriorOutputRef(binding,'matrix_path'),
-                    n_components=1,output_dir=str(Path(request.inputs['output_dir'])/'pca'))),))
-    downstream=ResearchAgentApplication(root,planner=PCAPlanner()).run(AgentRequest('pca','Compute PCA from the accepted matrix',{}))
+            return AgentPlan('pca','pca','Native feature selection consumes the accepted matrix',(
+                PlanStep('pca','run_snapatac2',dict(input_path=PriorOutputRef(binding,'matrix_path'),
+                    function_name='pp.select_features',output_dir=str(Path(request.inputs['output_dir'])/'pca'))),))
+    downstream=ResearchAgentApplication(root,planner=NativePlanner()).run(AgentRequest('pca','Select native accessibility features from the accepted matrix',{}))
     assert downstream.status.value=='SUCCEEDED',downstream.run_result.errors
-    assert downstream.run_result.steps[0].result['embedding_dim']==1
+    import anndata as ad
+    assert 'selected' in ad.read_h5ad(downstream.run_result.steps[0].result['matrix_path']).var
     matrix=Path(run.steps[-1].result['matrix_path']);matrix.write_bytes(b'corrupt')
     with pytest.raises(ValueError): _load_context(restarted.run_store,'first:run','historical_verified_sources.v1')
 

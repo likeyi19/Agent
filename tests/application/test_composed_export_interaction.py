@@ -55,7 +55,7 @@ def accepted_chain(app, name, stage, *, source=None):
         native.result = data
     defaults = {str:'fixture', int:2, float:.5, bool:True, dict:{}, list:[]}
     def result(tool, **overrides):
-        fields = app.registry.get(tool).result_contract.required_fields
+        fields = app.registry.accepted(tool).result_contract.required_fields
         return {k:defaults[t[0]] for k,t in fields.items()} | overrides
     pca_result = result('pca_embed_cells', status='success', input_path=str(native.source),
         analysis_path=str(pca.native), embedding_path=str(embedding), cell_ids_path=str(cell_ids), analysis_sha256=sha(pca.native),
@@ -82,7 +82,7 @@ def accepted_chain(app, name, stage, *, source=None):
         result=value, resolved_arguments=args, verification=passed('step',p.step_id),
         started_at='2026-10-24T00:00:00+00:00', finished_at='2026-10-24T00:00:00+00:00', duration_seconds=0.)
         for p,value,args in zip(plan.steps, (pca_result,graph,selected), resolved))
-    policies = tuple(ToolRecoveryPolicySnapshot(tool, app.registry.get(tool).recovery_policy_version)
+    policies = tuple(ToolRecoveryPolicySnapshot(tool, app.registry.accepted(tool).recovery_policy_version)
                      for tool in sorted(p.tool_name for p in plan.steps))
     policy = RecoveryPolicySnapshot('fixture',1,policies,fingerprint_recovery_policy('fixture',1,policies))
     app.sessions.start_turn('session',name,request,(OutputSelection('selected','result','analysis_path'),),
@@ -103,10 +103,10 @@ def accepted_chain(app, name, stage, *, source=None):
         steps=[dict(step_id=s.step_id,tool_name=s.tool_name,attempt_count=1,
             facts={k:_serialize(s.result[k]) for k in evidence_owner._TOOL_PROJECTIONS[s.tool_name].fact_fields},
             verification=dict(passed=True,freshly_verified=True,check_names=['fixture']),
-            recovery_identity=app.registry.get(s.tool_name).recovery_policy_version) for s in steps],
+            recovery_identity=app.registry.accepted(s.tool_name).recovery_policy_version) for s in steps],
         artifacts=[],provenance=dict(trace_sha256=digest([]),evidence_projection_version=1,
-            registry_tool_identities=[dict(tool_name=p.tool_name,result_contract=app.registry.get(p.tool_name).result_contract.name,
-                recovery_identity=app.registry.get(p.tool_name).recovery_policy_version) for p in plan.steps]))
+            registry_tool_identities=[dict(tool_name=p.tool_name,result_contract=app.registry.accepted(p.tool_name).result_contract.name,
+                recovery_identity=app.registry.accepted(p.tool_name).recovery_policy_version) for p in plan.steps]))
     evidence = paths.evidence / evidence_owner.ANALYSIS_EVIDENCE_FILENAME
     evidence.write_bytes(canonical(payload))
     report = paths.report / 'fixture.json'; report.write_text('{}')

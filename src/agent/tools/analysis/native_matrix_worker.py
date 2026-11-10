@@ -157,6 +157,12 @@ def main(request_path):
             native_signature=str(inspect.signature(function)), native_output_type=native_type, result_slots=slots,
             function_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             measurement=measurement, layer_semantics=layer_semantics)
+        effective = {k: p.default for k, p in inspect.signature(function).parameters.items()
+            if p.default is not inspect.Parameter.empty}
+        effective.update(kwargs)
+        receipt['effective_parameters'] = effective
+        receipt['result_shapes'] = {s: list(getattr(a, s.partition('.')[0])[s.partition('.')[2]].shape)
+            for s in slots if s.startswith(('obsm.', 'obsp.'))}
         if axis_positions is not None: receipt['source_axis_positions'] = axis_positions
         (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2))
     except Exception as exc:

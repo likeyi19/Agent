@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.raw_handoff import (
     AnnotationDeclaration, BamDeclaration, FastqDeclaration, FragmentsDeclaration,
     merge, scientific_metadata_fields,
@@ -227,12 +230,12 @@ def test_resource_advice_retains_exact_configuration_continuation(app, monkeypat
     configured = ScientificInputSet('method', 'Configured PCA settings', {'n_components': 2})
     inputs = dict(input_path='/explicit/unchanged-source.h5ad')
     objective = 'Explore this supplied matrix using the selected configured method settings.'
-    request = dict(kind='request_resources', target='pca_embed_cells', arguments=[])
+    request = dict(kind='request_resources', target='mock_embed_cells', arguments=[])
     app = guard(app, monkeypatch)
     first = app.sessions.respond('session', 'first', objective, interpreter=Model(request),
         submission=dict(execution_inputs=inputs), execution_inputs=inputs, input_sets=(configured,))
     assert first.status == 'clarification'
-    model = Model(advice(), tools=('pca_embed_cells',), direct=direct)
+    model = Model(advice(), tools=('mock_embed_cells',), direct=direct)
     answer = app.sessions.respond('session', 'advice', 'What do these settings establish and what remains unchecked?',
         interpreter=model, input_sets=(configured,))
     assert answer.status == 'answered'

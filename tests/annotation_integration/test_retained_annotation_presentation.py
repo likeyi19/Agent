@@ -1,4 +1,4 @@
-"""Fresh simulated MAESTRO output plus real Scanpy science, reports and downloads."""
+"""Fresh simulated MAESTRO output plus real SnapATAC2 science, reports and downloads."""
 import hashlib,json,os
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from scipy.sparse import csr_matrix
 from test_external_entry import external_case, case
+from test_spectral_continuation import native_runtime
 from agent.application import ResearchAgentApplication, OutputSelection
 from agent.orchestration import AgentPlan,AgentRequest,PlanStep
 from agent.schemas import StepOutputRef
@@ -32,7 +33,7 @@ def matrix_source(tmp_path):
         species='human',assembly='hg38',matrix_semantics='fragment_counts',output_dir=str(tmp_path/'output'))
 
 
-def test_native_annotation_figures_factual_report_download_and_restart(external_case,tmp_path,monkeypatch):
+def test_native_annotation_figures_factual_report_download_and_restart(external_case,tmp_path,monkeypatch,native_runtime):
     from agent.schemas.orchestration import _serialize
     from agent.application.annotation_delivery import accepted_annotation
     from agent.application.matrix_delivery import MatrixDownloadPreparer
@@ -43,16 +44,17 @@ def test_native_annotation_figures_factual_report_download_and_restart(external_
     class Planner:
         def plan(self,request,registry):
             output=Path(request.inputs['output_dir'])
-            return AgentPlan('native-presentation',request.request_id,'Synthetic annotation presentation fixture',(
-                PlanStep('pca','pca_embed_cells',dict(input_path=args['source_path'],output_dir=str(output/'pca'),n_components=3)),
-                PlanStep('neighbors','build_cell_neighbors',dict(embedding_path=StepOutputRef('pca','embedding_path'),
-                    cell_ids_path=StepOutputRef('pca','cell_ids_path'),output_dir=str(output/'neighbors'),n_neighbors=4),('pca',)),
-                PlanStep('clusters','cluster_cells',dict(analysis_path=StepOutputRef('neighbors','analysis_path'),output_dir=str(output/'clusters')),('neighbors',)),
-                PlanStep('umap','compute_cell_umap',dict(analysis_path=StepOutputRef('clusters','analysis_path'),output_dir=str(output/'umap')),('clusters',)),
-                PlanStep('annotation','annotate_scATAC_cell_types',dict(args,output_dir=str(output/'annotation')))))
+            steps=[]
+            for name,fn in [('features','pp.select_features'),('spectral','tl.spectral'),('neighbors','pp.knn'),('clusters','tl.leiden'),('umap','tl.umap')]:
+                parent=steps[-1].step_id if steps else None
+                steps.append(PlanStep(name,'run_snapatac2',dict(function_name=fn,
+                    input_path=StepOutputRef(parent,'matrix_path') if parent else args['source_path'],
+                    output_dir=str(output/name)),depends_on=(parent,) if parent else ()))
+            steps.append(PlanStep('annotation','annotate_scATAC_cell_types',dict(args,output_dir=str(output/'annotation'))))
+            return AgentPlan('native-presentation',request.request_id,'Synthetic annotation presentation fixture',tuple(steps))
     app=ResearchAgentApplication(workspace,planner=Planner());sid='retirement-annotation-smoke-20261108';app.sessions.create(sid)
     state=app.sessions.run(sid,'retained-native',AgentRequest('retained-native','Inspect the synthetic native annotation presentation',{}),
-        (OutputSelection('annotation','annotation','manifest_path'),OutputSelection('umap','umap','analysis_path')),expected_generation=0)
+        (OutputSelection('annotation','annotation','manifest_path'),OutputSelection('umap','umap','matrix_path')),expected_generation=0)
     assert state.turn('retained-native').status=='activated',state.turn('retained-native')
     assert len(calls)==1
     run=app.run_store.load('retained-native:run');result=_serialize(run.steps[-1].result)
@@ -114,5 +116,5 @@ def test_native_annotation_figures_factual_report_download_and_restart(external_
         (O/'audit/smoke-result.json').write_text(json.dumps(dict(workspace=str(workspace),session_id=sid,
             revision_id=state.revisions[-1].revision_id,run_id=run.run_id,source_path=args['source_path'],
             source_sha256=hashlib.sha256(source_bytes).hexdigest(),annotation=result,
-            scientific_scope='Simulated MAESTRO backend; real native Scanpy PCA/neighbors/Leiden/UMAP on synthetic 16x8 counts. Not original PBMC science.',
+            scientific_scope='Simulated MAESTRO backend; real native SnapATAC2 feature selection/Spectral/KNN/Leiden/UMAP on synthetic 16x8 counts. Not original PBMC science.',
             figures=[f['figure_kind'] for f in figures]),indent=2))

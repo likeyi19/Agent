@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 import numpy as np
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 from scipy import sparse
 
 from agent.application import InteractiveAgentApplication
@@ -31,7 +34,7 @@ COMPARE = DIRECT + ' Compare groups with the supplied annotations.'
 PENDING = 'I will supply cells; use 2 components and compare groups with supplied annotations.'
 PENDING_EXACT = PENDING + f' The comparison column is "{LABEL}".'
 REPLY = 'Continue the original task using the supplied annotations.'
-PORT = dict(tool='pca_embed_cells', port='dataset')
+PORT = dict(tool='mock_embed_cells', port='dataset')
 TRUTH = dict(tool='evaluate_cell_clustering', port='ground_truth_dataset')
 
 
@@ -72,28 +75,28 @@ class Model:
         if 'turn_schema_version' in value:
             text = value['utterance']
             if text in (PENDING, PENDING_EXACT):
-                decision = dict(kind='request_roles', target='pca_embed_cells',
+                decision = dict(kind='request_roles', target='mock_embed_cells',
                     required_roles=[PORT, TRUTH], roles=[], arguments=[
-                        declaration(text, 'pca_embed_cells', 'n_components', '2')])
+                        declaration(text, 'mock_embed_cells', 'n_components', '2')])
                 if self.prefile_exact:
                     decision['arguments'].append(declaration(text, 'evaluate_cell_clustering', 'label_key', LABEL))
             else:
                 source = 'source.1' if self.independent else 'source.0'
                 roles = [] if self.direct else [dict(PORT, source=source), dict(TRUTH, source=source)]
                 arguments = [] if self.pending and not self.independent else [
-                    declaration(text, 'pca_embed_cells', 'n_components', '3')]
+                    declaration(text, 'mock_embed_cells', 'n_components', '3')]
                 if not self.direct and not self.prefile_exact:
                     arguments.append(declaration(text, 'evaluate_cell_clustering', 'label_key',
                                                  'supplied annotations', value=LABEL, source=source, mode='offered'))
                 decision = (dict(kind='answer_roles', pending='@roles', roles=roles, arguments=arguments)
                     if self.pending and not self.independent else
-                    dict(kind='execute_plan', target='pca_embed_cells', roles=roles, arguments=arguments))
+                    dict(kind='execute_plan', target='mock_embed_cells', roles=roles, arguments=arguments))
             return json.dumps(dict(turn_schema_version=1, decision=decision), ensure_ascii=False)
         if 'output_selection_schema_version' in value:
             return json.dumps(dict(outputs=[dict(name='accepted result',
                 step_id='reduce' if self.direct else 'score',
                 output_key='analysis_path' if self.direct else 'report_path')]))
-        steps = [dict(step_id='reduce', tool='pca_embed_cells', sources=[], control_dependencies=[])]
+        steps = [dict(step_id='reduce', tool='mock_embed_cells', sources=[], control_dependencies=[])]
         if not self.direct:
             steps.extend([
                 dict(step_id='links', tool='build_cell_neighbors', sources=[

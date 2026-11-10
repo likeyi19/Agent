@@ -22,6 +22,9 @@ FUNCTIONS = {
     'metrics.tsse': ('exclude_chroms', 'inplace', 'n_jobs'),
     'metrics.frag_size_distr': ('max_recorded_size', 'add_key', 'inplace', 'n_jobs'),
     'pp.filter_cells': ('min_counts', 'min_tsse', 'max_counts', 'max_tsse', 'inplace', 'n_jobs'),
+    'pp.call_cells': ('use_rep', 'inplace', 'n_jobs'),
+    'pp.add_tile_matrix': ('bin_size', 'chunk_size', 'exclude_chroms', 'min_frag_size', 'max_frag_size',
+        'counting_strategy', 'value_type', 'summary_type', 'inplace', 'n_jobs'),
     'pp.make_peak_matrix': ('chunk_size', 'use_x', 'min_frag_size', 'max_frag_size', 'counting_strategy',
         'value_type', 'summary_type', 'use_rep', 'inplace'),
 }
@@ -43,6 +46,8 @@ LIMITATIONS = ('Native SnapATAC2 preprocessing, not biological validation. Barco
     'Import excludes records outside supplied chromosome sizes. Native defaults are min_num_fragments=200 and sorted_by_barcode=True; '
     'task input-order selection is recorded separately and explicit sorted_by_barcode kwargs prevail. '
     'The imported barcode population reflects native import retention, distinct from later filter_cells selection. '
+    'Task Otsu removes the depth prefilter and fits omitted filter minima on native n_fragment/log10 and tsse/linear, '
+    'not pycisTopic fragments-in-peaks or its TSS calculation; explicit minima prevail. '
     'BAM filtering/deduplication and endpoint shifts follow the recorded native method, not historical Agent BAM policies; duplicate-flagged reads are excluded. '
     'Native import n_fragment excludes mitochondrial records; count matrices do not weight column-five duplicate support. '
     'Default make_peak_matrix counts paired insertions, not fragment-body overlaps. Native filter_cells defaults to min_counts=1000 and min_tsse=5. '
@@ -126,13 +131,13 @@ def execute(owner, args, execution_identity):
         cells, features = (None, None) if is_bam else axes(stage / payload)
         if before is not None:
             prior_cells, prior_features = before
-            if name == 'pp.filter_cells' and kwargs.get('inplace', True):
+            if name in ('pp.filter_cells', 'pp.call_cells') and kwargs.get('inplace', True):
                 positions = iter(prior_cells)
                 if any(not any(old == cell for old in positions) for cell in cells):
                     raise AuthorityError('Native filtering changed ordered source cell identities')
             elif cells != prior_cells:
                 raise AuthorityError('Native function changed ordered source cell identities')
-            if name != 'pp.make_peak_matrix' and features != prior_features:
+            if name not in ('pp.make_peak_matrix', 'pp.add_tile_matrix') and features != prior_features:
                 raise AuthorityError('Native QC/filtering changed feature identities')
         source = sources[0]
         summary = dict(status='success', contract_version=owner.CONTRACT,
@@ -147,10 +152,18 @@ def execute(owner, args, execution_identity):
                 declarations={key: args[key] for key in ('species', 'assembly', 'matrix_semantics') if key in args}),
             software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
             result_slots=receipt['result_slots'], limitations=LIMITATIONS)
+        if args.get('qc_thresholds') is not None:
+            summary['parameters']['qc_thresholds'] = args['qc_thresholds']
+            if 'threshold_selection' in receipt:
+                summary['parameters']['threshold_selection'] = receipt['threshold_selection']
+            summary['parameters']['omitted_optional_arguments'] = 'native defaults except recorded Agent choices'
+            summary['parameters']['agent_selected_parameters'] = {
+                key: value for key, value in receipt['effective_parameters'].items()
+                if key in ('min_num_fragments', 'min_counts', 'min_tsse') and key not in args.get('kwargs', {})}
         if args.get('fragment_order') is not None:
             summary['parameters']['fragment_order'] = args['fragment_order']
-            summary['parameters']['agent_selected_parameters'] = {
-                key: value for key, value in kwargs.items() if key not in args.get('kwargs', {})}
+            summary['parameters'].setdefault('agent_selected_parameters', {}).update({
+                key: value for key, value in kwargs.items() if key not in args.get('kwargs', {})})
         if args.get('counting_strategy') is not None:
             # A supplied scalar may be a user declaration or registered Planner
             # choice. The captured request/plan owns that attribution; do not
@@ -161,8 +174,8 @@ def execute(owner, args, execution_identity):
             summary['parameters']['population'] = dict(stage='native_import', retained_barcodes=len(cells),
                 min_num_fragments=receipt['effective_parameters']['min_num_fragments'],
                 pre_import_barcode_count=None, reason='Native import retention; Agent did not separately count the source barcode population')
-        elif name == 'pp.filter_cells':
-            summary['parameters']['population'] = dict(stage='native_cell_filter', input_barcodes=len(before[0]),
+        elif name in ('pp.filter_cells', 'pp.call_cells'):
+            summary['parameters']['population'] = dict(stage='native_cell_filter' if name == 'pp.filter_cells' else 'native_ordmag_cell_call', input_barcodes=len(before[0]),
                 selected_barcodes=len(cells) if kwargs.get('inplace', True) else receipt['selected_count'],
                 output_barcodes=len(cells), applied=kwargs.get('inplace', True))
         expected = {r['path']: r for r in [*sources, *receipt['implementation']]}

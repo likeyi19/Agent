@@ -12,7 +12,6 @@ from .embedding_analysis import (
     cluster_cells,
     compute_cell_umap,
 )
-from .pca_embedding import pca_embed_cells
 from .epizoo_embedding import EpiZooEmbeddingToolResult, epizoo_embed_cells
 from .label_transfer import CellLabelTransferToolResult, transfer_cell_labels
 from .replicate_pseudobulk import (
@@ -44,7 +43,6 @@ __all__ = [
     "cluster_cells",
     "compute_cell_umap",
     "epizoo_embed_cells",
-    "pca_embed_cells",
     "evaluate_cell_clustering",
     "transfer_cell_labels",
     "build_replicate_pseudobulk",

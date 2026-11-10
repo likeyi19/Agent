@@ -1,5 +1,14 @@
 # Agent
 
+Stage 1 native scATAC consolidation supersedes current dedicated-PCA and fixed
+ordinary raw-QC recommendations below. Ordinary compatible scATAC uses native
+SnapATAC2 matrix preparation, `pp.select_features`, `tl.spectral`, KNN, Leiden
+and UMAP; EpiZoo remains separate. Uncalled single-sample fragments use documented
+Otsu selection with all observed barcodes initially retained and explicit thresholds
+respected. OrdMag is explicit only. Dedicated PCA is read-only accepted history;
+explicit native PCA remains. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
+owns these methods. No Stage 2 work, commit or push is authorized.
+
 The [fresh PBMC10k acceptance](../agent-data/acceptance/scientific-results/pbmc10k-fresh-2026-11-09/REPORT.md)
 retains **CONDITIONAL GO**: genuine Firefox/official OpenAI raw-to-MAESTRO
 science and verified downloads are complete; that acceptance recorded numeric QC

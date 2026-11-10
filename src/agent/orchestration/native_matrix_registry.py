@@ -41,8 +41,15 @@ def tool_spec(owner):
     raw_fields = set()
     if owner.package == 'snapatac2':
         from agent.tools.analysis import snapatac_raw as raw
+        optional['qc_thresholds'] = arg((str,),
+            'Task choice for uncalled single-sample fragments: otsu retains all observed barcodes on import '
+            '(min_num_fragments=0), then derives omitted filter_cells minima from native n_fragment '
+            '(log10, floor 100) and tsse (linear, floor 1), skimage Otsu with 5000 bins. '
+            'Explicit minima prevail independently. Preserve called cells; no automatic OrdMag stacking. '
+            'Explicit native calls omit this choice and retain native defaults.',
+            choices=('otsu',), scientific_parameter=True, conversational_choice=True, planner_choice=True)
         optional['counting_strategy'] = arg((str,),
-            'Native pp.make_peak_matrix counting strategy. For research tasks select a representation compatible '
+            'Native pp.make_peak_matrix/pp.add_tile_matrix counting strategy. For research tasks select a representation compatible '
             'with the current objective and stated downstream method: fragment gives fragment-body overlaps, '
             'insertion gives endpoints, paired-insertion gives paired endpoints. MAESTRO region-count annotation '
             'accepts fragment counts, not insertion counts. Preserve explicit kwargs; for explicit native calls '
@@ -105,11 +112,25 @@ def tool_spec(owner):
         'no annotation method or region vocabulary is mandatory. Explicit native calls retain omitted defaults, '
         'and explicit user kwargs or counting choices prevail. Reuse accepted fragment storage when a later '
         'matrix needs different counting; do not relabel or silently convert an existing measurement. '
-        'Use native import min_num_fragments=200 and filter_cells min_counts=1000/min_tsse=5.0 by omission. '
+        'For ordinary uncalled raw fragments, select qc_thresholds=otsu on import and filter_cells. '
+        'Import then retains all observed barcodes unless the user supplies its retention threshold. '
+        'Accepted older imports retain their recorded populations; do not describe Otsu fitted after a depth '
+        'prefilter as an untruncated sample fit. Use original fragments when a fresh uncalled population is needed. '
+        'Native filter_cells receives the sample Otsu minima directly; explicit minima prevail. '
+        'Already called inputs retain established identities unless filtering is requested. '
+        'Barcode correction and a whitelist alone do not establish called-cell identities. '
+        'pp.call_cells is explicit native OrdMag, never an additional default before or after Otsu. '
+        'Omitted task selection on explicit native calls retains native import/filter defaults. '
         'Never substitute old Agent TSS 4 or global fragment-body counting defaults. '
         'A user request to retain low-depth/all barcodes may explicitly bind '
         'min_num_fragments=0; do not lower thresholds just for a small dataset. Imported barcodes and later filtered '
-        'barcodes are distinct populations. Native import has no X measurement: build a matrix before PCA/LSI. '
+        'barcodes are distinct populations. Native import has no X measurement: use native pp.add_tile_matrix '
+        'or pp.make_peak_matrix when a matrix is needed, then pp.select_features and tl.spectral. '
+        'Processed compatible peak-count H5AD starts at pp.select_features; no raw reimport or cell calling. '
+        'Ordinary non-EpiZoo scATAC reduction uses Spectral with native defaults. Build pp.knn, tl.leiden '
+        'and tl.umap from the same X_spectral representation. Reuse accepted exact matrices/graphs across turns '
+        'and clustering for annotation without recomputing reductions. EpiZoo remains a separate explicit '
+        'model-based capability. Explicit PCA uses run_scanpy pp.pca or run_episcanpy tl.pca. '
         'Preserve supplied barcode/coordinate history and declared source/reference species/assembly. '
         'Use optional native reference ports only for the function that consumes them. '
     ) if owner.package == 'snapatac2' else 'No genome is required for these matrix functions. '

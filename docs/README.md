@@ -26,8 +26,9 @@ with a CONDITIONAL GO recommendation for those historical scopes. Current cell-t
 benchmark operations are retired; see the [current results guide](guides/scientific-results-and-evaluation.md).
 The [backend installation guide](guides/backends.md) covers the managed EpiZoo and
 EpiAgent source snapshots, optional dependencies and exact import origins.
-The [PCA representation guide](guides/pca-analysis.md) explains explicit count
-preprocessing, original-measurement preservation and interpretation limits.
+The [native scATAC guide](guides/native-scatac-analysis.md) explains native QC,
+Otsu thresholds, feature selection and Spectral. The [PCA history guide](guides/pca-analysis.md)
+records retired publication meanings and explicit native PCA.
 The [raw scATAC guide](guides/raw-scatac-processing.md) covers FASTQ/BAM prerequisites,
 large-file deployment, matrix semantics, downstream handoff and the separately
 recorded genuine FASTQ and BAM acceptance scopes.

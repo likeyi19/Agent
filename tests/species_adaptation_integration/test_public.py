@@ -341,7 +341,7 @@ def test_accepted_neutral_matrix_exposes_exact_dataset_for_later_consumers(case,
     assert {i.binding.source_port for i in context.items}=={'matrix','dataset'}
     binding=bind_output(app.run_store,app.registry,'adopt:run','adopt','dataset')
     assert binding in [i.binding for i in context.items]
-    for consumer in ('epizoo_embed_cells','inspect_scATAC','pca_embed_cells'):
+    for consumer in ('epizoo_embed_cells','inspect_scATAC','run_snapatac2'):
         channel_for(binding,consumer,'dataset',app.registry)
     with prior_output_store(app.run_store):
         path=resolve(PriorOutputRef(binding,'matrix_path'))

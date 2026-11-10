@@ -10,6 +10,37 @@ import sys
 import traceback
 
 
+def otsu_thresholds(obs, kwargs):
+    """pycisTopic-style sample thresholds on SnapATAC2's own QC measurements.
+
+    The package supplies Otsu; Agent only selects/transforms its input and
+    passes the resulting scalars to native filter_cells. Explicit minima,
+    including None, take precedence independently.
+    """
+    import numpy as np
+    from skimage.filters import threshold_otsu
+    selected, details = {}, {}
+    for key, field, floor, logarithmic in (
+            ('min_counts', 'n_fragment', 100, True), ('min_tsse', 'tsse', 1.0, False)):
+        if key in kwargs:
+            details[key] = dict(method='explicit', value=kwargs[key])
+            continue
+        values = np.asarray(obs[field], dtype=float)
+        fitting = values[np.isfinite(values) & (values >= floor)]
+        if not len(fitting):
+            raise ValueError('Otsu has no eligible ' + field + ' observations; supply an explicit ' + key)
+        transformed = np.log10(fitting) if logarithmic else fitting
+        threshold = float(threshold_otsu(transformed, nbins=5000))
+        selected[key] = float(10 ** threshold) if logarithmic else threshold
+        details[key] = dict(method='skimage.filters.threshold_otsu', field=field,
+            transform='log10' if logarithmic else 'identity', fitting_floor=floor,
+            fitting_barcodes=len(fitting), nonfinite_barcodes=int((~np.isfinite(values)).sum()),
+            value=selected[key], nbins=5000)
+    return selected, dict(method='sample-level Otsu', input_barcodes=len(np.asarray(obs['n_fragment'])), thresholds=details,
+        measurement='SnapATAC2 n_fragment and tsse; not pycisTopic fragments-in-peaks or TSS scores',
+        comparison='native filter_cells inclusive minima (>=)')
+
+
 def peak_measurement(source_measurement, strategy):
     """Meaning of the native counting choice, shared by planning and publication."""
     return ({'fragment': 'fragment_counts', 'insertion': 'insertion_counts',
@@ -27,7 +58,8 @@ def main(request_path):
             raise ValueError('Installed package version differs from recorded dispatch')
         functions = {'pp.make_fragment_file': snap.pp.make_fragment_file, 'pp.import_fragments': snap.pp.import_fragments,
             'metrics.tsse': snap.metrics.tsse, 'metrics.frag_size_distr': snap.metrics.frag_size_distr,
-            'pp.filter_cells': snap.pp.filter_cells, 'pp.make_peak_matrix': snap.pp.make_peak_matrix}
+            'pp.filter_cells': snap.pp.filter_cells, 'pp.call_cells': snap.pp.call_cells,
+            'pp.add_tile_matrix': snap.pp.add_tile_matrix, 'pp.make_peak_matrix': snap.pp.make_peak_matrix}
         name = req['function_name']; fn = functions[name]; kw = req['kwargs']; inputs = req['raw_inputs']
         implementation_paths = [Path(inspect.getsourcefile(fn)), Path(snap._snapatac2.__file__)]
         def implementation():
@@ -36,6 +68,11 @@ def main(request_path):
         native_implementation = implementation()
         call = dict(kw); a = None; result = None; slots = []; measurement = inputs.get('matrix_semantics')
         declarations = {k: inputs[k] for k in ('species', 'assembly') if inputs.get(k) is not None}
+        threshold_selection = None
+        if inputs.get('qc_thresholds') == 'otsu' and name == 'pp.filter_cells':
+            from skimage.filters import threshold_otsu
+            implementation_paths.append(Path(inspect.getsourcefile(threshold_otsu)))
+            native_implementation = implementation()
         if name == 'pp.make_fragment_file':
             compression = kw.get('compression')
             filename = 'fragments.tsv.zst' if compression == 'zstandard' else 'fragments.tsv' if compression is None else 'fragments.tsv.gz'
@@ -66,13 +103,16 @@ def main(request_path):
                         raise ValueError('Supplied ' + key + ' conflicts with the native source declaration')
                     declarations[key] = existing
             if name == 'metrics.tsse': call['gene_anno'] = inputs['gene_anno_path']
-            if name == 'pp.make_peak_matrix':
+            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
                 source_measurement = ('X_region_aggregation' if kw.get('use_x') else 'paired_fragments' if 'fragment_paired' in a.obsm
                     else 'single_end_insertions' if 'fragment_single' in a.obsm else 'native_base_values')
                 if inputs.get('peaks_path'): call['peak_file'] = inputs['peaks_path']
-                if not kw.get('inplace', False): call['file'] = str(stage / 'matrix.h5ad')
+                if not kw.get('inplace', name == 'pp.add_tile_matrix'): call['file'] = str(stage / 'matrix.h5ad')
+            if name == 'pp.filter_cells' and inputs.get('qc_thresholds') == 'otsu':
+                thresholds, threshold_selection = otsu_thresholds(a.obs, kw)
+                call.update(thresholds)
             result = fn(a, **call)
-            if name == 'pp.make_peak_matrix':
+            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
                 if result is not None:
                     a.close(); a = result
                 strategy = kw.get('counting_strategy', 'paired-insertion')
@@ -80,7 +120,7 @@ def main(request_path):
                 slots = ['X']
             elif name == 'metrics.tsse': slots = ['obs.tsse', 'uns.library_tsse', 'uns.frac_overlap_TSS', 'uns.TSS_profile']
             elif name == 'metrics.frag_size_distr': slots = ['uns.' + kw.get('add_key', 'frag_size_distr')]
-            elif name == 'pp.filter_cells': slots = ['obs']
+            elif name in ('pp.filter_cells', 'pp.call_cells'): slots = ['obs']
             if result is not None and not isinstance(result, type(a)):
                 # Preserve inplace=False as an independent native return, never apply its mask.
                 spec = util.spec_from_file_location('native_matrix_worker', Path(__file__).with_name('native_matrix_worker.py'))
@@ -101,7 +141,7 @@ def main(request_path):
                     measurement = read_elem(uns['matrix_semantics']) if 'matrix_semantics' in uns else 'native_fragment_positions_and_lengths'
                 write_elem(uns, 'matrix_semantics', measurement)
                 for key, value in declarations.items(): write_elem(uns, key, value)
-                if name == 'pp.make_peak_matrix':
+                if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
                     # Project native coordinate names, without rebuilding counts
                     # or changing the native feature order.
                     import pandas as pd
@@ -128,7 +168,10 @@ def main(request_path):
             native_signature=str(inspect.signature(fn)), native_output_type=native_type,
             function_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(), result_slots=slots,
             effective_parameters=effective, measurement=measurement, implementation=native_implementation)
-        if name == 'pp.filter_cells' and result is not None:
+        if threshold_selection is not None:
+            receipt['threshold_selection'] = threshold_selection
+            receipt['versions']['scikit-image'] = importlib.metadata.version('scikit-image')
+        if name in ('pp.filter_cells', 'pp.call_cells') and result is not None:
             receipt['selected_count'] = len(result)
         (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2))
         return 0

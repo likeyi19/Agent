@@ -1,10 +1,8 @@
-"""PCA publication through the existing operation proof and authority mechanisms."""
+"""Read-only accepted PCA publications; no execution, replay or new publication."""
 from pathlib import Path
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.schemas.orchestration import _serialize
-from agent.tools.data.authority_context import current, owned_verification
-from agent.tools._file_identity import file_closure
-from .neighbors_publication import read_json, _write_json, _shape, _file, _sha
+from .neighbors_publication import read_json, _shape, _file, _sha
 
 KIND = 'cell_pca'
 CONTRACT = 'cell-pca-publication.v1'
@@ -61,33 +59,11 @@ def _result(value,path,sha):
     return dict(value['result'],manifest_path=str(path),manifest_sha256=sha)
 
 
-def publish(args,result,path):
-    args=arguments(args);ctx=current();identity=None
-    if ctx is not None and ctx.execution is not None and ctx.execution[:2]==(KIND,Path(args['output_dir'])):
-        identity=ctx.execution[2]
-    contract,profile=_identity(args)
-    value=dict(contract=contract,profile=profile,execution_identity=identity,arguments=args,result=result,
-        files=file_closure([result['analysis_path'],result['cell_ids_path']]),sources=file_closure([args['input_path']]))
-    sha=_write_json(path,value,overwrite=args['overwrite'])
-    return verify_publication(path,expected_sha256=sha)
-
-
-@owned_verification(KIND)
-def verify_publication(path,*,expected_sha256=None):
-    value,sha=load(path,expected_sha256)
-    for field in ('files','sources'):
-        if file_closure(f['path'] for f in value[field])!=value[field]:
-            raise AuthorityError('PCA source or publication bytes changed.')
-    from .pca_embedding import _verify_result
-    _verify_result(value['arguments'],value['result'])
-    return _result(value,path,sha)
-
-
-def verify_result(args,result):
-    value,sha=load(result['manifest_path'],result['manifest_sha256'])
-    if value['arguments']!=arguments(args) or dict(result)!=verify_publication(result['manifest_path'],expected_sha256=sha):
-        raise AuthorityError('PCA result differs from exact execution publication.')
-    return value
+def verify_publication(path, *, expected_sha256=None):
+    from agent.tools.data.raw_history import accepted
+    value, sha = load(path, expected_sha256)
+    accepted(KIND, path, sha)
+    return _result(value, path, sha)
 
 
 def describe(path,sha,context):
@@ -110,18 +86,18 @@ def reuse_result(kind,description,proof,kwargs):
 def proof_metadata(kind,result,context):return dict(result)
 
 
-def publication_record(context,tool_name,args,result,execution_identity,result_metadata):
-    value,sha=load(result['manifest_path'],result['manifest_sha256'])
-    if (tool_name!='pca_embed_cells' or value['execution_identity']!=execution_identity
-            or value['arguments']!=arguments(args) or _serialize(result_metadata)!=dict(result)
-            or _result(value,result['manifest_path'],sha)!=dict(result)):
-        raise AuthorityError('PCA publication lacks exact producing execution identity.')
-    description,key=context.describe(KIND,Path(result['manifest_path']),sha)
-    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.cell-pca',artifact_contract=value['contract'],
-        publication_path=result['manifest_path'],manifest_sha256=sha,files=description['files'],
-        execution_identity=execution_identity,arguments_sha256=digest(arguments(args)),receipt_sha256=sha,
-        upstream={'producer_inputs':digest(description['proof_identity'])},
-        resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=dict(result)),
-        science_profile=value['profile'],producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',
-        completion='succeeded',integrity_scope='artifact_integrity_lineage_historical_sources.v1',
-        source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))
+def publication_record(context, tool_name, args, result, execution_identity, result_metadata):
+    from agent.tools.data.raw_history import accepted
+    value, record = accepted(KIND, result['manifest_path'], result['manifest_sha256'], context=context)
+    if (tool_name != 'pca_embed_cells' or record['execution_identity'] != execution_identity
+            or record['arguments_sha256'] != digest(arguments(args))
+            or record['resources']['result_metadata'] != _serialize(result_metadata)
+            or _result(value, result['manifest_path'], result['manifest_sha256']) != dict(result)):
+        raise AuthorityError('Historical PCA differs from its accepted execution.')
+    return VerifiedArtifactAuthority(record)
+
+
+def hooks():
+    from agent.orchestration.registry import ScientificAuthorityHooks
+    return ScientificAuthorityHooks(kind=KIND, producer_ports=('embedding',), describe=describe,
+        publication_record=publication_record, reuse_result=reuse_result, proof_metadata=proof_metadata)

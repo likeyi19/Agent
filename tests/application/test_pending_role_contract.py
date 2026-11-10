@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.local_resources import (
     RegisteredInputGroup, ResourceAdmissionError, group_role_inputs, validate_group_roles,
 )
@@ -119,7 +122,7 @@ def test_role_answer_retains_reviewed_scalar_choice_wire():
 
 
 @pytest.mark.parametrize('tool,ports', [
-    ('inspect_scATAC', {'dataset'}), ('pca_embed_cells', {'dataset'}),
+    ('inspect_scATAC', {'dataset'}), ('mock_embed_cells', {'dataset'}),
     ('run_signac', {'dataset'}), ('run_episcanpy', {'dataset'}), ('run_snapatac2', {'dataset'}),
     ('run_scanpy', {'dataset'}), ('run_cicero_cds', {'dataset'}),
     ('transfer_cell_labels', {'reference_dataset', 'query_dataset'}),
@@ -188,7 +191,7 @@ def test_pending_distinct_consumers_can_explicitly_share_one_exact_source(monkey
     group = selection()
     group = RegisteredInputGroup(group.members if attachment_candidates else group.members[:1], {},
                                  attachment_candidates=attachment_candidates)
-    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'pca_embed_cells')]
+    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'mock_embed_cells')]
     assigned = [role | dict(source='source.0') for role in required]
     def forbidden(*args, **kwargs):
         raise AssertionError('Pure pending role admission opened a scientific source.')
@@ -204,7 +207,7 @@ def test_pending_distinct_consumers_can_explicitly_share_one_exact_source(monkey
 @pytest.mark.parametrize('complete', [False, True])
 def test_pending_explicit_shared_alias_rejects_different_source_bindings(complete):
     registry, group = build_default_tool_registry(), selection()
-    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'pca_embed_cells')]
+    required = [dict(tool=tool, port='dataset') for tool in ('inspect_scATAC', 'mock_embed_cells')]
     assigned = [role | dict(source=f'source.{index}') for index, role in enumerate(required)]
     with pytest.raises(ResourceAdmissionError) as rejected:
         validate_group_roles(group, assigned, registry, required, complete=complete)

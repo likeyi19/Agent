@@ -134,15 +134,15 @@ existing groups only is preserved as `grouping_strategy=reuse_only` and does not
 authorize computing replacements. Multiple qualified groupings still require an
 unambiguous selection. UMAP is not required to annotate groups.
 
-The Registry now permits the Planner to select the documented PCA preprocessing
-vocabulary when the user has not supplied a choice. Declared raw region counts or
-binary accessibility can use the existing `tfidf_l2` route; explicitly supplied
-choices take precedence and other settings retain native defaults. This is a
-recorded method selection, not an inferred user instruction or a new global PCA
-default. TF-IDF/PCA remains exploratory and is not Signac LSI or biological proof.
+Ordinary compatible region-count or binary-accessibility inputs use native
+SnapATAC2 feature selection, Spectral, KNN and Leiden with native defaults.
+Explicitly supplied choices take precedence. This is a recorded method selection,
+not an inferred user instruction or biological proof. EpiZoo remains a separate
+model-based capability, and explicit PCA uses the native-function interface.
 
-The annotation owner accepts exact clustered-analysis path/checksum ports, verifies
-its PCA original-file identity and exact ordered cells, and retains the clustering
+The annotation owner accepts exact clustered-analysis path/checksum ports and
+native count-preserving H5AD results. It verifies exact original-file identity
+and ordered cells through accepted lineage, and retains the clustering
 artifact in the annotation publication's integrity closure. Original measurements
 remain in the original count slot. Legacy embedding results without exact source
 identity cannot establish this correspondence. The existing annotation publication

@@ -73,7 +73,6 @@ _GROUP_PORTS = (
     ('inspect_scATAC_fragments', 'source_index'),
     ('inspect_scATAC', 'dataset'),
     ('epizoo_embed_cells', 'dataset'),
-    ('pca_embed_cells', 'dataset'),
     ('adopt_scATAC_cell_by_features', 'source'),
     ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
@@ -103,10 +102,10 @@ _BAM_COMPOSITION = 'bam-science.v1'
 _FASTQ_COMPOSITION = 'fastq-science.v1'
 _NATIVE_COMPOSITION = 'native-science.v1'
 # These consumers may receive user parameters; only the planner binds matrix outputs.
-_RAW_ANALYSIS_TOOLS = ('pca_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
+_RAW_ANALYSIS_TOOLS = ('build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
 _FASTQ_SELECTION_ERRORS = ('FASTQ_RESOURCE_AMBIGUOUS',)
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
-_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'pca_embed_cells', 'build_cell_neighbors',
+_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors',
                          'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
@@ -2008,7 +2007,7 @@ class LocalResourceAdmission:
         source_path = values['input_path']
         channels = None
         for step in plan.steps:
-            if step.tool_name not in ('inspect_scATAC', 'epizoo_embed_cells', 'pca_embed_cells'):
+            if step.tool_name not in ('inspect_scATAC', 'epizoo_embed_cells'):
                 continue
             argument = 'path' if step.tool_name == 'inspect_scATAC' else 'input_path'
             source = step.arguments.get(argument)
@@ -2078,7 +2077,7 @@ class LocalResourceAdmission:
             for step in steps:
                 if step.tool_name == 'inspect_raw_scATAC': self._fastq_inspection_arguments(values, step.resolved_arguments)
             return
-        h5ad_steps = [step for step in steps if step.tool_name in {'inspect_scATAC','epizoo_embed_cells','pca_embed_cells'}] if binding.tool_name == 'inspect_scATAC' else []
+        h5ad_steps = [step for step in steps if step.tool_name in {'inspect_scATAC','epizoo_embed_cells'}] if binding.tool_name == 'inspect_scATAC' else []
         if h5ad_steps:
             values = _serialize(binding.execution_inputs)
             for step in h5ad_steps:

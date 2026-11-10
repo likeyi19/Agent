@@ -1,6 +1,6 @@
-"""Read-only metadata for accepted retired raw-tool records.
+"""Read-only metadata for accepted retired scientific-tool records.
 
-No callable, recovery hook, registration, provider offer or execution capability.
+No scientific execution, recovery hook, registration or provider offer.
 """
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,13 +23,13 @@ class HistoricalTool:
     planning: object = None
 
 
-@lru_cache(maxsize=7)
+@lru_cache(maxsize=8)
 def tool(name):
     from .registry import (UnknownToolError, ArgumentSpec, ArgumentPlanningSemantics, ResultContract,
         ArtifactSemanticKind, PlanningSourceEligibility, PlanningProvenanceRole, SemanticProducerPortSpec,
         SemanticPortMember, _semantic_argument_port)
     rows = json.loads(Path(__file__).with_name('raw_history_contracts.json').read_text())
-    if name not in rows: raise UnknownToolError('No reviewed historical raw-tool reader')
+    if name not in rows: raise UnknownToolError('No reviewed historical tool reader')
     row = rows[name]; types = dict(str=str, int=int, float=float, dict=dict, list=list, tuple=tuple, bool=bool, Path=Path, NoneType=type(None))
     def arguments(values):
         result = {}
@@ -45,10 +45,15 @@ def tool(name):
         return MappingProxyType(result)
     ports = tuple(SemanticProducerPortSpec(**dict(p, members=tuple(SemanticPortMember(**m) for m in p['members']))) for p in row['ports'])
     required, optional = arguments(row['required_arguments']), arguments(row['optional_arguments'])
+    hooks = None
+    if name == 'pca_embed_cells':
+        from agent.tools.analysis.pca_publication import hooks as pca_hooks
+        hooks = pca_hooks()
     scalars = tuple(_semantic_argument_port(key, required=key in required) for key, value in {**required, **optional}.items()
                     if value.planning is not None and value.planning.scientific_parameter)
     return HistoricalTool(name, row['policy'], ResultContract(row['result_name'], {k:tuple(types[t] for t in ts) for k,ts in row['fields'].items()}),
-        required, optional, SimpleNamespace(producer_ports=ports, consumer_ports=scalars))
+        required, optional, SimpleNamespace(producer_ports=ports, consumer_ports=scalars),
+        scientific_authority=hooks)
 
 
 class ReplayRegistry:

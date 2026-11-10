@@ -169,9 +169,15 @@ class MatrixPackage:
         kwargs = native_kwargs(self.FUNCTIONS, args)
         if self.package == 'snapatac2':
             from . import snapatac_raw as raw
+            if args.get('qc_thresholds') is not None:
+                if args['qc_thresholds'] != 'otsu' or function not in ('pp.import_fragments', 'pp.filter_cells'):
+                    raise ValueError('Otsu threshold selection applies only to uncalled import or native filtering')
+                if function == 'pp.import_fragments':
+                    kwargs = dict(kwargs)
+                    kwargs.setdefault('min_num_fragments', 0)
             if args.get('counting_strategy') is not None:
-                if function != 'pp.make_peak_matrix':
-                    raise ValueError('counting_strategy applies only to native pp.make_peak_matrix')
+                if function not in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
+                    raise ValueError('counting_strategy applies only to native peak or tile matrix construction')
                 if 'counting_strategy' in kwargs and kwargs['counting_strategy'] != args['counting_strategy']:
                     raise ValueError('Explicit native kwargs and scalar have conflicting counting_strategy values')
                 kwargs = dict(kwargs, counting_strategy=args['counting_strategy'])
@@ -219,6 +225,7 @@ class MatrixPackage:
             function_name=args['function_name'], kwargs=self.native_arguments(args), second_matrix=bool(args.get('second_path')))
         if raw_call:
             request['raw_inputs'] = {key: args[key] for key in ('input_path', 'matrix_semantics', 'species', 'assembly',
+                'qc_thresholds',
                 *(record[0] for record in raw.PORTS.values())) if key in args}
         request_sha = write(stage / 'request.json', request)
         if is_r:
@@ -370,6 +377,9 @@ class MatrixPackage:
                 source_identity=dict(sha256=source['sha256'], size_bytes=source['size_bytes'], measurement=effective['matrix_semantics']),
                 software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
                 result_slots=receipt['result_slots'], limitations=LIMITATIONS)
+            if 'effective_parameters' in receipt:
+                summary['parameters']['effective_native_parameters'] = receipt['effective_parameters']
+                summary['parameters']['result_shapes'] = receipt.get('result_shapes', {})
             if second_source:
                 summary['source_identity']['second'] = dict(sha256=second_source['sha256'], size_bytes=second_source['size_bytes'],
                     count_slot=other_effective['count_slot'], measurement=other_effective['matrix_semantics'], n_cells=other.n_obs)
@@ -402,7 +412,8 @@ class MatrixPackage:
     def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
-                        whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None):
+                        whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None,
+                        qc_thresholds=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 

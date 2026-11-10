@@ -15,7 +15,7 @@ def test_retired_operations_and_modules_are_absent_while_native_science_remains(
     assert {'annotate_scATAC_cell_types','transfer_cell_labels','evaluate_cell_clustering',
         'run_scanpy','run_signac','run_snapatac2','run_episcanpy','inspect_raw_scATAC',
         'run_chromap','build_replicate_pseudobulk','run_replicate_differential_accessibility',
-        'pca_embed_cells','build_cell_neighbors','cluster_cells','compute_cell_umap'}<=set(registry.names())
+        'build_cell_neighbors','cluster_cells','compute_cell_umap'}<=set(registry.names())
     offers=json.dumps(scientific_parameters(registry))
     assert not any(n in offers for n in (*retired,'prediction_mapping','reference_mapping','string_mapping'))
     assert 'name_evidence' not in json.dumps(decision_schema())

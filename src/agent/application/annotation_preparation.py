@@ -224,7 +224,7 @@ def preparer(sessions, interaction, admitted):
         Execution still checks actual source metadata, counts and ordered groups.
         No reference choice, counting choice or biological context is inferred here.
         """
-        if producer != 'run_snapatac2' or values.get('function_name') != 'pp.make_peak_matrix':
+        if producer != 'run_snapatac2' or values.get('function_name') not in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
             return None
         kwargs = values.get('kwargs', {})
         if kwargs.get('use_x') or values.get('count_slot', 'X') != 'X':
@@ -247,7 +247,7 @@ def preparer(sessions, interaction, admitted):
                     raise ValueError('Explicit native kwargs and scalar have conflicting counting_strategy values')
                 return dict(measurement=peak_measurement(storage, strategy), count_slot='X',
                     **{key: upstream[key] for key in ('species', 'assembly') if upstream.get(key) is not None})
-            if function not in ('metrics.tsse', 'metrics.frag_size_distr', 'pp.filter_cells'):
+            if function not in ('metrics.tsse', 'metrics.frag_size_distr', 'pp.filter_cells', 'pp.call_cells'):
                 return None
             source = upstream.get('input_path')
         return None

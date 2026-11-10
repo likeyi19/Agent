@@ -4,6 +4,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 from agent.application.dialogue_execution import _bind_arguments, _check_parameter_plan, _source_field_roles
 from agent.application.local_resources import (RegisteredInputGroup, group_role_inputs,
     LocalResourceAdmission, ResourceAdmissionError)
@@ -53,7 +56,7 @@ def test_explicit_repeated_sources_replay_and_match_without_step_order():
     assert parse_decision(json.dumps(wire), utterance='mouse').arguments == declarations
 
 
-@pytest.mark.parametrize('tool,argument', [('pca_embed_cells','n_components'),
+@pytest.mark.parametrize('tool,argument', [('mock_embed_cells','n_components'),
     ('transfer_cell_labels','reference_label_key')])
 def test_retained_settings_preserve_every_explicit_repeated_source_role(monkeypatch,tool,argument):
     """A retained setting must not collapse two explicit calls of another tool."""

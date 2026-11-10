@@ -1,58 +1,21 @@
-# PCA representations for scATAC exploration
+# Historical PCA representations and explicit native PCA
 
-`pca_embed_cells` uses sparse-safe centered Scanpy PCA with ARPACK. Numerical
-eligibility alone does not establish that an input representation is biologically
-appropriate. Record the selected representation and review depth effects,
-feature definitions, sample structure and upstream QC before interpreting clusters.
+Ordinary compatible scATAC analysis now uses [native feature selection and
+Spectral](native-scatac-analysis.md). The dedicated `pca_embed_cells` tool and
+its optional TF-IDF/L2 execution path are retired.
 
-The optional `preprocessing` parameter has two choices:
+Accepted historical results remain readable with their exact meanings:
 
-- `none` (default): use the supplied `X` unchanged, preserving the established
-  behavior for already prepared measurements and historical analyses.
-- `tfidf_l2`: require finite nonnegative integer counts or binary accessibility,
-  with a positive total in every cell. Apply the installed scikit-learn
-  `TfidfTransformer(norm='l2', use_idf=True, smooth_idf=True, sublinear_tf=False)`
-  before centered PCA. For feature j, IDF is
-  `log((1 + number_of_cells) / (1 + cells_with_nonzero_feature_j)) + 1`.
-  Multiply counts by IDF, then normalize each weighted cell vector to unit L2
-  length. Explicit sparse zeros do not count as observations. Zero-frequency
-  features remain present. No cells/features are dropped or automatically aligned.
+- v1: centered Scanpy PCA of supplied X unchanged.
+- v2: scikit-learn smoothed document-frequency TF-IDF, L2 cell normalization,
+  then centered Scanpy PCA. This was exploratory PCA, not Signac LSI.
 
-This is an exploratory TF-IDF/PCA representation, not Signac LSI, batch correction,
-cell calling, reference qualification, or evidence of optimal biological separation.
-L2 normalization removes simple per-cell multiplicative scale; it does not remove
-all sequencing-depth or technical effects. Do not apply the count transform to
-log-normalized or otherwise processed measurements by relabelling them as counts.
-The original file, measurements and ordered axes remain unchanged; the compact
-embedding publication records the transformation. An integrated export retains
-original `X` and adds selected embeddings, coordinates and labels.
+Historical descriptors, method parameters, reports, downloads and accepted source
+lineage are retained. Read-only reuse does not refit PCA, reopen the source matrix,
+or reinterpret old evidence under a current method. Unaccepted old publications
+cannot acquire new scientific authority.
 
-The method uses [scikit-learn's documented TF-IDF implementation](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfTransformer.html).
-[Signac's ATAC workflow](https://stuartlab.org/signac/reference/runtfidf) documents
-different TF-IDF variants; equivalence to those variants or their uncentered SVD
-is not claimed.
-
-The Registry offers this choice through the existing conversational parameter
-owner. A researcher can request “TF-IDF with L2 cell normalization before centered
-PCA”; the interpreter binds that phrase to `tfidf_l2`. When no choice was supplied,
-the Planner may choose from this parameter's explicitly enabled Registry choices
-using the declared measurement and objective. For raw region counts or binary
-accessibility, its guidance prefers `tfidf_l2`; prepared measurements require their
-actual interpretation. Explicit user choices take precedence. The native default
-remains `none`, and the plan records any selected transform. No arbitrary values
-or other scientific parameters acquire this permission. The numerical source and eigenpair
-checks operate on the chosen representation. Unchanged raw-X publications retain
-v1 identities; transformed publications use embedding/publication v2 and a distinct
-scientific profile. Readers do not reinterpret accepted v1 evidence.
-
-PCA execution and source-fit verification use the shared systemd/cgroup native
-process boundary and the operator's `AGENT_NATIVE_MEMORY_BYTES` and
-`AGENT_NATIVE_TIMEOUT_SECONDS`. The kernel budget governs their allocations;
-fixed 2 GiB input/workspace estimates do not reject isolated execution. This
-changes execution capacity, not preprocessing, component selection or scientific
-verification. The small in-process suitability observation retains its bounded
-read; accepted-result reuse does not repeat the fit.
-
-RPD-1 acceptance, including real PBMC analysis, explicit graph reuse, original-data
-exports and provider limitations, is recorded in
-[the managed report](../../../agent-data/acceptance/researcher-pilot-demo/rpd-1/REPORT.md).
+For explicit new PCA requests use the existing native `run_scanpy` / `pp.pca`
+or `run_episcanpy` / `tl.pca` interface. Researcher parameters pass through its
+native kwargs; omitted values retain installed defaults. EpiZoo remains a
+separate model-based capability with its own reference/vocabulary requirements.

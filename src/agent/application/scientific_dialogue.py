@@ -285,7 +285,7 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
         row.pop('description', None)
         row.pop('ports', None)
         if row['tool'] not in semantics:
-            spec = registry.get(row['tool'])
+            spec = registry.accepted(row['tool'])
             semantics[row['tool']] = dict(result_contract=spec.result_contract.name,
                 description='' if spec.planning is None else spec.planning.description[:1200],
                 roles=[] if spec.semantic_planning is None else [dict(name=p.name, semantic_type=p.semantic_type)

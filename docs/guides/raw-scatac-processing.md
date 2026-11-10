@@ -17,6 +17,16 @@ clarification; successful post-correction live planning and presentation remain
 unqualified. This is not unrestricted input, provider or biological qualification.
 The paused SRV-2C PBMC10k evaluation has not resumed.
 
+## Current ordinary workflow
+
+[Stage 1 native scATAC analysis](native-scatac-analysis.md) owns the current
+uncalled-population Otsu thresholds, initial retention of all observed barcodes,
+native tile/feature preparation and feature-selection/Spectral workflow. This
+supersedes earlier ordinary-workflow recommendations to omit native import and
+filter thresholds. Explicit native calls retain their installed defaults, and
+already called or processed inputs retain established identities unless filtering
+is requested. OrdMag `pp.call_cells` remains explicit, without default stacking.
+
 ## Scientific operations
 
 | Input / goal | Registered interface and native function | Output |
@@ -26,6 +36,8 @@ The paused SRV-2C PBMC10k evaluation has not resumed.
 | Original fragments to native data | `run_snapatac2`, `pp.import_fragments` | Native fragment-storage H5AD with barcode observations |
 | TSS enrichment | `run_snapatac2`, `metrics.tsse` | Native H5AD with QC observations and library TSS profile |
 | Fragment-size distribution | `run_snapatac2`, `metrics.frag_size_distr` | Native library distribution in H5AD |
+| Explicit OrdMag cell calling | `run_snapatac2`, `pp.call_cells` | Native selected H5AD or independent indices |
+| Tile matrix | `run_snapatac2`, `pp.add_tile_matrix` | Native cell-by-bin H5AD |
 | Barcode selection | `run_snapatac2`, `pp.filter_cells` | Native selected H5AD, or the independent return when `inplace=false` |
 | Peak, cCRE or supplied region matrix | `run_snapatac2`, `pp.make_peak_matrix` | Native cell-by-region H5AD |
 
@@ -170,10 +182,11 @@ coordinate names into `var.chrom/start/end` for cross-tool use, without recounti
 or changing feature order. Normalized accessibility and binary accessibility are
 separate measurements.
 
-Native import defaults to `min_num_fragments=200` and `sorted_by_barcode=true`.
-Only ordinary task input-order adaptation changes the sorting choice; it does not
-lower import retention or change counting. Explicit native-function calls preserve
-omitted defaults. A supplied `sorted_by_barcode` value always prevails.
+Explicit native import defaults to `min_num_fragments=200` and
+`sorted_by_barcode=true`. Ordinary uncalled-sample Otsu selection records its
+Agent-selected `min_num_fragments=0` to avoid truncating the fitted distribution.
+Task input-order adaptation separately controls native sorting. Neither choice
+changes native counting. Explicit native-function calls preserve omitted defaults. A supplied `sorted_by_barcode` value always prevails.
 Native cell filtering defaults to `min_counts=1000`, `min_tsse=5`. The old Agent
 selection used a different TSS calculation and threshold 4; these are not equivalent
 methods. The native fragment-size distribution is library-wide, not the old

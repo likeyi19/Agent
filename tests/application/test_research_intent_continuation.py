@@ -20,7 +20,7 @@ from test_dialogue_evidence import accepted
 from test_scientific_completion import overlay_service
 
 
-OBJECTIVE = ('I will upload a count matrix. Compute PCA, neighbors and Leiden; compare the new '
+OBJECTIVE = ('I will upload a count matrix. Compute native scATAC Spectral, neighbors and Leiden; compare the new '
     'Leiden distribution with cohort on the selected previous UMAP and color those previous '
     'coordinates by the new Leiden assignments. Omit the independently optional marker analysis.')
 
@@ -44,7 +44,7 @@ def setup(tmp_path, monkeypatch, *, invalid=None, retain_components=False):
             if 'turn_schema_version' in value:
                 if value['dialogue'].get('pending_prerequisite'):
                     decision = dict(kind='answer_roles', pending='@roles',
-                        roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')])
+                        roles=[dict(tool='run_snapatac2', port='dataset', source='source.0')])
                 else:
                     group, = [g for g in value['dialogue']['result_groups'] if g['tool'] == 'compute_cell_umap']
                     selected['comparison'] = dict(left='new', right=group['handle'], detail=dict(
@@ -54,8 +54,8 @@ def setup(tmp_path, monkeypatch, *, invalid=None, retain_components=False):
                         selected['comparison']['right'] = 'g999'
                     if invalid == 'source':
                         selected['visualization'].update(labels='source.15', field='source:cohort')
-                    decision = dict(kind='request_roles', target='pca_embed_cells',
-                        required_roles=[dict(tool='pca_embed_cells', port='dataset')], roles=[],
+                    decision = dict(kind='request_roles', target='run_snapatac2',
+                        required_roles=[dict(tool='run_snapatac2', port='dataset')], roles=[],
                         comparison=selected['comparison'], visualization=selected['visualization'],
                         unfulfilled=['optional marker analysis'])
                     if retain_components:
@@ -70,16 +70,16 @@ def setup(tmp_path, monkeypatch, *, invalid=None, retain_components=False):
                 assert task['comparison'] == selected['comparison']
                 assert task['visualization'] == selected['visualization']
                 assert task['unfulfilled'] == ['optional marker analysis']
-                return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=[
-                    dict(step_id='pca', tool='pca_embed_cells', sources=[], control_dependencies=[]),
-                    dict(step_id='graph', tool='build_cell_neighbors', sources=[dict(
-                        kind='step', target='embedding', step='pca')], control_dependencies=[]),
-                    dict(step_id='labels', tool='cluster_cells', sources=[dict(
-                        kind='step', target='analysis', step='graph')], control_dependencies=[])])))
+                steps=[]
+                for i,(name,fn) in enumerate([('features','pp.select_features'),('spectral','tl.spectral'),('graph','pp.knn'),('labels','tl.leiden')]):
+                    sources=[dict(target='function_name',source=dict(kind='registered_choice',choice=fn))]
+                    sources.append(dict(target='dataset',source=(dict(kind='step_port',step=steps[-1]['step_id'],source_port='dataset') if i else dict(kind='input',input='input_path'))))
+                    steps.append(dict(step_id=name,tool='run_snapatac2',sources=sources,control_dependencies=[]))
+                return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=steps)))
             if 'output_selection_schema_version' in value:
                 assert set(value['requested_output_uses']) == {'comparison_result', 'visualization_labels'}
                 return json.dumps(dict(outputs=[dict(name='new_labels', step_id='labels',
-                    output_key='analysis_path', use=['comparison_result', 'visualization_labels'])]))
+                    output_key='matrix_path', use=['comparison_result', 'visualization_labels'])]))
             raise AssertionError('Unexpected provider or scientific phase')
 
     profiles = tuple(seed._profiles.values())
@@ -129,7 +129,7 @@ def test_missing_file_upload_retains_exact_intent_and_selects_one_result_for_bot
         expected_generation=1, attachment_ids=(record.resource_id,))
     assert outcome.status == 'failed' and outcome.error.code == 'TEST_SCIENCE_WITHHELD', outcome.to_dict()
     plan, = case.executor.plans
-    assert [step.tool_name for step in plan.steps] == ['pca_embed_cells', 'build_cell_neighbors', 'cluster_cells']
+    assert [step.tool_name for step in plan.steps] == ['run_snapatac2']*4
     assert plan.steps[0].arguments['input_path'] == record.source_path
     state = case.facade._application.sessions.load('session')
     assert state.interactions[0] == original
@@ -213,28 +213,10 @@ def test_selection_purposes_decode_legacy_and_current_session_records(tmp_path, 
         OutputSelection('invalid', 'step0', 'analysis_path', ['comparison_result', 'comparison_result'])
 
 
-def test_missing_file_retains_accepted_pca_parameter_through_upload_and_compilation(tmp_path, monkeypatch):
+def test_retired_pca_parameter_does_not_authorize_new_native_science(tmp_path, monkeypatch):
     case = setup(tmp_path, monkeypatch, retain_components=True)
-    assert initial(case).status == 'clarification'
-    state = case.facade._application.sessions.load('session')
-    original = state.interactions[-1]
-    assert original.admitted['inputs'] == {'n_components': 3}
-    retained, = original.admitted['retained_parameters']
-    assert retained['tool'] == 'pca_embed_cells' and retained['argument'] == 'n_components'
-    assert retained['value'] == 3 and retained['origin'] == 'accepted_argument'
-    assert not original.admitted.get('arguments') and not case.executor.plans
-    record = upload_matrix(case)
-    outcome = case.facade.submit_turn('session', 'upload', 'Use this matrix and retain the prior settings.',
-        expected_generation=case.generation, attachment_ids=(record.resource_id,))
-    assert outcome.status == 'failed' and outcome.error.code == 'TEST_SCIENCE_WITHHELD', outcome.to_dict()
-    plan, = case.executor.plans
-    assert [step.tool_name for step in plan.steps] == ['pca_embed_cells', 'build_cell_neighbors', 'cluster_cells']
-    assert plan.steps[0].arguments['n_components'] == 3
-    assert plan.steps[0].arguments['input_path'] == record.source_path
-    state = case.facade._application.sessions.load('session')
-    assert state.interactions[0] == original
-    assert state.interactions[-1].admitted['inputs']['n_components'] == 3
-    assert planning_task(state.interactions[-1], state)['retained_parameters'][0] == _serialize(retained)
-    run = case.facade._application.run_store.load(outcome.run_id)
-    assert run.request.prompt == case.objective and run.request.inputs['n_components'] == 3
-    assert state.generation == case.generation and not case.scientific_calls
+    result=initial(case)
+    assert result.status == 'failed'
+    assert not case.executor.plans and not case.scientific_calls
+    state=case.facade._application.sessions.load('session')
+    assert state.generation == case.generation

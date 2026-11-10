@@ -15,6 +15,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 from scipy import sparse
 
 from agent.application import InteractiveAgentApplication, ResearchAgentApplication
@@ -82,7 +85,7 @@ def wire_steps():
     def step(name, tool, target=None, source=None):
         return dict(step_id=name, tool=tool, control_dependencies=[],
                     sources=[] if target is None else [dict(kind='step', target=target, step=source)])
-    return [step('pca', 'pca_embed_cells'),
+    return [step('pca', 'mock_embed_cells'),
             step('graph', 'build_cell_neighbors', 'embedding', 'pca'),
             step('clusters', 'cluster_cells', 'analysis', 'graph'),
             step('umap', 'compute_cell_umap', 'analysis', 'clusters')]
@@ -98,9 +101,9 @@ class ScriptedPlanningModel:
         payload = json.loads(prompt)
         self.calls.append((payload, response_schema))
         if 'turn_schema_version' in payload:
-            decision = self.decision or dict(kind='execute_plan', target='pca_embed_cells',
-                roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')],
-                arguments=[dict(tool='pca_embed_cells', argument='n_components', literal='3',
+            decision = self.decision or dict(kind='execute_plan', target='mock_embed_cells',
+                roles=[dict(tool='mock_embed_cells', port='dataset', source='source.0')],
+                arguments=[dict(tool='mock_embed_cells', argument='n_components', literal='3',
                                 evidence='PCA with 3 components')])
             return json.dumps(dict(turn_schema_version=1, decision=decision))
         if 'semantic_prompt_version' in payload:
@@ -188,7 +191,7 @@ def test_uploaded_turn_reaches_same_detailed_planner_and_validated_plan_without_
     assert steps['clusters'].arguments['analysis_path'] == StepOutputRef('graph', 'analysis_path')
     assert steps['umap'].arguments['analysis_path'] == StepOutputRef('clusters', 'analysis_path')
     assert {step.tool_name for step in steps.values()} == {
-        'pca_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap'}
+        'mock_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap'}
     state = assert_no_scientific_records(case)
     assert state.interactions[-1].status == 'admitted'
     assert state.interactions[-1].admitted['inputs']['n_components'] == 3
@@ -264,10 +267,10 @@ DEFAULT_REQUEST = ('Inspect the uploaded matrix and explore cellular heterogenei
 
 def shared_source_decision(pca_source='source.0'):
     # Exact response structure authored by the real Interpreter in UAT-02.
-    return dict(kind='execute_plan', target='pca_embed_cells', delivery=['explanation'],
+    return dict(kind='execute_plan', target='mock_embed_cells', delivery=['explanation'],
         unfulfilled=[], arguments=[], roles=[
             dict(tool='inspect_scATAC', port='dataset', source='source.0'),
-            dict(tool='pca_embed_cells', port='dataset', source=pca_source)])
+            dict(tool='mock_embed_cells', port='dataset', source=pca_source)])
 
 
 def test_authentic_shared_source_roles_reach_inspection_pca_plan_without_science(tmp_path, monkeypatch):

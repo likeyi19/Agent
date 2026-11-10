@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.epizoo_handoff import EpiZooDeclaration
 from agent.application.local_resources import LocalResourceAdmission
 from agent.application.raw_handoff import AnnotationDeclaration
@@ -35,7 +38,7 @@ class ProjectionModel:
         self.calls.append(dict(prompt=value, schema=response_schema))
         if value['utterance'] == offered.OLD:
             if self.pending_field == 'roles':
-                decision = dict(kind='request_roles', target='pca_embed_cells',
+                decision = dict(kind='request_roles', target='mock_embed_cells',
                     required_roles=[offered.PORT], roles=[],
                     arguments=[offered.number(offered.OLD, '2')])
             else:
@@ -57,14 +60,6 @@ def setup_case(tmp_path, monkeypatch, **options):
     monkeypatch.setattr(offered, 'Model', ProjectionModel)
     app, records, executor, calls = offered.setup_case(tmp_path, **options)
     observations = []
-
-    def observe(path, resources=()):
-        observations.append(str(path))
-        index = next(i for i, record in enumerate(records) if record.source_path == str(path))
-        return dict(pca='eligible' if index == 0 else 'invalid_or_unsupported',
-                    epizoo=[], pca_measurements='Simulated observation of source ' + str(index))
-
-    monkeypatch.setattr('agent.tools.analysis.pca_embedding.observe_methods', observe)
     return app, records, executor, calls, observations
 
 
@@ -86,9 +81,7 @@ def test_single_primary_after_pending_uses_one_source_order_for_every_offer(
     assert public['selected_primary_source'] == 'source.1'
     assert public['session_source_candidates'] is True
     assert [row['source'] for row in public['source_fields']] == ['source.0', 'source.1']
-    assert observations == [record.source_path for record in records]
-    assert [(row['source'], row['pca']) for row in public['embedding_suitability']] == [
-        ('source.0', 'eligible'), ('source.1', 'invalid_or_unsupported')]
+    assert 'embedding_suitability' not in public
     assert 'annotation_sources' not in public
     for field in ('annotation', 'epizoo'):
         assert field + '_resources' in public
@@ -117,9 +110,7 @@ def test_current_single_without_pending_is_primary_before_old_candidates(tmp_pat
     assert [row['label'] for row in public['selected_sources']] == [record.label for record in reversed(records)]
     assert public['current_turn_sources'] == ['source.0']
     assert public['selected_primary_source'] == 'source.0'
-    assert observations == [record.source_path for record in reversed(records)]
-    assert [(row['source'], row['pca']) for row in public['embedding_suitability']] == [
-        ('source.0', 'invalid_or_unsupported'), ('source.1', 'eligible')]
+    assert 'embedding_suitability' not in public
 
 
 def test_new_single_cannot_replace_a_fixed_pending_source(tmp_path, monkeypatch):
@@ -155,7 +146,6 @@ def test_old_capture_without_source_view_decodes_after_sources_disappear(tmp_pat
         pytest.fail('Retained Session decoding attempted source I/O.')
 
     monkeypatch.setattr('agent.tools.analysis.categorical.fields', forbidden)
-    monkeypatch.setattr('agent.tools.analysis.pca_embedding.observe_methods', forbidden)
     monkeypatch.setattr(LocalResourceAdmission, '_verify_records', forbidden)
     loaded = AnalysisSession.from_dict(legacy)
     assert _serialize(loaded.to_dict()) == legacy

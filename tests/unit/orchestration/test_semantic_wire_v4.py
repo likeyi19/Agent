@@ -878,7 +878,8 @@ def test_schema_correlates_every_source_kind_with_selected_tool_ports(registry) 
     for name, target in targets.items():
         assert set(target['enum']) <= expected[name]
         assert not _accepts_target(target, 'invented')
-    assert 'preprocessing' in targets['pca_embed_cells']['enum']
+    assert 'qc_thresholds' in targets['run_snapatac2']['enum']
+    assert 'pca_embed_cells' not in targets
 
 
 
@@ -995,12 +996,12 @@ def test_source_schema_excludes_unrelated_resources_and_illegal_handoffs(registr
         return {s['properties']['target']['enum'][0]: s['properties']['source']['anyOf']
             for s in by_tool[tool]['properties']['sources']['items']['anyOf']}
     source = ports('annotate_scATAC_cell_types')['source']
-    assert len(source) == 1 and source[0]['properties']['kind']['enum'] == ('input',)
+    assert source[0]['properties']['kind']['enum'] == ('input',)
     assert source[0]['properties']['input']['enum'] == ('source_path',)
-    assert all(option['properties']['kind']['enum'] in (('step',), ('step_port',))
-        for option in ports('pca_embed_cells')['dataset'])
+    assert all(option['properties']['kind']['enum'] in (('input',), ('step',), ('step_port',))
+        for option in ports('run_snapatac2')['dataset'])
     clustering = ports('annotate_scATAC_cell_types')['clustering']
-    assert clustering[1]['properties']['source_port']['enum'] == ('clustered_analysis',)
+    assert set(clustering[1]['properties']['source_port']['enum']) == {'clustered_analysis','dataset'}
 
 
 def _nested_payload(steps):

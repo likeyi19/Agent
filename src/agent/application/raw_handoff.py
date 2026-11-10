@@ -252,7 +252,7 @@ def validate_downstream_annotation(value):
 
 def validate_arguments(arguments, field='fastq'):
     from .epizoo_handoff import TOOLS
-    downstream=('pca_embed_cells','build_cell_neighbors','cluster_cells','compute_cell_umap')
+    downstream=('build_cell_neighbors','cluster_cells','compute_cell_umap')
     allowed = {'epizoo':TOOLS, 'annotation':('annotate_scATAC_cell_types',),
         'fragments':('run_snapatac2',)+downstream, 'bam':('run_snapatac2',)+downstream,
         'fastq':('run_chromap','run_snapatac2')+downstream}[field]

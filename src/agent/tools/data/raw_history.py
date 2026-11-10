@@ -34,7 +34,7 @@ def accepted(kind, path, sha, *, context=None):
     context = current() if context is None else context
     key = (str(path), sha)
     if context is None or key not in context.accepted:
-        raise AuthorityError('Retired raw methods require existing accepted execution authority; receipts cannot qualify new science')
+        raise AuthorityError('Retired methods require existing accepted execution authority; receipts cannot qualify new science')
     record = _serialize(context.accepted[key]['record'])
     if record['schema_version'] != 2 or record['completion'] != 'succeeded' or record['scope'] != 'scientific_correctness.v1':
         raise AuthorityError('No reusable accepted historical scientific authority')

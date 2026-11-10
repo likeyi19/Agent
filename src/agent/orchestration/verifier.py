@@ -1983,15 +1983,6 @@ def verify_step(
                 'Fragment observation or source identity differs.', 'EXTERNAL_FRAGMENTS_INSPECTION_MISMATCH')
         elif step.tool_name == "inspect_scATAC":
             _verify_inspection(resolved_arguments, plain_result, checks)
-        elif step.tool_name == "pca_embed_cells":
-            try:
-                from agent.tools.analysis.pca_embedding import verify_result
-                verify_result(resolved_arguments, plain_result)
-                passed = True
-            except Exception:
-                passed = False
-            checks.add("pca_source_projection", passed, "Centered PCA source projection and fit verified.",
-                       "PCA source, parameters, projection or fit is invalid.", "PCA_VERIFICATION_FAILED")
         elif step.tool_name == "epizoo_embed_cells":
             _verify_embedding(
                 step,

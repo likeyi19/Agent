@@ -10,6 +10,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 from scipy import sparse
 
 from agent.application import InteractiveAgentApplication
@@ -26,12 +29,12 @@ NEW = 'Analyze the newly attached cells using 3 components.'
 COMPARE = NEW + ' Compare the groups with the supplied annotations.'
 ANNOTATE = 'Annotate the newly attached cells; I do not know the processing history.'
 LABEL = 'Provided cell identity α'
-PORT = dict(tool='pca_embed_cells', port='dataset')
+PORT = dict(tool='mock_embed_cells', port='dataset')
 
 
 def number(text, value):
     start = text.index(value)
-    return dict(tool='pca_embed_cells', argument='n_components', literal=value,
+    return dict(tool='mock_embed_cells', argument='n_components', literal=value,
                 start=start, end=start + len(value))
 
 
@@ -54,14 +57,14 @@ class Model:
                         required_roles=[], roles=[], arguments=[],
                         annotation=asdict(AnnotationDeclaration(source='source.0')))
                 else:
-                    decision = dict(kind='request_roles', target='pca_embed_cells',
+                    decision = dict(kind='request_roles', target='mock_embed_cells',
                         required_roles=[PORT], roles=[], arguments=[number(text, '2')])
             elif self.raw_new:
                 decision = dict(kind='request_roles', target='annotate_scATAC_cell_types',
                     required_roles=[], roles=[], arguments=[],
                     annotation=asdict(AnnotationDeclaration(source='source.1')))
             elif self.request_new:
-                decision = dict(kind='request_roles', target='pca_embed_cells',
+                decision = dict(kind='request_roles', target='mock_embed_cells',
                     required_roles=[PORT], roles=[], arguments=[number(text, '3')])
             else:
                 roles = [dict(PORT, source='source.1')]
@@ -73,7 +76,7 @@ class Model:
                     arguments.append(dict(tool='evaluate_cell_clustering', argument='label_key',
                         literal=phrase, start=start, end=start + len(phrase), value=LABEL,
                         source='source.1', mode='offered'))
-                decision = dict(kind='execute_plan', target='pca_embed_cells',
+                decision = dict(kind='execute_plan', target='mock_embed_cells',
                                 roles=roles, arguments=arguments)
             return json.dumps(dict(turn_schema_version=1, decision=decision), ensure_ascii=False)
         if 'output_selection_schema_version' in value:
@@ -81,7 +84,7 @@ class Model:
                 step_id='score' if self.comparison else 'reduce',
                 output_key='report_path' if self.comparison else 'analysis_path')]))
         assert value['user_request'] == (COMPARE if self.comparison else NEW)
-        steps = [dict(step_id='reduce', tool='pca_embed_cells', sources=[], control_dependencies=[])]
+        steps = [dict(step_id='reduce', tool='mock_embed_cells', sources=[], control_dependencies=[])]
         if self.comparison:
             steps.extend([
                 dict(step_id='links', tool='build_cell_neighbors',
@@ -190,7 +193,7 @@ def test_new_generic_role_request_after_raw_pending_does_not_continue_annotation
     interaction = app._application.sessions.load('session').interactions[-1]
     assert interaction.prerequisite['field'] == 'roles'
     assert interaction.prerequisite['origin_turn_id'] == 'new-request'
-    assert interaction.admitted['tool'] == 'pca_embed_cells'
+    assert interaction.admitted['tool'] == 'mock_embed_cells'
     assert interaction.admitted['inputs'] == {'n_components': 3}
     assert not interaction.admitted['roles'] and 'annotation' not in interaction.admitted
     assert 'continuation' not in interaction.admitted

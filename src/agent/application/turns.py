@@ -522,23 +522,15 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         members = offered.get('members', ())
         if members and (context is None or not context.items or (submission or {}).get('attachments')):
             from .local_resources import LocalResourceAdmission
-            from agent.tools.analysis.pca_embedding import observe_methods
             owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
-            suitability = []
             motif_requirements = []
             for index, member in enumerate(members):
                 record = owner.load(member['resource_id'])
                 if record.input_type != 'h5ad':
                     continue
-                verified = False
                 try:
                     owner._verify_records([record])
-                    verified = True
-                    observation = observe_methods(record.source_path, epizoo_resources)
                 except (ValueError, OSError):
-                    observation = dict(pca='unavailable', epizoo=[])
-                suitability.append(dict(source=f'source.{index}', **observation))
-                if not verified:
                     continue
                 from agent.tools.analysis.chromvar import observe_input
                 try:
@@ -548,8 +540,6 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                         motif_requirements.append(dict(source=f'source.{index}', **motif_observation))
                 except (ValueError, OSError, KeyError, TypeError):
                     pass
-            if suitability:
-                visible['dialogue']['embedding_suitability'] = suitability
             if motif_requirements:
                 visible['dialogue']['motif_input_declarations'] = motif_requirements
         diagnostic_stage = 'interpretation'

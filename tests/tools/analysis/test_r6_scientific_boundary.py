@@ -13,7 +13,6 @@ from scipy import sparse
 from agent.tools.data.scatac import inspect_scATAC
 from agent.tools.analysis import replicate_pseudobulk as pb
 from agent.tools.analysis import differential_accessibility_backend as da
-from agent.tools.analysis.pca_embedding import pca_embed_cells
 from agent.orchestration import PlanStep, build_default_tool_registry, verify_step
 from test_replicate_pseudobulk import _source, _feature
 from test_differential_accessibility_verifier import _source_and_pseudobulk, _arguments
@@ -31,8 +30,6 @@ def test_native_h5ad_without_filename_gate_and_exact_aggregation(tmp_path, stora
     before = path.read_bytes()
     inspection = inspect_scATAC(path)
     assert inspection["n_cells"] == 5
-    pca = pca_embed_cells(path, tmp_path/"pca", n_components=2)
-    assert pca["n_cells"] == 5
     feature = _feature(path, tmp_path/"features")
     manifest = json.loads(Path(feature["feature_space_path"]).read_text())
     assert manifest["schema_version"] == 2

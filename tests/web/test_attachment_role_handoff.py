@@ -141,13 +141,13 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
 
 @pytest.mark.parametrize('field,target,declarations', [
     ('fastq', 'run_chromap', (
-        ('pca_embed_cells', 'n_components', '10', 10),
+        ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
         ('build_cell_neighbors', 'n_neighbors', '5', 5))),
     ('bam', 'run_snapatac2', (
-        ('pca_embed_cells', 'n_components', '10', 10),
+        ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
         ('build_cell_neighbors', 'n_neighbors', '5', 5))),
     ('fragments', 'run_snapatac2', (
-        ('pca_embed_cells', 'n_components', '10', 10),
+        ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
         ('build_cell_neighbors', 'n_neighbors', '5', 5))),
     ('annotation', 'annotate_scATAC_cell_types', (
         ('annotate_scATAC_cell_types', 'count_slot', 'X', 'X'),
@@ -177,6 +177,7 @@ def test_raw_declaration_arguments_continue_without_science(tmp_path, field, tar
                 else dict(kind='request_roles', target=target, required_roles=[], roles=[]))
             decision.update({field: asdict(declared)}, arguments=[dict(tool=tool,
                 argument=name, literal=literal, start=start, end=start + len(literal))])
+            if name == 'counting_strategy': decision['arguments'][0]['value']=literal
             return json.dumps(dict(turn_schema_version=1, decision=decision))
 
     backend, uploads = role_web(tmp_path, model_type=DeclarationModel)

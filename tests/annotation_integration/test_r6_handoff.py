@@ -18,7 +18,7 @@ from agent.tools.analysis import annotation_contract as c, annotation_input, pea
 from agent.tools.analysis import scatac_annotation as owner, marker_annotation as science
 from test_external_entry import external_case, case, wait_turn, wire
 from test_conversational_handoff import setup, HandoffModel, send
-from test_pca_continuation import Model as PCAModel
+from test_spectral_continuation import Model as SpectralModel, native_runtime
 
 
 def test_native_encodings_and_private_metadata_export(external_case):
@@ -126,32 +126,30 @@ def test_native_allocation_failure_publishes_no_result(external_case, monkeypatc
 
 
 @pytest.mark.parametrize('different_source', [False, True])
-def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, monkeypatch, different_source):
+def test_spectral_clustering_to_annotation_without_reupload(external_case, tmp_path, monkeypatch, different_source, native_runtime):
     args, calls = external_case
     source = Path(args['source_path'])
-    data = ad.AnnData(sparse.csr_matrix(np.random.default_rng(4).poisson(.4, (24, 71))),
-        obs=pd.DataFrame(index=[f'cell{i}' for i in range(24)]),
+    data = ad.AnnData(sparse.csr_matrix(np.random.default_rng(4).poisson(.4, (128, 71))),
+        obs=pd.DataFrame(index=[f'cell{i}' for i in range(128)]),
         var=pd.DataFrame(index=[f'chr1:{i*2}-{i*2+1}' for i in range(71)]))
+    data.X[:64, 35:] = 0; data.X[64:, :35] = 0
+    data.X.eliminate_zeros()
     data.write_h5ad(source)
     root = tmp_path/'web'
-    upstream = ResearchAgentApplication(root, planner=LLMPlanner(PCAModel()))
+    upstream = ResearchAgentApplication(root, planner=LLMPlanner(SpectralModel()))
     upstream.sessions.create('upload')
     state = upstream.sessions.run('upload', 'clusters',
-        AgentRequest('pca-first', 'PCA, clusters and UMAP.', dict(input_path=str(source))),
-        (OutputSelection('umap', 'umap', 'analysis_path'),), expected_generation=0)
+        AgentRequest('spectral-first', 'Native Spectral, clusters and UMAP.', dict(input_path=str(source))),
+        (OutputSelection('umap', 'umap', 'matrix_path'),), expected_generation=0)
     assert state.generation == 1
     if different_source:
         changed = data.copy(); changed.X.data[0] += 1
         changed.write_h5ad(source)
     before = {p: p.read_bytes() for p in upstream._workspace.runs.rglob('*') if p.is_file()}
-    import scanpy as sc
-    from agent.tools.analysis import pca_embedding, neighbors_publication
+    from agent.tools.analysis.native_matrix import SNAPATAC2
     def forbidden(*args, **kwargs):
         pytest.fail('Upstream scientific computation repeated')
-    for module, name in ((sc.pp, 'pca'), (sc.pp, 'neighbors'), (sc.tl, 'leiden'),
-                         (sc.tl, 'umap'), (pca_embedding, '_verify_result'),
-                         (neighbors_publication, '_verify')):
-        monkeypatch.setattr(module, name, forbidden)
+    monkeypatch.setattr(SNAPATAC2, 'native', forbidden)
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
@@ -170,6 +168,10 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
             return json.dumps(dict(turn_schema_version=1, decision=dict(kind='request_roles',
                 target='annotate_scATAC_cell_types', required_roles=[], roles=[], arguments=[],
                 annotation=asdict(declaration))))
+        if 'output_selection_schema_version' in value:
+            choice=dict(outputs=[dict(name='annotation',step_id='annotation',output_key='manifest_path')])
+            if value['output_selection_schema_version']==2: choice['retain']=[]
+            return json.dumps(choice)
         if 'semantic_prompt_version' in value:
             plan = wire()
             plan['decision']['steps'][0]['sources'] = [
@@ -193,25 +195,25 @@ def test_pca_clustering_to_annotation_without_reupload(external_case, tmp_path, 
             assert client.get('/api/v1/sessions/upload').status_code == 200
             assert all(p.read_bytes() == value for p, value in before.items())
             content = pd.DataFrame(dict(cell_id=data.obs_names,
-                group=['first']*12+['second']*12)).to_csv(sep='\t', index=False).encode()
+                group=['first']*64+['second']*64)).to_csv(sep='\t', index=False).encode()
             groups = client.put('/api/v1/sessions/upload/uploads/groups?filename=groups.tsv&input_type=attachment',
                 content=content, headers={'Content-Type':'application/octet-stream'})
             assert groups.status_code == 201, groups.text
             done = send(client, 'correct-groups',
                 'Use the attached independent simulated groups for these counts.',
                 [groups.json()['resource_id']], generation=1)
-            assert done['status'] == 'succeeded', done
+            assert done['status'] == 'succeeded', (done,app._application.run_store.load(done['run_id']).errors if done.get('run_id') else None)
             assert len(calls) == 1
             assert all(p.read_bytes() == value for p, value in before.items())
             return
-        assert done['status'] == 'succeeded', done
+        assert done['status'] == 'succeeded', (done,app._application.run_store.load(done['run_id']).errors if done.get('run_id') else None)
         run = app._application.run_store.load(done['run_id'])
         assert len(calls) == 1
         bound = run.steps[0].resolved_arguments
         assert 'group_analysis_path' in bound and 'groups_path' not in bound
         assert 'count_slot' not in bound
-        clustered = upstream.run_store.load('pca-first:run').steps[2].result
-        expected = ad.read_h5ad(clustered['analysis_path'])
+        clustered = upstream.run_store.load('spectral-first:run').steps[3].result
+        expected = ad.read_h5ad(clustered['matrix_path'])
         actual = ad.read_h5ad(run.steps[0].result['annotated_h5ad_path'])
         assert actual.obs_names.equals(data.obs_names)
         assert actual.obs['annotation_group'].astype(str).tolist() == expected.obs['leiden'].astype(str).tolist()

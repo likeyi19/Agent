@@ -11,6 +11,9 @@ import anndata as ad
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.epizoo_handoff import EpiZooDeclaration
 from agent.application.raw_handoff import AnnotationDeclaration
 from agent.web.app import create_app
@@ -30,7 +33,7 @@ def model_for(field, decisions):
             source = decisions[value['utterance']]
             if source == 'generic_pending':
                 return json.dumps(dict(turn_schema_version=1, decision=dict(kind='request_roles',
-                    target='pca_embed_cells', required_roles=[dict(tool='pca_embed_cells', port='dataset')],
+                    target='mock_embed_cells', required_roles=[dict(tool='mock_embed_cells', port='dataset')],
                     roles=[], arguments=[])))
             if source == 'answer_same':
                 declared = EpiZooDeclaration() if field == 'epizoo' else AnnotationDeclaration()

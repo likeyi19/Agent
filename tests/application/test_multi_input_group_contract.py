@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.local_resources import (
     LocalResourceAdmission, RegisteredInputGroup, ResourceAdmissionError,
 )
@@ -122,7 +125,7 @@ def test_exact_authorized_compiled_consumers_are_required(selection, variant):
     elif variant == 'substitute':
         first.arguments['analysis_path'] = records[1].source_path
     elif variant == 'foreign_consumer':
-        compiled.steps += (SimpleNamespace(tool_name='pca_embed_cells',
+        compiled.steps += (SimpleNamespace(tool_name='mock_embed_cells',
             arguments=dict(input_path=records[1].source_path)),)
     elif variant == 'literal':
         second.arguments['analysis_path'] = '/unregistered/clustered.h5ad'
@@ -142,18 +145,18 @@ def test_selected_dataset_may_flow_through_exact_inspection_output(selection):
     from agent.orchestration import PlanStep
     owner, records, _ = selection
     group = owner.compose_group([records[0].resource_id])
-    bound = owner.bind_group(group, [dict(tool='pca_embed_cells', port='dataset', source='source.0')])
+    bound = owner.bind_group(group, [dict(tool='mock_embed_cells', port='dataset', source='source.0')])
     inspection = PlanStep('inspect', 'inspect_scATAC', dict(path=records[0].source_path))
-    pca = PlanStep('pca', 'pca_embed_cells',
+    pca = PlanStep('pca', 'mock_embed_cells',
                   dict(input_path=StepOutputRef('inspect', 'input_path')), depends_on=('inspect',))
     owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, pca)))
     resolved = [SimpleNamespace(tool_name='inspect_scATAC',
                                resolved_arguments=dict(path=records[0].source_path)),
-                SimpleNamespace(tool_name='pca_embed_cells',
+                SimpleNamespace(tool_name='mock_embed_cells',
                                 resolved_arguments=dict(input_path=records[0].source_path))]
     owner.validate_result(submission(bound), resolved)
     for wrong in (StepOutputRef('inspect', 'n_cells'), StepOutputRef('unknown', 'input_path')):
-        bad = PlanStep('pca', 'pca_embed_cells', dict(input_path=wrong))
+        bad = PlanStep('pca', 'mock_embed_cells', dict(input_path=wrong))
         with pytest.raises(ResourceAdmissionError):
             owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, bad)))
     other = PlanStep('inspect', 'inspect_scATAC', dict(path=records[1].source_path))
@@ -172,19 +175,19 @@ def test_one_exact_source_can_be_explicitly_bound_to_inspection_and_pca(
     group = owner.compose_group([record.resource_id for record in selected],
                                 attachment_candidates=attachment_candidates)
     declared = [dict(tool=tool, port='dataset', source='source.0')
-                for tool in ('inspect_scATAC', 'pca_embed_cells')]
+                for tool in ('inspect_scATAC', 'mock_embed_cells')]
     bound = owner.bind_group(group, declared)
     assert _serialize(bound.roles) == declared
     assert _serialize(bound.execution_inputs) == {'input_path': records[0].source_path}
     assert _serialize(group.roles) == [] and _serialize(group.execution_inputs) == {}
     inspection = PlanStep('inspect', 'inspect_scATAC', dict(path=records[0].source_path))
     path = StepOutputRef('inspect', 'input_path') if inspection_output else records[0].source_path
-    pca = PlanStep('pca', 'pca_embed_cells', dict(input_path=path),
+    pca = PlanStep('pca', 'mock_embed_cells', dict(input_path=path),
                   depends_on=('inspect',) if inspection_output else ())
     owner.validate_plan(submission(bound), SimpleNamespace(steps=(inspection, pca)))
     resolved = [SimpleNamespace(tool_name='inspect_scATAC',
                                resolved_arguments=dict(path=records[0].source_path)),
-                SimpleNamespace(tool_name='pca_embed_cells',
+                SimpleNamespace(tool_name='mock_embed_cells',
                                 resolved_arguments=dict(input_path=records[0].source_path))]
     owner.validate_result(submission(bound), resolved)
     # Every explicitly authorized consumer still has to consume its exact input.
@@ -197,7 +200,7 @@ def test_one_exact_source_can_be_explicitly_bound_to_inspection_and_pca(
 def test_explicit_shared_source_does_not_allow_conflicting_alias_or_duplicate_consumer(selection, variant):
     owner, records, _ = selection
     declared = [dict(tool='inspect_scATAC', port='dataset', source='source.0'),
-                dict(tool='pca_embed_cells', port='dataset', source='source.1')]
+                dict(tool='mock_embed_cells', port='dataset', source='source.1')]
     if variant == 'duplicate_consumer':
         declared[1] = dict(declared[0])
     group = owner.compose_group([record.resource_id for record in records], attachment_candidates=True)

@@ -172,14 +172,14 @@ history; new DA v2 completion checks no longer replay edgeR. Historical v1
 readers remain, and independent scientific qualification tests are retained.
 EpiZoo vocabulary requirements and raw-data/QC/matrix scientific contracts remain.
 
-[UA3.6.5-R2A](docs/history/ua3.6.5-r2a-generic-cell-embedding.md) adds centered, sparse-safe
-Scanpy PCA for ordinary H5AD X measurements. PCA and EpiZoo use the same neighbor,
-Leiden and UMAP tools with their actual representation and dimensions. Explicit
-EpiZoo requests retain exact model-vocabulary requirements and never silently
-switch methods. PCA defaults to unchanged X. RPD-1 adds an explicit TF-IDF/L2 preprocessing
-choice for nonnegative count/binary accessibility, with no feature/cell filtering.
-The [PCA guide](docs/guides/pca-analysis.md) records its exact method, historical
-publication compatibility and scientific limitations.
+Ordinary compatible scATAC analysis uses native SnapATAC2 feature selection,
+Spectral, KNN, Leiden and UMAP, including processed peak-count H5AD. Uncalled
+single-sample raw fragments use sample-level Otsu thresholds on native depth and
+TSS enrichment, with explicit researcher thresholds taking precedence. EpiZoo
+remains a separate model-based capability. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
+records exact methods and input populations. Dedicated PCA execution is retired;
+accepted [historical PCA results](docs/guides/pca-analysis.md) remain readable,
+and explicit native PCA remains available.
 
 [UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md) removes the
 primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,

@@ -178,3 +178,23 @@ def test_existing_peak_caller_reads_exact_explicit_cell_contract_without_raw_pro
     assert label == 'explicit supplied ordered cells; no QC claim' and len(pins) == 2
     with pytest.raises(ValueError, match='changed'):
         selected_population(dict(args, explicit_cells_manifest_sha256='0'*64), source)
+
+
+def test_native_tiles_and_explicit_ordmag_keep_independent_returns(native, inputs):
+    import numpy as np
+    source = imported(inputs)
+    before = Path(source['matrix_path']).read_bytes()
+    tiles = call(inputs, 'pp.add_tile_matrix', input_path=source['matrix_path'])
+    output = ad.read_h5ad(tiles['matrix_path'])
+    assert output.n_obs == 2 and output.n_vars > 0
+    assert tiles['measurement'] == 'paired_insertion_counts'
+    assert tiles['parameters']['effective_native_parameters']['bin_size'] == 500
+    called = call(inputs, 'pp.call_cells', input_path=source['matrix_path'],
+        kwargs=dict(use_rep='n_fragment', inplace=False))
+    retained = ad.read_h5ad(called['matrix_path'])
+    assert retained.obs_names.tolist() == ['A-1','B-1']
+    assert called['result_slots'] == ['uns.agent_native_return']
+    indices = retained.uns['agent_native_return']
+    assert np.asarray(indices).dtype.kind in 'iu'
+    assert called['parameters']['population']['applied'] is False
+    assert Path(source['matrix_path']).read_bytes() == before

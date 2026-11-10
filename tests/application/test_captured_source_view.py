@@ -3,6 +3,9 @@ from dataclasses import replace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
+
 from agent.application.dialogue_execution import (
     _role_binding, captured_input_group, validate_source_fields,
 )
@@ -33,7 +36,7 @@ def pending_case(field='roles', *, original=None, current_inputs=None):
     available = RegisteredInputGroup([b, *old.members], current_inputs or {}, attachment_candidates=True,
                                      resource_choice=old.resource_choice)
     admitted = dict(inputs=_serialize(old.execution_inputs), registered_input=old.attribution(),
-                    roles=_serialize(old.roles), required_roles=[dict(tool='pca_embed_cells', port='dataset')])
+                    roles=_serialize(old.roles), required_roles=[dict(tool='mock_embed_cells', port='dataset')])
     if field != 'roles':
         admitted[field + '_sources'] = old.attribution()
         # Raw method declarations hold scalar settings separately from source membership.
@@ -68,14 +71,14 @@ def test_pending_prefix_and_current_attachment_share_one_offered_and_admitted_or
     viewed = available_input_view(frozen)
     actual = LocalResourceAdmission._submission_binding(viewed.submission)
     assert actual.members == binding.members
-    roles = [dict(tool='pca_embed_cells', port='dataset', source='source.1')]
+    roles = [dict(tool='mock_embed_cells', port='dataset', source='source.1')]
     assert group_role_inputs(actual, roles, build_default_tool_registry())['input_path'] == member(2)['source_path']
     assert 'available_input' not in viewed.submission
 
 
 def test_neutral_view_keeps_only_current_received_companions():
     original = RegisteredInputGroup([member(1)], dict(n_components=7, pca_random_seed=4),
-        roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')], attachment_candidates=True)
+        roles=[dict(tool='mock_embed_cells', port='dataset', source='source.0')], attachment_candidates=True)
     origin, current, _, _ = pending_case(original=original, current_inputs=dict(n_components=7))
     current = replace(current, submission=submission(RegisteredInputGroup([member(1), member(2)],
         dict(n_components=7), attachment_candidates=True)))
@@ -88,7 +91,7 @@ def test_neutral_view_keeps_only_current_received_companions():
 def test_neutral_view_does_not_inherit_fixed_task_parameters_roles_or_resource_choice():
     resource = dict(input_set_id='fixed', definition_sha256='a'*64)
     original = RegisteredInputGroup([member(1)], dict(n_components=7),
-        roles=[dict(tool='pca_embed_cells', port='dataset', source='source.0')], resource_choice=resource)
+        roles=[dict(tool='mock_embed_cells', port='dataset', source='source.0')], resource_choice=resource)
     origin, current, _, _ = pending_case(original=original)
     current = replace(current, submission=None)
     view = captured_input_group(current, (origin,))
@@ -112,7 +115,7 @@ def test_candidate_extension_cannot_reinterpret_captured_members(change):
         fixed = RegisteredInputGroup([member(1)], {})
         origin = replace(origin, submission=submission(fixed), admitted=dict(
             inputs={}, registered_input=fixed.attribution(), roles=[],
-            required_roles=[dict(tool='pca_embed_cells', port='dataset')]))
+            required_roles=[dict(tool='mock_embed_cells', port='dataset')]))
         current = replace(current, submission=submission(RegisteredInputGroup([member(2)], {})))
     if change != 'fixed_selection':
         current = replace(current, submission=submission(RegisteredInputGroup([member(2)], {}, attachment_candidates=True),
@@ -164,7 +167,7 @@ def test_ordinary_single_h5ad_candidate_uses_the_same_group_field_and_role_owner
     actual = LocalResourceAdmission._submission_binding(available_input_view(frozen).submission)
     assert actual.members == view.members
     assert group_role_inputs(actual,
-        [dict(tool='pca_embed_cells', port='dataset', source='source.0')],
+        [dict(tool='mock_embed_cells', port='dataset', source='source.0')],
         build_default_tool_registry())['input_path'] == member(2)['source_path']
     # The original primary selection remains available for its scientific owner.
     assert _serialize(frozen.submission) == original

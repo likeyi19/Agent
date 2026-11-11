@@ -10,6 +10,18 @@ from agent.orchestration.native_parameters import declaration_input
 from .turn_decisions import ExplicitArgument, IntentError, argument_identity
 
 
+def pending_slots(interaction, registry=None):
+    """The same field identities for pre-plan and native-discovered questions."""
+    failure = (interaction.prerequisite or {}).get('native_failure')
+    if failure is not None:
+        if registry is None:
+            from agent.orchestration.registry import build_default_tool_registry
+            registry = build_default_tool_registry()
+        return parameter_slots(registry, interaction.admitted['tool'], [dict(tool='run_episcanpy',
+            native_function=failure['function_name'], argument='kwargs', member='num_clusters')])
+    return (interaction.admitted or {}).get('parameter_slots')
+
+
 def parameter_slots(registry, target, requests):
     """Project pending fields from the same Registry and declaration scopes.
 
@@ -220,6 +232,10 @@ def matches(plan, row, registry, admitted):
                     == members[index]['source_path']]
     if row.get('step_id') is not None:
         selected = [s for s in selected if s.step_id == row['step_id']]
+    failure = admitted.get('native_failure')
+    if (failure is not None and row['tool'] == 'run_episcanpy' and row['argument'] == 'kwargs'
+            and row.get('native_function') == failure['function_name'] and 'num_clusters' in row['value']):
+        selected = [s for s in selected if s.step_id == failure['step_id']]
     return selected
 
 
@@ -434,7 +450,7 @@ def result_parameters(sessions, session_id, revision_id):
                 name = field['argument']
                 values = (recorded_native_kwargs(step) if kwarg
                           else {**_serialize(step.resolved_arguments),
-                                **{k:v for k,v in recorded.items() if k == name},
+                                **{k:v for k,v in recorded.items() if k == name and k != 'parameter_selection'},
                                 **{k:_serialize(v) for k,v in step.result.items() if k == name}})
                 if function and not kwarg and name not in values:
                     continue
@@ -481,8 +497,44 @@ def prepare_result_edit(sessions, interaction):
         if names - {p['argument'] for p in step['parameters'] if p['editable'] and p['kwarg'] == (row['argument'] == 'kwargs')}:
             raise ParameterEditUnavailable('The selected value is not an adjustable scientific parameter.')
     values = _bind_arguments(registry, '', {}, declarations(rows, registry))
-    plan = bind_plan(run.plan, rows, values, registry, {})
-    affected = {s.step_id for s, old in zip(plan.steps, run.plan.steps) if s.arguments != old.arguments}
+    # The accepted selected value is an ordinary effective parameter. Pin it on
+    # every recorded clustering step before edits, including downstream reruns.
+    # Do not materialize unrelated native defaults into a second parameter system.
+    stored = {s.step_id:s for s in run.steps}
+    baseline = []
+    for step in run.plan.steps:
+        recorded = stored[step.step_id].result.get('parameters', {})
+        selection = recorded.get('parameter_selection')
+        args = dict(step.arguments)
+        if selection is not None:
+            parameter = selection['parameter']
+            effective = recorded.get('effective_native_parameters', {})
+            if parameter in effective:
+                args['kwargs'] = {**_serialize(args.get('kwargs', {})), parameter: _serialize(effective[parameter])}
+        baseline.append(replace(step, arguments=args))
+    baseline = replace(run.plan, steps=tuple(baseline))
+    plan = bind_plan(baseline, rows, values, registry, {})
+    # An explicit selection-policy edit requests a new selection/default, rather
+    # than merely changing a sibling kwarg. A simultaneous numeric edit prevails.
+    for row in rows:
+        if row['argument'] != 'parameter_selection':
+            continue
+        selected = stored[row['step_id']].result['parameters'].get('parameter_selection')
+        if selected is None:
+            continue
+        parameter = selected['parameter']
+        if any(r['step_id'] == row['step_id'] and r['argument'] == 'kwargs' and parameter in r['value'] for r in rows):
+            continue
+        if row['value'] == 'native_defaults' and parameter == 'num_clusters':
+            raise ParameterEditUnavailable('This native function has no num_clusters default; supply an explicit cluster count.')
+        steps = []
+        for step in plan.steps:
+            args = dict(step.arguments)
+            if step.step_id == row['step_id']:
+                args['kwargs'] = {k:v for k,v in args.get('kwargs', {}).items() if k != parameter}
+            steps.append(replace(step, arguments=args))
+        plan = replace(plan, steps=tuple(steps))
+    affected = {s.step_id for s, old in zip(plan.steps, baseline.steps) if s.arguments != old.arguments}
     if not affected:
         raise ParameterEditUnavailable('Change at least one recorded parameter before running.')
     while True:

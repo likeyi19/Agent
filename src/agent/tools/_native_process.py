@@ -189,7 +189,7 @@ def call(operation, arguments, local):
                         raise AuthorityError(error['message'])
                     if error['type'] == 'NativeInvocationError':
                         from agent.tools.analysis.native_matrix import NativeInvocationError
-                        raise NativeInvocationError(error['message'])
+                        raise NativeInvocationError(error['message'], code=error['code'])
                     safe = {'ValueError': ValueError, 'FileNotFoundError': FileNotFoundError,
                             'FileExistsError': FileExistsError, 'ImportError': ImportError,
                             'ModuleNotFoundError': ModuleNotFoundError, 'RuntimeError': RuntimeError}

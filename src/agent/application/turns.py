@@ -536,6 +536,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .dialogue_execution import _missing_parameter_inputs
             missing_parameters = tuple(_missing_parameter_inputs(sessions._application.registry, admitted['tool'],
                 tuple(dict.fromkeys(owner_missing)), admitted['inputs'])) + decision.missing_parameters
+            from agent.orchestration.native_parameters import missing_clustering_parameters
+            missing_parameters += missing_clustering_parameters(selected_tool, admitted['inputs'])
             if missing_parameters:
                 from .dialogue_execution import request_parameters
                 admitted, prerequisite = request_parameters(sessions, interaction, admitted,

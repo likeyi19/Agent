@@ -25,7 +25,8 @@ def pending_choices(reference, preceding):
             for value, label in (('human', '人类 · human'), ('mouse', '小鼠 · mouse')))
     if reference['field'] == 'parameters':
         original = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
-        slots = (original.admitted or {}).get('parameter_slots')
+        from .structured_parameters import pending_slots
+        slots = pending_slots(original)
         if slots:
             admitted = original.admitted
             groups = original.snapshot.get('dialogue', {}).get('results', ())

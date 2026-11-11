@@ -959,6 +959,13 @@ def compile_semantic_plan(
         settings, registry, original_inputs)
     for step_id, (_, arguments) in selected.items():
         states[step_id].arguments = arguments
+    # This policy belongs to AI semantic planning, after exact researcher binding.
+    # Native Functions builds its own explicit plan and never enters this compiler.
+    from agent.tools.analysis.native_clustering import ELIGIBLE
+    for step in candidate.steps:
+        arguments = states[step.step_id].arguments
+        if (step.tool_name.removeprefix('run_'), arguments.get('function_name')) in ELIGIBLE:
+            arguments.setdefault('parameter_selection', 'asw')
     from agent.schemas import RunMode
     if deferred_preparation and request.mode is not RunMode.PLAN_ONLY:
         raise SemanticPlanCompileError('AMBIGUOUS_PARAMETER_SCOPE',

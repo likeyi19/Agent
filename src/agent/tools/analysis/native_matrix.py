@@ -73,6 +73,11 @@ LIMITATIONS = ('Independent native invocation, not a completed analysis workflow
 
 class NativeInvocationError(ValueError):
     """The native package failed on the unchanged invocation."""
+    def __init__(self, message, *, code='NATIVE_FUNCTION_REJECTED'):
+        if code not in {'NATIVE_FUNCTION_REJECTED', 'NATIVE_CLUSTER_COUNT_REQUIRED'}:
+            raise ValueError('Unknown native invocation error code')
+        self.code = code
+        super().__init__(message)
 
 
 def arguments(values):
@@ -166,6 +171,10 @@ class MatrixPackage:
     def native_arguments(self, args):
         function = args.get('function_name')
         kwargs = native_kwargs(self.FUNCTIONS, args)
+        if args.get('parameter_selection') is not None:
+            from .native_clustering import ELIGIBLE
+            if (self.package, function) not in ELIGIBLE or args['parameter_selection'] not in ('asw', 'native_defaults'):
+                raise ValueError('Parameter selection applies only to the six adapted native clustering functions')
         if args.get('use_rep') is not None:
             if 'use_rep' not in self.FUNCTIONS[function]:
                 raise ValueError('Representation selection requires a native use_rep parameter')
@@ -241,9 +250,43 @@ class MatrixPackage:
             implementation_paths.append(script.with_name('native_matrix_worker.py'))
         if not is_r:
             implementation_paths.append(executable.parent.parent / 'pyvenv.cfg')
+            if not raw_call:
+                implementation_paths.extend(script.with_name(name) for name in ('native_clustering.py', 'cell_result.py'))
         implementation = file_closure(implementation_paths)
         request = dict(stage=str(stage), package=self.package, version=self.version,
             function_name=args['function_name'], kwargs=self.native_arguments(args), second_matrix=bool(args.get('second_path')))
+        if not raw_call and not is_r:
+            source = file_closure([args['input_path']])[0]
+            request.update(source_sha256=source['sha256'], parameter_selection=args.get('parameter_selection'))
+            context = current()
+            if context is not None:
+                context.validate_anchors()
+                from .cell_result import NATIVE, describe
+                lineage = {}
+                for proof in context.proofs.values():
+                    result = proof.result_metadata
+                    for tool in NATIVE:
+                        if proof.kind != 'native_' + tool.removeprefix('run_') + '_matrix':
+                            continue
+                        descriptor = describe(tool, result)
+                        lineage[result.get('matrix_path'), result.get('matrix_sha256')] = (proof, descriptor)
+                        if result.get('matrix_path') == str(args['input_path']) and result.get('matrix_sha256') == source['sha256']:
+                            request['graph_inputs'] = _serialize(result['parameters'].get('graph_inputs', []))
+                # Only this source's accepted ancestry can identify a custom
+                # UMAP slot. The most recent writer owns an overwritten field.
+                visualizations, written, visited = set(), set(), set()
+                location = (str(args['input_path']), source['sha256'])
+                while location in lineage and location not in visited:
+                    visited.add(location)
+                    proof, descriptor = lineage[location]
+                    result = proof.result_metadata
+                    coordinate = descriptor['coordinates'] if descriptor else None
+                    if coordinate and coordinate not in written:
+                        visualizations.add(coordinate)
+                    written.update(slot[5:] for slot in result['result_slots'] if slot.startswith('obsm.'))
+                    original = proof.description['manifest']['arguments']['input_path']
+                    location = (original, result['source_identity']['sha256'])
+                request['visualization_representations'] = sorted(visualizations)
         if raw_call:
             request['raw_inputs'] = {key: args[key] for key in ('input_path', 'matrix_semantics', 'species', 'assembly',
                 'qc_thresholds',
@@ -257,9 +300,17 @@ class MatrixPackage:
             stage / 'native.log', environment=r_environment())
         if code:
             shutil.copyfile(stage / 'native.log', stage.parent / 'native-failure.log')
-            message = read(stage / 'native-error.json').get('message', '')[:2000] if (stage / 'native-error.json').is_file() else ''
+            error = read(stage / 'native-error.json') if (stage / 'native-error.json').is_file() else {}
+            message = error.get('message', '')[:2000]
             if not message or peak_h5ad._PATH.search(message) or any(ord(c) < 32 for c in message):
                 message = 'Native function failed; consult the retained private diagnostic'
+            if (error.get('type') == 'RequiredClusterCount' and self.package == 'episcanpy'
+                    and args['function_name'] in ('tl.kmeans', 'tl.hc')
+                    and args.get('parameter_selection') == 'asw' and 'num_clusters' not in request['kwargs']
+                    and error.get('request_sha256') == request_sha):
+                # Diagnostics survive staging cleanup, but confer no result authority.
+                write(stage.parent / 'native-error.json', dict(error, source_sha256=source['sha256']))
+                raise NativeInvocationError(message, code='NATIVE_CLUSTER_COUNT_REQUIRED')
             raise NativeInvocationError(message)
         # Preserve warnings/progress privately; logs confer no publication authority.
         shutil.copyfile(stage / 'native.log', stage.parent / 'native.log')
@@ -403,6 +454,13 @@ class MatrixPackage:
                 summary['parameters']['result_shapes'] = receipt.get('result_shapes', {})
             if 'input_adaptation' in receipt:
                 summary['parameters']['input_adaptation'] = receipt['input_adaptation']
+            for key in ('graph_inputs', 'parameter_selection'):
+                if key in receipt:
+                    summary['parameters'][key] = receipt[key]
+            selection = receipt.get('parameter_selection')
+            if selection and selection['origin'] == 'automatic':
+                summary['parameters']['kwargs'] = dict(kwargs, **{selection['parameter']: selection['selected_value']})
+                summary['limitations'] = LIMITATIONS + ' Bounded ASW selection is an internal separation criterion, not biological validation.'
             if second_source:
                 summary['source_identity']['second'] = dict(sha256=second_source['sha256'], size_bytes=second_source['size_bytes'],
                     count_slot=other_effective['count_slot'], measurement=other_effective['matrix_semantics'], n_cells=other.n_obs)
@@ -426,7 +484,7 @@ class MatrixPackage:
             current().register_execution(self.KIND, root, execution_identity)
         return self.verify_publication(path, expected_sha256=sha)
 
-    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None):
+    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
@@ -436,7 +494,7 @@ class MatrixPackage:
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
                         whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None,
-                        qc_thresholds=None):
+                        qc_thresholds=None, parameter_selection=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 

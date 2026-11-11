@@ -8,7 +8,7 @@ def classify(exception):
     from agent.schemas import ErrorCategory
     from agent.schemas.verification_authority import AuthorityError
     if isinstance(exception, native_matrix.NativeInvocationError):
-        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR, 'NATIVE_FUNCTION_REJECTED', str(exception))
+        return ErrorClassification(ErrorCategory.USER_INPUT_ERROR, exception.code, str(exception))
     if isinstance(exception, AuthorityError):
         return ErrorClassification(ErrorCategory.VERIFICATION_ERROR, 'NATIVE_FUNCTION_PUBLICATION_INVALID')
     if isinstance(exception, (ValueError, KeyError, FileNotFoundError)):
@@ -38,6 +38,13 @@ def tool_spec(owner):
             scientific_parameter=True, conversational_exact_string=True),
         matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
+    if owner.package in ('snapatac2', 'scanpy', 'episcanpy'):
+        optional['parameter_selection'] = arg((str,),
+            'AI Research automatically selects omitted eligible clustering parameters by bounded ASW after method selection. '
+            'Use native_defaults only when the researcher requests native defaults; asw requests bounded selection. '
+            'Explicit resolution/num_clusters always prevails. Other functions retain native defaults. '
+            'epiScanpy kmeans/hc require num_clusters when native_defaults is requested.',
+            choices=('asw', 'native_defaults'), scientific_parameter=True, conversational_choice=True)
     if any('use_rep' in members for members in owner.FUNCTIONS.values()):
         optional['use_rep'] = arg((str,),
             'Exact representation for a function exposing native use_rep; X_epizoo is the compact EpiZoo embedding. '
@@ -166,7 +173,11 @@ def tool_spec(owner):
             'neighbors, tl.diffmap and supplied root-cell information (uns.iroot); do not invent a root.',
             'Use use_rep (or explicit native kwargs.use_rep) for representation consumers, including X_epizoo. '
             'Scanpy UMAP consumes its neighbors graph, not a use_rep argument. Never substitute incompatible '
-            'package graphs. Explicit parameters prevail; omitted parameters retain native defaults.', *notes),
+            'package graphs. Explicit parameters prevail.',
+            'AI Research uses shared bounded ASW for omitted '
+            'Leiden resolution, epiScanpy Louvain resolution and epiScanpy kmeans/hc num_clusters. '
+            'Do not plan candidate scans or invent numeric values. epiScanpy kmeans/hc consume X_pca. '
+            'Other omitted parameters retain native defaults. Honor explicit parameter_selection=native_defaults.', *notes),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('matrix', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
             Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset','matrix_path'),member('sha256','matrix_sha256')), lineage_from_port='dataset'),

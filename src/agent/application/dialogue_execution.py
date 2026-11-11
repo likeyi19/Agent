@@ -805,8 +805,72 @@ def _read_requested_parameters(registry, admitted, names):
     return sorted(names)
 
 
+def _native_count_step(run):
+    """Recognize only the worker's typed, nonretryable ASW count requirement."""
+    from agent.schemas import StepStatus
+    from agent.schemas.run_state import RunLifecycleStatus
+    failed = [s for s in run.steps if s.status is StepStatus.FAILED]
+    if run.lifecycle_status is not RunLifecycleStatus.FAILED or run.plan is None or len(failed) != 1:
+        return None
+    step = failed[0]
+    args = step.resolved_arguments
+    if (step.error is None or step.error.code != 'NATIVE_CLUSTER_COUNT_REQUIRED'
+            or step.tool_name != 'run_episcanpy' or args.get('function_name') not in ('tl.kmeans', 'tl.hc')
+            or args.get('parameter_selection') != 'asw' or 'num_clusters' in args.get('kwargs', {})
+            or step.result is not None):
+        return None
+    return step
+
+
+def _native_count_record(run, step):
+    from pathlib import Path
+    diagnostic = json.loads((Path(step.resolved_arguments['output_dir']) / 'native-error.json').read_text())
+    return dict(run_id=run.run_id, step_id=step.step_id,
+        function_name=step.resolved_arguments['function_name'], plan_sha256=digest(run.plan.to_dict()),
+        diagnostic_sha256=digest(diagnostic)), diagnostic
+
+
+def _continue_native_count(sessions, origin, admitted):
+    """Rebind the exact attempted plan using the ordinary prepared-plan path.
+
+    PriorOutputRefs retain accepted upstream authority. Outputs from the failed
+    run are not promoted to accepted inputs; its unaccepted steps remain in the
+    original task. Only a new explicit answer authorizes this new execution.
+    """
+    from pathlib import Path
+    from agent.schemas import StepOutputRef, PriorOutputRef
+    app = sessions._application
+    failure = origin.prerequisite['native_failure']
+    run = app.run_store.load(failure['run_id'])
+    step = _native_count_step(run)
+    if step is None:
+        raise IntentError('invalid_prerequisite')
+    record, diagnostic = _native_count_record(run, step)
+    if record != failure:
+        raise IntentError('invalid_prerequisite')
+    state = sessions.load(sessions._interaction_session_id)
+    attempted = state.turn(origin.turn_id)
+    if (attempted.status != 'failed' or attempted.run_id != run.run_id
+            or run.request.request_id != origin.admitted['request_id']):
+        raise IntentError('invalid_prerequisite')
+    request_id = admitted['request_id']
+    effective, _ = app._prepare_request(AgentRequest(request_id, run.request.prompt, admitted['inputs']))
+    old_root, new_root = Path(run.request.inputs['output_dir']), Path(effective.inputs['output_dir'])
+    steps = []
+    for planned in run.plan.steps:
+        # Keep typed references, including exact accepted upstream bindings.
+        args = dict(planned.arguments)
+        if isinstance(args.get('output_dir'), str):
+            args['output_dir'] = str(new_root / Path(args['output_dir']).relative_to(old_root))
+        if planned.step_id == step.step_id and not isinstance(args['input_path'], (StepOutputRef, PriorOutputRef)):
+            args['input_sha256'] = diagnostic['source_sha256']
+        steps.append(replace(planned, arguments=args))
+    plan = replace(run.plan, plan_id=request_id + ':parameter-answer', request_id=request_id, steps=tuple(steps))
+    return dict(admitted, native_failure=_serialize(failure), native_plan=plan.to_dict())
+
+
 def request_parameters(sessions, interaction, admitted, names, resources):
-    """Use the existing parameter continuation before any planning reservation."""
+    """Capture the existing scoped parameter question and continuation identities."""
     from .structured_parameters import parameter_slots, missing_slots
     registry = sessions._application.registry
     for name in names:
@@ -840,6 +904,14 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 raise ValueError('No originating execution.')
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
+            if 'native_failure' in pending:
+                from .structured_parameters import pending_slots, missing_slots
+                failure = pending['native_failure']
+                if (failure['run_id'] != admitted['request_id'] + ':run'
+                        or pending['tool'] != admitted['tool']
+                        or missing_slots(registry, pending_slots(interaction, registry), values) != list(pending['missing'])):
+                    raise ValueError('Native parameter requirement changed.')
+                return
             if 'parameter_slots' in admitted:
                 from .structured_parameters import parameter_slots, missing_slots
                 slots = _serialize(admitted['parameter_slots'])
@@ -880,8 +952,12 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 or admitted.get('tool', reference['tool']) != origin.admitted['tool']
                 or admitted.get('revision_id', interaction.base_revision_id) != interaction.base_revision_id):
             raise ValueError('Parameter continuation changed scope.')
+        failure = origin.prerequisite.get('native_failure')
+        if failure is not None and admitted.get('kind') == 'execute' and admitted.get('native_failure') != failure:
+            raise ValueError('Native parameter continuation changed its failed execution.')
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
-        slots = origin.admitted.get('parameter_slots')
+        from .structured_parameters import pending_slots
+        slots = pending_slots(origin, registry)
         if slots:
             from .structured_parameters import validate_slot_answers
             validate_slot_answers(slots, declarations)
@@ -924,7 +1000,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     origin, source, values = _parameter_source(reference, state.interactions[:-1])
     if origin.admitted['request_id'] != 'turn-' + digest(dict(session=state.session_id, turn=origin.turn_id)):
         raise IntentError('invalid_prerequisite')
-    slots = origin.admitted.get('parameter_slots')
+    from .structured_parameters import pending_slots
+    slots = pending_slots(origin, sessions._application.registry)
     if slots:
         from .structured_parameters import validate_slot_answers
         validate_slot_answers(slots, decision.arguments)
@@ -932,7 +1009,7 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    if not {'parameter_request', 'parameter_slots'}.intersection(origin.admitted):
+    if not slots and 'parameter_request' not in origin.admitted:
         stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         original_error = next((e for e in stored.errors
             if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
@@ -1001,6 +1078,8 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
             admitted['roles'] = _serialize(origin.admitted['roles'])
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
+    if not missing and 'native_failure' in origin.prerequisite:
+        admitted = _continue_native_count(sessions, origin, admitted)
     return admitted
 
 
@@ -1032,8 +1111,10 @@ def _parameter_identities(admitted, interactions):
         continuation = record.get('parameter_continuation', record.get('continuation'))
         if continuation is not None and continuation.get('field') == 'parameters':
             origin = by_id[continuation['origin_turn_id']]
-            if origin.admitted.get('parameter_slots'):
-                identities.update((row['tool'], row['argument']) for row in origin.admitted['parameter_slots'].values())
+            from .structured_parameters import pending_slots
+            slots = pending_slots(origin)
+            if slots:
+                identities.update((row['tool'], row['argument']) for row in slots.values())
             else:
                 identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
         declarations = list(record.get('arguments', ()))
@@ -1785,7 +1866,10 @@ def _received_origin(interaction, interactions):
 
 
 def _execution_objective(interaction, interactions):
-    return _received_origin(interaction, interactions).utterance
+    origin = _received_origin(interaction, interactions)
+    # Result edits retain the original scientific task even when their UI
+    # submission has no utterance; a later count answer keeps that same task.
+    return origin.admitted['objective'] if 'result_edit' in (origin.admitted or {}) else origin.utterance
 
 
 def planning_task(interaction, state, registry=None):
@@ -2079,6 +2163,11 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     resource_failure = None
     parameter_failure = None
     def select_outputs(plan):
+        if 'native_failure' in admitted:
+            origin = next(i for i in sessions.load(sid).interactions
+                          if i.turn_id == admitted['continuation']['origin_turn_id'])
+            attempted = sessions.load(sid).turn(origin.turn_id)
+            return attempted.selections, attempted.retained_outputs
         if 'result_edit' in admitted:
             from .session_state import OutputLocator
             return (tuple(OutputSelection(**row) for row in admitted['outputs']),
@@ -2282,6 +2371,20 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         except ResourceAdmissionError as exc:
             return TurnOutcome('execute', 'failed', text=exc.message, error=exc.error)
         state = sessions.recover(sid, interaction.turn_id)
+        if state.turn(interaction.turn_id).status == 'failed':
+            run = app.run_store.load(state.turn(interaction.turn_id).run_id)
+            step = _native_count_step(run)
+            if step is not None:
+                # Intent and the failed scientific turn are immutable. The
+                # Interaction owns the newly discovered missing prerequisite.
+                failure, _ = _native_count_record(run, step)
+                _, pending = request_parameters(sessions, interaction, admitted, [dict(tool='run_episcanpy',
+                    native_function=failure['function_name'], argument='kwargs', member='num_clusters')], epizoo_resources)
+                pending['native_failure'] = failure
+                from .turn_decisions import Clarify
+                _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
+                return TurnOutcome('clarify', 'clarification',
+                    Clarify('missing_parameter_value', tuple(pending['missing']), True), error=step.error)
         return completion_outcome(state, interaction.turn_id, error=result.error)
     error = resource_failure or result.error or next(iter(result.run_result.errors), None)
     if parameter_failure is not None:

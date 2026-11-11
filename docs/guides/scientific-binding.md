@@ -29,7 +29,8 @@ Registry argument or native kwarg member. The input control shows available nati
 default information and uniquely relevant recorded prior settings. Defaults and
 prior settings are descriptive; they do not preauthorize a new value. A genuinely
 omitted optional parameter follows the existing scientific owner default without
-a question. No automatic resolution optimizer is provided.
+a question. Eligible omitted clustering values use the bounded ASW policy described
+in the [native analysis guide](native-scatac-analysis.md).
 
 Function, dataset port/source and captured plan step identify consumers. The same
 argument name does not authorize transfer across datasets or native functions.
@@ -81,12 +82,25 @@ controls can read the exact selected Revision through the existing result-parame
 endpoint to show a uniquely matching recorded upstream setting. That display never
 changes the submitted value or selects an execution step.
 
-## Separate next phase
+## Bounded clustering selection
 
-Scientific Clustering Parameter Selection is not implemented by this consolidation.
-Any later automatic method must preserve explicit researcher values, structured UI
-overrides, result-scoped edits, exact Revision continuation and unaffected upstream
-reuse. Selection applies only when a parameter is genuinely unspecified or the
-researcher explicitly requests optimization. Its method, selected value, evaluation
-criterion and actual native execution must be recorded. An internal clustering
-metric alone cannot establish a universal biological optimum.
+Scientific Clustering Parameter Selection now uses one bounded ASW scan for the
+six eligible native clustering functions. Explicit researcher values, structured
+UI overrides and result edits take precedence. `parameter_selection=native_defaults`
+respects a researcher request for installed defaults. The compiler applies the
+ASW policy only after method selection and deterministic value binding; the LLM
+neither invents candidate values nor plans individual candidate executions.
+
+If ASW cannot recommend a required epiScanpy kmeans/hc count, its scientific Run
+remains failed with retained diagnostics. The Interaction captures the same scoped
+`kwargs.num_clusters` question used for missing native defaults. Admitted intent
+and failed Run/SessionTurn identities remain immutable. A structured numeric answer
+uses the exact prepared task and accepted input references, with a new Run and
+direct native count binding; no provider chooses the value or repeats planning.
+
+Selected effective parameters are ordinary accepted result values. Result edits
+pin these before applying changes, preserving exact step/source scope, Revision
+continuation and unaffected upstream reuse. An internal clustering metric alone
+cannot establish a universal biological optimum. Native Functions remains
+unoptimized. The [acceptance report](../../../agent-data/acceptance/scientific-clustering-parameter-selection-2026-11-11/REPORT.md)
+separates real native science, scripted planning, focused tests and limitations.

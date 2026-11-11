@@ -1,3 +1,22 @@
+# ASW Scientific Clustering Parameter Selection (2026-11-11)
+
+The current request authorizes one bounded shared ASW scan for native SnapATAC2,
+Scanpy and epiScanpy Leiden resolution, epiScanpy Louvain resolution, and epiScanpy
+K-means/hierarchical num_clusters. This supersedes the earlier no-optimizer scope
+only for these six adaptations. Explicit researcher values, result edits and native
+default requests prevail; Native Functions remains zero-provider and unoptimized.
+The existing native worker, publication, parameter binding and Revision owners
+remain authoritative. The final targeted correction routes unavailable ASW for
+required epiScanpy cluster counts through the existing scoped parameter question,
+retaining the failed scientific Run and exact accepted inputs. An explicit answer
+continues the selected task without repeating ASW or calling a provider. The final
+closeout authorizes one reviewed commit and normal push to `origin/main` after
+focused verification. No generic optimizer, additional metric, DBSCAN/KNN selection
+or iterative annotation is authorized. The
+[guide](docs/guides/native-scatac-analysis.md) and
+[report](../agent-data/acceptance/scientific-clustering-parameter-selection-2026-11-11/REPORT.md)
+record candidate bounds, exact graph/representation provenance and verification.
+
 # Scientific Execution Path Consolidation (2026-11-11)
 
 The current architectural correction retains distinct mature native package APIs

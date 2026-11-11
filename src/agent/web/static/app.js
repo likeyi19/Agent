@@ -461,7 +461,7 @@ function resultFigureGallery(artifacts) {
     marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
     marker_activity_umap: "Color = log1p(raw native MAESTRO RP), without additional normalization. All cells use the same accepted UMAP. Accessibility-derived activity is not measured RNA expression. Native markers can help inspect candidate annotations and within-cluster heterogeneity; they are dependent evidence, not independent biological validation.",
     annotation_umap: "Accepted UMAP colored by MAESTRO predictions using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
-    umap_leiden: "UMAP colored by accepted Leiden groups. Separation is descriptive, not independent validation of cell identity.",
+    umap_leiden: "UMAP colored by accepted native clustering groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
     umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
     clustering_metrics: "Clustering agreement with the recorded reference labels. Interpretation depends on the reference's provenance and independence.",
@@ -878,7 +878,7 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
 }
 
 function readableLabel(value) {
-  const scientificLabels = {umap_leiden: "UMAP · Leiden", umap_coordinates: "UMAP coordinates",
+  const scientificLabels = {umap_leiden: "UMAP · clusters", umap_coordinates: "UMAP coordinates",
     umap_categorical: "UMAP · categorical field", annotation_umap: "UMAP · cell-type annotation",
     qc_metrics: "QC measurements", annotation_composition: "Cell-type composition",
     marker_activity_umap: "UMAP · marker activity", marker_activity_dot: "Marker activity",

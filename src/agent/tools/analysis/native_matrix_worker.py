@@ -51,6 +51,8 @@ def _receipt_default(value):
 def main(request_path):
     raw = Path(request_path).read_bytes(); req = json.loads(raw)
     stage = Path(req['stage'])
+    sys.path.insert(0, str(Path(__file__).parent))
+    from native_clustering import RequiredClusterCount
     try:
         import anndata as ad
         import numpy as np
@@ -61,9 +63,11 @@ def main(request_path):
             raise ValueError('Installed package version differs from qualified dispatch')
         # Shared installed callable resolution. Registry method offers and this
         # AI publication's specialized scientific slots remain separate owners.
-        sys.path.insert(0, str(Path(__file__).parent))
         from native_callable_worker import functions
+        from native_clustering import invoke, valid_graphs, graph_record
+        from cell_result import grouping_key
         function = functions(package)[name]
+        graphs = valid_graphs(a, req.get('graph_inputs', []))
         # A positional marker follows native subsetting, including duplicate labels.
         marker = None
         if name == 'pp.highly_variable_genes' and kwargs.get('subset'):
@@ -85,7 +89,8 @@ def main(request_path):
                 adaptation = dict(slot='obsm.' + key, source_dtype='float32', execution_dtype='float64',
                     conversion='lossless widening for native KD-tree FFI; original representation restored')
         try:
-            result = function(a, **kwargs)
+            result, selection = invoke(function, a, package, name, kwargs,
+                                       req.get('parameter_selection'), graphs)
         finally:
             if restored_rep is not None:
                 a.obsm[restored_rep[0]] = restored_rep[1]
@@ -93,6 +98,12 @@ def main(request_path):
         independent = result is not None and not isinstance(result, ad.AnnData)
         if isinstance(result, ad.AnnData):
             a = result
+        graphs = valid_graphs(a, graphs)
+        graph = graph_record(a, package, name, kwargs)
+        if graph is not None:
+            graph['source_sha256'] = req['source_sha256']
+            graph['visualization'] = graph['representation'] in req.get('visualization_representations', [])
+            graphs = [g for g in graphs if g['graph'] != graph['graph']] + [graph]
         axis_positions = None
         if marker is not None:
             axis_positions = dict(cells=list(range(a.n_obs)), features=a.var.pop(marker).tolist())
@@ -119,8 +130,8 @@ def main(request_path):
             elif name == 'tl.umap':
                 slots += ['obsm.X_' + kwargs.get('key_added', 'umap')] if package == 'snapatac2' else ['obsm.X_umap', 'uns.umap']
             elif name in ('tl.leiden', 'tl.louvain', 'tl.kmeans', 'tl.hc', 'tl.dbscan'):
-                slots += ['obs.' + kwargs.get('key_added', name.split('.')[1])]
-                if package != 'snapatac2' and name in ('tl.leiden', 'tl.louvain'): slots += ['uns.' + kwargs.get('key_added', name.split('.')[1])]
+                slots += ['obs.' + grouping_key(package, name, kwargs)]
+                if package != 'snapatac2' and name in ('tl.leiden', 'tl.louvain'): slots += ['uns.' + name.split('.')[1]]
             elif name == 'tl.paga': slots += ['uns.paga']
             elif name in ('tl.rank_genes_groups', 'tl.rank_features'):
                 slots += ['uns.' + (kwargs.get('key_added') or ('rank_features_groups' if name == 'tl.rank_features' else 'rank_genes_groups'))]
@@ -167,6 +178,10 @@ def main(request_path):
             if p.default is not inspect.Parameter.empty}
         effective.update(kwargs)
         receipt['effective_parameters'] = effective
+        if selection is not None:
+            receipt['parameter_selection'] = selection
+        if graphs:
+            receipt['graph_inputs'] = graphs
         if adaptation is not None:
             receipt['input_adaptation'] = adaptation
         receipt['result_shapes'] = {s: list(getattr(a, s.partition('.')[0])[s.partition('.')[2]].shape)
@@ -174,7 +189,10 @@ def main(request_path):
         if axis_positions is not None: receipt['source_axis_positions'] = axis_positions
         (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2, default=_receipt_default))
     except Exception as exc:
-        (stage / 'native-error.json').write_text(json.dumps(dict(message=str(exc), type=type(exc).__name__)))
+        error = dict(message=str(exc), type=type(exc).__name__)
+        if isinstance(exc, RequiredClusterCount):
+            error.update(parameter_selection=exc.evidence, request_sha256=hashlib.sha256(raw).hexdigest())
+        (stage / 'native-error.json').write_text(json.dumps(error))
         traceback.print_exc()
         return 1
     return 0

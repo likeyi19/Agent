@@ -6,8 +6,8 @@ prepare a native tile or region matrix when needed, `pp.select_features`,
 operation when requested; clustering does not require UMAP. Processed peak-count H5AD
 starts with feature selection; it does not require raw import, cell calling,
 a genome declaration, or a model resource. Native functions own numerical input
-legality and adaptive behavior. Omitted parameters retain the installed native
-defaults, including feature selection, Spectral's requested 30 components and
+legality and adaptive behavior. Except for the bounded clustering selection below,
+omitted parameters retain the installed native defaults, including feature selection, Spectral's requested 30 components and
 its native small-matrix adjustment, cosine similarity and eigenvalue weighting.
 
 In this spectral workflow, KNN and UMAP use `X_spectral`; Leiden consumes the native graph. The same accepted
@@ -106,11 +106,63 @@ upstream outputs. Explicit researcher values prevail; native packages own omitte
 defaults and numerical legality. Publications record the actual function, parameters,
 source identity and completion; current native readers serve evidence and downloads.
 
-Native Functions remains independent and zero-provider. No automatic resolution
-selection is implemented. A future shared silhouette/ASW criterion must evaluate
-labels from the LLM-selected native method with its compatible graph and selected
-representation. Not every clustering method has a resolution parameter. This is
-not a claim of a universal biological optimum or implicit Native Functions optimization.
+## Bounded ASW clustering parameter selection
+
+After the LLM selects a native method, AI Research automatically evaluates an
+omitted eligible parameter inside the existing isolated native execution:
+
+| Native functions | Parameter | Candidates |
+| --- | --- | --- |
+| SnapATAC2/Scanpy/epiScanpy `tl.leiden`, epiScanpy `tl.louvain` | `resolution` | 0.1, 0.25, 0.5, 1, 1.5, 2 |
+| epiScanpy `tl.kmeans`, `tl.hc` | `num_clusters` | 2, 3, 4, 6, 8, 10, restricted to values smaller than the cell count |
+
+All six use one scan and installed `sklearn.metrics.silhouette_score`. Each
+candidate changes only that parameter, calls the selected native function on its
+full input population, and reuses the compatible accepted graph. The highest
+valid ASW wins; exact ties select the first (smallest) candidate. At most 2,000
+cells are sampled once with NumPy seed 0, with the same sample for every candidate.
+Native clustering seeds/defaults remain unchanged. Winning native labels are
+retained without another clustering calculation.
+
+Explicit researcher kwargs and result edits bypass scanning. An explicit
+`parameter_selection=native_defaults` also bypasses it; epiScanpy kmeans/hc have
+no cluster-count default and request that value through the existing parameter
+question. Other native parameters retain their actual defaults. Native Functions
+remains unchanged, zero-provider and unoptimized.
+
+Graph construction records the actual representation, dimensions, metric,
+ordered-cell digest and graph/representation digests in existing native receipts.
+Only the exact verified upstream publication carries these associations forward.
+Scanpy/epiScanpy connectivities and SnapATAC2 distances are never interchanged.
+K-means and hierarchical clustering use all of `X_pca`, as required by the
+installed epiScanpy APIs. UMAP is not a substitute for the clustering input.
+No PCA, Spectral, EpiZoo, KNN or UMAP calculation is repeated by the scan.
+
+One cluster, invalid label counts, unassigned labels in the fixed sample, or an
+unusable representation yield undefined scores, never invented numbers. If no
+candidate is valid, the native default is retained and selection is reported as
+unavailable. For epiScanpy kmeans/hc, unavailable ASW with no count/default leaves
+the attempted Run failed and retains its candidate diagnostics. The Interaction
+then asks for function-scoped `kwargs.num_clusters` through the existing parameter
+question. Its explicit answer runs the same prepared task with that count, without
+ASW or provider calls, preserving exact accepted upstream references. No clustering
+result or Revision is accepted from the failed attempt. Genuine native errors
+remain failures. Unqualified external graph provenance,
+restricted subclustering and non-vtraag Louvain flavors currently use the default
+fallback; explicit native calls remain available.
+
+The selected value, origin, candidate scores, sample details and native identities
+are recorded in ordinary result parameters, receipts and reports. Adjust parameters
+shows the actual selected value. Editing another setting preserves it, including
+on affected downstream clustering steps; unchanged upstream results remain exact
+accepted references. Native Leiden, Louvain, K-means, hierarchical and DBSCAN
+written grouping slots are recognized by the existing display, figures, annotation,
+evaluation and download owners. Inherited observation columns confer no authority.
+
+ASW measures separation in the selected representation. It neither identifies
+biologically correct cell types nor proves a universal optimum. See the
+[scikit-learn definition](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.silhouette_score.html)
+and the [selection acceptance report](../../../agent-data/acceptance/scientific-clustering-parameter-selection-2026-11-11/REPORT.md).
 
 The [consolidation report](../../../agent-data/acceptance/scientific-execution-consolidation-2026-11-11/REPORT.md)
 records the audit, bounded native evidence and remaining limitations.

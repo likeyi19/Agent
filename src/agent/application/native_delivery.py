@@ -6,7 +6,7 @@ from agent.schemas.orchestration import _serialize
 
 PRIVATE_LABEL = '[private label omitted; use ordered index]'
 CELL_MATRIX_LABELS = ('UMAP coordinates and retained matrix (H5AD)',
-    'Leiden groups and retained matrix (H5AD)', 'Region fragment counts (H5AD)',
+    'Native clustering groups and retained matrix (H5AD)', 'Region fragment counts (H5AD)',
     'Peak counts (H5AD)', 'Binary accessibility (H5AD)')
 
 
@@ -85,7 +85,7 @@ def _label(step, name, default):
         if view['coordinates']:
             return 'UMAP coordinates and retained matrix (H5AD)'
         if view['grouping']:
-            return 'Leiden groups and retained matrix (H5AD)'
+            return 'Native clustering groups and retained matrix (H5AD)'
         measurement = step.result.get('measurement')
         if measurement in ('fragment_counts', 'peak_counts', 'binary_accessibility'):
             return {'fragment_counts': 'Region fragment counts', 'peak_counts': 'Peak counts',

@@ -654,7 +654,8 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                 raise AnalysisVisualizationError('VISUALIZATION_SOURCE_INVALID',
                     'Pinned native coordinates or categories are unavailable or invalid.') from exc
             categories = _first_occurrence(labels)
-            data = _UmapData(ids, xy, labels, categories, _categorical_palette(len(categories)) if categories else (), _umap_point_size(len(ids)))
+            data = _UmapData(ids, xy, labels, categories, _categorical_palette(len(categories)) if categories else (),
+                             _umap_point_size(len(ids)), label_title=grouping['field'] if grouping else None)
             digest = _umap_plot_digest(data.cell_ids, data.coordinates, data.labels)
             legend_columns = max(1, math.ceil(len(data.categories) / 20))
             width_px = int((8.0 + 1.5 * (legend_columns - 1)) * _DPI)

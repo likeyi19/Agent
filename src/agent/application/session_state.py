@@ -234,7 +234,7 @@ class Interaction:
         if self.prerequisite is not None:
             frozen = freeze_json_mapping(self.prerequisite, 'interaction.prerequisite')
             legacy = set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256'} and frozen['field'] == 'species'
-            parameters = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
+            parameters = (set(frozen) - {'native_failure'} == {'origin_turn_id', 'field', 'resource_context_sha256',
                                          'binding_turn_id', 'tool', 'missing'} and frozen['field'] == 'parameters')
             roles = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
                                     'binding_turn_id', 'tool', 'required_roles'} and frozen['field'] == 'roles')
@@ -254,6 +254,15 @@ class Interaction:
                 except (ValueError, TypeError) as exc:
                     raise SessionError('Invalid missing scientific roles.') from exc
             if parameters:
+                if 'native_failure' in frozen:
+                    failure = frozen['native_failure']
+                    if (set(failure) != {'run_id', 'step_id', 'function_name', 'plan_sha256', 'diagnostic_sha256'}
+                            or failure['function_name'] not in {'tl.kmeans', 'tl.hc'}):
+                        raise SessionError('Invalid native cluster-count prerequisite.')
+                    text(failure['run_id'])
+                    text(failure['step_id'])
+                    sha(failure['plan_sha256'])
+                    sha(failure['diagnostic_sha256'])
                 missing = frozen['missing']
                 if not 1 <= len(missing) <= 8 or len(set(missing)) != len(missing):
                     raise SessionError('Invalid missing scientific parameters.')
@@ -369,6 +378,13 @@ class AnalysisSession:
                 validate_capture(self, interaction, self.interactions[:interaction_index])
             from .dialogue_execution import validate_prerequisite
             validate_prerequisite(interaction, self.interactions[:interaction_index])
+            failure = (interaction.prerequisite or {}).get('native_failure')
+            if failure is not None:
+                origin_id = interaction.prerequisite['origin_turn_id']
+                attempted = next((t for t in self.turns if t.turn_id == origin_id), None)
+                if (attempted is None or attempted.status != 'failed' or attempted.run_id != failure['run_id']
+                        or attempted.revision_id is not None):
+                    raise SessionError('Native prerequisite requires its truthful failed scientific turn.')
             edit = (interaction.admitted or {}).get('result_edit')
             if edit is not None:
                 source = revisions.get(edit['revision_id'])

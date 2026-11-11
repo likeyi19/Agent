@@ -9,7 +9,22 @@ DEDICATED = ('annotate_scATAC_cell_types',)
 NATIVE = ('run_snapatac2', 'run_scanpy', 'run_episcanpy')
 TOOLS = DEDICATED + NATIVE
 _PRESERVE = frozenset(('pp.select_features', 'tl.spectral', 'pp.knn',
-                      'tl.leiden', 'tl.umap', 'pp.pca', 'tl.pca', 'pp.neighbors'))
+                      'tl.leiden', 'tl.louvain', 'tl.kmeans', 'tl.hc', 'tl.dbscan',
+                      'tl.umap', 'pp.pca', 'tl.pca', 'pp.neighbors'))
+
+
+def grouping_key(package, function, kwargs):
+    """Installed native grouping slots, including Scanpy's restricted suffix."""
+    supported = {'snapatac2': ('tl.leiden', 'tl.dbscan'),
+                 'scanpy': ('tl.leiden',),
+                 'episcanpy': ('tl.leiden', 'tl.louvain', 'tl.kmeans', 'tl.hc')}
+    if function not in supported.get(package, ()):
+        return None
+    default = function.split('.')[1]
+    key = kwargs.get('key_added', default)
+    if package != 'snapatac2' and kwargs.get('restrict_to') is not None and key == default:
+        key += '_R'
+    return key
 
 
 def describe(tool, result):
@@ -35,10 +50,10 @@ def describe(tool, result):
     # cannot be offered as newly computed UMAP/clustering.
     inplace = kwargs.get('inplace', True) is not False
     coordinate = ('X_' + kwargs.get('key_added', 'umap')) if package == 'snapatac2' else 'X_umap'
-    grouping = kwargs.get('key_added', 'leiden')
+    grouping = grouping_key(package, function, kwargs)
     return dict(path_field='matrix_path', sha_field='matrix_sha256',
         coordinates=coordinate if inplace and function == 'tl.umap' and 'obsm.' + coordinate in slots else None,
-        grouping=grouping if inplace and function == 'tl.leiden' and 'obs.' + grouping in slots else None,
+        grouping=grouping if inplace and grouping and 'obs.' + grouping in slots else None,
         preserves_counts=function in _PRESERVE and parameters.get('count_slot', 'X') == 'X',
         input_argument='input_path')
 

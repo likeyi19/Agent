@@ -394,8 +394,8 @@ from .annotation_visualization import CAPTIONS as _ANNOTATION_CAPTIONS
 _FIGURE_CAPTIONS: Mapping[str, str] = {
     'qc_metrics': 'Saved native numeric QC values and actual producer populations. Display transformations and missing measurements are explicit. No QC recomputation or refiltering.',
     **_ANNOTATION_CAPTIONS,
-    "umap_leiden": "Verified UMAP coordinates colored by Leiden cluster labels.",
-    "umap_coordinates": "Verified UMAP coordinates; Leiden clustering was not performed for this result.",
+    "umap_leiden": "Verified UMAP coordinates colored by accepted native cluster labels.",
+    "umap_coordinates": "Verified UMAP coordinates without an accepted clustering for this result.",
     "clustering_metrics": (
         "Verified NMI, ARI, AMI, and Homogeneity values in fixed metric order."
     ),
@@ -923,7 +923,7 @@ _FIELD_LABELS: Mapping[str, str] = {
     "resolution": "Resolution",
     "n_components": "UMAP dimensions",
     "umap_key": "UMAP key",
-    "clustering_present": "Leiden clustering present",
+    "clustering_present": "Native clustering present",
     "coordinate_dtype": "Coordinate dtype",
     "min_dist": "UMAP min_dist",
     "spread": "UMAP spread",

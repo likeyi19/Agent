@@ -118,3 +118,19 @@ def bind_structured_parameters(selected, settings, registry, request_inputs):
         arguments[name] = value
         applied.setdefault(step, set()).add(name)
     return bound, applied, ambiguous
+
+
+def missing_clustering_parameters(tool, inputs):
+    """The two count-based APIs have no default when ASW is explicitly disabled."""
+    if tool.name != 'run_episcanpy':
+        return ()
+    missing = []
+    for function in ('tl.kmeans', 'tl.hc'):
+        selection = inputs.get(input_name(tool.name, function, 'parameter_selection'))
+        if inputs.get('function_name') == function:
+            selection = selection or inputs.get('parameter_selection')
+        kwargs = inputs.get(input_name(tool.name, function, 'kwargs'),
+                            inputs.get('kwargs', {}) if inputs.get('function_name') == function else {})
+        if selection == 'native_defaults' and 'num_clusters' not in kwargs:
+            missing.append(dict(tool=tool.name, native_function=function, argument='kwargs', member='num_clusters'))
+    return tuple(missing)
